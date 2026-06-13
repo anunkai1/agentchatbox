@@ -56,7 +56,7 @@ import type {
 	ThinkingLevel,
 } from "../shared/protocol.js";
 import { createChatClient, type ChatClient } from "./ws.js";
-import { uploadFile, transcribeAudio, getHealth, synthesizeSpeech, listVoices } from "./api.js";
+import { uploadFile, transcribeAudio, getHealth, getModels, synthesizeSpeech, listVoices, type ModelInfo } from "./api.js";
 
 // ---------------------------------------------------------------------------
 // DOM helpers (no framework)
@@ -211,6 +211,10 @@ type PersistedMessage =
 interface ModelOption {
 	id: string;
 	provider: string;
+	/** Human-readable label from the server (e.g. "DeepSeek V4 Pro"). */
+	name?: string;
+	/** Whether this model supports extended thinking. */
+	reasoning?: boolean;
 }
 
 const state: AppState = {
@@ -853,23 +857,46 @@ function openModelPicker(): void {
 		appendError("No models available (server has no provider keys configured).");
 		return;
 	}
-	const overlay = el("div", { class: "modal-overlay" });
-	const box = el("div", { class: "modal-box" });
-	box.append(el("h3", { text: "Choose model" }));
+	// Group models by provider for readability. Within each group, sort
+	// by name. We use a stable insertion-ordered map (the model list
+	// returned by /api/models is already grouped by provider, but we
+	// re-group defensively in case the server changes that).
+	const groups = new Map<string, ModelOption[]>();
 	for (const m of state.availableModels) {
-		const row = el("div", { class: "model-row" });
-		row.append(el("div", { class: "model-name" }, m.id));
-		row.append(el("div", { class: "model-provider" }, m.provider));
-		if (m.id === state.currentModelId) row.classList.add("active");
-		row.addEventListener("click", () => {
-			chatClient.setModel(m.id, m.provider);
-			state.currentModelId = m.id;
-			state.currentProvider = m.provider;
-			refreshStatus();
-			document.body.removeChild(overlay);
-		});
-		box.append(row);
+		const list = groups.get(m.provider) ?? [];
+		list.push(m);
+		groups.set(m.provider, list);
 	}
+	for (const [, list] of groups) {
+		list.sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
+	}
+
+	const overlay = el("div", { class: "modal-overlay" });
+	const box = el("div", { class: "modal-box model-picker-box" });
+	box.append(el("h3", { text: "Choose model" }));
+
+	for (const [provider, models] of groups) {
+		box.append(el("div", { class: "model-group-header" }, provider));
+		for (const m of models) {
+			const row = el("div", { class: "model-row" });
+			const main = el("div", { class: "model-name" }, m.name ?? m.id);
+			if (m.reasoning) {
+				main.append(el("span", { class: "model-badge", title: "Supports extended thinking" }, "thinking"));
+			}
+			row.append(main);
+			row.append(el("div", { class: "model-provider" }, m.id === m.name ? "" : m.id));
+			if (m.id === state.currentModelId) row.classList.add("active");
+			row.addEventListener("click", () => {
+				chatClient.setModel(m.id, m.provider);
+				state.currentModelId = m.id;
+				state.currentProvider = m.provider;
+				refreshStatus();
+				document.body.removeChild(overlay);
+			});
+			box.append(row);
+		}
+	}
+
 	box.append(el("button", { class: "btn", text: "Close", onclick: () => document.body.removeChild(overlay) }));
 	overlay.append(box);
 	overlay.addEventListener("click", (e) => {
@@ -1503,12 +1530,23 @@ function onEvent(event: AgentEvent): void {
 let chatClient: ChatClient;
 
 async function boot(): Promise<void> {
-	// Probe the server's health. If the minimax key isn't set, we still let
-	// the chat connect (it will tell us about the missing key on first
-	// prompt) — we just inform the user.
+	// Probe the server's health and model list. If the relevant API keys
+	// aren't set, the lists come back empty and the picker will show a
+	// helpful error.
 	try {
-		const h = await getHealth();
-		state.availableModels = h.providers.map((p) => ({ id: "MiniMax-M3", provider: p })); // The server defaults to M3; UI just shows the active one.
+		const [h, models] = await Promise.all([getHealth(), getModels()]);
+		state.availableModels = models.map((m: ModelInfo) => ({
+			id: m.id,
+			provider: m.provider,
+			name: m.name,
+			reasoning: m.reasoning,
+		}));
+		// Fall back to the legacy single-provider shape if /api/models
+		// returns nothing (older server) — we still get *something* in
+		// the picker so the user isn't stuck.
+		if (state.availableModels.length === 0) {
+			state.availableModels = h.providers.map((p) => ({ id: "MiniMax-M3", provider: p }));
+		}
 	} catch (e) {
 		appendError("server health check failed: " + (e instanceof Error ? e.message : String(e)));
 	}

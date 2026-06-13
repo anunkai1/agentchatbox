@@ -18,6 +18,7 @@ import { createUploadsRouter } from "./uploads.js";
 import { createTranscribeRouter, checkWhisperAvailable } from "./transcribe.js";
 import { createTtsRouter, checkTtsAvailable } from "./tts.js";
 import { mountChatWs } from "./chat.js";
+import { getModels } from "@earendil-works/pi-ai";
 
 mkdirSync(config.uploadsDir, { recursive: true });
 
@@ -85,6 +86,80 @@ app.get("/api/health", async (_req, res) => {
 		ttsReason: tts.available ? undefined : tts.reason,
 		ttsVoice: tts.voice,
 	});
+});
+
+/**
+ * GET /api/models
+ *
+ * Returns the list of LLM models the client can pick from, one entry per
+ * (provider, modelId). Only providers with a configured API key are
+ * included — the server is the source of truth for what's available,
+ * matching the policy in src/shared/protocol.ts.
+ *
+ * Shape: { models: Array<{ id, provider, name, reasoning }> }
+ *   - id:        the model id (what /api/chat's setModel expects)
+ *   - provider:  the provider key (e.g. "deepseek", "minimax")
+ *   - name:      human-readable label
+ *   - reasoning: true if the model supports thinking
+ *
+ * The custom "minimax" provider isn't in the SDK's built-in registry,
+ * so we hand-build its entry here to keep the picker self-consistent.
+ */
+app.get("/api/models", (_req, res) => {
+	const out: Array<{ id: string; provider: string; name: string; reasoning: boolean }> = [];
+
+	// Providers registered in @earendil-works/pi-ai's MODELS map.
+	const builtinProviders: Array<keyof typeof config.apiKeys> = [
+		"anthropic",
+		"openai",
+		"google",
+		"xai",
+		"groq",
+		"cerebras",
+		"openrouter",
+		"deepseek",
+		"mistral",
+		"huggingface",
+		"fireworks",
+		"together",
+		"vercel-ai-gateway",
+		"zai",
+		"kimi-coding",
+		"opencode",
+	];
+	for (const provider of builtinProviders) {
+		if (!config.apiKeys[provider]) continue;
+		try {
+			// getModels is typed against KnownProvider; we cast since we've
+			// narrowed to a known list.
+			const models = getModels(provider as never) as Array<{
+				id: string;
+				name: string;
+				reasoning?: boolean;
+			}>;
+			for (const m of models) {
+				out.push({ id: m.id, provider, name: m.name, reasoning: !!m.reasoning });
+			}
+		} catch (e) {
+			// If the SDK doesn't know this provider, skip it rather than
+			// 500ing the whole endpoint.
+			console.warn(`[models] failed to list models for ${provider}:`, e instanceof Error ? e.message : e);
+		}
+	}
+
+	// Custom "minimax" provider — not in the SDK registry, but used by
+	// this app as the default. Match the construction in agent.ts so the
+	// model id the client picks is the same one the server resolves.
+	if (config.apiKeys["minimax"]) {
+		out.push({
+			id: "MiniMax-M3",
+			provider: "minimax",
+			name: "MiniMax M3",
+			reasoning: true,
+		});
+	}
+
+	res.json({ models: out });
 });
 
 // Static files (built client)

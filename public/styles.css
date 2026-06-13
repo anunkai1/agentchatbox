@@ -335,10 +335,35 @@ html, body {
 }
 .model-row:hover, .session-row:hover { background: #161616; }
 .model-row.active, .session-row.active { border-color: #4f6dd6; background: #14233f; }
-.model-name { font-weight: 600; }
+.model-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .model-provider, .session-meta { font-size: 11px; color: #5a5a5a; margin-top: 2px; }
 .session-title { font-weight: 600; }
 .muted { color: #5a5a5a; }
+
+/* Group header inside the model picker — visual separator between
+ * providers, no border around the whole group, just a small label. */
+.model-group-header {
+	font-size: 11px;
+	color: #7a7a7a;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	margin: 10px 0 4px 0;
+	padding: 0 4px;
+}
+.model-group-header:first-of-type { margin-top: 4px; }
+
+/* Reasoning-capable badge shown next to the model name in the picker. */
+.model-badge {
+	font-size: 10px;
+	font-weight: 500;
+	color: #9ece6a;
+	background: rgba(158, 206, 106, 0.12);
+	border: 1px solid rgba(158, 206, 106, 0.3);
+	border-radius: 3px;
+	padding: 1px 5px;
+	text-transform: lowercase;
+	letter-spacing: 0;
+}
 
 .help {
 	background: #0e0e0e;

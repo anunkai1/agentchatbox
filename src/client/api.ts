@@ -54,6 +54,25 @@ export async function getHealth(): Promise<HealthInfo> {
 	return (await res.json()) as HealthInfo;
 }
 
+/** A single model entry returned by /api/models. */
+export interface ModelInfo {
+	id: string;
+	provider: string;
+	name: string;
+	reasoning: boolean;
+}
+
+/**
+ * Returns the list of models the client can pick from. Only includes
+ * providers that have an API key configured on the server.
+ */
+export async function getModels(): Promise<ModelInfo[]> {
+	const res = await fetch(`${BASE}/api/models`);
+	if (!res.ok) throw new Error(`models failed: ${res.status}`);
+	const data = (await res.json()) as { models: ModelInfo[] };
+	return data.models;
+}
+
 /**
  * Local TTS via /api/tts. Returns the WAV bytes. Caller is responsible
  * for turning them into playable audio (we use a single shared <audio>
