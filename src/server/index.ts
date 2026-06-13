@@ -16,6 +16,7 @@ import { config } from "./config.js";
 import { handleStream } from "./proxy.js";
 import { createUploadsRouter } from "./uploads.js";
 import { createTranscribeRouter, checkWhisperAvailable } from "./transcribe.js";
+import { createTtsRouter, checkTtsAvailable } from "./tts.js";
 import { mountChatWs } from "./chat.js";
 
 mkdirSync(config.uploadsDir, { recursive: true });
@@ -39,16 +40,20 @@ app.use((req, _res, next) => {
 app.post("/api/stream", handleStream);
 app.use("/api/upload", createUploadsRouter());
 app.use("/api/transcribe", createTranscribeRouter());
+app.use("/api/tts", createTtsRouter());
 
-// Health check. Reports configured provider keys AND whether local Whisper
-// is available (so the client can fall back gracefully if it isn't).
+// Health check. Reports configured provider keys, local Whisper, local TTS.
 app.get("/api/health", async (_req, res) => {
 	const whisper = await checkWhisperAvailable();
+	const tts = await checkTtsAvailable();
 	res.json({
 		status: "ok",
 		providers: Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]),
 		whisper: whisper.available,
 		whisperReason: whisper.available ? undefined : whisper.reason,
+		tts: tts.available,
+		ttsReason: tts.available ? undefined : tts.reason,
+		ttsVoice: tts.voice,
 	});
 });
 
@@ -76,6 +81,8 @@ const server = app.listen(config.port, config.host, () => {
 	console.log(`agentchatbox listening on http://${config.host}:${config.port}`);
 	console.log(`  uploads dir:   ${config.uploadsDir}`);
 	console.log(`  providers:     ${providers.length ? providers.join(", ") : "(none — set API keys in .env)"}`);
+	console.log(`  whisper:       ${config.openaiApiKey ? "openai (disabled, using local faster-whisper)" : "local faster-whisper (CPU)"}`);
+	console.log(`  tts:           local piper (CPU)`);
 });
 
 // WebSocket endpoint. Mounted on the same HTTP server so we don't need a

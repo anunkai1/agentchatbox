@@ -34,7 +34,7 @@ import type {
 	ThinkingLevel,
 } from "../shared/protocol.js";
 import { createChatClient, type ChatClient } from "./ws.js";
-import { uploadFile, transcribeAudio, getHealth } from "./api.js";
+import { uploadFile, transcribeAudio, getHealth, synthesizeSpeech, listVoices } from "./api.js";
 
 // ---------------------------------------------------------------------------
 // DOM helpers (no framework)
@@ -170,11 +170,19 @@ interface AppState {
 	currentProvider: string | null;
 	currentThinking: ThinkingLevel;
 	connectionStatus: "connecting" | "open" | "closed";
+	/** When true, every final assistant message is spoken automatically. */
+	autoSpeak: boolean;
+	/** Currently selected TTS voice id. */
+	ttsVoice: string | null;
+	/** Number of TTS requests in flight (for the status bar indicator). */
+	ttsInFlight: number;
+	/** Set true while audio is playing (for the play/pause indicator). */
+	audioPlaying: boolean;
 }
 
 type PersistedMessage =
 	| { kind: "user"; text: string }
-	| { kind: "assistant"; text: string; thinking: string }
+	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean }
 	| { kind: "tool"; name: string; args: unknown; result?: string; isError?: boolean }
 	| { kind: "error"; text: string };
 
@@ -197,6 +205,10 @@ const state: AppState = {
 	currentProvider: null,
 	currentThinking: "high",
 	connectionStatus: "connecting",
+	autoSpeak: false,
+	ttsVoice: null,
+	ttsInFlight: 0,
+	audioPlaying: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -232,6 +244,16 @@ function renderShell(): void {
 			"button",
 			{ class: "picker-btn", id: "think-picker", title: "Thinking (/think)" },
 			"think: …",
+		),
+		el(
+			"button",
+			{ class: "picker-btn", id: "voice-picker", title: "TTS voice" },
+			"voice: …",
+		),
+		el(
+			"button",
+			{ class: "picker-btn", id: "tts-toggle", title: "Auto-speak assistant messages" },
+			"🔇 off",
 		),
 	);
 	root.append(header);
@@ -273,6 +295,27 @@ function renderShell(): void {
 	const statusBar = el("div", { class: "status-bar", id: "status-bar" }, "connecting…");
 	root.append(statusBar);
 
+	// Hidden audio element for TTS playback. One shared element so a new
+	// speak request stops the current one.
+	const audio = el("audio", { id: "tts-audio", hidden: true, preload: "auto" });
+	audio.addEventListener("play", () => {
+		state.audioPlaying = true;
+		refreshStatus();
+	});
+	audio.addEventListener("ended", () => {
+		state.audioPlaying = false;
+		refreshStatus();
+	});
+	audio.addEventListener("pause", () => {
+		state.audioPlaying = false;
+		refreshStatus();
+	});
+	audio.addEventListener("error", () => {
+		state.audioPlaying = false;
+		refreshStatus();
+	});
+	root.append(audio);
+
 	// File-input handler
 	$("#file-input").addEventListener("change", handleFileAttach);
 
@@ -296,6 +339,8 @@ function renderShell(): void {
 	input.addEventListener("input", autoSize);
 	$("#model-picker").addEventListener("click", openModelPicker);
 	$("#think-picker").addEventListener("click", openThinkPicker);
+	$("#voice-picker").addEventListener("click", openVoicePicker);
+	$("#tts-toggle").addEventListener("click", toggleAutoSpeak);
 
 	renderHistory();
 	refreshStatus();
@@ -346,6 +391,17 @@ function renderMessageNode(m: PersistedMessage): HTMLElement {
 		}
 		const text = el("pre", { class: "text" }, m.text || " ");
 		body.append(text);
+		// Speak button: synthesize + play this message.
+		const speakBtn = el(
+			"button",
+			{
+				class: "speak-btn",
+				title: "Speak this message (local TTS)",
+				onclick: () => void speakText(m.text),
+			},
+			"🔊",
+		);
+		body.append(speakBtn);
 		wrap.append(body);
 		return wrap;
 	}
@@ -396,6 +452,23 @@ function appendAssistantPlaceholder(): HTMLPreElement {
 	const body = el("div", { class: "body" });
 	const pre = el("pre", { class: "text streaming" });
 	body.append(pre);
+	// Speak button: synthesized text comes from the in-flight lastAssistant
+	// record; we re-look it up at click time so the user can replay the
+	// final text even after the streaming cursor has been removed.
+	const speakBtn = el(
+		"button",
+		{
+			class: "speak-btn",
+			title: "Speak this message (local TTS)",
+			onclick: () => {
+				if (lastAssistant && lastAssistant.kind === "assistant") {
+					void speakText(lastAssistant.text);
+				}
+			},
+		},
+		"🔊",
+	);
+	body.append(speakBtn);
 	wrap.append(body);
 	appendNode(wrap);
 	return pre;
@@ -450,6 +523,8 @@ function refreshStatus(): void {
 	parts.push(`${(c.input + c.output).toLocaleString()} tok`);
 	if (c.cost > 0) parts.push(`$${c.cost.toFixed(4)}`);
 	if (state.isStreaming) parts.push("● streaming");
+	if (state.ttsInFlight > 0) parts.push("● tts");
+	if (state.audioPlaying) parts.push("♪ playing");
 	if (state.connectionStatus !== "open") parts.push(`[${state.connectionStatus}]`);
 	$("#status-bar").textContent = parts.join(" · ");
 
@@ -457,6 +532,8 @@ function refreshStatus(): void {
 	mp.textContent = `model: ${state.currentModelId ?? "…"}`;
 	const tp = $<HTMLButtonElement>("#think-picker");
 	tp.textContent = `think: ${state.currentThinking}`;
+	const vp = $<HTMLButtonElement>("#voice-picker");
+	vp.textContent = `voice: ${state.ttsVoice ?? "default"}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -664,6 +741,88 @@ async function saveCurrentSession(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// TTS (local piper)
+// ---------------------------------------------------------------------------
+
+/**
+ * Synthesize the given text via /api/tts and play it on the shared <audio>.
+ * One call at a time — starting a new one stops the current playback.
+ */
+async function speakText(text: string): Promise<void> {
+	const trimmed = text.trim();
+	if (!trimmed) return;
+	const audio = $<HTMLAudioElement>("#tts-audio");
+	state.ttsInFlight++;
+	refreshStatus();
+	try {
+		// Stop any current playback.
+		audio.pause();
+		audio.currentTime = 0;
+		const blob = await synthesizeSpeech(trimmed, state.ttsVoice ?? undefined);
+		const url = URL.createObjectURL(blob);
+		audio.src = url;
+		await audio.play();
+		// Revoke object URL after playback ends (or on next speak).
+		audio.onended = () => {
+			URL.revokeObjectURL(url);
+			audio.onended = null;
+		};
+	} catch (err) {
+		appendError("tts failed: " + (err instanceof Error ? err.message : String(err)));
+	} finally {
+		state.ttsInFlight--;
+		refreshStatus();
+	}
+}
+
+function toggleAutoSpeak(): void {
+	state.autoSpeak = !state.autoSpeak;
+	const btn = $<HTMLButtonElement>("#tts-toggle");
+	btn.classList.toggle("active", state.autoSpeak);
+	btn.textContent = state.autoSpeak ? "🔊 on" : "🔇 off";
+	refreshStatus();
+}
+
+async function openVoicePicker(): Promise<void> {
+	let voices: string[];
+	let defaultVoice: string;
+	try {
+		const v = await listVoices();
+		voices = v.available;
+		defaultVoice = v.default;
+	} catch (e) {
+		appendError("could not list voices: " + (e instanceof Error ? e.message : String(e)));
+		return;
+	}
+	if (voices.length === 0) {
+		appendError("no piper voices found. Download one to ~/.local/share/piper/voices/.");
+		return;
+	}
+
+	const overlay = el("div", { class: "modal-overlay" });
+	const box = el("div", { class: "modal-box" });
+	box.append(el("h3", { text: "TTS voice" }));
+	for (const v of voices) {
+		const row = el("div", { class: "model-row" });
+		row.append(el("div", { class: "model-name" }, v));
+		if (v === defaultVoice) row.append(el("div", { class: "model-provider" }, "(server default)"));
+		if (v === state.ttsVoice) row.classList.add("active");
+		row.addEventListener("click", () => {
+			state.ttsVoice = v;
+			document.body.removeChild(overlay);
+			refreshStatus();
+		});
+		box.append(row);
+	}
+	box.append(el("button", { class: "btn", text: "Close", onclick: () => document.body.removeChild(overlay) }));
+	overlay.append(box);
+	overlay.addEventListener("click", (e) => {
+		if (e.target === overlay) document.body.removeChild(overlay);
+	});
+	document.body.append(overlay);
+}
+
+// ---------------------------------------------------------------------------
 // History (↑/↓)
 // ---------------------------------------------------------------------------
 
@@ -821,6 +980,7 @@ function onEvent(event: AgentEvent): void {
 			lastAssistant = null;
 			lastAssistantNode = null;
 			lastThinking = null;
+			// Don't reset spoken here — spoken is per-message, not per-turn.
 			break;
 
 		case "turn_end":
@@ -887,6 +1047,19 @@ function onEvent(event: AgentEvent): void {
 				state.costTotal.cost += m.usage.cost?.total ?? 0;
 			}
 			if (lastAssistantNode) lastAssistantNode.classList.remove("streaming");
+			// Auto-speak: if the toggle is on, fire TTS for the final
+			// assistant text. We only speak if there's a "lastAssistant"
+			// with non-empty text, and only on the first message_end for
+			// that turn (we use the in-place edit of the .text node as a
+			// proxy: if text is non-empty and we haven't spoken it yet,
+			// speak).
+			if (m.role === "assistant" && state.autoSpeak && lastAssistant && lastAssistant.kind === "assistant") {
+				const t = lastAssistant.text;
+				if (t && t.trim() && !lastAssistant.spoken) {
+					lastAssistant.spoken = true;
+					void speakText(t);
+				}
+			}
 			refreshStatus();
 			break;
 		}
