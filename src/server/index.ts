@@ -41,6 +41,36 @@ app.post("/api/stream", handleStream);
 app.use("/api/upload", createUploadsRouter());
 app.use("/api/transcribe", createTranscribeRouter());
 app.use("/api/tts", createTtsRouter());
+/**
+ * GET /api/changelog?limit=20
+ * Returns the most recent N commits on the current HEAD, formatted for
+ * the /changelog slash command. No auth.
+ */
+app.get("/api/changelog", (req, res) => {
+	const limitRaw = Number.parseInt(String(req.query.limit ?? "20"), 10);
+	const limit = Math.max(1, Math.min(100, Number.isFinite(limitRaw) ? limitRaw : 20));
+	import("node:child_process").then(({ execFile }) => {
+		execFile(
+			"git",
+			["log", `-n${String(limit)}`, "--pretty=format:%h%x09%ad%x09%s", "--date=iso"],
+			{ cwd: process.cwd() },
+			(err, stdout) => {
+				if (err) {
+					res.status(500).json({ error: `git log failed: ${err.message}` });
+					return;
+				}
+				const commits = stdout
+					.split("\n")
+					.filter((l) => l.length > 0)
+					.map((l) => {
+						const [hash, date, ...rest] = l.split("\t");
+						return { hash, date, subject: rest.join("\t") };
+					});
+				res.json({ commits });
+			},
+		);
+	});
+});
 
 // Health check. Reports configured provider keys, local Whisper, local TTS.
 app.get("/api/health", async (_req, res) => {

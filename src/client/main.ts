@@ -595,13 +595,28 @@ function refreshStatus(): void {
 // ---------------------------------------------------------------------------
 
 const SLASH_COMMANDS: Record<string, string> = {
+	// Core
 	model: "open the model picker",
 	think: "set thinking level: /think off|minimal|low|medium|high",
-	clear: "start a new chat",
-	sessions: "open the sessions list",
+	clear: "start a new chat (alias: /new)",
+	new: "start a new chat (alias: /clear)",
+	sessions: "open the sessions list (alias: /resume)",
+	resume: "open the sessions list (alias: /sessions)",
 	help: "show this help",
 	cost: "show session token/cost totals",
 	abort: "abort the current run",
+	// Session meta
+	name: "rename the current session: /name <name>",
+	session: "show session info (id, model, thinking, tokens, cost)",
+	// Output
+	copy: "copy the last assistant message to the clipboard",
+	export: "download the current session as an HTML file",
+	// Reference
+	hotkeys: "show keyboard shortcuts",
+	changelog: "show recent commits to this repo",
+	// Misc
+	reload: "reload the page (re-pick up any server-side changes)",
+	quit: "close the tab",
 };
 
 function showSlashMenu(): void {
@@ -675,6 +690,97 @@ function handleSlash(arg: string): void {
 			break;
 		case "abort":
 			chatClient.abort();
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		// --- New commands: aliases first, then actions. ---
+		case "new":
+			// Alias for /clear.
+			handleSlash("clear");
+			return;
+		case "resume":
+			// Alias for /sessions.
+			handleSlash("sessions");
+			return;
+		case "name": {
+			const newName = rest.trim();
+			if (!newName) {
+				appendError("usage: /name <name>");
+			} else {
+				state.title = newName.slice(0, 60);
+				$<HTMLSpanElement>("#title").textContent = state.title;
+				void saveCurrentSession();
+			}
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		}
+		case "session": {
+			const c = state.costTotal;
+			const info =
+				`Session info:\n` +
+				`  id:        ${state.sessionId}\n` +
+				`  title:     ${state.title}\n` +
+				`  model:     ${state.currentModelId ?? "(unknown)"}\n` +
+				`  thinking:  ${state.currentThinking}\n` +
+				`  messages:  ${state.messages.length}\n` +
+				`  in:        ${c.input.toLocaleString()} tok\n` +
+				`  out:       ${c.output.toLocaleString()} tok\n` +
+				`  cache r/w: ${c.cacheRead.toLocaleString()} / ${c.cacheWrite.toLocaleString()} tok\n` +
+				`  cost:      $${c.cost.toFixed(6)}`;
+			appendNode(el("pre", { class: "help" }, info));
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		}
+		case "copy": {
+			for (let i = state.messages.length - 1; i >= 0; i--) {
+				const m = state.messages[i];
+				if (m.kind === "assistant" && m.text.trim()) {
+					const ok = copyToClipboard(m.text);
+					if (ok) appendNode(el("pre", { class: "help" }, "Copied last assistant message to clipboard."));
+					else appendError("clipboard access denied");
+					break;
+				}
+			}
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		}
+		case "export":
+			exportSessionAsHtml();
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		case "hotkeys": {
+			const text =
+				`Keyboard shortcuts:\n` +
+				`  Enter           send message\n` +
+				`  Shift+Enter     newline in input\n` +
+				`  /               open slash menu (in empty input)\n` +
+				`  ↑ / ↓           recall previous / next user message\n` +
+				`  /abort          stop the current run\n` +
+				`  /clear          start a new chat\n` +
+				`  /sessions       browse previous chats\n` +
+				`  /model          switch model\n` +
+				`  /think <level>  set thinking level`;
+			appendNode(el("pre", { class: "help" }, text));
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		}
+		case "changelog": {
+			void fetch("/api/changelog?limit=20")
+				.then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+				.then((data) => {
+					const lines = (data.commits ?? []).map((c) =>
+						`  ${c.hash}  ${c.date.slice(0, 10)}  ${c.subject}`,
+					);
+					appendNode(el("pre", { class: "help" }, `Recent commits:\n${lines.join("\n") || "  (none)"}`));
+				})
+				.catch((e) => appendError("changelog failed: " + (e instanceof Error ? e.message : String(e))));
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		}
+		case "reload":
+			location.reload();
+			return;
+		case "quit":
+			try { window.close(); } catch { /* ignore */ }
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
 		default:
@@ -1001,6 +1107,109 @@ function handleSend(): void {
 function isKnownSlash(s: string): boolean {
 	const cmd = s.replace(/^\//, "").split(/\s+/)[0]?.toLowerCase() ?? "";
 	return cmd in SLASH_COMMANDS;
+}
+
+
+/**
+ * Copy text to the system clipboard. Returns false on permission denied
+ * or in non-secure contexts where navigator.clipboard is unavailable.
+ */
+function copyToClipboard(text: string): boolean {
+	try {
+		if (navigator.clipboard?.writeText) {
+			// navigator.clipboard requires https or localhost. Fall back to
+			// the legacy textarea trick on http:// LAN addresses.
+			navigator.clipboard.writeText(text);
+			return true;
+		}
+	} catch {
+		// fall through
+	}
+	try {
+		const ta = document.createElement("textarea");
+		ta.value = text;
+		ta.style.position = "fixed";
+		ta.style.opacity = "0";
+		document.body.appendChild(ta);
+		ta.focus();
+		ta.select();
+		const ok = document.execCommand("copy");
+		document.body.removeChild(ta);
+		return ok;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Download the current session as a self-contained HTML file. Used by
+ * /export. Produces a styled dark-mode page that mirrors the chat view.
+ */
+function exportSessionAsHtml(): void {
+	const esc = (s: string) =>
+		s
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/"/g, "&quot;")
+			.replace(/'/g, "&#39;");
+	const css = `
+		* { box-sizing: border-box; }
+		body { background: #0b0b0b; color: #d4d4d4; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 24px; line-height: 1.5; }
+		h1 { font-size: 16px; font-weight: 600; margin: 0 0 16px; }
+		.msg { padding: 6px 0; display: flex; gap: 10px; }
+		.role { flex-shrink: 0; font-weight: 600; }
+		.user .role { color: #7aa2f7; }
+		.assistant .role { color: #9ece6a; }
+		.tool .role { color: #bb9af7; }
+		.error .role { color: #f7768e; }
+		.body { flex: 1; min-width: 0; white-space: pre-wrap; word-wrap: break-word; }
+		.tool-body { flex: 1; }
+		.tool-name { color: #9aa0a6; font-size: 12px; margin-bottom: 4px; }
+		.tool-result { background: #161616; padding: 6px 10px; border-radius: 4px; font-size: 12px; max-height: 400px; overflow: auto; }
+		.tool-error { border-left: 2px solid #f7768e; }
+		.thinking { color: #5a5a5a; font-size: 12px; }
+		.thinking-body { margin: 4px 0 4px 12px; max-height: 200px; overflow: auto; border-left: 2px solid #2a2a2a; padding-left: 8px; }
+		.meta { color: #5a5a5a; font-size: 12px; margin-bottom: 16px; }
+		footer { color: #5a5a5a; font-size: 12px; margin-top: 24px; border-top: 1px solid #1f1f1f; padding-top: 12px; }
+	`;
+	const c = state.costTotal;
+	const lines: string[] = [];
+	lines.push(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(state.title)} — agentchatbox export</title><style>${css}</style></head><body>`);
+	lines.push(`<h1>${esc(state.title)}</h1>`);
+	lines.push(`<div class="meta">id: ${esc(state.sessionId.slice(0, 8))} · model: ${esc(state.currentModelId ?? "(unknown)")} · thinking: ${esc(state.currentThinking)} · ${state.messages.length} messages · ${c.input.toLocaleString()}/${c.output.toLocaleString()} tok · $${c.cost.toFixed(6)}</div>`);
+	for (const m of state.messages) {
+		if (m.kind === "user") {
+			lines.push(`<div class="msg user"><span class="role">You ›</span><span class="body">${esc(m.text)}</span></div>`);
+		} else if (m.kind === "assistant") {
+			lines.push(`<div class="msg assistant"><span class="role">Pi ›</span><span class="body">`);
+			if (m.thinking) lines.push(`<details class="thinking"><summary>▸ thinking</summary><pre class="thinking-body">${esc(m.thinking)}</pre></details>`);
+			lines.push(esc(m.text));
+			lines.push(`</span></div>`);
+		} else if (m.kind === "tool") {
+			const args = (() => {
+				try { return JSON.stringify(m.args); } catch { return String(m.args); }
+			})();
+			lines.push(`<div class="msg tool"><span class="role">Tool ›</span><div class="tool-body"><div class="tool-name">${esc(m.name)} ${esc(args)}</div>`);
+			if (m.result !== undefined) {
+				lines.push(`<pre class="tool-result${m.isError ? " tool-error" : ""}">${esc(m.result)}</pre>`);
+			}
+			lines.push(`</div></div>`);
+		} else if (m.kind === "error") {
+			lines.push(`<div class="msg error"><span class="role">!</span><span class="body">${esc(m.text)}</span></div>`);
+		}
+	}
+	lines.push(`<footer>Exported from agentchatbox · ${new Date().toISOString()}</footer>`);
+	lines.push(`</body></html>`);
+	const blob = new Blob([lines.join("\n")], { type: "text/html;charset=utf-8" });
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = `${state.title.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase().slice(0, 40) || "session"}-${state.sessionId.slice(0, 8)}.html`;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	URL.revokeObjectURL(url);
 }
 
 // ---------------------------------------------------------------------------
