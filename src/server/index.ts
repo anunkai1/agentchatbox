@@ -166,6 +166,21 @@ app.get("/api/models", (_req, res) => {
 const publicDir = "./public";
 if (existsSync(publicDir)) {
 	app.use(express.static(publicDir));
+	// Serve uploaded files at /uploads/<id>.<ext>. We mount the whole
+	// uploads dir as static so the URLs returned by /api/upload are
+	// fetchable. The upload IDs are random UUIDs (unguessable), which
+	// is sufficient capability for this single-user local app. The SPA
+	// fallback below explicitly excludes /uploads/ so it doesn't try to
+	// serve index.html for missing files.
+	if (existsSync(config.uploadsDir)) {
+		app.use(
+			"/uploads",
+			express.static(config.uploadsDir, {
+				fallthrough: true,
+				maxAge: "1h",
+			}),
+		);
+	}
 	// SPA fallback: serve index.html for any non-API GET.
 	app.get(/^(?!\/api\/|\/uploads\/).*/, (_req, res) => {
 		res.sendFile("index.html", { root: publicDir });
