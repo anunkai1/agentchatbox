@@ -480,10 +480,30 @@ function appendNode(node: HTMLElement): void {
 // DON'T re-render the whole list on every event (would lose the cursor
 // and cause flicker).
 
-function appendAssistantPlaceholder(): HTMLPreElement {
+/**
+ * Live rendering for the streaming case: returns the `.text` <pre> node
+ * AND the thinking container so message_update can update both in place.
+ */
+function appendAssistantPlaceholder(): LiveAssistantDom {
 	const wrap = el("div", { class: "row row-assistant" });
 	wrap.append(el("span", { class: "role role-assistant" }, "Pi ›"));
 	const body = el("div", { class: "body" });
+	// Thinking block — created collapsed by default; populated as
+	// message_update events stream in thinking content. If the model never
+	// emits thinking, the container stays empty and we remove it at
+	// message_end so it doesn't leave a stray "▸ thinking" header.
+	const thinkingWrap = el("div", { class: "thinking hidden-thinking" });
+	const thinkingToggle = el("span", { class: "thinking-toggle" }, "▸ thinking");
+	// Start with the body collapsed (`.hidden`). Click on the toggle to
+	// expand. The static `renderMessage` path also starts collapsed.
+	const thinkingPre = el("pre", { class: "thinking-body hidden" }, "");
+	thinkingWrap.append(thinkingToggle);
+	thinkingWrap.append(thinkingPre);
+	thinkingWrap.addEventListener("click", () => {
+		thinkingPre.classList.toggle("hidden");
+		thinkingToggle.textContent = thinkingPre.classList.contains("hidden") ? "▸ thinking" : "▾ thinking";
+	});
+	body.append(thinkingWrap);
 	const pre = el("pre", { class: "text streaming" });
 	body.append(pre);
 	// Speak button: synthesized text comes from the in-flight lastAssistant
@@ -505,7 +525,7 @@ function appendAssistantPlaceholder(): HTMLPreElement {
 	body.append(speakBtn);
 	wrap.append(body);
 	appendNode(wrap);
-	return pre;
+	return { textPre: pre, thinkingWrap, thinkingPre };
 }
 
 function appendToolCall(name: string, args: unknown): void {
@@ -1047,7 +1067,12 @@ async function handleVoiceRecord(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 let lastAssistant: PersistedMessage | null = null;
-let lastAssistantNode: HTMLPreElement | null = null;
+interface LiveAssistantDom {
+	textPre: HTMLPreElement;
+	thinkingWrap: HTMLDivElement;
+	thinkingPre: HTMLPreElement;
+}
+let lastAssistantDom: LiveAssistantDom | null = null;
 let lastThinking: PersistedMessage | null = null;
 
 function onEvent(event: AgentEvent): void {
@@ -1065,7 +1090,7 @@ function onEvent(event: AgentEvent): void {
 			// Reset per-turn state. The assistant block for the next message
 			// gets created on the first message_start.
 			lastAssistant = null;
-			lastAssistantNode = null;
+			lastAssistantDom = null;
 			lastThinking = null;
 			// Don't reset spoken here — spoken is per-message, not per-turn.
 			break;
@@ -1081,7 +1106,7 @@ function onEvent(event: AgentEvent): void {
 				// New assistant message — create a fresh block.
 				lastAssistant = { kind: "assistant", text: "", thinking: "" };
 				state.messages.push(lastAssistant);
-				lastAssistantNode = appendAssistantPlaceholder();
+				lastAssistantDom = appendAssistantPlaceholder();
 			} else if (event.message.role === "user") {
 				// User message echoed by the server (we already showed it).
 			} else if (event.message.role === "toolResult") {
@@ -1110,7 +1135,16 @@ function onEvent(event: AgentEvent): void {
 				lastAssistant.text = text;
 				lastAssistant.thinking = thinking;
 			}
-			if (lastAssistantNode) lastAssistantNode.textContent = text || " ";
+			if (lastAssistantDom) {
+				lastAssistantDom.textPre.textContent = text || " ";
+				// Stream thinking content into the (collapsed) thinking block.
+				// If this is the first non-empty chunk, remove the
+				// hidden-thinking marker so the toggle is visible.
+				if (thinking) {
+					lastAssistantDom.thinkingPre.textContent = thinking;
+					lastAssistantDom.thinkingWrap.classList.remove("hidden-thinking");
+				}
+			}
 			// Update cost incrementally.
 			if (m.usage) {
 				state.costTotal.input += m.usage.input;
@@ -1133,7 +1167,15 @@ function onEvent(event: AgentEvent): void {
 				state.costTotal.cacheWrite += m.usage.cacheWrite;
 				state.costTotal.cost += m.usage.cost?.total ?? 0;
 			}
-			if (lastAssistantNode) lastAssistantNode.classList.remove("streaming");
+			if (lastAssistantDom) {
+				lastAssistantDom.textPre.classList.remove("streaming");
+				// If the model never emitted any thinking content, remove
+				// the stray toggle so the message doesn't show a useless
+				// "▸ thinking" header.
+				if (!lastAssistantDom.thinkingPre.textContent?.trim()) {
+					lastAssistantDom.thinkingWrap.remove();
+				}
+			}
 			// Auto-speak: if the toggle is on, fire TTS for the final
 			// assistant text. We only speak if there's a "lastAssistant"
 			// with non-empty text, and only on the first message_end for
