@@ -2,7 +2,7 @@
 import { chromium } from "playwright";
 
 const URL = process.env.URL || "http://192.168.0.148:3500/";
-const VIEWPORT = { width: 390, height: 844 };
+const VIEWPORT = { width: 390, height: 1080 };
 const UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36";
 
 const browser = await chromium.launch({ headless: true });
