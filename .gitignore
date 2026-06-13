@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output
+dist/
+build/
+public/app.js
+public/app.js.map
+public/app.css
+public/index.html
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Uploads (keep folder, ignore contents)
+uploads/*
+!uploads/.gitkeep
+
+# Sessions (pi stores under ~/.pi/agent by default; this is just a safety net)
+.sessions/
+
+# Pi agent data lives in ~/.pi/agent - do not commit keys
+.pi-agent/
