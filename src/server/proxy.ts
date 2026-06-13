@@ -34,11 +34,14 @@ export function handleStream(req: Request, res: Response): void {
 	const apiKey = serverKey ?? body.options?.apiKey;
 
 	if (!apiKey) {
+		console.log(`[stream] rejected: no API key for provider "${provider}"`);
 		res.status(401).json({
 			error: `no API key configured on the server for provider "${provider}"`,
 		});
 		return;
 	}
+
+	console.log(`[stream] model=${body.model.id} provider=${provider} key=${apiKey.slice(0, 8)}…`);
 
 	// Set up SSE headers
 	res.status(200);
