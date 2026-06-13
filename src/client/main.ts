@@ -277,6 +277,18 @@ function renderShell(): void {
 			{ class: "picker-btn", id: "tts-toggle", title: "Auto-speak assistant messages" },
 			"🔇 off",
 		),
+		// Overflow menu — only visible on narrow screens, where the picker pills
+		// are hidden via the @media block in styles.css.
+		el(
+			"button",
+			{
+				class: "icon-btn overflow-menu",
+				id: "overflow-menu",
+				title: "Settings",
+				onclick: openOverflowMenu,
+			},
+			"⋯",
+		),
 	);
 	root.append(header);
 
@@ -302,7 +314,7 @@ function renderShell(): void {
 			id: "input",
 			class: "input",
 			rows: 1,
-			placeholder: "Type a message — Enter to send, Shift+Enter newline, / for commands",
+			placeholder: "Type…",
 			autocomplete: "off",
 			autocapitalize: "off",
 			spellcheck: false,
@@ -836,6 +848,59 @@ async function openVoicePicker(): Promise<void> {
 		});
 		box.append(row);
 	}
+	box.append(el("button", { class: "btn", text: "Close", onclick: () => document.body.removeChild(overlay) }));
+	overlay.append(box);
+	overlay.addEventListener("click", (e) => {
+		if (e.target === overlay) document.body.removeChild(overlay);
+	});
+	document.body.append(overlay);
+}
+
+/**
+ * Compact mobile menu — only shown on narrow screens (see styles.css).
+ * Re-exposes model, thinking, voice, and TTS toggle in a single overlay.
+ */
+function openOverflowMenu(): void {
+	const overlay = el("div", { class: "modal-overlay" });
+	const box = el("div", { class: "modal-box overflow-box" });
+	box.append(el("h3", { text: "Settings" }));
+
+	const modelLine = el("div", { class: "overflow-row" });
+	modelLine.append(el("div", { class: "overflow-label" }, "model"));
+	modelLine.append(el("div", { class: "overflow-value" }, state.currentModelId ?? "—"));
+	modelLine.addEventListener("click", () => {
+		document.body.removeChild(overlay);
+		openModelPicker();
+	});
+	box.append(modelLine);
+
+	const thinkLine = el("div", { class: "overflow-row" });
+	thinkLine.append(el("div", { class: "overflow-label" }, "think"));
+	thinkLine.append(el("div", { class: "overflow-value" }, state.currentThinking));
+	thinkLine.addEventListener("click", () => {
+		document.body.removeChild(overlay);
+		openThinkPicker();
+	});
+	box.append(thinkLine);
+
+	const voiceLine = el("div", { class: "overflow-row" });
+	voiceLine.append(el("div", { class: "overflow-label" }, "voice"));
+	voiceLine.append(el("div", { class: "overflow-value" }, state.ttsVoice ?? "default"));
+	voiceLine.addEventListener("click", () => {
+		document.body.removeChild(overlay);
+		void openVoicePicker();
+	});
+	box.append(voiceLine);
+
+	const ttsLine = el("div", { class: "overflow-row" });
+	ttsLine.append(el("div", { class: "overflow-label" }, "auto-speak"));
+	ttsLine.append(el("div", { class: "overflow-value" }, state.autoSpeak ? "on" : "off"));
+	ttsLine.addEventListener("click", () => {
+		toggleAutoSpeak();
+		ttsLine.querySelector(".overflow-value")!.textContent = state.autoSpeak ? "on" : "off";
+	});
+	box.append(ttsLine);
+
 	box.append(el("button", { class: "btn", text: "Close", onclick: () => document.body.removeChild(overlay) }));
 	overlay.append(box);
 	overlay.addEventListener("click", (e) => {
