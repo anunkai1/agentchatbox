@@ -22,6 +22,17 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
+// Lightweight access log so we can see what the browser is actually doing.
+app.use((req, _res, next) => {
+	const ts = new Date().toISOString().slice(11, 23);
+	const line = `${ts} ${req.method} ${req.url}`;
+	if (req.url.startsWith("/api/")) {
+		const len = req.headers["content-length"];
+		console.log(`${line} (${len ?? 0} bytes)`);
+	}
+	next();
+});
+
 // API routes
 app.post("/api/stream", handleStream);
 app.use("/api/upload", createUploadsRouter());
