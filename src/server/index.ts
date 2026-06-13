@@ -1,8 +1,9 @@
 /**
  * Agentchatbox server entry.
  *
- * Serves the built web UI from `public/`, and exposes the proxy / upload
- * / transcribe endpoints under `/api/*`.
+ * Serves the built web UI from `public/`, exposes the proxy / upload
+ * / transcribe endpoints under `/api/*`, and runs a per-connection
+ * server-side pi Agent over WebSocket at `/api/chat`.
  *
  * Run in dev with `npm run dev` (concurrent server + client watcher).
  * Run in prod with `npm start` after `npm run build`.
@@ -14,7 +15,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { config } from "./config.js";
 import { handleStream } from "./proxy.js";
 import { createUploadsRouter } from "./uploads.js";
-import { createTranscribeRouter } from "./transcribe.js";
+import { createTranscribeRouter, checkWhisperAvailable } from "./transcribe.js";
+import { mountChatWs } from "./chat.js";
 
 mkdirSync(config.uploadsDir, { recursive: true });
 
@@ -38,9 +40,16 @@ app.post("/api/stream", handleStream);
 app.use("/api/upload", createUploadsRouter());
 app.use("/api/transcribe", createTranscribeRouter());
 
-// Simple health check
-app.get("/api/health", (_req, res) => {
-	res.json({ status: "ok", providers: Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]) });
+// Health check. Reports configured provider keys AND whether local Whisper
+// is available (so the client can fall back gracefully if it isn't).
+app.get("/api/health", async (_req, res) => {
+	const whisper = await checkWhisperAvailable();
+	res.json({
+		status: "ok",
+		providers: Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]),
+		whisper: whisper.available,
+		whisperReason: whisper.available ? undefined : whisper.reason,
+	});
 });
 
 // Static files (built client)
@@ -62,10 +71,13 @@ if (existsSync(publicDir)) {
 	});
 }
 
-app.listen(config.port, config.host, () => {
+const server = app.listen(config.port, config.host, () => {
 	const providers = Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]);
 	console.log(`agentchatbox listening on http://${config.host}:${config.port}`);
 	console.log(`  uploads dir:   ${config.uploadsDir}`);
 	console.log(`  providers:     ${providers.length ? providers.join(", ") : "(none — set API keys in .env)"}`);
-	console.log(`  whisper:       ${config.openaiApiKey ? "enabled" : "disabled (no OPENAI_API_KEY)"}`);
 });
+
+// WebSocket endpoint. Mounted on the same HTTP server so we don't need a
+// second port.
+mountChatWs(server);
