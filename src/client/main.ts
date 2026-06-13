@@ -174,6 +174,12 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		},
 		// Always go through the server proxy so API keys stay on the server.
 		streamFn: proxiedStreamFn,
+		// Pick up per-provider keys the user enters in the API-key dialog
+		// (stored in ProviderKeysStore). The server's own env key still wins
+		// if it's configured — see src/server/proxy.ts.
+		getApiKey: async (provider: string) => {
+			return (await providerKeys.get(provider)) ?? undefined;
+		},
 	});
 
 	agentUnsubscribe = agent.subscribe((event: { type: string; state?: AgentState }) => {
