@@ -169,6 +169,12 @@ html, body {
 	font-size: 12px;
 	margin: 2px 0;
 }
+/* The empty thinking placeholder is created in the live-streaming path
+ * before any thinking content has arrived. Hide it (don't take vertical
+ * space) until the first thinking chunk arrives — message_update removes
+ * this class as soon as the model emits content.
+ */
+.thinking.hidden-thinking { display: none; }
 .thinking-toggle { cursor: pointer; user-select: none; }
 .thinking-body {
 	margin: 4px 0 4px 12px;
