@@ -622,9 +622,11 @@ function showSlashMenu(): void {
 }
 
 function handleSlash(arg: string): void {
-	const value = $<HTMLTextAreaElement>("#input").value.trim();
-	const parts = value.replace(/^\//, "").split(/\s+/);
-	const cmd = (arg || parts[0] || "").toLowerCase();
+	// `arg` is the slash body with the leading "/" already stripped (for
+	// input-based invocations) OR a bare command name (for header-button
+	// invocations like handleSlash("clear")).
+	const parts = (arg || "").split(/\s+/);
+	const cmd = (parts[0] || "").toLowerCase();
 	const rest = parts.slice(1).join(" ");
 
 	switch (cmd) {
@@ -655,6 +657,7 @@ function handleSlash(arg: string): void {
 			}
 			break;
 		case "sessions":
+			$<HTMLTextAreaElement>("#input").value = "";
 			void openSessionsDialog();
 			break;
 		case "help":
@@ -967,13 +970,14 @@ function handleSend(): void {
 	input.value = "";
 	autoSize();
 	if (trimmed.startsWith("/")) {
-		handleSlash("");
+		handleSlash(trimmed.replace(/^\//, ""));
 		// If the slash was unknown, send it as a regular prompt.
 		// (handleSlash leaves the input empty on known commands.)
-		if ($<HTMLTextAreaElement>("#input").value === "" && !isKnownSlash(trimmed)) {
-			// unknown — fall through
-		} else {
+		if ($<HTMLTextAreaElement>("#input").value === "" && isKnownSlash(trimmed)) {
+			// known slash — handled, do NOT also send as prompt
 			return;
+		} else {
+			// unknown slash — fall through and send as prompt
 		}
 	}
 	// Push to history.
