@@ -103,7 +103,7 @@ export function createTtsRouter(): Router {
 
 function runHelper(args: string[], env: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> {
 	return new Promise((resolveP) => {
-		const child = spawn("python3", [HELPER_PATH, ...args], {
+		const child = spawn(process.env.PYTHON_BIN || "python3", [HELPER_PATH, ...args], {
 			stdio: ["ignore", "pipe", "pipe"],
 			env,
 		});
@@ -134,7 +134,7 @@ async function listVoices(): Promise<string[]> {
 
 export async function checkTtsAvailable(): Promise<{ available: boolean; reason?: string; voice?: string }> {
 	return new Promise((resolveP) => {
-		const child = spawn("python3", [HELPER_PATH, "--self-test"], {
+		const child = spawn(process.env.PYTHON_BIN || "python3", [HELPER_PATH, "--self-test"], {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: process.env,
 		});

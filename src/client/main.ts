@@ -20,6 +20,28 @@
  *   - errors in red
  */
 
+/**
+ * UUID helper — `crypto.randomUUID()` is unavailable in non-secure contexts
+ * on some Android WebViews (e.g. plain http://LAN IPs). Fall back to a
+ * tiny RFC4122 v4 generator so the page still loads.
+ */
+function uuid(): string {
+	if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+		return crypto.randomUUID();
+	}
+	const b = new Uint8Array(16);
+	const get = (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function")
+		? crypto.getRandomValues.bind(crypto)
+		: (a) => a.map(() => Math.floor(Math.random() * 256));
+	get(b);
+	b[6] = (b[6] & 0x0f) | 0x40;
+	b[8] = (b[8] & 0x3f) | 0x80;
+	const h = Array.from(b, (x) => x.toString(16).padStart(2, "0"));
+	return `${h.slice(0, 4).join("")}-${h.slice(4, 6).join("")}-${h.slice(6, 8).join("")}-${h.slice(8, 10).join("")}-${h.slice(10, 16).join("")}`;
+}
+
+
+
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type {
 	AssistantMessage,
@@ -192,7 +214,7 @@ interface ModelOption {
 }
 
 const state: AppState = {
-	sessionId: crypto.randomUUID(),
+	sessionId: uuid(),
 	title: "New chat",
 	messages: [],
 	historyIdx: null,
@@ -590,7 +612,7 @@ function handleSlash(arg: string): void {
 		case "clear":
 			if (confirm("Start a new chat? Current conversation will be saved.")) {
 				void saveCurrentSession().then(() => {
-					state.sessionId = crypto.randomUUID();
+					state.sessionId = uuid();
 					state.title = "New chat";
 					state.messages = [];
 					state.history = [];
