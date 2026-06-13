@@ -191,6 +191,15 @@ interface AppState {
 	currentModelId: string | null;
 	currentProvider: string | null;
 	currentThinking: ThinkingLevel;
+	/**
+	 * The model id the user just clicked in the picker. The server will
+	 * confirm it on the next `ready` event. Set to the model id at click
+	 * time, cleared when the matching `ready` arrives. Used to distinguish
+	 * "user picked this" from "server just connected and is reporting its
+	 * default" — we only adopt the server-reported model if either we
+	 * have no model displayed yet, or the server is confirming our pick.
+	 */
+	pendingModelSet: string | null;
 	connectionStatus: "connecting" | "open" | "closed";
 	/** When true, every final assistant message is spoken automatically. */
 	autoSpeak: boolean;
@@ -230,6 +239,7 @@ const state: AppState = {
 	currentModelId: null,
 	currentProvider: null,
 	currentThinking: "high",
+	pendingModelSet: null,
 	connectionStatus: "connecting",
 	autoSpeak: false,
 	ttsVoice: null,
@@ -595,9 +605,18 @@ function appendError(text: string): void {
 // ---------------------------------------------------------------------------
 
 function refreshStatus(): void {
+	// Helper: prefer the human-readable name from /api/models over the
+	// raw model id (which is the same as the name for MiniMax-M3 but
+	// is "deepseek-v4-pro" rather than "DeepSeek V4 Pro" for deepseek).
+	const modelLabel = (() => {
+		const id = state.currentModelId;
+		if (!id) return "(no model)";
+		const opt = state.availableModels.find((m) => m.id === id);
+		return opt?.name ?? id;
+	})();
+
 	const parts: string[] = [];
-	if (state.currentModelId) parts.push(state.currentModelId);
-	else parts.push("(no model)");
+	parts.push(modelLabel);
 	parts.push(`think: ${state.currentThinking}`);
 	const c = state.costTotal;
 	parts.push(`${(c.input + c.output).toLocaleString()} tok`);
@@ -609,7 +628,11 @@ function refreshStatus(): void {
 	$("#status-bar").textContent = parts.join(" · ");
 
 	const mp = $<HTMLButtonElement>("#model-picker");
-	mp.textContent = `model: ${state.currentModelId ?? "…"}`;
+	// Show the human-readable name when we have it (e.g. "DeepSeek V4
+	// Pro"), otherwise fall back to the raw id. Keep the raw id in the
+	// title attribute for hover-tooltips.
+	mp.textContent = `model: ${modelLabel}`;
+	mp.title = `Model (/model) — current id: ${state.currentModelId ?? "…"}`;
 	const tp = $<HTMLButtonElement>("#think-picker");
 	tp.textContent = `think: ${state.currentThinking}`;
 	const vp = $<HTMLButtonElement>("#voice-picker");
@@ -887,9 +910,16 @@ function openModelPicker(): void {
 			row.append(el("div", { class: "model-provider" }, m.id === m.name ? "" : m.id));
 			if (m.id === state.currentModelId) row.classList.add("active");
 			row.addEventListener("click", () => {
-				chatClient.setModel(m.id, m.provider);
+				// Update displayed model optimistically so the picker
+				// feels instant, but mark the model as "pending" so the
+				// server's next `ready` event confirms it (rather than
+				// being mistaken for a default-rebroadcast on a new
+				// connection). See onReady in boot() for the matching
+				// logic.
 				state.currentModelId = m.id;
 				state.currentProvider = m.provider;
+				state.pendingModelSet = m.id;
+				chatClient.setModel(m.id, m.provider);
 				refreshStatus();
 				document.body.removeChild(overlay);
 			});
@@ -969,9 +999,17 @@ async function loadSession(id: string): Promise<void> {
 	state.currentThinking = s.thinkingLevel;
 	renderShell();
 	// Re-sync model + thinking with the server so subsequent prompts use them.
+	// Mark the model as pending so the server's `ready` confirmation
+	// (which is the only signal that the new agent is built) updates the
+	// UI rather than being masked as a default-rebroadcast. See onReady
+	// in boot() for the matching logic.
+	state.currentModelId = s.modelId;
+	state.currentProvider = s.provider;
+	state.pendingModelSet = s.modelId;
 	chatClient.setModel(s.modelId, s.provider);
 	chatClient.setThinking(s.thinkingLevel);
 	$<HTMLSpanElement>("#title").textContent = s.title;
+	refreshStatus();
 }
 
 async function saveCurrentSession(): Promise<void> {
@@ -1559,8 +1597,25 @@ async function boot(): Promise<void> {
 		refreshStatus();
 	});
 	chatClient.onReady((info) => {
-		state.currentModelId = info.modelId;
-		state.currentProvider = info.provider;
+		// Don't blindly overwrite the displayed model with the server's
+		// default on every fresh connection — the server sends `ready`
+		// with the *initial* model (MiniMax-M3) on each new connection,
+		// which would clobber the user's pick on every reconnect.
+		//
+		// Instead: only adopt the server-reported model if
+		//   1. we don't currently have one displayed, OR
+		//   2. the server is confirming the model the user just picked
+		//      (i.e. a setModel round-trip — server rebuilt the agent
+		//      and is reporting back the model we asked for).
+		//
+		// We detect (2) by tracking `pendingModelSet` — set when the user
+		// clicks a model in the picker, cleared on the matching `ready`.
+		const isConfirmingPending = state.pendingModelSet === info.modelId;
+		if (!state.currentModelId || isConfirmingPending) {
+			state.currentModelId = info.modelId;
+			state.currentProvider = info.provider;
+		}
+		state.pendingModelSet = null;
 		state.currentThinking = info.thinkingLevel;
 		refreshStatus();
 	});
