@@ -448,4 +448,18 @@ export const lsTool: AgentTool<typeof lsSchema, LsDetails> = {
 // Export the list
 // ---------------------------------------------------------------------------
 
-export const allTools: AgentTool[] = [bashTool, readTool, writeTool, editTool, lsTool];
+// Web access tools (vendored from pi-web-access) are imported separately so the
+// core tools file stays small. They need EXA_API_KEY or GEMINI_API_KEY in env to
+// actually do anything — see web-tools.ts for the env contract.
+import { webSearchTool, fetchContentTool, codeSearchTool } from "./web-tools.js";
+
+export const allTools: AgentTool[] = [
+	bashTool,
+	readTool,
+	writeTool,
+	editTool,
+	lsTool,
+	webSearchTool,
+	fetchContentTool,
+	codeSearchTool,
+];

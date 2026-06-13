@@ -617,6 +617,10 @@ const SLASH_COMMANDS: Record<string, string> = {
 	// Misc
 	reload: "reload the page (re-pick up any server-side changes)",
 	quit: "close the tab",
+	// Web access (pi-web-access tools)
+	websearch: "search the web and summarise: /websearch <query>",
+	fetch: "fetch and read a URL: /fetch <url>",
+	codesearch: "search for code examples: /codesearch <query>",
 };
 
 function showSlashMenu(): void {
@@ -783,6 +787,39 @@ function handleSlash(arg: string): void {
 			try { window.close(); } catch { /* ignore */ }
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
+		case "websearch": {
+			const query = rest;
+			if (!query) {
+				appendError("Usage: /websearch <query>");
+			} else {
+				sendAsUser(`Use web_search to look up: ${query}\nGive me a 3-sentence summary plus the top 3 source URLs.`);
+			}
+			$<HTMLTextAreaElement>("#input").value = "";
+			autoSize();
+			break;
+		}
+		case "fetch": {
+			const url = rest;
+			if (!url) {
+				appendError("Usage: /fetch <url>");
+			} else {
+				sendAsUser(`Use fetch_content to grab ${url} and summarise the key points in 5 bullet points.`);
+			}
+			$<HTMLTextAreaElement>("#input").value = "";
+			autoSize();
+			break;
+		}
+		case "codesearch": {
+			const query = rest;
+			if (!query) {
+				appendError("Usage: /codesearch <query>");
+			} else {
+				sendAsUser(`Use code_search to find: ${query}\nGive me 2 short code snippets with source URLs.`);
+			}
+			$<HTMLTextAreaElement>("#input").value = "";
+			autoSize();
+			break;
+		}
 		default:
 			// Unknown. Leave the slash in the input and let it be sent as a regular prompt.
 			refreshStatus();
@@ -1086,6 +1123,16 @@ function handleSend(): void {
 			// unknown slash — fall through and send as prompt
 		}
 	}
+	sendAsUser(trimmed);
+}
+
+/**
+ * Send a message as the user. Called both from handleSend (typed input) and
+ * from slash commands like /websearch, /fetch, /codesearch that need to inject
+ * a pre-formatted prompt into the conversation.
+ */
+function sendAsUser(trimmed: string): void {
+	if (!trimmed) return;
 	// Push to history.
 	if (state.history[state.history.length - 1] !== trimmed) state.history.push(trimmed);
 	state.historyIdx = null;
