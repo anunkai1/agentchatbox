@@ -159,9 +159,14 @@ const updateUrl = (sessionId: string) => {
 const createAgent = async (initialState?: Partial<AgentState>) => {
 	if (agentUnsubscribe) agentUnsubscribe();
 
-	// Pick a default model. The user can switch in the model selector.
+	// Default model priority: M3 (if the user has a key, server or browser)
+	// → Claude Sonnet → GPT-4o. The user can switch in the model selector.
+	const minimaxProvider = await customProviders.get("minimax");
+	const m3 = minimaxProvider?.models?.find((m) => m.id === "MiniMax-M3");
 	const defaultModel =
-		getModel("anthropic", "claude-sonnet-4-5-20250929") ?? getModel("openai", "gpt-4o");
+		m3 ??
+		getModel("anthropic", "claude-sonnet-4-5-20250929") ??
+		getModel("openai", "gpt-4o");
 
 	agent = new Agent({
 		initialState: initialState || {
