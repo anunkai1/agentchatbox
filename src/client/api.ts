@@ -11,7 +11,7 @@
  *   - /api/health — server liveness + configured providers
  */
 
-import type { UploadResponse, TranscribeResponse } from "../shared/protocol.js";
+import type { UploadResponse, TranscribeResponse, VoicesResponse } from "../shared/protocol.js";
 
 const BASE = ""; // same origin
 
@@ -43,10 +43,37 @@ export interface HealthInfo {
 	providers: string[];
 	whisper: boolean;
 	whisperReason?: string;
+	tts: boolean;
+	ttsReason?: string;
+	ttsVoice?: string;
 }
 
 export async function getHealth(): Promise<HealthInfo> {
 	const res = await fetch(`${BASE}/api/health`);
 	if (!res.ok) throw new Error(`health failed: ${res.status}`);
 	return (await res.json()) as HealthInfo;
+}
+
+/**
+ * Local TTS via /api/tts. Returns the WAV bytes. Caller is responsible
+ * for turning them into playable audio (we use a single shared <audio>
+ * element in the renderer to avoid multiple voices overlapping).
+ */
+export async function synthesizeSpeech(text: string, voice?: string): Promise<Blob> {
+	const res = await fetch(`${BASE}/api/tts`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ text, voice }),
+	});
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`tts failed: ${res.status} ${body.slice(0, 200)}`);
+	}
+	return await res.blob();
+}
+
+export async function listVoices(): Promise<VoicesResponse> {
+	const res = await fetch(`${BASE}/api/tts/voices`);
+	if (!res.ok) throw new Error(`voices failed: ${res.status}`);
+	return (await res.json()) as VoicesResponse;
 }
