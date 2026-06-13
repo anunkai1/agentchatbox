@@ -466,9 +466,31 @@ function summarizeArgs(args: unknown): string {
 	return JSON.stringify(a);
 }
 
+/**
+ * True iff the user is currently sitting at the bottom of the messages list
+ * (within a small tolerance). Used to decide whether new streamed tokens
+ * should keep the viewport pinned to the latest line, or leave the user
+ * alone when they've deliberately scrolled up to re-read something.
+ */
+function isAtBottom(): boolean {
+	const list = $("#messages");
+	const slack = 32; // px — small enough that "near the bottom" counts as pinned
+	return list.scrollHeight - list.clientHeight - list.scrollTop <= slack;
+}
+
 function scrollToBottom(): void {
 	const list = $("#messages");
 	list.scrollTop = list.scrollHeight;
+}
+
+/**
+ * Scroll only if the user is already at (or near) the bottom. If they've
+ * scrolled up, do nothing — we don't want to yank them away from the
+ * earlier text they were re-reading. Used during streaming so the cursor
+ * line doesn't keep moving once the reader has looked away from it.
+ */
+function scrollToBottomIfPinned(): void {
+	if (isAtBottom()) scrollToBottom();
 }
 
 function appendNode(node: HTMLElement): void {
@@ -1412,13 +1434,16 @@ function onEvent(event: AgentEvent): void {
 				state.costTotal.cacheRead += m.usage.cacheRead;
 				state.costTotal.cacheWrite += m.usage.cacheWrite;
 				state.costTotal.cost += m.usage.cost?.total ?? 0;
-			}
-			scrollToBottom();
-			refreshStatus();
-			break;
-		}
+				}
+				// Don't yank the user back to the bottom on every token — if they've
+				// scrolled up to re-read, leave them there. scrollToBottomIfPinned
+				// only scrolls when they were already near the bottom.
+				scrollToBottomIfPinned();
+				refreshStatus();
+				break;
+				}
 
-		case "message_end": {
+				case "message_end": {
 			const m = event.message as AssistantMessage;
 			if (m.usage) {
 				state.costTotal.input += m.usage.input;
