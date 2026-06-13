@@ -1,10 +1,10 @@
 /**
  * Client-side API for talking to the agentchatbox server.
  *
- * The official `@earendil-works/pi-web-ui` runs the Agent in the browser.
- * We replace the default `streamSimple` call with one that POSTs to our
- * server, which forwards the call to the LLM provider using the API
- * key configured there. The browser never sees the key.
+ * The Agent in the browser calls `proxiedStreamFn` for every LLM request.
+ * We replace the default direct-to-provider call with a POST to our server,
+ * which forwards the call to the LLM provider using the API key configured
+ * server-side. The browser never sees the key.
  */
 
 import {
@@ -16,11 +16,7 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { StreamRequest } from "../shared/protocol.js";
 
 /** Empty AssistantMessage used to report proxy errors. */
-function emptyAssistantMessage(
-	model: Model<Api>,
-	errorMessage: string,
-	stopReason: "error" | "aborted" = "error",
-) {
+function emptyAssistantMessage(model: Model<Api>, errorMessage: string) {
 	return {
 		role: "assistant" as const,
 		content: [],
@@ -35,7 +31,7 @@ function emptyAssistantMessage(
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
-		stopReason,
+		stopReason: "error" as const,
 		errorMessage,
 		timestamp: Date.now(),
 	};
@@ -44,13 +40,9 @@ function emptyAssistantMessage(
 /**
  * Custom stream function for the Agent.
  *
- * Calls `/api/stream` with the model + context. Reads the SSE response
- * and pushes each `AssistantMessageEvent` into a fresh
- * `AssistantMessageEventStream` that we return to the Agent.
- *
- * The function is intentionally synchronous: it creates the event stream,
- * fires off the fetch in the background, and returns the stream right
- * away. Events are pushed into the stream as the response is read.
+ * Synchronous: creates an event stream, fires off the fetch in the background,
+ * and returns the stream immediately. Events are pushed into it as the SSE
+ * response is read.
  */
 export const proxiedStreamFn: StreamFn = (
 	model: Model<Api>,
@@ -58,7 +50,6 @@ export const proxiedStreamFn: StreamFn = (
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
 	const out = createAssistantMessageEventStream();
-
 	const body: StreamRequest = { model, context, options };
 
 	void (async () => {
@@ -74,10 +65,7 @@ export const proxiedStreamFn: StreamFn = (
 				out.push({
 					type: "error",
 					reason: "error",
-					error: emptyAssistantMessage(
-						model,
-						`proxy: ${response.status} ${text}`,
-					),
+					error: emptyAssistantMessage(model, `proxy: ${response.status} ${text}`),
 				});
 				out.end();
 				return;
@@ -92,7 +80,6 @@ export const proxiedStreamFn: StreamFn = (
 				if (done) break;
 				buffer += decoder.decode(value, { stream: true });
 
-				// Parse SSE frames. Each frame is `event: <type>\ndata: <json>\n\n`.
 				let frameEnd: number;
 				while ((frameEnd = buffer.indexOf("\n\n")) !== -1) {
 					const raw = buffer.slice(0, frameEnd);
@@ -118,15 +105,13 @@ export const proxiedStreamFn: StreamFn = (
 						}
 					} else if (eventName === "message" && data) {
 						try {
-							const evt = JSON.parse(data);
-							out.push(evt);
+							out.push(JSON.parse(data));
 						} catch {
-							/* ignore parse errors */
+							/* ignore */
 						}
 					}
 				}
 			}
-
 			out.end();
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -142,9 +127,7 @@ export const proxiedStreamFn: StreamFn = (
 	return out;
 };
 
-/**
- * Upload a file to the server. Returns the URL to use in attachments.
- */
+/** Upload a file to the server. Returns the URL to use in attachments. */
 export async function uploadFile(
 	file: File,
 ): Promise<{ url: string; filename: string; mimeType: string; size: number }> {
@@ -158,10 +141,7 @@ export async function uploadFile(
 	return res.json() as Promise<{ url: string; filename: string; mimeType: string; size: number }>;
 }
 
-/**
- * Transcribe an audio blob (typically a recorded voice note) to text
- * using the server's Whisper endpoint.
- */
+/** Transcribe an audio blob to text via the server's Whisper endpoint. */
 export async function transcribeAudio(audio: Blob, filename = "voice.webm"): Promise<string> {
 	const form = new FormData();
 	form.append("audio", audio, filename);

@@ -25,10 +25,13 @@ const htmlSrc = resolve(root, "index.html");
 const htmlDst = resolve(root, "public/index.html");
 
 async function copyStatic() {
+	const clientCssSrc = resolve(root, "src/client/styles.css");
+	const clientCssDst = resolve(root, "public/styles.css");
 	await copyFile(cssSrc, cssDst);
-	const cssStat = await stat(cssDst);
+	await copyFile(clientCssSrc, clientCssDst);
 	await copyFile(htmlSrc, htmlDst);
-	console.log(`client: copied app.css (${(cssStat.size / 1024).toFixed(1)} KB) and index.html`);
+	const cssStat = await stat(cssDst);
+	console.log(`client: copied app.css (${(cssStat.size / 1024).toFixed(1)} KB) + styles.css + index.html`);
 }
 
 const options = {
