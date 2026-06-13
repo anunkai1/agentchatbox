@@ -90,7 +90,7 @@ export function createTranscribeRouter(): Router {
 
 function runHelper(audioPath: string): Promise<{ stdout: string; stderr: string; code: number }> {
 	return new Promise((resolveP) => {
-		const child = spawn("python3", [HELPER_PATH, audioPath], {
+		const child = spawn(process.env.PYTHON_BIN || "python3", [HELPER_PATH, audioPath], {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let stdout = "";
