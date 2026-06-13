@@ -414,8 +414,9 @@ function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const body = el("div", { class: "body" });
 		if (m.thinking) {
 			const t = el("div", { class: "thinking" });
-			t.append(el("span", { class: "thinking-toggle" }, "▸ thinking"));
-			const pre = el("pre", { class: "thinking-body hidden" }, m.thinking);
+			// Default: expanded (▾). Click to collapse.
+			t.append(el("span", { class: "thinking-toggle" }, "▾ thinking"));
+			const pre = el("pre", { class: "thinking-body" }, m.thinking);
 			t.append(pre);
 			t.addEventListener("click", () => {
 				pre.classList.toggle("hidden");
@@ -488,15 +489,14 @@ function appendAssistantPlaceholder(): LiveAssistantDom {
 	const wrap = el("div", { class: "row row-assistant" });
 	wrap.append(el("span", { class: "role role-assistant" }, "Pi ›"));
 	const body = el("div", { class: "body" });
-	// Thinking block — created collapsed by default; populated as
+	// Thinking block — created expanded by default; populated as
 	// message_update events stream in thinking content. If the model never
 	// emits thinking, the container stays empty and we remove it at
-	// message_end so it doesn't leave a stray "▸ thinking" header.
+	// message_end so it doesn't leave a stray "▾ thinking" header.
 	const thinkingWrap = el("div", { class: "thinking hidden-thinking" });
-	const thinkingToggle = el("span", { class: "thinking-toggle" }, "▸ thinking");
-	// Start with the body collapsed (`.hidden`). Click on the toggle to
-	// expand. The static `renderMessage` path also starts collapsed.
-	const thinkingPre = el("pre", { class: "thinking-body hidden" }, "");
+	// Default expanded (▾). Click to collapse.
+	const thinkingToggle = el("span", { class: "thinking-toggle" }, "▾ thinking");
+	const thinkingPre = el("pre", { class: "thinking-body" }, "");
 	thinkingWrap.append(thinkingToggle);
 	thinkingWrap.append(thinkingPre);
 	thinkingWrap.addEventListener("click", () => {
