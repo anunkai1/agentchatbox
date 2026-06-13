@@ -33,6 +33,9 @@ import {
 import { proxiedStreamFn } from "./api.js";
 // CSS is loaded via <link> in index.html (see scripts/build-client.mjs for the copy step).
 
+import { SEED_CUSTOM_PROVIDERS } from "./seed-providers.js";
+
+
 // =============================================================================
 // Storage (browser-side IndexedDB; same pattern as the official example)
 // =============================================================================
@@ -63,6 +66,17 @@ sessions.setBackend(backend);
 
 const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 setAppStorage(storage);
+
+// Seed custom providers (e.g. MiniMax M3) the first time the app loads.
+// Existing user entries are preserved; missing ones are added.
+async function seedProviders() {
+	for (const provider of SEED_CUSTOM_PROVIDERS) {
+		const existing = await customProviders.get(provider.id);
+		if (!existing) {
+			await customProviders.set(provider);
+		}
+	}
+}
 
 // =============================================================================
 // State
@@ -296,6 +310,8 @@ async function initApp() {
 	);
 
 	chatPanel = new ChatPanel();
+
+	await seedProviders();
 
 	const urlParams = new URLSearchParams(window.location.search);
 	const sessionIdFromUrl = urlParams.get("session");
