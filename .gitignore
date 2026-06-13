@@ -34,8 +34,11 @@ npm-debug.log*
 uploads/*
 !uploads/.gitkeep
 
-# Sessions (pi stores under ~/.pi/agent by default; this is just a safety net)
+# Playwright browsers used for the check-page script
+.playwright/
+
+# Sessions
 .sessions/
 
-# Pi agent data lives in ~/.pi/agent - do not commit keys
+# Pi agent data
 .pi-agent/

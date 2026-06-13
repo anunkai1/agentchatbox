@@ -45,9 +45,26 @@ const options = {
 	define: {
 		"process.env.NODE_ENV": watch ? '"development"' : '"production"',
 	},
-	// These packages are Node-only (or pull in Node-only deps). The web UI
-	// references them as optional integrations, so we let the browser skip them.
-	external: ["@lmstudio/sdk", "ollama", "jszip"],
+	// These packages are Node-only (or pull in Node-only deps like `process`).
+	// The web UI references them as optional integrations; we replace any
+	// import of them (including subpaths) with an empty stub.
+	plugins: [
+		{
+			name: "stub-optional-deps",
+			setup(build) {
+				const STUB = resolve(root, "src/client/stubs/empty.js");
+				const STUB_PREFIXES = ["@lmstudio/sdk", "ollama", "jszip"];
+				build.onResolve({ filter: /.*/ }, (args) => {
+					for (const prefix of STUB_PREFIXES) {
+						if (args.path === prefix || args.path.startsWith(prefix + "/")) {
+							return { path: STUB };
+						}
+					}
+					return undefined;
+				});
+			},
+		},
+	],
 };
 
 if (watch) {
