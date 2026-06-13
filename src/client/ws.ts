@@ -13,6 +13,7 @@ import type {
 	ClientMessage,
 	ServerMessage,
 	ThinkingLevel,
+	PromptImage,
 } from "../shared/protocol.js";
 
 export type AgentEventListener = (event: AgentEvent) => void;
@@ -25,8 +26,8 @@ export type ErrorListener = (message: string) => void;
 export type StatusListener = (status: "connecting" | "open" | "closed") => void;
 
 export interface ChatClient {
-	/** Send a user prompt. Returns when the server has accepted (not when the run ends). */
-	prompt(text: string): void;
+	/** Send a user prompt. Optionally attach images (base64 + mimeType). */
+	prompt(text: string, images?: PromptImage[]): void;
 	/** Abort the current run, if any. */
 	abort(): void;
 	/** Switch to a different model mid-session. */
@@ -124,7 +125,7 @@ export function createChatClient(): ChatClient {
 	connect();
 
 	return {
-		prompt: (text) => send({ type: "prompt", text }),
+		prompt: (text, images) => send({ type: "prompt", text, ...(images && images.length > 0 ? { images } : {}) }),
 		abort: () => send({ type: "abort" }),
 		setModel: (modelId, provider) => send({ type: "setModel", modelId, provider }),
 		setThinking: (level) => send({ type: "setThinking", level }),

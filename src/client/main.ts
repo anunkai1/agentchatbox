@@ -200,6 +200,14 @@ interface AppState {
 	 * have no model displayed yet, or the server is confirming our pick.
 	 */
 	pendingModelSet: string | null;
+	/**
+	 * Map of uploaded image URL → base64 data + mime + filename. Populated
+	 * when the user attaches an image via the file picker, consumed when
+	 * they send a prompt that references the URL. Used to pass image
+	 * bytes to the model so multimodal models (e.g. minimax M3) can see
+	 * the picture, not just the markdown link.
+	 */
+	uploadedImages: Map<string, { data: string; mimeType: string; filename: string }>;
 	connectionStatus: "connecting" | "open" | "closed";
 	/** When true, every final assistant message is spoken automatically. */
 	autoSpeak: boolean;
@@ -240,6 +248,7 @@ const state: AppState = {
 	currentProvider: null,
 	currentThinking: "high",
 	pendingModelSet: null,
+	uploadedImages: new Map(),
 	connectionStatus: "connecting",
 	autoSpeak: false,
 	ttsVoice: null,
@@ -1234,7 +1243,25 @@ function sendAsUser(trimmed: string): void {
 		$<HTMLSpanElement>("#title").textContent = state.title;
 	}
 
-	chatClient.prompt(trimmed);
+	// Find any /uploads/<id>... URLs in the prompt and pull the base64
+	// bytes for each one. The URLs are emitted by handleFileAttach as
+	// markdown image links, so the regex finds them. We dedupe by URL
+	// and remove them from the map after sending so we don't keep
+	// multi-megabyte base64 strings around forever.
+	const urlRegex = /(\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)/g;
+	const seen = new Set<string>();
+	const images: Array<{ data: string; mimeType: string }> = [];
+	for (const m of trimmed.matchAll(urlRegex)) {
+		const url = m[1];
+		if (seen.has(url)) continue;
+		seen.add(url);
+		const img = state.uploadedImages.get(url);
+		if (img) {
+			images.push({ data: img.data, mimeType: img.mimeType });
+		}
+	}
+
+	chatClient.prompt(trimmed, images.length > 0 ? images : undefined);
 	setStreaming(true);
 }
 
@@ -1358,6 +1385,16 @@ async function handleFileAttach(e: Event): Promise<void> {
 	for (const file of Array.from(files)) {
 		try {
 			const res = await uploadFile(file);
+			// Remember the base64 data alongside the URL so when the user
+			// actually sends, we can include the image bytes for the
+			// model to see. We compute the base64 here (one per upload)
+			// rather than when sending, so the wire cost is paid once
+			// and the user doesn't see any delay between clicking send
+			// and the model responding.
+			if (res.mimeType.startsWith("image/")) {
+				const data = await blobToBase64(file);
+				state.uploadedImages.set(res.url, { data, mimeType: res.mimeType, filename: res.filename });
+			}
 			const insertion = res.mimeType.startsWith("image/")
 				? `\n[image: ${res.filename}](${res.url})`
 				: `\n[file: ${res.filename}](${res.url})`;
@@ -1368,6 +1405,25 @@ async function handleFileAttach(e: Event): Promise<void> {
 		}
 	}
 	input.value = "";
+}
+
+/** Convert a Blob to a base64 string (no data: URL prefix). */
+function blobToBase64(blob: Blob): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onloadend = () => {
+			const result = reader.result;
+			if (typeof result !== "string") {
+				reject(new Error("FileReader returned non-string"));
+				return;
+			}
+			// Strip the "data:<mime>;base64," prefix.
+			const comma = result.indexOf(",");
+			resolve(comma >= 0 ? result.slice(comma + 1) : result);
+		};
+		reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
+		reader.readAsDataURL(blob);
+	});
 }
 
 let mediaRecorder: MediaRecorder | null = null;

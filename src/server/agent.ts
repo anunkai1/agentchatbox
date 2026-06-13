@@ -137,7 +137,11 @@ function resolveModel(provider: string, modelId: string): Model<any> {
 			provider: "minimax",
 			baseUrl: "https://api.minimax.io/anthropic",
 			reasoning: true,
-			input: ["text"],
+			// MiniMax M3 is multimodal — accepts text + image input. This
+			// matters for image uploads: the SDK's streamSimple looks at
+			// model.input to decide whether to include image content
+			// blocks in the request, or just to send the URL as text.
+			input: ["text", "image"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 1_000_000,
 			maxTokens: 32_000,

@@ -150,6 +150,8 @@ app.get("/api/models", (_req, res) => {
 	// Custom "minimax" provider — not in the SDK registry, but used by
 	// this app as the default. Match the construction in agent.ts so the
 	// model id the client picks is the same one the server resolves.
+	// input: ["text","image"] marks M3 as multimodal — image uploads work
+	// when this model is selected.
 	if (config.apiKeys["minimax"]) {
 		out.push({
 			id: "MiniMax-M3",

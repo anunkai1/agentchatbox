@@ -64,10 +64,10 @@ export interface VoicesResponse {
 //   { type: "error", message: string }                    unrecoverable error
 //
 // Client → server:
-//   { type: "prompt", text: string }                      send a user prompt
-//   { type: "abort" }                                     abort the current run
-//   { type: "setModel", modelId: string, provider: string } swap model mid-session
-//   { type: "setThinking", level: ThinkingLevel }        swap thinking level
+//   { type: "prompt", text: string, images?: PromptImage[] }  send a user prompt (with optional images)
+//   { type: "abort" }                                         abort the current run
+//   { type: "setModel", modelId: string, provider: string }   swap model mid-session
+//   { type: "setThinking", level: ThinkingLevel }             swap thinking level
 //
 // `init` is implicit: the server uses defaults (M3, thinking=high) on first
 // connect. `setModel` is the only model switcher. We do not accept a model
@@ -81,6 +81,14 @@ export type ThinkingLevel =
 	| "medium"
 	| "high";
 
+/** Base64-encoded image attached to a user prompt. */
+export interface PromptImage {
+	/** Base64-encoded image bytes (no data: URL prefix). */
+	data: string;
+	/** MIME type, e.g. "image/jpeg", "image/png". */
+	mimeType: string;
+}
+
 /** Server → client. */
 export type ServerMessage =
 	| { type: "ready"; modelId: string; provider: string; thinkingLevel: ThinkingLevel }
@@ -89,7 +97,7 @@ export type ServerMessage =
 
 /** Client → server. */
 export type ClientMessage =
-	| { type: "prompt"; text: string }
+	| { type: "prompt"; text: string; images?: PromptImage[] }
 	| { type: "abort" }
 	| { type: "setModel"; modelId: string; provider: string }
 	| { type: "setThinking"; level: ThinkingLevel };

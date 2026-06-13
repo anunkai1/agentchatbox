@@ -16,8 +16,9 @@
 import { WebSocketServer, type WebSocket } from "ws";
 import type { IncomingMessage, Server as HttpServer } from "node:http";
 import { createAgent, DEFAULT_MODEL_ID, DEFAULT_PROVIDER, DEFAULT_THINKING } from "./agent.js";
-import type { ClientMessage, ServerMessage, ThinkingLevel } from "../shared/protocol.js";
+import type { ClientMessage, ServerMessage, ThinkingLevel, PromptImage } from "../shared/protocol.js";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
+import type { ImageContent } from "@earendil-works/pi-ai";
 
 export function mountChatWs(server: HttpServer): void {
 	const wss = new WebSocketServer({ server, path: "/api/chat" });
@@ -90,7 +91,24 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 					// forward them via the subscriber above. Errors come
 					// through as message_end with stopReason="error" or
 					// agent_end with an errorMessage.
-					await agent.prompt(msg.text);
+					//
+					// If the client sent images (e.g. via the file picker),
+					// pass them as the second arg so the SDK can build a
+					// multimodal request — text + image content blocks — for
+					// models whose `input` includes "image". The model
+					// receives the actual pixels, not just a URL.
+					const images: ImageContent[] | undefined = msg.images?.length
+						? msg.images.map((img: PromptImage) => ({
+								type: "image",
+								data: img.data,
+								mimeType: img.mimeType,
+							}))
+						: undefined;
+					if (images) {
+						await agent.prompt(msg.text, images);
+					} else {
+						await agent.prompt(msg.text);
+					}
 					break;
 				}
 				case "abort": {
