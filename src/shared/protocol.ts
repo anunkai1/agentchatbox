@@ -74,12 +74,11 @@ export interface VoicesResponse {
 // from the client at init time — the server is the source of truth for
 // model availability.
 
-export type ThinkingLevel =
-	| "off"
-	| "minimal"
-	| "low"
-	| "medium"
-	| "high";
+// Re-export the SDK's ThinkingLevel so the protocol stays in sync with
+// the wider union (which includes "xhigh"). If the SDK adds a new level,
+// the protocol picks it up automatically.
+import type { ThinkingLevel as ThinkingLevelSdk } from "@earendil-works/pi-agent-core";
+export type ThinkingLevel = ThinkingLevelSdk;
 
 /** Base64-encoded image attached to a user prompt. */
 export interface PromptImage {

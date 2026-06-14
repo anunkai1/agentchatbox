@@ -24,12 +24,12 @@ jobs:
         run: npm ci
 
       - name: Typecheck
-        # The client typecheck has two pre-existing errors in src/client/main.ts
-        # (implicit any on uuid fallback and a map callback). They were
-        # present at session start and aren't part of the CI change. We
-        # run server-only typecheck here until the client side is cleaned
-        # up — see README.
-        run: npx tsc -p tsconfig.json --noEmit
+        # Runs both server and client configs. `npm run typecheck` chains
+        # the two tsc invocations; client side was previously excluded
+        # (two pre-existing implicit-any errors in main.ts) but those
+        # were fixed when main.ts was split into the dom/render/slashes/
+        # voice/state modules.
+        run: npm run typecheck
 
       - name: Test
         run: npm test -- --reporter=verbose 2>&1

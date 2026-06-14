@@ -15,6 +15,7 @@
 
 import { WebSocketServer, type WebSocket } from "ws";
 import type { IncomingMessage, Server as HttpServer } from "node:http";
+import { Agent, type ThinkingLevel as ThinkingLevelSdk } from "@earendil-works/pi-agent-core";
 import { createAgent, DEFAULT_MODEL_ID, DEFAULT_PROVIDER, DEFAULT_THINKING } from "./agent.js";
 import type { ClientMessage, ServerMessage, ThinkingLevel, PromptImage } from "../shared/protocol.js";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
@@ -42,11 +43,18 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 	// Build the agent with defaults. A future protocol can let the client
 	// override the model at init time, but for now we use the locked-in
 	// defaults (M3, thinking=high).
-	let { agent, provider, model, thinkingLevel } = createAgent({
+	const built = createAgent({
 		modelId: DEFAULT_MODEL_ID,
 		provider: DEFAULT_PROVIDER,
 		thinkingLevel: DEFAULT_THINKING,
 	});
+	// Use the SDK's ThinkingLevel (the wider union incl. "xhigh") for the
+	// local binding so we can pass it through to the next agent without
+	// re-narrowing on every reassignment.
+	let agent: Agent = built.agent;
+	let provider: string = built.provider;
+	let model = built.model;
+	let thinkingLevel: ThinkingLevelSdk = built.thinkingLevel;
 
 	// Forward every Agent event to the WS. `unsubscribe` is a let because
 	// `setModel` swaps the agent out from under us mid-session — the old
@@ -134,18 +142,18 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 					const next = createAgent({
 						modelId: msg.modelId,
 						provider: msg.provider,
-						thinkingLevel: agent.state.thinkingLevel as ThinkingLevel,
+						thinkingLevel: agent.state.thinkingLevel,
 					});
 					// Carry over transcript.
 					next.agent.state.messages = messages;
-					agent = next.agent as never;
+					agent = next.agent;
 					provider = next.provider;
 					model = next.model;
 					thinkingLevel = next.thinkingLevel;
 					// Re-subscribe against the new agent and capture the
 					// unsubscribe so the NEXT setModel (or ws close) can
 					// release it cleanly.
-					unsubscribe = (agent as never as { subscribe: typeof agent.subscribe }).subscribe((event: AgentEvent) => {
+					unsubscribe = agent.subscribe((event: AgentEvent) => {
 						send(ws, { type: "event", event });
 					});
 					send(ws, {
@@ -157,7 +165,7 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 					break;
 				}
 				case "setThinking": {
-					agent.state.thinkingLevel = msg.level as never;
+					agent.state.thinkingLevel = msg.level;
 					thinkingLevel = msg.level;
 					break;
 				}

@@ -20,17 +20,17 @@
  */
 
 import { Agent } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel as ThinkingLevelSdk } from "@earendil-works/pi-agent-core";
 import { getModel } from "@earendil-works/pi-ai";
-import type { Model } from "@earendil-works/pi-ai";
+import type { KnownProvider, Model } from "@earendil-works/pi-ai";
 import { config, getServerApiKey } from "./config.js";
 import { allTools } from "./tools.js";
-import type { ThinkingLevel } from "../shared/protocol.js";
 
 export const DEFAULT_MODEL_ID = "MiniMax-M3";
 export const DEFAULT_PROVIDER = "minimax";
-export const DEFAULT_THINKING: ThinkingLevel = "high";
+export const DEFAULT_THINKING: ThinkingLevelSdk = "high";
 
-const KNOWN_PROVIDERS = new Set([
+const KNOWN_PROVIDERS: ReadonlySet<KnownProvider> = new Set<KnownProvider>([
 	"anthropic",
 	"openai",
 	"google",
@@ -57,7 +57,7 @@ export interface CreateAgentOptions {
 	/** Client-supplied API key for the chosen provider. Server env wins if set. */
 	clientApiKey?: string;
 	/** Override the default thinking level. */
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevel?: ThinkingLevelSdk;
 }
 
 export interface CreateAgentResult {
@@ -65,11 +65,15 @@ export interface CreateAgentResult {
 	model: Model<any>;
 	provider: string;
 	apiKeySource: "server" | "client" | "none";
-	thinkingLevel: ThinkingLevel;
+	thinkingLevel: ThinkingLevelSdk;
 }
 
 export function createAgent(opts: CreateAgentOptions = {}): CreateAgentResult {
-	const provider = (opts.provider ?? DEFAULT_PROVIDER).toLowerCase();
+	// KNOWN_PROVIDERS is typed as `ReadonlySet<KnownProvider>`, so `.has()`
+	// narrows `provider` from `string` to `KnownProvider` below. The
+	// outer `as KnownProvider` here is needed because opts.provider is
+	// still `string | undefined` at this point.
+	const provider = (opts.provider ?? DEFAULT_PROVIDER).toLowerCase() as KnownProvider;
 	const modelId = opts.modelId ?? DEFAULT_MODEL_ID;
 	const thinkingLevel = opts.thinkingLevel ?? DEFAULT_THINKING;
 
@@ -105,7 +109,7 @@ export function createAgent(opts: CreateAgentOptions = {}): CreateAgentResult {
 			model,
 			thinkingLevel,
 			messages: [],
-			tools: allTools as never, // Tools type lives in @earendil-works/pi-ai; the agent-core API takes a structurally-compatible array.
+			tools: allTools,
 		},
 		streamFn: async (...args) => {
 			// Server-side stream: call the provider directly with our key.
@@ -122,11 +126,15 @@ export function createAgent(opts: CreateAgentOptions = {}): CreateAgentResult {
 	return { agent, model, provider, apiKeySource, thinkingLevel };
 }
 
-function resolveModel(provider: string, modelId: string): Model<any> {
+function resolveModel(provider: KnownProvider, modelId: string): Model<any> {
 	// The built-in registry has anthropic/openai/google/... but not "minimax".
 	// For known providers, defer to getModel. For minimax, construct the
 	// Model object from the same shape the seed-providers used.
-	const built = getModel(provider as never, modelId as never) as Model<any> | undefined;
+	// modelId is a `string` but getModel wants `keyof (typeof MODELS)[K]`.
+	// The cast is safe because resolveModel is only called with ids the
+	// user typed in (or our default), not arbitrary — getModel returns
+	// undefined for unknown ids, which we handle in the caller.
+	const built = getModel(provider, modelId as never) as Model<any> | undefined;
 	if (built) return built;
 
 	if (provider === "minimax") {

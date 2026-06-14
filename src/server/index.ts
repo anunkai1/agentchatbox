@@ -20,7 +20,7 @@ import { createTranscribeRouter, checkWhisperAvailable } from "./transcribe.js";
 import { createTtsRouter, checkTtsAvailable } from "./tts.js";
 import { mountChatWs } from "./chat.js";
 import { projectRoot } from "./paths.js";
-import { getModels } from "@earendil-works/pi-ai";
+import { getModels, type KnownProvider } from "@earendil-works/pi-ai";
 
 mkdirSync(config.uploadsDir, { recursive: true });
 
@@ -129,16 +129,12 @@ app.get("/api/models", (_req, res) => {
 		"kimi-coding",
 		"opencode",
 	];
-	for (const provider of builtinProviders) {
+	// Inline cast to KnownProvider (the list above is a subset).
+	const providerList: ReadonlyArray<KnownProvider> = builtinProviders as ReadonlyArray<KnownProvider>;
+	for (const provider of providerList) {
 		if (!config.apiKeys[provider]) continue;
 		try {
-			// getModels is typed against KnownProvider; we cast since we've
-			// narrowed to a known list.
-			const models = getModels(provider as never) as Array<{
-				id: string;
-				name: string;
-				reasoning?: boolean;
-			}>;
+			const models = getModels(provider);
 			for (const m of models) {
 				out.push({ id: m.id, provider, name: m.name, reasoning: !!m.reasoning });
 			}
