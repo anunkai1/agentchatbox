@@ -12,12 +12,14 @@
 import cors from "cors";
 import express from "express";
 import { existsSync, mkdirSync } from "node:fs";
+import { resolve } from "node:path";
 import { config } from "./config.js";
 import { handleStream } from "./proxy.js";
 import { createUploadsRouter } from "./uploads.js";
 import { createTranscribeRouter, checkWhisperAvailable } from "./transcribe.js";
 import { createTtsRouter, checkTtsAvailable } from "./tts.js";
 import { mountChatWs } from "./chat.js";
+import { projectRoot } from "./paths.js";
 import { getModels } from "@earendil-works/pi-ai";
 
 mkdirSync(config.uploadsDir, { recursive: true });
@@ -54,7 +56,7 @@ app.get("/api/changelog", (req, res) => {
 		execFile(
 			"git",
 			["log", `-n${String(limit)}`, "--pretty=format:%h%x09%ad%x09%s", "--date=iso"],
-			{ cwd: process.cwd() },
+			{ cwd: projectRoot },
 			(err, stdout) => {
 				if (err) {
 					res.status(500).json({ error: `git log failed: ${err.message}` });
@@ -164,8 +166,9 @@ app.get("/api/models", (_req, res) => {
 	res.json({ models: out });
 });
 
-// Static files (built client)
-const publicDir = "./public";
+// Static files (built client). Resolved against the project root so the
+// server works regardless of the process working directory.
+const publicDir = resolve(projectRoot, "public");
 if (existsSync(publicDir)) {
 	app.use(express.static(publicDir));
 	// Serve uploaded files at /uploads/<id>.<ext>. We mount the whole

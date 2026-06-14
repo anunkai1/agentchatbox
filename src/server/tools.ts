@@ -53,6 +53,12 @@ class ToolError extends Error {
 	}
 }
 
+// Resolve a tool-supplied path against the server's working directory.
+// The model passes paths relative to wherever the user is "working" —
+// by design that's the server's cwd (the project the user started the
+// agent in). This is intentionally NOT projectRoot: if the user starts
+// the server from a subdirectory to scope the agent, relative paths
+// should resolve against that subdirectory.
 function resolveSafe(p: string): string {
 	return isAbsolute(p) ? p : resolve(process.cwd(), p);
 }

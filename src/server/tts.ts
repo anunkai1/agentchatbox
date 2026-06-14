@@ -21,8 +21,9 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { projectRoot } from "./paths.js";
 
-const HELPER_PATH = resolve(process.cwd(), "scripts/tts.py");
+const HELPER_PATH = resolve(projectRoot, "scripts/tts.py");
 
 const MAX_TEXT_CHARS = 4096; // hard cap on input — prevents runaway synthesis
 

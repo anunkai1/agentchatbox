@@ -48,8 +48,10 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 		thinkingLevel: DEFAULT_THINKING,
 	});
 
-	// Forward every Agent event to the WS.
-	const unsubscribe = agent.subscribe((event: AgentEvent) => {
+	// Forward every Agent event to the WS. `unsubscribe` is a let because
+	// `setModel` swaps the agent out from under us mid-session — the old
+	// subscription is released and a new one is captured here.
+	let unsubscribe = agent.subscribe((event: AgentEvent) => {
 		send(ws, { type: "event", event });
 	});
 
@@ -120,6 +122,9 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 					// requested model. We preserve the current messages so
 					// the conversation isn't lost across model switches.
 					const messages = agent.state.messages.slice();
+					// Release the old subscription BEFORE swapping the agent,
+					// so the listener on the dead agent doesn't keep firing
+					// on the WS until GC.
 					unsubscribe();
 					try {
 						agent.abort();
@@ -137,12 +142,10 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 					provider = next.provider;
 					model = next.model;
 					thinkingLevel = next.thinkingLevel;
-					// Re-subscribe. We close over `agent`, so this needs to
-					// happen against the new instance.
-					// (We can't reassign the outer `unsubscribe` cleanly from
-					// a callback, so we just leak a single reference; when
-					// the WS closes the GC picks everything up.)
-					(agent as never as { subscribe: typeof agent.subscribe }).subscribe((event: AgentEvent) => {
+					// Re-subscribe against the new agent and capture the
+					// unsubscribe so the NEXT setModel (or ws close) can
+					// release it cleanly.
+					unsubscribe = (agent as never as { subscribe: typeof agent.subscribe }).subscribe((event: AgentEvent) => {
 						send(ws, { type: "event", event });
 					});
 					send(ws, {

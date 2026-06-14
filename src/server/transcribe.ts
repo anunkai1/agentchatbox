@@ -23,6 +23,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import multer from "multer";
+import { projectRoot } from "./paths.js";
 import type { TranscribeResponse } from "../shared/protocol.js";
 
 const upload = multer({
@@ -30,8 +31,9 @@ const upload = multer({
 	limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB cap on audio
 });
 
-// Resolve the Python helper relative to the project root, not the dist dir.
-const HELPER_PATH = resolve(process.cwd(), "scripts/transcribe.py");
+// Resolve the Python helper relative to the project root, not the
+// process's working directory. The server may be started from anywhere.
+const HELPER_PATH = resolve(projectRoot, "scripts/transcribe.py");
 
 interface HelperOutput {
 	text: string;
