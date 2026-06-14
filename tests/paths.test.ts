@@ -9,6 +9,13 @@
  *   fix/cwd-and-subscription-leak
  * which replaced `process.cwd()` calls with `projectRoot` derived from
  * `import.meta.url`.
+ *
+ * The "different cwd" test uses `tsx` (already a devDependency) to
+ * execute the module's source under a fresh process. Plain `node`
+ * can't load `.ts` files — only `tsx`/`ts-node`/vitest's own loader
+ * can — and we want a real subprocess boundary so the module's
+ * top-level `projectRoot` calculation runs fresh, not via Vitest's
+ * module cache.
  */
 
 import { describe, expect, it } from "vitest";
@@ -26,6 +33,7 @@ const execFileP = promisify(execFile);
 const here = resolvePath(fileURLToPath(import.meta.url), "..");
 const projectRoot = resolvePath(here, "..");
 const pathsModule = resolvePath(projectRoot, "src/server/paths.ts");
+const tsxBin = resolvePath(projectRoot, "node_modules/.bin/tsx");
 
 describe("projectRoot", () => {
 	it("resolves to a directory that contains package.json", async () => {
@@ -34,11 +42,11 @@ describe("projectRoot", () => {
 	});
 
 	it("is the same regardless of the caller's cwd", async () => {
-		// Run a small node script that imports paths.ts from two
+		// Run a small tsx script that imports paths.ts from two
 		// different cwds and prints the resolved project root each
 		// time. The two outputs should match.
 		const tmp = await mkdtemp(join(tmpdir(), "paths-test-"));
-		const probe = join(tmp, "probe.mjs");
+		const probe = join(tmp, "probe.ts");
 		try {
 			await writeFile(
 				probe,
@@ -47,10 +55,10 @@ describe("projectRoot", () => {
 			);
 
 			// From the real project root.
-			const fromReal = (await execFileP("node", [probe], { cwd: projectRoot })).stdout.trim();
+			const fromReal = (await execFileP(tsxBin, [probe], { cwd: projectRoot })).stdout.trim();
 
 			// From /tmp.
-			const fromTmp = (await execFileP("node", [probe], { cwd: "/tmp" })).stdout.trim();
+			const fromTmp = (await execFileP(tsxBin, [probe], { cwd: "/tmp" })).stdout.trim();
 
 			// Both should resolve to the same real path on disk. realpath
 			// collapses symlinks so we don't get false negatives from
