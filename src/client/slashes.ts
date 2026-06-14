@@ -212,8 +212,8 @@ export function handleSlash(arg: string): void {
 		case "hotkeys": {
 			const text =
 				`Keyboard shortcuts:\n` +
-				`  Enter           send message\n` +
-				`  Shift+Enter     newline in input\n` +
+				`  Enter           newline in input (mobile-friendly)\n` +
+				`  ⌘/Ctrl+Enter    send message\n` +
 				`  /               open slash menu (in empty input)\n` +
 				`  ↑ / ↓           recall previous / next user message\n` +
 				`  /abort          stop the current run\n` +

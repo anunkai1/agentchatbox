@@ -369,13 +369,13 @@ export function renderShell(): void {
 			id: "input",
 			class: "input",
 			rows: 1,
-			placeholder: "Type…",
+			placeholder: "Type… (Enter for newline, tap send to submit)",
 			autocomplete: "off",
 			autocapitalize: "off",
 			spellcheck: false,
 		}),
-		el("button", { class: "send-btn", id: "send-btn", onclick: () => shellHandlers!.handleSend() }, "send"),
-		el("button", { class: "stop-btn", id: "stop-btn", hidden: true, onclick: () => shellHandlers!.abort() }, "stop"),
+		el("button", { class: "send-btn", id: "send-btn", title: "Send (⌘/Ctrl+Enter)", onclick: () => shellHandlers!.handleSend() }, "send"),
+		el("button", { class: "stop-btn", id: "stop-btn", title: "Stop the current run", hidden: true, onclick: () => shellHandlers!.abort() }, "stop"),
 	);
 	root.append(composer);
 	root.append(el("input", { type: "file", id: "file-input", hidden: true, multiple: true }));
@@ -411,7 +411,12 @@ export function renderShell(): void {
 	// Input handlers
 	const input = $<HTMLTextAreaElement>("#input");
 	input.addEventListener("keydown", (e) => {
-		if (e.key === "Enter" && !e.shiftKey) {
+		// Enter always inserts a newline. Sending is via the send button
+		// (or Ctrl/Cmd+Enter for power users) — plain Enter on the soft
+		// Android keyboard doesn't have a Shift modifier, so the old
+		// "Enter sends, Shift+Enter newline" rule was unfriendly to
+		// mobile users who tapped return expecting a line break.
+		if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
 			e.preventDefault();
 			shellHandlers!.handleSend();
 		} else if (e.key === "ArrowUp" && (input.value === "" || input.selectionStart === 0)) {
