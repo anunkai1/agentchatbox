@@ -7,11 +7,18 @@
  *
  * Run in dev with `npm run dev` (concurrent server + client watcher).
  * Run in prod with `npm start` after `npm run build`.
+ *
+ * `dotenv/config` is imported here (not in config.ts) so the .env file
+ * is loaded exactly once at process start, before any module reads
+ * process.env. config.ts is a pure data module.
  */
+
+import "dotenv/config";
 
 import cors from "cors";
 import express from "express";
 import { existsSync, mkdirSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { config } from "./config.js";
 import { handleStream } from "./proxy.js";
@@ -20,7 +27,8 @@ import { createTranscribeRouter, checkWhisperAvailable } from "./transcribe.js";
 import { createTtsRouter, checkTtsAvailable } from "./tts.js";
 import { mountChatWs } from "./chat.js";
 import { projectRoot } from "./paths.js";
-import { getModels, type KnownProvider } from "@earendil-works/pi-ai";
+import { SDK_PROVIDERS } from "./providers.js";
+import { getModels } from "@earendil-works/pi-ai";
 
 mkdirSync(config.uploadsDir, { recursive: true });
 
@@ -39,11 +47,27 @@ app.use((req, _res, next) => {
 	next();
 });
 
+// Resolved once at boot. The commit hash goes into /api/health and
+// the boot banner so an operator can verify the running process is on
+// the expected tree. If git fails (e.g. running from a tarball) we fall
+// back to "(unknown)" rather than blocking the server.
+let COMMIT_HASH = "(unknown)";
+try {
+	COMMIT_HASH = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+		cwd: projectRoot,
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	}).trim() || "(unknown)";
+} catch {
+	/* not a git checkout — leave the placeholder */
+}
+
 // API routes
 app.post("/api/stream", handleStream);
 app.use("/api/upload", createUploadsRouter());
 app.use("/api/transcribe", createTranscribeRouter());
 app.use("/api/tts", createTtsRouter());
+
 /**
  * GET /api/changelog?limit=20
  * Returns the most recent N commits on the current HEAD, formatted for
@@ -52,35 +76,37 @@ app.use("/api/tts", createTtsRouter());
 app.get("/api/changelog", (req, res) => {
 	const limitRaw = Number.parseInt(String(req.query.limit ?? "20"), 10);
 	const limit = Math.max(1, Math.min(100, Number.isFinite(limitRaw) ? limitRaw : 20));
-	import("node:child_process").then(({ execFile }) => {
-		execFile(
-			"git",
-			["log", `-n${String(limit)}`, "--pretty=format:%h%x09%ad%x09%s", "--date=iso"],
-			{ cwd: projectRoot },
-			(err, stdout) => {
-				if (err) {
-					res.status(500).json({ error: `git log failed: ${err.message}` });
-					return;
-				}
-				const commits = stdout
-					.split("\n")
-					.filter((l) => l.length > 0)
-					.map((l) => {
-						const [hash, date, ...rest] = l.split("\t");
-						return { hash, date, subject: rest.join("\t") };
-					});
-				res.json({ commits });
-			},
-		);
-	});
+	execFile(
+		"git",
+		["log", `-n${String(limit)}`, "--pretty=format:%h%x09%ad%x09%s", "--date=iso"],
+		{ cwd: projectRoot, maxBuffer: 1024 * 1024 },
+		(err, stdout) => {
+		if (err) {
+			res.status(500).json({ error: `git log failed: ${err.message}` });
+			return;
+		}
+		const commits = stdout
+			.split("\n")
+			.filter((l) => l.length > 0)
+			.map((l) => {
+				const [hash, date, ...rest] = l.split("	");
+				return { hash, date, subject: rest.join("	") };
+			});
+		res.json({ commits });
+	},
+	);
 });
 
-// Health check. Reports configured provider keys, local Whisper, local TTS.
+// Health check. Reports configured provider keys, local Whisper, local TTS,
+// and the running commit hash (so an operator can verify the live process
+// is on the expected tree). Cross-check against
+// `git -C /home/architect/agentchatbox rev-parse HEAD` on the host.
 app.get("/api/health", async (_req, res) => {
 	const whisper = await checkWhisperAvailable();
 	const tts = await checkTtsAvailable();
 	res.json({
 		status: "ok",
+		commit: COMMIT_HASH,
 		providers: Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]),
 		whisper: whisper.available,
 		whisperReason: whisper.available ? undefined : whisper.reason,
@@ -106,32 +132,12 @@ app.get("/api/health", async (_req, res) => {
  *
  * The custom "minimax" provider isn't in the SDK's built-in registry,
  * so we hand-build its entry here to keep the picker self-consistent.
+ * (See providers.ts for the source of truth on which providers exist.)
  */
 app.get("/api/models", (_req, res) => {
 	const out: Array<{ id: string; provider: string; name: string; reasoning: boolean }> = [];
 
-	// Providers registered in @earendil-works/pi-ai's MODELS map.
-	const builtinProviders: Array<keyof typeof config.apiKeys> = [
-		"anthropic",
-		"openai",
-		"google",
-		"xai",
-		"groq",
-		"cerebras",
-		"openrouter",
-		"deepseek",
-		"mistral",
-		"huggingface",
-		"fireworks",
-		"together",
-		"vercel-ai-gateway",
-		"zai",
-		"kimi-coding",
-		"opencode",
-	];
-	// Inline cast to KnownProvider (the list above is a subset).
-	const providerList: ReadonlyArray<KnownProvider> = builtinProviders as ReadonlyArray<KnownProvider>;
-	for (const provider of providerList) {
+	for (const provider of SDK_PROVIDERS) {
 		if (!config.apiKeys[provider]) continue;
 		try {
 			const models = getModels(provider);
@@ -200,6 +206,7 @@ if (existsSync(publicDir)) {
 const server = app.listen(config.port, config.host, () => {
 	const providers = Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]);
 	console.log(`agentchatbox listening on http://${config.host}:${config.port}`);
+	console.log(`  commit:        ${COMMIT_HASH}`);
 	console.log(`  uploads dir:   ${config.uploadsDir}`);
 	console.log(`  providers:     ${providers.length ? providers.join(", ") : "(none — set API keys in .env)"}`);
 	console.log(`  whisper:       ${config.openaiApiKey ? "openai (disabled, using local faster-whisper)" : "local faster-whisper (CPU)"}`);

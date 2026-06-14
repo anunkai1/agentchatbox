@@ -183,8 +183,7 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	appendNode(wrap);
 	return { textPre: pre, thinkingWrap, thinkingPre };
 }
-
-export function appendToolCall(name: string, args: unknown): void {
+export function appendToolCall(name: string, args: unknown, toolCallId: string): void {
 	const wrap = el("div", { class: "row row-tool" });
 	wrap.append(el("span", { class: "role role-tool" }, "Tool ›"));
 	const body = el("div", { class: "tool-body" });
@@ -192,28 +191,46 @@ export function appendToolCall(name: string, args: unknown): void {
 	const pending = el("div", { class: "tool-pending" }, "running…");
 	body.append(pending);
 	wrap.append(body);
+	// Mark the row with the SDK's toolCallId so the matching
+	// `tool_execution_end` (or the subsequent `message_start` for the
+	// toolResult) can find it directly. Falls back to the "last
+	// pending" heuristic if id is missing for some reason. (The "last
+	// pending" approach broke when the model fired two parallel tool
+	// calls — the second's result would fill the first's pending row.)
+	wrap.dataset.toolCallId = toolCallId;
 	wrap.dataset.toolPending = "1";
 	appendNode(wrap);
 }
 
-export function finalizeToolCall(name: string, result: string | undefined, isError: boolean): void {
+export function finalizeToolCall(toolCallId: string, name: string, result: string | undefined, isError: boolean): void {
 	const list = $("#messages");
-	const rows = list.querySelectorAll(".row-tool");
-	// Find the last pending tool row.
-	for (let i = rows.length - 1; i >= 0; i--) {
-		const r = rows[i] as HTMLElement;
-		if (r.dataset.toolPending === "1") {
-			delete r.dataset.toolPending;
-			const pending = r.querySelector(".tool-pending");
-			if (pending) pending.remove();
-			const body = r.querySelector(".tool-body");
-			if (body && result !== undefined) {
-				body.append(el("pre", { class: `tool-result ${isError ? "tool-error" : ""}` }, result));
+	const target = toolCallId
+		? list.querySelector(`[data-tool-call-id="${CSS.escape(toolCallId)}"]`)
+		: null;
+	// Resolve the row: prefer the id match (handles parallel tool calls);
+	// fall back to the "last pending" heuristic for any tool that landed
+	// without an id (shouldn't happen with the current SDK, but keeps us
+	// safe against future protocol changes).
+	let row: HTMLElement | null = target as HTMLElement | null;
+	if (!row) {
+		const rows = list.querySelectorAll(".row-tool");
+		for (let i = rows.length - 1; i >= 0; i--) {
+			const r = rows[i] as HTMLElement;
+			if (r.dataset.toolPending === "1") {
+				row = r;
+				break;
 			}
-			break;
 		}
 	}
-	void name; // unused for now
+	if (!row) return;
+	delete row.dataset.toolPending;
+	const pending = row.querySelector(".tool-pending");
+	if (pending) pending.remove();
+	const body = row.querySelector(".tool-body");
+	if (body && result !== undefined) {
+		body.append(el("pre", { class: `tool-result ${isError ? "tool-error" : ""}` }, result));
+	}
+	void name; // unused for now — the tool-name row was already set on append
 }
 
 export function appendError(text: string): void {
@@ -293,6 +310,13 @@ export function renderShell(): void {
 	if (!shellHandlers) {
 		throw new Error("renderShell called before registerShellHandlers — main.ts must wire the UI handlers first");
 	}
+	// Reset transient audio state BEFORE wiping the DOM. The shared
+	// <audio> element is about to be removed (its `pause` event won't
+	// fire), so without this, `state.audioPlaying` stays `true` and the
+	// status bar keeps showing "♪ playing" after the audio element is
+	// gone (until the next renderShell or page load).
+	state.audioPlaying = false;
+	state.ttsInFlight = 0;
 	document.body.innerHTML = "";
 	const root = el("div", { id: "app" });
 	document.body.append(root);

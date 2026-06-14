@@ -136,6 +136,7 @@ function sendAsUser(trimmed: string): void {
 	const urlRegex = /(\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)/g;
 	const seen = new Set<string>();
 	const images: Array<{ data: string; mimeType: string }> = [];
+	const uploadedUrls: string[] = [];
 	for (const m of trimmed.matchAll(urlRegex)) {
 		const url = m[1];
 		if (seen.has(url)) continue;
@@ -143,8 +144,13 @@ function sendAsUser(trimmed: string): void {
 		const img = state.uploadedImages.get(url);
 		if (img) {
 			images.push({ data: img.data, mimeType: img.mimeType });
+			// Drop the base64 blob from the in-memory map once we've
+			// shipped it. Multi-MB images would otherwise accumulate
+			// for the lifetime of the page.
+			uploadedUrls.push(url);
 		}
 	}
+	for (const url of uploadedUrls) state.uploadedImages.delete(url);
 
 	chatClient.prompt(trimmed, images.length > 0 ? images : undefined);
 	setStreaming(true);
@@ -209,7 +215,7 @@ function onEvent(event: AgentEvent): void {
 					.map((c) => (c as TextContent).text)
 					.join("");
 				state.messages.push({ kind: "tool", name: tr.toolName, args: "(see above)", result: text, isError: tr.isError });
-				finalizeToolCall(tr.toolName, text, tr.isError);
+				finalizeToolCall(tr.toolCallId, tr.toolName, text, tr.isError);
 			}
 			break;
 
@@ -293,8 +299,12 @@ function onEvent(event: AgentEvent): void {
 
 		case "tool_execution_start":
 			// The model just decided to call a tool. Show a pending block.
+			// Carry the SDK's toolCallId through to the DOM so the
+			// matching tool_execution_end / message_start can find the
+			// right row even when multiple tools are in flight in
+			// parallel.
 			state.messages.push({ kind: "tool", name: event.toolName, args: event.args });
-			appendToolCall(event.toolName, event.args);
+			appendToolCall(event.toolName, event.args, event.toolCallId);
 			break;
 
 		case "tool_execution_update":

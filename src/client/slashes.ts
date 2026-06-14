@@ -196,9 +196,14 @@ export function handleSlash(arg: string): void {
 			for (let i = state.messages.length - 1; i >= 0; i--) {
 				const m = state.messages[i];
 				if (m.kind === "assistant" && m.text.trim()) {
-					const ok = copyToClipboard(m.text);
-					if (ok) appendNode(el_pre("Copied last assistant message to clipboard."));
-					else appendError("clipboard access denied");
+					// Fire-and-forget; copyToClipboard now awaits the
+					// clipboard.writeText promise so a permission denial
+					// surfaces correctly. We don't block the slash
+					// command on it.
+					void copyToClipboard(m.text).then((ok) => {
+						if (ok) appendNode(el_pre("Copied last assistant message to clipboard."));
+						else appendError("clipboard access denied");
+					});
 					break;
 				}
 			}
@@ -536,17 +541,23 @@ export function openOverflowMenu(): void {
 /**
  * Copy text to the system clipboard. Returns false on permission denied
  * or in non-secure contexts where navigator.clipboard is unavailable.
+ *
+ * The `navigator.clipboard.writeText` call is awaited so a permission
+ * denial surfaces here (return `false`) instead of escaping the try as
+ * a fire-and-forget rejection. Before this fix, the function returned
+ * `true` *before* the write resolved, so callers that logged "copied!"
+ * were lying when the clipboard write had actually failed.
  */
-function copyToClipboard(text: string): boolean {
+async function copyToClipboard(text: string): Promise<boolean> {
 	try {
 		if (navigator.clipboard?.writeText) {
 			// navigator.clipboard requires https or localhost. Fall back to
 			// the legacy textarea trick on http:// LAN addresses.
-			navigator.clipboard.writeText(text);
+			await navigator.clipboard.writeText(text);
 			return true;
 		}
 	} catch {
-		// fall through
+		// fall through to textarea fallback
 	}
 	try {
 		const ta = document.createElement("textarea");

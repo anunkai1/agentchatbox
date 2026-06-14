@@ -17,11 +17,11 @@
 
 import { Router } from "express";
 import express, { type Request, type Response } from "express";
-import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { projectRoot } from "./paths.js";
+import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 
 const HELPER_PATH = resolve(projectRoot, "scripts/tts.py");
 
@@ -59,8 +59,18 @@ export function createTtsRouter(): Router {
 				env.PIPER_VOICE = body.voice;
 			}
 
-			const { stdout, stderr, code } = await runHelper([txtPath, wavPath], env);
+			const { stdout, stderr, code, timedOut } = await runPython({
+				bin: process.env.PYTHON_BIN || "python3",
+				helperPath: HELPER_PATH,
+				helperArgs: [txtPath, wavPath],
+				env,
+				timeoutMs: DEFAULT_PYTHON_TIMEOUT_MS,
+			});
 
+			if (timedOut) {
+				res.status(504).json({ error: `tts.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms` });
+				return;
+			}
 			if (code !== 0) {
 				const tail = (stderr || stdout).slice(-500);
 				res.status(500).json({ error: `tts.py exited ${code}: ${tail}` });
@@ -102,21 +112,6 @@ export function createTtsRouter(): Router {
 	return router;
 }
 
-function runHelper(args: string[], env: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> {
-	return new Promise((resolveP) => {
-		const child = spawn(process.env.PYTHON_BIN || "python3", [HELPER_PATH, ...args], {
-			stdio: ["ignore", "pipe", "pipe"],
-			env,
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", (c) => (stdout += c.toString("utf8")));
-		child.stderr.on("data", (c) => (stderr += c.toString("utf8")));
-		child.on("close", (code) => resolveP({ stdout, stderr, code: code ?? -1 }));
-		child.on("error", (e) => resolveP({ stdout, stderr: stderr + `\nspawn error: ${e.message}`, code: -1 }));
-	});
-}
-
 async function listVoices(): Promise<string[]> {
 	const { readdir, stat } = await import("node:fs/promises");
 	const base = resolve(process.env.HOME || "/root", ".local/share/piper/voices");
@@ -133,28 +128,40 @@ async function listVoices(): Promise<string[]> {
 // Health probe (used by /api/health)
 // ---------------------------------------------------------------------------
 
+const TTS_HEALTH_CACHE_MS = 60 * 1000;
+interface TtsHealthCache {
+	at: number;
+	result: { available: boolean; reason?: string; voice?: string };
+}
+let ttsHealthCache: TtsHealthCache | null = null;
+
 export async function checkTtsAvailable(): Promise<{ available: boolean; reason?: string; voice?: string }> {
-	return new Promise((resolveP) => {
-		const child = spawn(process.env.PYTHON_BIN || "python3", [HELPER_PATH, "--self-test"], {
-			stdio: ["ignore", "pipe", "pipe"],
-			env: process.env,
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", (c) => (stdout += c.toString("utf8")));
-		child.stderr.on("data", (c) => (stderr += c.toString("utf8")));
-		child.on("close", (code) => {
-			if (code !== 0) {
-				resolveP({ available: false, reason: stderr || stdout || "unknown" });
-				return;
-			}
-			try {
-				const info = JSON.parse(stdout) as { voice: string };
-				resolveP({ available: true, voice: info.voice });
-			} catch {
-				resolveP({ available: true });
-			}
-		});
-		child.on("error", (e) => resolveP({ available: false, reason: e.message }));
+	const now = Date.now();
+	if (ttsHealthCache && now - ttsHealthCache.at < TTS_HEALTH_CACHE_MS) {
+		return ttsHealthCache.result;
+	}
+
+	const { stdout, stderr, code, timedOut } = await runPython({
+		bin: process.env.PYTHON_BIN || "python3",
+		helperPath: HELPER_PATH,
+		helperArgs: ["--self-test"],
+		env: process.env,
+		timeoutMs: 30_000,
 	});
+
+	let result: { available: boolean; reason?: string; voice?: string };
+	if (timedOut) {
+		result = { available: false, reason: "self-test timed out" };
+	} else if (code !== 0) {
+		result = { available: false, reason: stderr || stdout || "unknown" };
+	} else {
+		try {
+			const info = JSON.parse(stdout) as { voice: string };
+			result = { available: true, voice: info.voice };
+		} catch {
+			result = { available: true };
+		}
+	}
+	ttsHealthCache = { at: now, result };
+	return result;
 }

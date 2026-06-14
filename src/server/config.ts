@@ -3,9 +3,20 @@
  *
  * Copy `.env.example` to `.env` and fill in the keys you want to use.
  * Only the providers you have keys for are exposed to the client.
+ *
+ * The `dotenv/config` side-effect import is intentionally NOT here — it
+ * lives at the top of `index.ts` so the env is loaded before any other
+ * module reads process.env. config.ts itself is a plain data file.
+ *
+ * `uploadsDir` defaults to `<projectRoot>/uploads` (not `./uploads`),
+ * so the upload location doesn't drift if the process is started from
+ * a different cwd (systemd, container init, supervisor, etc.). The
+ * `projectRoot` helper derives the path from this file's location, not
+ * from process.cwd() — see paths.ts.
  */
 
-import "dotenv/config";
+import { resolve } from "node:path";
+import { projectRoot } from "./paths.js";
 
 export interface ServerConfig {
 	port: number;
@@ -28,7 +39,9 @@ function readKey(name: string): string | undefined {
 export const config: ServerConfig = {
 	port: Number.parseInt(process.env.PORT ?? "3000", 10),
 	host: process.env.HOST ?? "0.0.0.0",
-	uploadsDir: process.env.UPLOADS_DIR ?? "./uploads",
+	uploadsDir: process.env.UPLOADS_DIR
+		? resolve(process.env.UPLOADS_DIR)
+		: resolve(projectRoot, "uploads"),
 	maxUploadBytes: Number.parseInt(process.env.MAX_UPLOAD_BYTES ?? `${50 * 1024 * 1024}`, 10),
 	apiKeys: {
 		anthropic: readKey("ANTHROPIC_API_KEY") ?? "",

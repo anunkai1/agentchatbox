@@ -18,12 +18,13 @@
 
 import { Router } from "express";
 import express from "express";
-import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import multer from "multer";
 import { projectRoot } from "./paths.js";
+import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 import type { TranscribeResponse } from "../shared/protocol.js";
 
 const upload = multer({
@@ -52,14 +53,26 @@ export function createTranscribeRouter(): Router {
 		}
 
 		// Stage the audio to a temp dir (faster-whisper wants a real path).
+		// We sanitize the filename to a safe stem so the temp path can't
+		// escape the dir via a malicious originalname.
 		let dir: string | undefined;
 		try {
 			dir = await mkdtemp(join(tmpdir(), "agentchatbox-transcribe-"));
-			const audioPath = join(dir, file.originalname || "voice.webm");
+			const safeStem = (file.originalname || "voice.webm").replace(/[^\w.\-]+/g, "_").slice(0, 64);
+			const audioPath = join(dir, safeStem || "voice.webm");
 			await writeFile(audioPath, file.buffer);
 
-			const { stdout, stderr, code } = await runHelper(audioPath);
+			const { stdout, stderr, code, timedOut } = await runPython({
+				bin: process.env.PYTHON_BIN || "python3",
+				helperPath: HELPER_PATH,
+				helperArgs: [audioPath],
+				timeoutMs: DEFAULT_PYTHON_TIMEOUT_MS,
+			});
 
+			if (timedOut) {
+				res.status(504).json({ error: `transcribe.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms` });
+				return;
+			}
 			if (code !== 0) {
 				res.status(500).json({ error: `transcribe.py exited ${code}: ${stderr.slice(0, 500)}` });
 				return;
@@ -68,7 +81,7 @@ export function createTranscribeRouter(): Router {
 			let parsed: HelperOutput;
 			try {
 				parsed = JSON.parse(stdout) as HelperOutput;
-			} catch (e) {
+			} catch {
 				res.status(500).json({ error: `transcribe.py: malformed JSON output: ${stdout.slice(0, 200)}` });
 				return;
 			}
@@ -90,30 +103,47 @@ export function createTranscribeRouter(): Router {
 	return router;
 }
 
-function runHelper(audioPath: string): Promise<{ stdout: string; stderr: string; code: number }> {
-	return new Promise((resolveP) => {
-		const child = spawn(process.env.PYTHON_BIN || "python3", [HELPER_PATH, audioPath], {
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", (c) => (stdout += c.toString("utf8")));
-		child.stderr.on("data", (c) => (stderr += c.toString("utf8")));
-		child.on("close", (code) => resolveP({ stdout, stderr, code: code ?? -1 }));
-		child.on("error", (e) => resolveP({ stdout, stderr: stderr + `\nspawn error: ${e.message}`, code: -1 }));
-	});
-}
-
 // ---------------------------------------------------------------------------
 // Used by /api/health to report whether the local Whisper is available.
+// Cached for `HEALTH_CACHE_MS` so the health check doesn't spawn a Python
+// process (and trigger a faster-whisper model load) on every browser poll.
 // ---------------------------------------------------------------------------
 
+const HEALTH_CACHE_MS = 60 * 1000; // 60 s
+
+interface HealthCache {
+	at: number;
+	result: { available: boolean; reason?: string };
+}
+let whisperHealthCache: HealthCache | null = null;
+
 export async function checkWhisperAvailable(): Promise<{ available: boolean; reason?: string }> {
-	try {
-		const { stdout, code } = await runHelper("--self-test");
-		if (code !== 0) return { available: false, reason: stdout || "unknown" };
-		return { available: true };
-	} catch (e) {
-		return { available: false, reason: e instanceof Error ? e.message : String(e) };
+	const now = Date.now();
+	if (whisperHealthCache && now - whisperHealthCache.at < HEALTH_CACHE_MS) {
+		return whisperHealthCache.result;
 	}
+
+	let result: { available: boolean; reason?: string };
+	try {
+		// Fast path: if the helper script isn't even on disk, fail
+		// immediately. Saves a process spawn when the server's deploy
+		// tree is missing the python scripts (e.g. partial install).
+		if (!existsSync(HELPER_PATH)) {
+			result = { available: false, reason: `helper not found at ${HELPER_PATH}` };
+		} else {
+			const { stdout, code, timedOut } = await runPython({
+				bin: process.env.PYTHON_BIN || "python3",
+				helperPath: HELPER_PATH,
+				helperArgs: ["--self-test"],
+				timeoutMs: 30_000,
+			});
+			if (timedOut) result = { available: false, reason: "self-test timed out" };
+			else if (code !== 0) result = { available: false, reason: stdout || "unknown" };
+			else result = { available: true };
+		}
+	} catch (e) {
+		result = { available: false, reason: e instanceof Error ? e.message : String(e) };
+	}
+	whisperHealthCache = { at: now, result };
+	return result;
 }

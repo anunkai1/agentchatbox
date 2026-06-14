@@ -17,30 +17,11 @@
  */
 
 import { Type } from "typebox";
-import type { TextContent } from "@earendil-works/pi-ai";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { search } from "./web-access/gemini-search.js";
 import { extractContent } from "./web-access/extract.js";
 import { executeCodeSearch } from "./web-access/code-search.js";
-
-function text(s: string): TextContent {
-	return { type: "text", text: s };
-}
-
-function errContent(s: string): TextContent {
-	return { type: "text", text: `Error: ${s}` };
-}
-
-function ok<T>(content: TextContent[], details: T): AgentToolResult<T> {
-	return { content, details };
-}
-
-class ToolError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "ToolError";
-	}
-}
+import { errContent, ok, text, ToolError } from "./tool-utils.js";
 
 function formatSearchOutput(query: string, response: {
 	answer: string;

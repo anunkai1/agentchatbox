@@ -9,52 +9,35 @@
  *   - default model:    MiniMax-M3 (minimax provider)
  *   - default thinking: high
  *
- * API key resolution order:
- *   1. Server .env (config.getServerApiKey)
- *   2. Key supplied by client at WS init (sent in the init message, optional)
+ * API key resolution: the server env is the only source. There is no
+ * client-supplied API key in the current WS protocol — the init frame
+ * never existed, despite the older CreateAgentOptions.clientApiKey
+ * field. (The option is kept exported for back-compat with any future
+ * protocol extension that re-introduces a per-key model switch.)
  *
- * No model id is accepted from the client for security/availability
- * reasons; the server is the source of truth for which models can be used.
- * `setModel` from the client can only pick from models the server knows
- * about.
+ * `setModel` from the client can only pick from models the server
+ * knows about — see providers.ts.
  */
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { ThinkingLevel as ThinkingLevelSdk } from "@earendil-works/pi-agent-core";
 import { getModel } from "@earendil-works/pi-ai";
-import type { KnownProvider, Model } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { config, getServerApiKey } from "./config.js";
 import { allTools } from "./tools.js";
+import { isSdkProvider, KNOWN_PROVIDERS } from "./providers.js";
 
 export const DEFAULT_MODEL_ID = "MiniMax-M3";
 export const DEFAULT_PROVIDER = "minimax";
 export const DEFAULT_THINKING: ThinkingLevelSdk = "high";
 
-const KNOWN_PROVIDERS: ReadonlySet<KnownProvider> = new Set<KnownProvider>([
-	"anthropic",
-	"openai",
-	"google",
-	"xai",
-	"groq",
-	"cerebras",
-	"openrouter",
-	"deepseek",
-	"mistral",
-	"minimax",
-	"huggingface",
-	"fireworks",
-	"together",
-	"vercel-ai-gateway",
-	"zai",
-	"kimi-coding",
-	"opencode",
-]);
-
 export interface CreateAgentOptions {
 	/** Override the default model. */
 	modelId?: string;
 	provider?: string;
-	/** Client-supplied API key for the chosen provider. Server env wins if set. */
+	/** Client-supplied API key for the chosen provider. Reserved for a
+	 *  future protocol extension that re-introduces a per-key model
+	 *  switch. The WS protocol today does not send this. */
 	clientApiKey?: string;
 	/** Override the default thinking level. */
 	thinkingLevel?: ThinkingLevelSdk;
@@ -69,11 +52,11 @@ export interface CreateAgentResult {
 }
 
 export function createAgent(opts: CreateAgentOptions = {}): CreateAgentResult {
-	// KNOWN_PROVIDERS is typed as `ReadonlySet<KnownProvider>`, so `.has()`
-	// narrows `provider` from `string` to `KnownProvider` below. The
-	// outer `as KnownProvider` here is needed because opts.provider is
-	// still `string | undefined` at this point.
-	const provider = (opts.provider ?? DEFAULT_PROVIDER).toLowerCase() as KnownProvider;
+	// `opts.provider` is `string | undefined`. The KNOWN_PROVIDERS.has()
+	// check on the *string* value below narrows the list of valid
+	// providers, but TS doesn't know that — so we keep a typed local
+	// (`provider: string`) and validate explicitly.
+	const provider = (opts.provider ?? DEFAULT_PROVIDER).toLowerCase();
 	const modelId = opts.modelId ?? DEFAULT_MODEL_ID;
 	const thinkingLevel = opts.thinkingLevel ?? DEFAULT_THINKING;
 
@@ -85,7 +68,8 @@ export function createAgent(opts: CreateAgentOptions = {}): CreateAgentResult {
 	// we have to construct a custom Model object (same shape the SDK uses).
 	const model = resolveModel(provider, modelId);
 
-	// API key: server env wins, client is fallback.
+	// API key: server env is the canonical source. Client key is reserved
+	// for a future protocol extension; today chat.ts never passes it.
 	const serverKey = getServerApiKey(provider);
 	const clientKey = opts.clientApiKey?.trim() || undefined;
 	const apiKey = serverKey ?? clientKey;
@@ -111,12 +95,13 @@ export function createAgent(opts: CreateAgentOptions = {}): CreateAgentResult {
 			messages: [],
 			tools: allTools,
 		},
-		streamFn: async (...args) => {
+		streamFn: (model, context, options) => {
 			// Server-side stream: call the provider directly with our key.
-			// (Re-imports streamSimple lazily so we don't pay the cost on
-			// module load.)
-			const { streamSimple } = await import("@earendil-works/pi-ai");
-			return streamSimple(...args);
+			// streamSimple is re-imported lazily here (vs. a top-level
+			// import) so the SDK's heavy transport adapters don't load
+			// until the first prompt. The import is cached after the
+			// first call.
+			return import("@earendil-works/pi-ai").then((m) => m.streamSimple(model, context, options));
 		},
 		getApiKey: async (prov: string) => {
 			return prov === provider ? apiKey : undefined;
@@ -126,16 +111,18 @@ export function createAgent(opts: CreateAgentOptions = {}): CreateAgentResult {
 	return { agent, model, provider, apiKeySource, thinkingLevel };
 }
 
-function resolveModel(provider: KnownProvider, modelId: string): Model<any> {
+function resolveModel(provider: string, modelId: string): Model<any> {
 	// The built-in registry has anthropic/openai/google/... but not "minimax".
-	// For known providers, defer to getModel. For minimax, construct the
-	// Model object from the same shape the seed-providers used.
+	// For known SDK providers, defer to getModel. For minimax, construct
+	// the Model object from the same shape the seed-providers used.
 	// modelId is a `string` but getModel wants `keyof (typeof MODELS)[K]`.
 	// The cast is safe because resolveModel is only called with ids the
-	// user typed in (or our default), not arbitrary — getModel returns
-	// undefined for unknown ids, which we handle in the caller.
-	const built = getModel(provider, modelId as never) as Model<any> | undefined;
-	if (built) return built;
+	// caller validated against KNOWN_PROVIDERS, and getModel returns
+	// undefined for unknown ids (which we handle below).
+	if (isSdkProvider(provider)) {
+		const built = getModel(provider, modelId as never) as Model<any> | undefined;
+		if (built) return built;
+	}
 
 	if (provider === "minimax") {
 		return {

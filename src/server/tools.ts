@@ -22,36 +22,8 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { Type } from "typebox";
-import type { TextContent } from "@earendil-works/pi-ai";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function text(s: string): TextContent {
-	return { type: "text", text: s };
-}
-
-function errContent(s: string): TextContent {
-	return { type: "text", text: `Error: ${s}` };
-}
-
-function ok<T>(content: TextContent[], details: T): AgentToolResult<T> {
-	return { content, details };
-}
-
-/**
- * Tool failure path: throw the error. The agent-loop catches it, emits a
- * tool result with `isError: true`, and the model sees the message. The
- * client's `toolResult.isError` flag drives red styling.
- */
-class ToolError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "ToolError";
-	}
-}
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { errContent, ok, text, ToolError } from "./tool-utils.js";
 
 // Resolve a tool-supplied path against the server's working directory.
 // The model passes paths relative to wherever the user is "working" —
@@ -88,8 +60,9 @@ interface BashDetails {
 }
 
 const MAX_OUTPUT = 64 * 1024; // 64 KB per stream; truncate beyond that.
+const TRUNCATION_MARKER = `\n…[truncated, showing last ${MAX_OUTPUT} bytes]`;
 
-function runBash(command: string, timeoutMs: number): Promise<BashDetails> {
+function runBash(command: string, timeoutMs: number, signal?: AbortSignal): Promise<BashDetails> {
 	const started = Date.now();
 	return new Promise((resolveP) => {
 		const child = spawn("/bin/bash", ["-c", command], {
@@ -97,40 +70,69 @@ function runBash(command: string, timeoutMs: number): Promise<BashDetails> {
 			env: process.env,
 		});
 
-		let stdout = "";
-		let stderr = "";
-		let stdoutTruncated = false;
-		let stderrTruncated = false;
+		// Per-stream bounded buffer. We keep the LAST MAX_OUTPUT bytes so the
+		// model sees the tail of build logs (where errors usually land) instead
+		// of the head. Each stream is tracked independently.
+		const outChunks: Buffer[] = [];
+		const errChunks: Buffer[] = [];
+		let outTruncated = false;
+		let errTruncated = false;
 
-		child.stdout.on("data", (chunk) => {
-			if (stdout.length < MAX_OUTPUT) {
-				stdout += chunk.toString("utf8");
-				if (stdout.length > MAX_OUTPUT) {
-					stdout = stdout.slice(0, MAX_OUTPUT);
-					stdoutTruncated = true;
+		const push = (chunks: Buffer[], chunk: Buffer): void => {
+			chunks.push(chunk);
+			let total = 0;
+			for (const c of chunks) total += c.length;
+			if (total > MAX_OUTPUT) {
+				let excess = total - MAX_OUTPUT;
+				while (excess > 0 && chunks.length > 0) {
+					const head = chunks[0];
+					if (head.length <= excess) {
+						excess -= head.length;
+						chunks.shift();
+					} else {
+						chunks[0] = head.subarray(excess);
+						excess = 0;
+					}
 				}
-			} else {
-				stdoutTruncated = true;
 			}
+		};
+
+		child.stdout.on("data", (chunk: Buffer) => {
+			push(outChunks, chunk);
+			if (outChunks.reduce((n, c) => n + c.length, 0) >= MAX_OUTPUT) outTruncated = true;
 		});
-		child.stderr.on("data", (chunk) => {
-			if (stderr.length < MAX_OUTPUT) {
-				stderr += chunk.toString("utf8");
-				if (stderr.length > MAX_OUTPUT) {
-					stderr = stderr.slice(0, MAX_OUTPUT);
-					stderrTruncated = true;
-				}
-			} else {
-				stderrTruncated = true;
-			}
+		child.stderr.on("data", (chunk: Buffer) => {
+			push(errChunks, chunk);
+			if (errChunks.reduce((n, c) => n + c.length, 0) >= MAX_OUTPUT) errTruncated = true;
 		});
 
 		const timer = setTimeout(() => {
 			child.kill("SIGKILL");
 		}, timeoutMs);
 
+		// Forward the agent's abort signal to the child. agent.abort() fires
+		// the signal; without this, a long-running bash keeps running until
+		// timeoutMs even after the user clicks "stop". SIGTERM first; the
+		// timeout will SIGKILL if the process doesn't exit within 2s.
+		let sigtermTimer: NodeJS.Timeout | null = null;
+		const onAbort = () => {
+			child.kill("SIGTERM");
+			sigtermTimer = setTimeout(() => {
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}, 2000);
+		};
+		if (signal) {
+			if (signal.aborted) onAbort();
+			else signal.addEventListener("abort", onAbort, { once: true });
+		}
+
 		child.on("error", (e) => {
 			clearTimeout(timer);
+			if (sigtermTimer) clearTimeout(sigtermTimer);
 			resolveP({
 				exitCode: null,
 				signal: null,
@@ -141,14 +143,18 @@ function runBash(command: string, timeoutMs: number): Promise<BashDetails> {
 			});
 		});
 
-		child.on("close", (code, signal) => {
+		child.on("close", (code, sig) => {
 			clearTimeout(timer);
+			if (sigtermTimer) clearTimeout(sigtermTimer);
+			if (signal) signal.removeEventListener("abort", onAbort);
+			const stdout = Buffer.concat(outChunks).toString("utf8");
+			const stderr = Buffer.concat(errChunks).toString("utf8");
 			resolveP({
 				exitCode: code,
-				signal,
-				stdout: stdoutTruncated ? stdout + `\n…[truncated at ${MAX_OUTPUT} bytes]` : stdout,
-				stderr: stderrTruncated ? stderr + `\n…[truncated at ${MAX_OUTPUT} bytes]` : stderr,
-				truncated: stdoutTruncated || stderrTruncated,
+				signal: sig,
+				stdout: outTruncated ? stdout + TRUNCATION_MARKER : stdout,
+				stderr: errTruncated ? stderr + TRUNCATION_MARKER : stderr,
+				truncated: outTruncated || errTruncated,
 				durationMs: Date.now() - started,
 			});
 		});
@@ -161,10 +167,10 @@ export const bashTool: AgentTool<typeof bashSchema, BashDetails> = {
 	description:
 		"Run a shell command in /bin/bash. Inherits the full process environment, runs in the agent's working directory. Returns exit code, stdout, and stderr. Use this for anything you'd do in a terminal: build, test, git, package install, file inspection via cat/ls/grep, etc.",
 	parameters: bashSchema,
-	execute: async (_toolCallId, params) => {
+	execute: async (_toolCallId, params, signal) => {
 		const args = params as { command: string; timeoutMs?: number };
 		const timeoutMs = args.timeoutMs ?? 30_000;
-		const result = await runBash(args.command, timeoutMs);
+		const result = await runBash(args.command, timeoutMs, signal);
 
 		const parts: string[] = [];
 		parts.push(
@@ -331,8 +337,24 @@ function unifiedDiff(before: string, after: string, context = 3): string {
 	}
 	while (i < m) out.push(`-${a[i++]}`);
 	while (j < n) out.push(`+${b[j++]}`);
-	const start = Math.max(0, out.findIndex((l) => l[0] !== " ") - context);
-	const end = Math.min(out.length, out.length + context);
+	// Find the first and last changed line. We walk the array directly
+	// rather than using findIndex/findLastIndex so we keep ES2022
+	// compatibility (findLastIndex is ES2023). End of slice is one past
+	// the last changed index, then plus `context` lines of unchanged
+	// content for the post-hunk tail. (Before this fix, end was clamped
+	// to out.length unconditionally, which is what out.length is
+	// anyway, so the trailing context was silently dropped — leaving
+	// the diff looking like it ended mid-hunk.)
+	let firstChanged = -1;
+	let lastChanged = -1;
+	for (let k = 0; k < out.length; k++) {
+		if (out[k][0] !== " ") {
+			if (firstChanged < 0) firstChanged = k;
+			lastChanged = k;
+		}
+	}
+	const start = Math.max(0, (firstChanged >= 0 ? firstChanged : 0) - context);
+	const end = lastChanged >= 0 ? Math.min(out.length, lastChanged + 1 + context) : out.length;
 	return out.slice(start, end).join("\n");
 }
 
