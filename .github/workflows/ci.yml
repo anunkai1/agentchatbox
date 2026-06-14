@@ -32,7 +32,7 @@ jobs:
         run: npx tsc -p tsconfig.json --noEmit
 
       - name: Test
-        run: npm test
+        run: npm test -- --reporter=verbose 2>&1
 
       - name: Build
         run: npm run build
