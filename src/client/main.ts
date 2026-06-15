@@ -465,10 +465,13 @@ async function boot(): Promise<void> {
 
 	// Send the init handshake as soon as the WS opens. The server is
 	// waiting for this before it spawns the `pi` child. If we have
-	// no model picked yet, default to the first available model.
+	// no model picked yet, default to MiniMax-M3 (if available in
+	// the model list) or the first available model otherwise.
+	const defaultModel = state.availableModels.find((m) => m.id === "MiniMax-M3")
+		?? state.availableModels[0];
 	const onOpen = () => {
-		const modelId = state.currentModelId ?? state.availableModels[0]?.id ?? "MiniMax-M3";
-		const provider = state.currentProvider ?? state.availableModels[0]?.provider ?? "minimax";
+		const modelId = state.currentModelId ?? defaultModel?.id ?? "MiniMax-M3";
+		const provider = state.currentProvider ?? defaultModel?.provider ?? "minimax";
 		const thinkingLevel = state.currentThinking;
 		chatClient.init({ provider, modelId, thinkingLevel });
 		chatClient.offStatus(onOpen);
