@@ -88,6 +88,13 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 
 	pi = spawnChild(init);
 	(ws as WebSocket & { _pi?: PiProcess })._pi = pi;
+	// Register the pi event listeners BEFORE awaiting the session
+	// line. If the child emits its `session` line in the gap
+	// between spawnChild() returning and attachEventForwarding()
+	// running, the EventEmitter won't replay the event — we'd
+	// hang waiting for `ready` forever. Registering first means
+	// we can never miss the first event, even on a fast-spawning
+	// fake-pi.
 	attachEventForwarding(ws, pi, init, () => pendingTranscript, (t) => { pendingTranscript = t; });
 
 	// Handle subsequent client messages: forward to `pi` or handle
