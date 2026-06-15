@@ -1,106 +1,43 @@
 /**
- * In-memory app state, persisted message types, and the IndexedDB layer
- * for session titles + transcripts. Owned by main.ts at boot, mutated
- * by every other module via the exported `state` singleton.
+ * In-memory app state and the typed cache of messages the renderer
+ * paints. Owned by main.ts at boot, mutated by the server-event
+ * dispatcher.
+ *
+ * Sessions are owned by the server (via `pi --mode rpc`'s on-disk
+ * JSONL files). The browser no longer persists anything — every
+ * session operation goes through the WS protocol to the server.
+ * `state.messages` is a renderer cache: the server's transcript
+ * replay on resume populates it once, and live `pi` events append
+ * to it as the conversation continues.
  */
 
 import type { ThinkingLevel } from "../shared/protocol.js";
 import { uuid } from "./dom.js";
 
-const DB_NAME = "agentchatbox";
-const DB_VERSION = 2; // bumped: removed provider-keys, custom-providers
+// ---------------------------------------------------------------------------
+// Renderer cache: messages the browser shows in the chat scrollback
+// ---------------------------------------------------------------------------
 
-export interface SessionRecord {
-	id: string;
-	title: string;
-	modelId: string;
-	provider: string;
-	thinkingLevel: ThinkingLevel;
-	/**
-	 * The persisted transcript. Typed as `PersistedMessage[]` rather
-	 * than `Array<Record<string, unknown>>` because writes (saveCurrentSession
-	 * in slashes.ts) and reads (loadSession in slashes.ts) are both
-	 * inside this app, so the runtime data is always PersistedMessage.
-	 * Foreign IndexedDB data from a future schema change would need a
-	 * real migration here — for now, `as PersistedMessage[]` at the
-	 * IndexedDB boundary (in openDb / getAll) is the single lie.
-	 */
-	messages: PersistedMessage[];
-	createdAt: string;
-	lastModified: string;
-}
-
-export function openDb(): Promise<IDBDatabase> {
-	return new Promise((resolve, reject) => {
-		const req = indexedDB.open(DB_NAME, DB_VERSION);
-		req.onupgradeneeded = () => {
-			const db = req.result;
-			if (!db.objectStoreNames.contains("sessions")) {
-				const s = db.createObjectStore("sessions", { keyPath: "id" });
-				s.createIndex("byLastModified", "lastModified");
-			}
-		};
-		req.onsuccess = () => resolve(req.result);
-		req.onerror = () => reject(req.error);
-	});
-}
-
-export async function dbAllSessions(): Promise<SessionRecord[]> {
-	const db = await openDb();
-	return new Promise((resolve, reject) => {
-		const tx = db.transaction("sessions", "readonly");
-		const req = tx.objectStore("sessions").getAll();
-		req.onsuccess = () => {
-			db.close();
-			const all = req.result as SessionRecord[];
-			resolve(all.sort((a, b) => b.lastModified.localeCompare(a.lastModified)));
-		};
-		req.onerror = () => {
-			db.close();
-			reject(req.error);
-		};
-	});
-}
-
-export async function dbSaveSession(rec: SessionRecord): Promise<void> {
-	const db = await openDb();
-	return new Promise((resolve, reject) => {
-		const tx = db.transaction("sessions", "readwrite");
-		tx.objectStore("sessions").put(rec);
-		tx.oncomplete = () => {
-			db.close();
-			resolve();
-		};
-		tx.onerror = () => {
-			db.close();
-			reject(tx.error);
-		};
-	});
-}
-
-export async function dbDeleteSession(id: string): Promise<void> {
-	const db = await openDb();
-	return new Promise((resolve, reject) => {
-		const tx = db.transaction("sessions", "readwrite");
-		tx.objectStore("sessions").delete(id);
-		tx.oncomplete = () => {
-			db.close();
-			resolve();
-		};
-		tx.onerror = () => {
-			db.close();
-			reject(tx.error);
-		};
-	});
-}
+/**
+ * A flat, display-oriented view of a message — what the renderer
+ * needs to paint a single block. The server's `transcript` message
+ * delivers the SDK's `Message[]` shape; we project it into this
+ * shape on the client so the renderer can stay simple.
+ */
+export type PersistedMessage =
+	| { kind: "user"; text: string }
+	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean }
+	| { kind: "tool"; name: string; args: unknown; result?: string; isError?: boolean }
+	| { kind: "error"; text: string };
 
 // ---------------------------------------------------------------------------
-// Session state (in-memory)
+// In-memory app state
 // ---------------------------------------------------------------------------
 
 export interface AppState {
-	sessionId: string;
+	/** Title of the current chat. Set on first user message; updatable via /name. */
 	title: string;
+	/** Renderer cache — the messages the browser has painted, in order. */
 	messages: PersistedMessage[];
 	historyIdx: number | null; // null = at the "now" position
 	history: string[]; // user prompts typed in this session
@@ -147,12 +84,6 @@ export interface AppState {
 	lastAssistantText: string;
 }
 
-export type PersistedMessage =
-	| { kind: "user"; text: string }
-	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean }
-	| { kind: "tool"; name: string; args: unknown; result?: string; isError?: boolean }
-	| { kind: "error"; text: string };
-
 export interface ModelOption {
 	id: string;
 	provider: string;
@@ -163,7 +94,6 @@ export interface ModelOption {
 }
 
 export const state: AppState = {
-	sessionId: uuid(),
 	title: "New chat",
 	messages: [],
 	historyIdx: null,
