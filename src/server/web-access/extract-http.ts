@@ -19,7 +19,9 @@ import { activityMonitor } from "./activity.js";
 import { extractRSCContent } from "./rsc-extract.js";
 import { extractPDFToMarkdown, isPDF } from "./pdf-extract.js";
 import {
+	abortedResult,
 	extractTextTitle,
+	isAbortError,
 	MIN_USEFUL_CONTENT,
 } from "./extract-utils.js";
 import type { ExtractedContent, ExtractOptions } from "./extract-types.js";
@@ -193,11 +195,11 @@ export async function extractViaHttp(
 		return { url, title: article.title || "", content: markdown, error: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		if (message.toLowerCase().includes("abort")) {
+		if (isAbortError(err)) {
 			activityMonitor.logComplete(activityId, 0);
-		} else {
-			activityMonitor.logError(activityId, message);
+			return abortedResult(url);
 		}
+		activityMonitor.logError(activityId, message);
 		return { url, title: "", content: "", error: message };
 	} finally {
 		clearTimeout(timeoutId);

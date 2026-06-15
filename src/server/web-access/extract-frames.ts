@@ -16,11 +16,11 @@
 import { isYouTubeURL, getYouTubeStreamInfo, extractYouTubeFrame, extractYouTubeFrames } from "./youtube-extract.js";
 import { isVideoFile, extractVideoFrame, getLocalVideoDuration } from "./video-extract.js";
 import { formatSeconds } from "./utils.js";
-import { computeRangeTimestamps, MIN_FRAME_INTERVAL } from "./extract-timestamps.js";
 import {
-	abortedResult,
-	errorMessage,
-} from "./extract-utils.js";
+	computeRangeTimestamps,
+	parseTimestampSpec,
+	MIN_FRAME_INTERVAL,
+} from "./extract-timestamps.js";
 import type { ExtractedContent, VideoFrame } from "./extract-types.js";
 
 /**
@@ -72,19 +72,6 @@ export async function extractLocalFrames(
 }
 
 /**
- * Wraps `isVideoFile` so a thrown error becomes a structured return
- * value. Lets the dispatcher pattern-match without a try/catch around
- * a synchronous call.
- */
-export function safeVideoInfo(url: string): { info: ReturnType<typeof isVideoFile>; error?: string } {
-	try {
-		return { info: isVideoFile(url) };
-	} catch (err) {
-		return { info: null, error: errorMessage(err) };
-	}
-}
-
-/**
  * Handle the "frames only" request (no specific timestamp — sample N
  * frames across the whole video). Dispatches to YouTube or local
  * based on the URL.
@@ -111,18 +98,15 @@ export async function extractFrames(
 		return buildFrameResult(url, label, timestamps.length, result.frames, result.error, streamInfo.duration);
 	}
 
-	const localVideo = safeVideoInfo(url);
-	if (localVideo.error) {
-		return { url, title: "", content: "", error: localVideo.error };
-	}
-	if (localVideo.info) {
-		const durationResult = await getLocalVideoDuration(localVideo.info.absolutePath);
+	const localVideo = isVideoFile(url);
+	if (localVideo) {
+		const durationResult = await getLocalVideoDuration(localVideo.absolutePath);
 		if (typeof durationResult !== "number") {
 			return { url, title: "Frames", content: durationResult.error, error: durationResult.error };
 		}
 		const dur = Math.floor(durationResult);
 		const timestamps = computeRangeTimestamps(0, dur, frameCount);
-		const result = await extractLocalFrames(localVideo.info.absolutePath, timestamps);
+		const result = await extractLocalFrames(localVideo.absolutePath, timestamps);
 		const label = `${formatSeconds(0)}-${formatSeconds(dur)}`;
 		return buildFrameResult(url, label, timestamps.length, result.frames, result.error, durationResult);
 	}
@@ -144,7 +128,6 @@ export async function extractAtTimestamp(
 	timestamp: string,
 	frameCount: number | undefined,
 ): Promise<ExtractedContent> {
-	const { parseTimestampSpec } = await import("./extract-timestamps.js");
 	const spec = parseTimestampSpec(timestamp);
 	if (!spec) {
 		return {
@@ -160,12 +143,9 @@ export async function extractAtTimestamp(
 		return extractYouTubeAtTimestamp(url, ytInfo.videoId, spec, frameCount, timestamp);
 	}
 
-	const localVideo = safeVideoInfo(url);
-	if (localVideo.error) {
-		return { url, title: "", content: "", error: localVideo.error };
-	}
-	if (localVideo.info) {
-		return extractLocalAtTimestamp(url, localVideo.info.absolutePath, spec, frameCount, timestamp);
+	const localVideo = isVideoFile(url);
+	if (localVideo) {
+		return extractLocalAtTimestamp(url, localVideo.absolutePath, spec, frameCount, timestamp);
 	}
 
 	return {
@@ -291,7 +271,3 @@ async function extractLocalAtTimestamp(
 		thumbnail: frame,
 	};
 }
-
-// (abortedResult is re-exported for convenience to call sites that
-// still want to use it via this module.)
-export { abortedResult };

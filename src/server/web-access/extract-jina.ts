@@ -10,7 +10,7 @@
  */
 
 import { activityMonitor } from "./activity.js";
-import { extractHeadingTitle } from "./extract-utils.js";
+import { extractTextTitle } from "./extract-utils.js";
 import type { ExtractedContent } from "./extract-types.js";
 
 const JINA_READER_BASE = "https://r.jina.ai/";
@@ -43,12 +43,13 @@ export async function extractWithJinaReader(
 		const content = await res.text();
 		activityMonitor.logComplete(activityId, res.status);
 
-		const contentStart = content.indexOf("Markdown Content:");
+		const marker = "Markdown Content:";
+		const contentStart = content.indexOf(marker);
 		if (contentStart < 0) {
 			return null;
 		}
 
-		const markdownPart = content.slice(contentStart + 17).trim(); // 17 = "Markdown Content:".length
+		const markdownPart = content.slice(contentStart + marker.length).trim();
 
 		// Check for failed JS rendering or minimal content
 		if (
@@ -59,7 +60,7 @@ export async function extractWithJinaReader(
 			return null;
 		}
 
-		const title = extractHeadingTitle(markdownPart) ?? (new URL(url).pathname.split("/").pop() || url);
+		const title = extractTextTitle(markdownPart, url);
 		return { url, title, content: markdownPart, error: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);

@@ -424,14 +424,10 @@ async function loadSession(id: string): Promise<void> {
 	state.currentThinking = s.thinkingLevel;
 	const { renderShell } = await import("./render.js");
 	renderShell();
-	// Re-sync the model with the server so subsequent prompts use it.
 	// Mark the model as pending so the server's `ready` confirmation
-	// (which is the only signal that the new agent is built) updates
-	// the UI rather than being masked as a default-rebroadcast. See
-	// onReady in boot() for the matching logic. (The currentModelId /
-	// currentProvider assignments above are kept — renderShell reads
-	// them to display the model in the header status bar. We just
-	// avoid reassigning them here, which would be a no-op.)
+	// (the only signal that the new agent is built) updates the UI
+	// rather than being masked as a default-rebroadcast. See
+	// onReady in boot() for the matching logic.
 	state.pendingModelSet = s.modelId;
 	chatControls?.setModel(s.modelId, s.provider);
 	chatControls?.setThinking(s.thinkingLevel);

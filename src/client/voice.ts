@@ -66,15 +66,17 @@ export async function handleFileAttach(e: Event): Promise<void> {
 	const ta = $<HTMLTextAreaElement>("#input");
 	for (const file of Array.from(files)) {
 		try {
-			const res = await uploadFile(file);
-			// Remember the base64 data alongside the URL so when the user
-			// actually sends, we can include the image bytes for the
-			// model to see. We compute the base64 here (one per upload)
-			// rather than when sending, so the wire cost is paid once
-			// and the user doesn't see any delay between clicking send
-			// and the model responding.
+			// Run the upload and the base64 conversion in parallel —
+			// they're independent. (Previously these were sequential,
+			// which created a race: the user could send the message
+			// during the uploadFile await, and the base64 wouldn't
+			// be in state.uploadedImages yet — so the model never
+			// saw the image bytes.)
+			const [res, data] = await Promise.all([
+				uploadFile(file),
+				blobToBase64(file),
+			]);
 			if (res.mimeType.startsWith("image/")) {
-				const data = await blobToBase64(file);
 				state.uploadedImages.set(res.url, { data, mimeType: res.mimeType, filename: res.filename });
 			}
 			const insertion = res.mimeType.startsWith("image/")
