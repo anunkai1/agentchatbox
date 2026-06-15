@@ -265,6 +265,64 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			close();
 		}
 	});
+
+	it("keeps the WS open across a resumeSession child respawn", async () => {
+		// Regression test for the bug where the old pi child's
+		// `exit` handler closed the WS, making subsequent
+		// client->server sends fail with "not connected to server"
+		// — which is exactly what the user reported in the browser.
+		// The fix: the server's pi.on("exit") and pi.on("error")
+		// handlers must not auto-close the WS when ready was already
+		// sent (a normal occurrence during resumeSession/newSession
+		// where the handler is in the middle of respawning).
+		fakePiPath = makeFakePi("ack");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
+			await inbox.waitFor(1);
+
+			// Snapshot WS state before respawn.
+			expect(ws.readyState).toBe(WebSocket.OPEN);
+
+			// Trigger a respawn. Server kills the old child, spawns
+			// a new one with --session <id>. Old child's `exit`
+			// fires while the new one is starting. The WS must
+			// survive that.
+			ws.send(JSON.stringify({ type: "resumeSession", sessionId: "test-session-001" }));
+
+			// The new child should send a fresh `ready` (its
+			// get_state replies with a sessionId). We wait until
+			// we've seen TWO readies — the original from init, plus
+			// the one from the resumed child. The interval poll
+			// (200ms) gives a clear signal of "the new child is up".
+			const deadline = Date.now() + 5000;
+			while (Date.now() < deadline) {
+				if (inbox.all().filter((m) => m.type === "ready").length >= 2) break;
+				await new Promise((r) => setTimeout(r, 50));
+			}
+			const readies = inbox.all().filter((m) => m.type === "ready");
+			expect(readies.length).toBe(2);
+
+			// The WS must STILL be open after the respawn —
+			// critical proof that we didn't auto-close it.
+			expect(ws.readyState).toBe(WebSocket.OPEN);
+
+			// And we must still be able to send a regular
+			// client message after the respawn.
+			ws.send(JSON.stringify({ type: "prompt", text: "after respawn" }));
+			// The fake-pi ack script will respond to `prompt` with
+			// a response frame (which the server drops). The point
+			// is that the send itself didn't throw.
+		} finally {
+			close();
+		}
+	});
 });
 
 // Keep this as a placeholder so the file ends with a non-empty line

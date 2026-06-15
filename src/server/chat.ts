@@ -204,20 +204,31 @@ function attachEventForwarding(
 	});
 
 	pi.on("error", (err) => {
+		// The child is going to die on its own after this. Send an
+		// error so the client knows what happened, but DO NOT close
+		// the WS — the client may still be holding the connection
+		// for an upcoming respawn (resumeSession / newSession kill
+		// the old child to start a new one, and that respawn races
+		// the WS close).
 		sendError(ws, `pi subprocess error: ${err.message}`);
-		// The child is going to die on its own after this; close the
-		// WS so the browser reconnects.
-		try { ws.close(); } catch { /* ignore */ }
 	});
 
 	pi.on("exit", (info) => {
 		if (statePoll) { clearInterval(statePoll); statePoll = null; }
 		// If we never sent `ready`, the spawn failed (e.g. binary
-		// not found, or get_state never returned a sessionId).
+		// not found, or get_state never returned a sessionId). Tell
+		// the client so it doesn't hang on the initial connect.
+		//
+		// If we DID send `ready` already, the child died after
+		// running for a while. Don't auto-close the WS — this is
+		// a normal occurrence during resumeSession / newSession,
+		// where the handler is in the middle of respawning. The
+		// client will receive a new `ready` once the new child
+		// is up. If the new child also fails, it will emit
+		// its own error/exit and the client will see the chain.
 		if (!readySent) {
 			sendError(ws, `pi exited before ready (code=${info.code}, signal=${info.signal}): ${pi.getStderr().slice(-200)}`);
 		}
-		try { ws.close(); } catch { /* ignore */ }
 	});
 
 	// Ask pi for its session id. We do this on a 200ms poll instead
