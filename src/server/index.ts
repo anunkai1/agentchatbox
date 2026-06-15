@@ -29,6 +29,7 @@ import { mountChatWs } from "./chat.js";
 import { projectRoot } from "./paths.js";
 import { SDK_PROVIDERS } from "./providers.js";
 import { getModels } from "@earendil-works/pi-ai";
+import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 
 mkdirSync(config.uploadsDir, { recursive: true });
 
@@ -67,6 +68,51 @@ app.post("/api/stream", handleStream);
 app.use("/api/upload", createUploadsRouter());
 app.use("/api/transcribe", createTranscribeRouter());
 app.use("/api/tts", createTtsRouter());
+
+/**
+ * GET /api/sessions
+ *
+ * Returns the list of saved `pi` sessions for the server's cwd
+ * (matching what `pi --resume` would show in the TUI). The browser's
+ * `/sessions` slash command calls this to populate the picker.
+ *
+ * Shape: { sessions: Array<{ id, cwd, createdAt, modifiedAt, title, messageCount }> }
+ *
+ * Pass ?cwd=<path> to query a different cwd; defaults to config.piCwd.
+ */
+app.get("/api/sessions", (req, res) => {
+	const cwd = String(req.query.cwd ?? config.piCwd);
+	const sessions = listPiSessions(cwd);
+	res.json({ sessions });
+});
+
+/**
+ * GET /api/sessions/:id
+ *
+ * Returns the full message transcript for a session. The browser
+ * typically doesn't need this (the WS server replays the transcript
+ * on resume), but it's useful for the `/export` slash command and
+ * for any future "open a session read-only" UI.
+ *
+ * Shape: { id, cwd, createdAt, messages: Array<UserMessage|AssistantMessage|ToolResultMessage> }
+ */
+app.get("/api/sessions/:id", (req, res) => {
+	const cwd = String(req.query.cwd ?? config.piCwd);
+	const id = req.params.id;
+	const all = listPiSessions(cwd);
+	const meta = all.find((s) => s.id === id);
+	if (!meta) {
+		res.status(404).json({ error: `session ${id} not found for cwd ${cwd}` });
+		return;
+	}
+	const messages = readPiSessionMessages(cwd, id);
+	res.json({
+		id: meta.id,
+		cwd: meta.cwd,
+		createdAt: meta.createdAt,
+		messages,
+	});
+});
 
 /**
  * GET /api/changelog?limit=20
@@ -209,6 +255,8 @@ const server = app.listen(config.port, config.host, () => {
 	console.log(`  commit:        ${COMMIT_HASH}`);
 	console.log(`  uploads dir:   ${config.uploadsDir}`);
 	console.log(`  providers:     ${providers.length ? providers.join(", ") : "(none — set API keys in .env)"}`);
+	console.log(`  pi binary:     ${config.piBin}`);
+	console.log(`  pi cwd:        ${config.piCwd}`);
 	console.log(`  whisper:       ${config.openaiApiKey ? "openai (disabled, using local faster-whisper)" : "local faster-whisper (CPU)"}`);
 	console.log(`  tts:           local piper (CPU)`);
 });
@@ -216,3 +264,22 @@ const server = app.listen(config.port, config.host, () => {
 // WebSocket endpoint. Mounted on the same HTTP server so we don't need a
 // second port.
 mountChatWs(server);
+
+// On server shutdown, SIGTERM every live `pi --mode rpc` child so each
+// gets a chance to flush its session JSONL before the process dies.
+// The `pi` process appends to its session file on every event, so a
+// fast SIGKILL would lose the last few events of an active session.
+process.on("SIGTERM", () => {
+	console.log("SIGTERM received, shutting down...");
+	server.close(() => {
+		// mountChatWs owns the child lifecycle; it has its own
+		// SIGTERM listener that iterates the live set.
+		process.exit(0);
+	});
+	// Failsafe: if the server.close() callback never fires (e.g. a
+	// stuck keep-alive connection), force-exit after 3 seconds.
+	setTimeout(() => {
+		console.warn("server.close timed out, forcing exit");
+		process.exit(1);
+	}, 3000).unref();
+});
