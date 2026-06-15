@@ -29,6 +29,19 @@ export interface ServerConfig {
 	apiKeys: Record<string, string>;
 	/** OpenAI key, used for Whisper transcription of voice notes. */
 	openaiApiKey: string | undefined;
+	/**
+	 * Path to the `pi` CLI binary. Default "pi" (resolved via $PATH).
+	 * Overridable via PI_BIN for tests (point at a fake-pi.sh fixture).
+	 */
+	piBin: string;
+	/**
+	 * Working directory the server passes to `pi --mode rpc` as the
+	 * project root. Sessions are scoped to this cwd by `pi` itself
+	 * (under `~/.pi/agent/sessions/--<cwd>--/`).
+	 * Default: process.cwd() at server boot.
+	 * Overridable via PI_CWD.
+	 */
+	piCwd: string;
 }
 
 function readKey(name: string): string | undefined {
@@ -63,6 +76,13 @@ export const config: ServerConfig = {
 		"opencode": readKey("OPENCODE_API_KEY") ?? "",
 	},
 	openaiApiKey: readKey("OPENAI_API_KEY"),
+	// `piBin` and `piCwd` are read lazily — they need to reflect the
+	// process state at boot time, not at module-load time (which could
+	// be any time the module is imported, e.g. during a test). A
+	// getter on the config object would be ideal but a frozen literal
+	// is what the rest of the file uses; resolve them here.
+	piBin: process.env.PI_BIN ?? "pi",
+	piCwd: process.env.PI_CWD ?? process.cwd(),
 };
 
 /**
