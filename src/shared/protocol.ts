@@ -7,7 +7,13 @@
  *   1. POST /api/stream (legacy) — raw LLM streaming proxy (SSE out).
  *      Used as a back-compat path while the WS-based agent lives in /api/chat.
  *   2. WS  /api/chat   (new)     — bidirectional: client sends prompts,
- *      server forwards every pi Agent event as JSON.
+ *      server forwards every `pi --mode rpc` event as JSON.
+ *
+ * The `/api/chat` WS protocol is a thin envelope around the upstream
+ * `pi --mode rpc` protocol (see /usr/lib/node_modules/@earendil-works/
+ * pi-coding-agent/docs/rpc.md). Every line of `pi`'s stdout is forwarded
+ * to the browser as `{type: "event", event: <line>}` — the same
+ * `pi` event the TUI would see, unchanged.
  */
 
 import type {
@@ -54,29 +60,54 @@ export interface VoicesResponse {
 // WebSocket protocol for /api/chat
 // ---------------------------------------------------------------------------
 //
-// Wire format: one JSON object per message. No envelopes, no envelopes, no
-// envelopes. We use plain WS frames because the events are small and frequent
-// and the round-trip cost of envelope parsing would dominate.
+// Wire format: one JSON object per message. No envelopes.
+//
+// Handshake: the client must send `{type:"init",...}` as its FIRST message
+// after the WS opens. The server uses it to spawn a `pi --mode rpc` child
+// with the right provider, model, thinking level, and (optionally) resume
+// a session by id. After the init, the server sends `{type:"ready"}` so
+// the client knows the child is up; from then on, pi events flow as
+// `{type:"event", event: <line>}`.
 //
 // Server → client:
-//   { type: "ready" }                                     after the Agent is built
-//   { type: "event", event: AgentEvent }                  for every pi Agent event
-//   { type: "error", message: string }                    unrecoverable error
+//   { type: "ready", modelId, provider, thinkingLevel, sessionId? }
+//       after the child is spawned and we've gotten its first `session`
+//       line. Lets the client know the model/thinking it should display.
+//   { type: "event", event: <piRpcLine> }
+//       every parsed NDJSON line from `pi`'s stdout, verbatim.
+//   { type: "sessions", sessions: SessionSummary[] }
+//       response to client.listSessions()
+//   { type: "transcript", sessionId, messages: Message[] }
+//       on resume: the prior transcript replayed before live events flow
+//   { type: "error", message }
+//       unrecoverable error (child spawn failed, etc.)
 //
 // Client → server:
-//   { type: "prompt", text: string, images?: PromptImage[] }  send a user prompt (with optional images)
-//   { type: "abort" }                                         abort the current run
-//   { type: "setModel", modelId: string, provider: string }   swap model mid-session
-//   { type: "setThinking", level: ThinkingLevel }             swap thinking level
-//
-// `init` is implicit: the server uses defaults (M3, thinking=high) on first
-// connect. `setModel` is the only model switcher. We do not accept a model
-// from the client at init time — the server is the source of truth for
-// model availability.
+//   { type: "init", provider, modelId, thinkingLevel, sessionId? }
+//       FIRST message after open. Spawns the `pi` child.
+//   { type: "prompt", text, images? }
+//       send a user prompt (with optional images). Translated to the
+//       `pi` `prompt` RPC command.
+//   { type: "abort" }
+//       abort the current run. Translated to `pi` `abort`.
+//   { type: "setModel", modelId, provider }
+//       in-process model switch. Translated to `pi` `set_model`.
+//   { type: "setThinking", level }
+//       in-process thinking level change. Translated to `pi`
+//       `set_thinking_level`.
+//   { type: "listSessions" }
+//       request the list of saved sessions (server reads the JSONL
+//       directory; replies with `{type:"sessions",...}`).
+//   { type: "resumeSession", sessionId }
+//       kill current child, spawn `pi --session <id>`, replay
+//       transcript, then forward live events. Replies with
+//       `{type:"sessionResumed",...}`.
+//   { type: "newSession" }
+//       kill current child, spawn a fresh one (no --session). Replies
+//       with `{type:"sessionResumed",...}`.
+//   { type: "renameSession", name }
+//       Translated to `pi` `set_session_name`.
 
-// Re-export the SDK's ThinkingLevel so the protocol stays in sync with
-// the wider union (which includes "xhigh"). If the SDK adds a new level,
-// the protocol picks it up automatically.
 import type { ThinkingLevel as ThinkingLevelSdk } from "@earendil-works/pi-agent-core";
 export type ThinkingLevel = ThinkingLevelSdk;
 
@@ -88,15 +119,44 @@ export interface PromptImage {
 	mimeType: string;
 }
 
+/**
+ * A summary of a `pi` session for the `/sessions` picker. Mirrors the
+ * shape of `SessionSummary` in `src/server/session-list.ts`. The two
+ * are kept in lockstep because the server's REST endpoint returns the
+ * same JSON the WS `sessions` message returns.
+ */
+export interface SessionSummary {
+	id: string;
+	cwd: string;
+	createdAt: string;
+	modifiedAt: string;
+	title: string;
+	messageCount: number;
+}
+
 /** Server → client. */
 export type ServerMessage =
-	| { type: "ready"; modelId: string; provider: string; thinkingLevel: ThinkingLevel }
-	| { type: "event"; event: AgentEvent }
+	| { type: "ready"; modelId: string; provider: string; thinkingLevel: ThinkingLevel; sessionId?: string }
+	| { type: "event"; event: Record<string, unknown> }
+	| { type: "sessions"; sessions: SessionSummary[] }
+	| { type: "transcript"; sessionId: string; messages: unknown[] }
+	| { type: "sessionResumed"; sessionId: string; modelId: string; provider: string; thinkingLevel: ThinkingLevel }
 	| { type: "error"; message: string };
 
 /** Client → server. */
 export type ClientMessage =
+	| { type: "init"; provider: string; modelId: string; thinkingLevel: ThinkingLevel; sessionId?: string }
 	| { type: "prompt"; text: string; images?: PromptImage[] }
 	| { type: "abort" }
 	| { type: "setModel"; modelId: string; provider: string }
-	| { type: "setThinking"; level: ThinkingLevel };
+	| { type: "setThinking"; level: ThinkingLevel }
+	| { type: "listSessions" }
+	| { type: "resumeSession"; sessionId: string }
+	| { type: "newSession" }
+	| { type: "renameSession"; name: string };
+
+// Re-export the AgentEvent union so existing client code that imports
+// `AgentEvent` from this file keeps working. The client doesn't use
+// AgentEvent directly (the wire format is whatever `pi` emits), but
+// some files still import the type for renderer-side switch coverage.
+export type { AgentEvent };
