@@ -98,6 +98,10 @@ export interface ChatControls {
 	setModel(modelId: string, provider: string): void;
 	setThinking(level: ThinkingLevel): void;
 	abort(): void;
+	newSession(): void;
+	resumeSession(sessionId: string): void;
+	listSessions(): void;
+	renameSession(name: string): void;
 }
 let chatControls: ChatControls | null = null;
 export function setChatControls(c: ChatControls): void {

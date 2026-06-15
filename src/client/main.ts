@@ -23,7 +23,7 @@ import type {
 import { $, el, type LiveAssistantDom } from "./dom.js";
 import { createChatClient } from "./ws.js";
 import { getHealth, getModels, type ModelInfo } from "./api.js";
-import { saveCurrentSession } from "./slashes.js";
+import { renderSessionsIntoPicker } from "./slashes.js";
 import {
 	appendAssistantPlaceholder,
 	appendError,
@@ -186,15 +186,21 @@ let lastAssistant: PersistedMessage | null = null;
 let lastAssistantDom: LiveAssistantDom | null = null;
 let lastThinking: PersistedMessage | null = null;
 
-function onEvent(event: AgentEvent): void {
-	switch (event.type) {
+function onEvent(event: AgentEvent | Record<string, unknown>): void {
+	// The server is now forwarding raw `pi --mode rpc` events, which
+	// is a superset of the bare `AgentEvent` union. Treat the input
+	// as `Record<string, unknown>` and read the `type` field as a
+	// string; the switch ignores unknown types.
+	const e = event as AgentEvent;
+	switch (e.type) {
 		case "agent_start":
 			setStreaming(true);
 			break;
 
 		case "agent_end":
 			setStreaming(false);
-			void saveCurrentSession();
+			// No local save — the server's `pi` child auto-persists
+			// every event to its JSONL session file as it happens.
 			break;
 
 		case "turn_start":
@@ -394,6 +400,10 @@ async function boot(): Promise<void> {
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
 		setThinking: (level) => chatClient.setThinking(level),
 		abort: () => chatClient.abort(),
+		newSession: () => chatClient.newSession(),
+		resumeSession: (id) => chatClient.resumeSession(id),
+		listSessions: () => chatClient.listSessions(),
+		renameSession: (name) => chatClient.renameSession(name),
 	});
 	chatClient.onStatus((s) => {
 		state.connectionStatus = s;
@@ -424,6 +434,47 @@ async function boot(): Promise<void> {
 	});
 	chatClient.onEvent(onEvent);
 	chatClient.onError((msg) => appendError(msg));
+	// /sessions picker: when the server replies with the list, fill the
+	// open modal. The listener is a no-op if no picker is open.
+	chatClient.onSessionsUpdated((sessions) => {
+		renderSessionsIntoPicker(sessions);
+	});
+	// On resume: replace the renderer cache with the server's replay
+	// transcript, then re-render the chat scrollback so the past
+	// conversation is visible.
+	chatClient.onTranscript((_sessionId, messages) => {
+		state.messages = messages.map(projectToPersisted);
+		// Re-render: simplest approach is to nuke the messages div
+		// and re-append every cached message. The render layer's
+		// renderMessageNode is the source of truth for what a
+		// single PersistedMessage looks like.
+		void import("./render.js").then(({ renderShell }) => {
+			renderShell();
+		});
+	});
+	// After resumeSession/newSession completes, the server reports
+	// the new session's metadata. We adopt it (model/thinking) but
+	// don't touch the message cache — that's already populated by
+	// the transcript message for resume, or is empty for new.
+	chatClient.onSessionResumed((info) => {
+		state.currentModelId = info.modelId;
+		state.currentProvider = info.provider;
+		state.currentThinking = info.thinkingLevel;
+		refreshStatus();
+	});
+
+	// Send the init handshake as soon as the WS opens. The server is
+	// waiting for this before it spawns the `pi` child. If we have
+	// no model picked yet, default to the first available model.
+	const onOpen = () => {
+		const modelId = state.currentModelId ?? state.availableModels[0]?.id ?? "MiniMax-M3";
+		const provider = state.currentProvider ?? state.availableModels[0]?.provider ?? "minimax";
+		const thinkingLevel = state.currentThinking;
+		chatClient.init({ provider, modelId, thinkingLevel });
+		chatClient.offStatus(onOpen);
+	};
+	chatClient.onStatus(onOpen);
+
 	// Wire the prompt-send hook used by `sendAsUser` (defined above
 	// at module scope, so the `setSendAsUser` dep injection in
 	// slashes.ts works before/after boot completes). The hook is a
@@ -433,6 +484,58 @@ async function boot(): Promise<void> {
 	sendPromptHook = (text, images) => {
 		chatClient.prompt(text, images);
 	};
+}
+
+/**
+ * Project an SDK-shaped Message (from the server's transcript
+ * replay) to the renderer's flat PersistedMessage cache type. The
+ * types are mostly equivalent for user/assistant messages; tool
+ * messages and toolResult messages get merged into a single
+ * "tool" cache row that the renderer already knows how to paint.
+ */
+function projectToPersisted(m: unknown): PersistedMessage {
+	if (!m || typeof m !== "object") {
+		return { kind: "error", text: String(m) };
+	}
+	const msg = m as { role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean };
+	switch (msg.role) {
+		case "user": {
+			const text = extractText(msg.content);
+			return { kind: "user", text };
+		}
+		case "assistant": {
+			const text = extractText(msg.content);
+			const thinking = extractThinking(msg.content);
+			return { kind: "assistant", text, thinking };
+		}
+		case "toolResult": {
+			const text = extractText(msg.content);
+			return { kind: "tool", name: msg.toolName ?? "tool", args: "(replayed)", result: text, isError: msg.isError };
+		}
+		default:
+			return { kind: "error", text: JSON.stringify(m).slice(0, 500) };
+	}
+}
+
+function extractText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.filter((b: { type?: string }) => b && b.type === "text")
+			.map((b: { text?: string }) => b.text ?? "")
+			.join("");
+	}
+	return "";
+}
+
+function extractThinking(content: unknown): string {
+	if (Array.isArray(content)) {
+		return content
+			.filter((b: { type?: string }) => b && b.type === "thinking")
+			.map((b: { thinking?: string }) => b.thinking ?? "")
+			.join("");
+	}
+	return "";
 }
 
 boot();
