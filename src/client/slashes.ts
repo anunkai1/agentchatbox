@@ -11,16 +11,10 @@
  * as well as the slash menu.
  */
 
-import type { ThinkingLevel } from "../shared/protocol.js";
-import { $, el, uuid } from "./dom.js";
+import type { ThinkingLevel, SessionSummary } from "../shared/protocol.js";
+import { $, el } from "./dom.js";
 import { appendError, appendNode, refreshStatus } from "./render.js";
-import {
-	dbAllSessions,
-	dbSaveSession,
-	state,
-	type ModelOption,
-	type SessionRecord,
-} from "./state.js";
+import { state, type ModelOption } from "./state.js";
 
 /**
  * Small helper for the slash command's help/session/copy messages.
@@ -134,16 +128,16 @@ export function handleSlash(arg: string): void {
 			break;
 		case "clear":
 			if (confirm("Start a new chat? Current conversation will be saved.")) {
-				void saveCurrentSession().then(async () => {
-					state.sessionId = uuid();
-					state.title = "New chat";
-					state.messages = [];
-					state.history = [];
-					state.historyIdx = null;
-					state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-					const { renderShell } = await import("./render.js");
-					renderShell();
-				});
+				// Server-side: `pi` already auto-saves on every event, so
+				// there's no local "save the prior session" step. We just
+				// ask the server to start a new one.
+				chatControls?.newSession();
+				state.title = "New chat";
+				state.messages = [];
+				state.history = [];
+				state.historyIdx = null;
+				state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+				void import("./render.js").then(({ renderShell }) => renderShell());
 			}
 			break;
 		case "sessions":
@@ -182,7 +176,7 @@ export function handleSlash(arg: string): void {
 			} else {
 				state.title = newName.slice(0, 60);
 				$<HTMLSpanElement>("#title").textContent = state.title;
-				void saveCurrentSession();
+				chatControls?.renameSession(newName.slice(0, 60));
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
@@ -191,9 +185,9 @@ export function handleSlash(arg: string): void {
 			const c = state.costTotal;
 			const info =
 				`Session info:\n` +
-				`  id:        ${state.sessionId}\n` +
 				`  title:     ${state.title}\n` +
 				`  model:     ${state.currentModelId ?? "(unknown)"}\n` +
+				`  provider:  ${state.currentProvider ?? "(unknown)"}\n` +
 				`  thinking:  ${state.currentThinking}\n` +
 				`  messages:  ${state.messages.length}\n` +
 				`  in:        ${c.input.toLocaleString()} tok\n` +
@@ -393,61 +387,60 @@ export function openThinkPicker(): void {
 }
 
 export async function openSessionsDialog(): Promise<void> {
-	const all = await dbAllSessions();
+	// The actual list is delivered asynchronously via the WS
+	// `onSessionsUpdated` callback (set up in main.ts). The picker
+	// modal opens immediately; the rows are filled in when the server
+	// replies. If the server doesn't reply within 3s, we show an
+	// error so the user isn't staring at a forever-empty modal.
+	chatControls?.listSessions();
 	const { overlay, box } = openModal("Sessions");
-	if (all.length === 0) {
+	box.append(el("p", { class: "muted", text: "Loading sessions…" }));
+	// Save the box in a closure-captured var so the listener can fill it.
+	pendingSessionsBox = box;
+	pendingSessionsOverlay = overlay;
+	setTimeout(() => {
+		if (pendingSessionsBox === box) {
+			box.innerHTML = "";
+			box.append(el("p", { class: "muted", text: "No saved sessions (or server didn't reply)." }));
+		}
+	}, 3000);
+}
+
+// Module-scope: the box the listener should fill. Set when
+// openSessionsDialog opens the modal, cleared when filled.
+let pendingSessionsBox: HTMLDivElement | null = null;
+let pendingSessionsOverlay: HTMLDivElement | null = null;
+
+/**
+ * Called by main.ts's `onSessionsUpdated` listener to render the
+ * server's reply into the currently-open picker modal. Idempotent
+ * and self-clearing: subsequent calls with no modal open are a
+ * no-op (the list was probably triggered by code other than the
+ * picker, e.g. /name showing the active session).
+ */
+export function renderSessionsIntoPicker(sessions: SessionSummary[]): void {
+	if (!pendingSessionsBox || !pendingSessionsOverlay) return;
+	const box = pendingSessionsBox;
+	const overlay = pendingSessionsOverlay;
+	pendingSessionsBox = null;
+	pendingSessionsOverlay = null;
+	box.innerHTML = "";
+	if (sessions.length === 0) {
 		box.append(el("p", { class: "muted", text: "No saved sessions yet." }));
 	} else {
-		for (const s of all) {
+		for (const s of sessions) {
 			const row = el("div", { class: "session-row" });
 			row.append(el("div", { class: "session-title" }, s.title));
-			row.append(el("div", { class: "session-meta" }, `${s.messages.length} msgs · ${s.modelId}`));
-			row.addEventListener("click", async () => {
+			const meta = `${s.messageCount} msgs · ${new Date(s.createdAt).toLocaleString()}`;
+			row.append(el("div", { class: "session-meta" }, meta));
+			row.addEventListener("click", () => {
 				overlay.remove();
-				await loadSession(s.id);
+				chatControls?.resumeSession(s.id);
 			});
 			box.append(row);
 		}
 	}
 	box.append(el("button", { class: "btn", text: "Close", onclick: () => overlay.remove() }));
-}
-
-async function loadSession(id: string): Promise<void> {
-	const all = await dbAllSessions();
-	const s = all.find((x) => x.id === id);
-	if (!s) return;
-	state.sessionId = s.id;
-	state.title = s.title;
-	state.messages = s.messages;
-	state.currentModelId = s.modelId;
-	state.currentProvider = s.provider;
-	state.currentThinking = s.thinkingLevel;
-	const { renderShell } = await import("./render.js");
-	renderShell();
-	// Mark the model as pending so the server's `ready` confirmation
-	// (the only signal that the new agent is built) updates the UI
-	// rather than being masked as a default-rebroadcast. See
-	// onReady in boot() for the matching logic.
-	state.pendingModelSet = s.modelId;
-	chatControls?.setModel(s.modelId, s.provider);
-	chatControls?.setThinking(s.thinkingLevel);
-	$<HTMLSpanElement>("#title").textContent = s.title;
-	refreshStatus();
-}
-
-export async function saveCurrentSession(): Promise<void> {
-	if (state.messages.length === 0) return;
-	const rec: SessionRecord = {
-		id: state.sessionId,
-		title: state.title,
-		modelId: state.currentModelId ?? "unknown",
-		provider: state.currentProvider ?? "unknown",
-		thinkingLevel: state.currentThinking,
-		messages: state.messages,
-		createdAt: new Date().toISOString(),
-		lastModified: new Date().toISOString(),
-	};
-	await dbSaveSession(rec);
 }
 
 export async function openVoicePicker(): Promise<void> {
@@ -641,7 +634,7 @@ export function exportSessionAsHtml(): void {
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement("a");
 	a.href = url;
-	a.download = `${state.title.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase().slice(0, 40) || "session"}-${state.sessionId.slice(0, 8)}.html`;
+	a.download = `${state.title.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase().slice(0, 40) || "session"}-${new Date().toISOString().slice(0, 10)}.html`;
 	document.body.appendChild(a);
 	a.click();
 	document.body.removeChild(a);
