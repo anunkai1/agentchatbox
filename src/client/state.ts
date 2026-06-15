@@ -16,7 +16,16 @@ export interface SessionRecord {
 	modelId: string;
 	provider: string;
 	thinkingLevel: ThinkingLevel;
-	messages: Array<Record<string, unknown>>;
+	/**
+	 * The persisted transcript. Typed as `PersistedMessage[]` rather
+	 * than `Array<Record<string, unknown>>` because writes (saveCurrentSession
+	 * in slashes.ts) and reads (loadSession in slashes.ts) are both
+	 * inside this app, so the runtime data is always PersistedMessage.
+	 * Foreign IndexedDB data from a future schema change would need a
+	 * real migration here — for now, `as PersistedMessage[]` at the
+	 * IndexedDB boundary (in openDb / getAll) is the single lie.
+	 */
+	messages: PersistedMessage[];
 	createdAt: string;
 	lastModified: string;
 }

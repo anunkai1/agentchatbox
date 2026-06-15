@@ -103,7 +103,13 @@ export function createChatClient(): ChatClient {
 			setStatus("closed");
 			ws = null;
 			if (!manualClose) {
-				const delay = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
+				const base = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
+				// Apply ±20% jitter so multiple browser tabs reconnecting
+				// to the same recovered server don't synchronize their
+				// retries and thunder against it. (Jittered retry is a
+				// standard mitigation for the "thundering herd" problem.)
+				const jitter = 1 + (Math.random() * 0.4 - 0.2);
+				const delay = Math.round(base * jitter);
 				attempt++;
 				setTimeout(connect, delay);
 			}

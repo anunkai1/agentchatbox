@@ -19,9 +19,21 @@ import {
 	dbSaveSession,
 	state,
 	type ModelOption,
-	type PersistedMessage,
 	type SessionRecord,
 } from "./state.js";
+
+/**
+ * Small helper for the slash command's help/session/copy messages.
+ * Hoisted here (not at the bottom of the file as it used to be) so
+ * forward readers can find the helper when they hit the first
+ * call site in `handleSlash`.
+ */
+function el_pre(text: string): HTMLPreElement {
+	const node = document.createElement("pre");
+	node.className = "help";
+	node.textContent = text;
+	return node;
+}
 
 export const SLASH_COMMANDS: Record<string, string> = {
 	// Core
@@ -291,13 +303,6 @@ export function handleSlash(arg: string): void {
 	}
 }
 
-function el_pre(text: string): HTMLPreElement {
-	const node = document.createElement("pre");
-	node.className = "help";
-	node.textContent = text;
-	return node;
-}
-
 interface ModalRefs { overlay: HTMLDivElement; box: HTMLDivElement; }
 function openModal(title: string, extraClass?: string): ModalRefs {
 	const overlay = el("div", { class: "modal-overlay" });
@@ -413,19 +418,20 @@ async function loadSession(id: string): Promise<void> {
 	if (!s) return;
 	state.sessionId = s.id;
 	state.title = s.title;
-	state.messages = s.messages as unknown as PersistedMessage[];
+	state.messages = s.messages;
 	state.currentModelId = s.modelId;
 	state.currentProvider = s.provider;
 	state.currentThinking = s.thinkingLevel;
 	const { renderShell } = await import("./render.js");
 	renderShell();
-	// Re-sync model + thinking with the server so subsequent prompts use them.
+	// Re-sync the model with the server so subsequent prompts use it.
 	// Mark the model as pending so the server's `ready` confirmation
-	// (which is the only signal that the new agent is built) updates the
-	// UI rather than being masked as a default-rebroadcast. See onReady
-	// in boot() for the matching logic.
-	state.currentModelId = s.modelId;
-	state.currentProvider = s.provider;
+	// (which is the only signal that the new agent is built) updates
+	// the UI rather than being masked as a default-rebroadcast. See
+	// onReady in boot() for the matching logic. (The currentModelId /
+	// currentProvider assignments above are kept — renderShell reads
+	// them to display the model in the header status bar. We just
+	// avoid reassigning them here, which would be a no-op.)
 	state.pendingModelSet = s.modelId;
 	chatControls?.setModel(s.modelId, s.provider);
 	chatControls?.setThinking(s.thinkingLevel);
@@ -441,7 +447,7 @@ export async function saveCurrentSession(): Promise<void> {
 		modelId: state.currentModelId ?? "unknown",
 		provider: state.currentProvider ?? "unknown",
 		thinkingLevel: state.currentThinking,
-		messages: state.messages as unknown as Array<Record<string, unknown>>,
+		messages: state.messages,
 		createdAt: new Date().toISOString(),
 		lastModified: new Date().toISOString(),
 	};

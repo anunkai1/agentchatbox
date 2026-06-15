@@ -21,7 +21,7 @@ import type {
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { $, el, type LiveAssistantDom } from "./dom.js";
-import { createChatClient, type ChatClient } from "./ws.js";
+import { createChatClient } from "./ws.js";
 import { getHealth, getModels, type ModelInfo } from "./api.js";
 import { saveCurrentSession } from "./slashes.js";
 import {
@@ -152,9 +152,23 @@ function sendAsUser(trimmed: string): void {
 	}
 	for (const url of uploadedUrls) state.uploadedImages.delete(url);
 
-	chatClient.prompt(trimmed, images.length > 0 ? images : undefined);
+	// Hand off the actual send to a hook wired up in boot(), so this
+	// function doesn't have to capture `chatClient` (which is local to
+	// boot()). The hook is `(text, images?) => void`.
+	sendPromptHook(trimmed, images.length > 0 ? images : undefined);
 	setStreaming(true);
 }
+
+/**
+ * Wires the prompt-send half of `sendAsUser` to a closure over the
+ * `chatClient` instance. Called once at the end of `boot()`; null
+ * outside the boot path (e.g. early slash-command triggers from the
+ * `setSendAsUser` import — those are no-ops until boot completes).
+ */
+type SendPromptHook = (text: string, images?: Array<{ data: string; mimeType: string }>) => void;
+let sendPromptHook: SendPromptHook = () => {
+	/* will be replaced by boot() */
+};
 
 // Local appendNode — main.ts only uses it once (in sendAsUser), so we
 // keep the dep on render.ts for the bulk of the API and call it inline.
@@ -323,8 +337,6 @@ function onEvent(event: AgentEvent): void {
 // Boot
 // ---------------------------------------------------------------------------
 
-let chatClient: ChatClient;
-
 async function boot(): Promise<void> {
 	// Probe the server's health and model list. If the relevant API keys
 	// aren't set, the lists come back empty and the picker will show a
@@ -346,6 +358,14 @@ async function boot(): Promise<void> {
 	} catch (e) {
 		appendError("server health check failed: " + (e instanceof Error ? e.message : String(e)));
 	}
+
+	// Build the WS client FIRST so the shell-handler closures below
+	// capture a real `ChatClient` instead of a module-level `let` that
+	// happens to be `undefined` at registration time. (Old code
+	// declared `let chatClient` at module scope and registered the
+	// shell handlers before `createChatClient()` ran — the closures
+	// would have crashed if any handler fired during boot.)
+	const chatClient = createChatClient();
 
 	// Register cross-module handlers BEFORE renderShell so the UI
 	// buttons can find them. Once renderShell runs, the handlers
@@ -370,7 +390,6 @@ async function boot(): Promise<void> {
 
 	renderShell();
 
-	chatClient = createChatClient();
 	setChatControls({
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
 		setThinking: (level) => chatClient.setThinking(level),
@@ -405,6 +424,15 @@ async function boot(): Promise<void> {
 	});
 	chatClient.onEvent(onEvent);
 	chatClient.onError((msg) => appendError(msg));
+	// Wire the prompt-send hook used by `sendAsUser` (defined above
+	// at module scope, so the `setSendAsUser` dep injection in
+	// slashes.ts works before/after boot completes). The hook is a
+	// no-op until this runs, which is fine — the only way to call
+	// `sendAsUser` is via a user gesture (button/keypress) which
+	// can only fire after `renderShell` has wired the handlers.
+	sendPromptHook = (text, images) => {
+		chatClient.prompt(text, images);
+	};
 }
 
 boot();
