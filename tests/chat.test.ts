@@ -25,43 +25,53 @@ type AnyMsg = { type: string; [k: string]: unknown };
 const ECHO_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that responds to any prompt with a canned event stream.
 # Reads JSONL commands from stdin, writes one NDJSON line per event.
-# Emits the "session" line UP FRONT (before reading stdin) so the
-# server's handleConnection has something to translate to "ready" —
-# matches real pi behavior (the session id is the first stdout line,
-# sent as soon as the process is up and configured).
+# Responds to get_state with a canned sessionId — matches real pi
+# behavior (rpc mode does NOT emit a "session" line on startup; the
+# session id only comes out of get_state's response).
 sleep 0.05
-echo '{"type":"session","id":"test-session-001","cwd":"/tmp","timestamp":"2026-06-15T00:00:00.000Z"}'
 while IFS= read -r line; do
-  case "$(echo "$line" | jq -r '.type // ""')" in
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"test-session-001\\",\\"messageCount\\":0}}"
+      ;;
+    "prompt")
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"prompt\\",\\"success\\":true}"
+      echo '{"type":"agent_start"}'
+      echo '{"type":"turn_start"}'
+      echo '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}}'
+      echo '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}}'
+      echo '{"type":"message_start","message":{"role":"assistant","content":[],"api":"anthropic-messages","provider":"test","model":"test","usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":3,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":2}}'
+      echo '{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}],"timestamp":2}}'
+      echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}],"api":"anthropic-messages","provider":"test","model":"test","usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":3,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":2}}'
+      echo '{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}],"timestamp":2},"toolResults":[]}'
+      echo '{"type":"agent_end","messages":[],"willRetry":false}'
+      ;;
     "")
       ;;
     *)
-      if [[ "$(echo "$line" | jq -r '.type')" == "prompt" ]]; then
-        echo '{"type":"agent_start"}'
-        echo '{"type":"turn_start"}'
-        echo '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}}'
-        echo '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}}'
-        echo '{"type":"message_start","message":{"role":"assistant","content":[],"api":"anthropic-messages","provider":"test","model":"test","usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":3,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":2}}'
-        echo '{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}],"timestamp":2}}'
-        echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}],"api":"anthropic-messages","provider":"test","model":"test","usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":3,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":2}}'
-        echo '{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}],"timestamp":2},"toolResults":[]}'
-        echo '{"type":"agent_end","messages":[],"willRetry":false}'
-      else
-        echo "{\\\"type\\\":\\\"response\\\",\\\"command\\\":\\\"$(echo "$line" | jq -r '.type')\\\",\\\"success\\\":true}"
-      fi
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"$type\\",\\"success\\":true}"
       ;;
   esac
 done
 `;
 
 const ACK_SCRIPT = `#!/usr/bin/env bash
-# Fake pi that just acks after emitting the session line. Used by
-# tests that don't need a full event stream (e.g. listSessions is
-# a server-side read; pi is only there to satisfy the spawn).
+# Fake pi that responds to get_state with a sessionId and acks
+# everything else. Used by tests that don't need a full event
+# stream (e.g. listSessions is a server-side read; pi is only
+# there to satisfy the spawn).
 sleep 0.05
-echo '{"type":"session","id":"test-session-002","cwd":"/tmp","timestamp":"2026-06-15T00:00:00.000Z"}'
 while IFS= read -r line; do
-  echo "{\\\"type\\\":\\\"response\\\",\\\"command\\\":\\\"$(echo "$line" | jq -r '.type // "noop"')\\\",\\\"success\\\":true}"
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"test-session-002\\",\\"messageCount\\":0}}"
+      ;;
+    *)
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"$type\\",\\"success\\":true}"
+      ;;
+  esac
 done
 `;
 

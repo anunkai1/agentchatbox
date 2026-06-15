@@ -88,13 +88,11 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 
 	pi = spawnChild(init);
 	(ws as WebSocket & { _pi?: PiProcess })._pi = pi;
-	// Register the pi event listeners BEFORE awaiting the session
-	// line. If the child emits its `session` line in the gap
-	// between spawnChild() returning and attachEventForwarding()
-	// running, the EventEmitter won't replay the event — we'd
-	// hang waiting for `ready` forever. Registering first means
-	// we can never miss the first event, even on a fast-spawning
-	// fake-pi.
+	// attachEventForwarding synchronously subscribes to pi's events
+	// and starts a get_state poll. There's no race here because
+	// `pi` is a Node EventEmitter that buffers events for late
+	// subscribers (no, actually it doesn't — it drops them). So we
+	// attach synchronously before any async wait.
 	attachEventForwarding(ws, pi, init, () => pendingTranscript, (t) => { pendingTranscript = t; });
 
 	// Handle subsequent client messages: forward to `pi` or handle
@@ -160,39 +158,40 @@ function attachEventForwarding(
 ): void {
 	let sessionIdSent = false;
 	let readySent = false;
+	let statePoll: NodeJS.Timeout | null = null;
 
 	pi.on("event", (line) => {
 		// Drop request/response ack frames — the renderer is event-driven,
 		// the `pi` RPC docs are explicit that `response` is for
 		// request/response correlation, irrelevant to the WS stream.
-		if (line.type === "response") return;
-
-		// The first `session` line from `pi` carries the session id and
-		// is the natural "I'm ready" signal. Send `ready` once, then
-		// replay the prior transcript (if any) before any other events.
-		if (line.type === "session" && !readySent) {
-			const id = String(line.id ?? "");
-			readySent = true;
-			send(ws, {
-				type: "ready",
-				modelId: init.modelId,
-				provider: init.provider,
-				thinkingLevel: init.thinkingLevel,
-				sessionId: id || undefined,
-			});
-			// Replay the prior transcript, if the client asked to resume
-			// one. We send this BEFORE any other event so the browser's
-			// renderer can paint the history before the live stream
-			// starts.
-			const pending = getPending();
-			if (pending && pending.messages.length > 0) {
-				send(ws, { type: "transcript", sessionId: pending.sessionId, messages: pending.messages });
+		if (line.type === "response") {
+			// Pull sessionId out of get_state's response. The pi
+			// process doesn't emit a "session" line on startup the
+			// way the TUI does — instead, the session id is buried
+			// inside the response to a get_state call. We send that
+			// on init so the client gets its sessionId promptly.
+			if (line.command === "get_state" && !readySent) {
+				const data = line.data as { sessionId?: string } | undefined;
+				const id = String(data?.sessionId ?? "");
+				if (id) {
+					readySent = true;
+					if (statePoll) { clearInterval(statePoll); statePoll = null; }
+					send(ws, {
+						type: "ready",
+						modelId: init.modelId,
+						provider: init.provider,
+						thinkingLevel: init.thinkingLevel,
+						sessionId: id,
+					});
+					// Replay the prior transcript, if the client asked to resume one.
+					const pending = getPending();
+					if (pending && pending.messages.length > 0) {
+						send(ws, { type: "transcript", sessionId: pending.sessionId, messages: pending.messages });
+					}
+					setPending(null);
+					sessionIdSent = true;
+				}
 			}
-			setPending(null);
-			sessionIdSent = true;
-			// Don't forward the `session` line itself to the browser —
-			// the `ready` message carries the same info, and the
-			// renderer doesn't know what to do with a `session` event.
 			return;
 		}
 
@@ -212,13 +211,25 @@ function attachEventForwarding(
 	});
 
 	pi.on("exit", (info) => {
+		if (statePoll) { clearInterval(statePoll); statePoll = null; }
 		// If we never sent `ready`, the spawn failed (e.g. binary
-		// not found). Tell the client.
+		// not found, or get_state never returned a sessionId).
 		if (!readySent) {
 			sendError(ws, `pi exited before ready (code=${info.code}, signal=${info.signal}): ${pi.getStderr().slice(-200)}`);
 		}
 		try { ws.close(); } catch { /* ignore */ }
 	});
+
+	// Ask pi for its session id. We do this on a 200ms poll instead
+	// of "send once and wait" because pi doesn't acknowledge the
+	// get_state immediately — it emits it after the AgentSession
+	// is constructed. The poll stops as soon as we get a sessionId
+	// (or the child exits).
+	pi.send({ type: "get_state" });
+	statePoll = setInterval(() => {
+		if (readySent) return;
+		pi.send({ type: "get_state" });
+	}, 200);
 
 	// Stash the ws reference on the child for the abort/clear paths.
 	// (No-op if already stashed; idempotent.)
