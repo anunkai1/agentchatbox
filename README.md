@@ -64,10 +64,6 @@ src/
     transcribe.ts         # /api/transcribe (faster-whisper)
     tts.ts                # /api/tts (piper)
     proxy.ts              # legacy POST /api/stream (SSE) — back-compat only
-    agent.ts              # LEGACY — old in-process Agent factory (dead code, not imported)
-    tools.ts              # LEGACY — old local tools: bash, read, write, edit, ls (dead code)
-    web-tools.ts          # LEGACY — old web tools: web_search, fetch_content, code_search
-    web-access/           # LEGACY — vendored third-party web tooling (was pi-web-access)
   shared/
     protocol.ts           # types shared by client and server
 tests/                    # vitest, server-side
@@ -102,15 +98,18 @@ npm start       # node dist/server/index.js
 
 Everything goes through `.env`. Keys for the providers you want to use; an empty value means the provider simply isn't shown in the model picker.
 
-| Variable               | Default       | Purpose                                        |
-|------------------------|---------------|------------------------------------------------|
-| `PORT`                 | `3000`        | HTTP port                                      |
-| `HOST`                 | `0.0.0.0`     | Bind address                                   |
-| `UPLOADS_DIR`          | `<root>/uploads` | Where multipart uploads land                |
-| `MAX_UPLOAD_BYTES`     | `52428800`    | 50 MB upload cap                               |
-| `PI_BIN`               | `pi`          | Path to the `pi` CLI binary (overridable for tests) |
-| `PI_CWD`               | `process.cwd()` | Working directory passed to `pi` as project root |
-| `*_API_KEY`            | (unset)       | One per provider — see `src/server/config.ts`  |
+| Variable                       | Default                       | Purpose                                        |
+|--------------------------------|-------------------------------|------------------------------------------------|
+| `PORT`                         | `3000`                        | HTTP port                                      |
+| `HOST`                         | `0.0.0.0`                     | Bind address                                   |
+| `UPLOADS_DIR`                  | `<root>/uploads`              | Where multipart uploads land                   |
+| `MAX_UPLOAD_BYTES`             | `52428800`                    | 50 MB upload cap                               |
+| `PI_BIN`                       | `pi`                          | Path to the `pi` CLI binary (overridable for tests) |
+| `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
+| `PYTHON_BIN`                   | `python3`                     | Python binary for Piper (TTS) + Whisper (STT)  |
+| `PIPER_VOICE`                  | `en_US-amy-medium`            | Piper TTS voice model                           |
+| `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
+| `*_API_KEY`                    | (unset)                       | One per provider — see `src/server/config.ts`  |
 
 Provider keys currently recognised: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `MiniMax_API_KEY`, `HUGGINGFACE_API_KEY`, `FIREWORKS_API_KEY`, `TOGETHER_API_KEY`, `VERCEL_AI_GATEWAY_API_KEY`, `ZAI_API_KEY`, `KIMI_API_KEY`, `OPENCODE_API_KEY`. Only providers with a key are exposed via `/api/models`.
 

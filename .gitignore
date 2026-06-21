@@ -43,6 +43,7 @@ uploads/*
 # Pi agent data
 .pi-agent/
 
-# Throwaway debug scripts. Keep the *-smoke.mjs and check-*.mjs files
-# at the top level; new debug one-offs go here and get pruned in sweep PRs.
+# Throwaway debug
+.hermes/
+AGENTS.md
 scripts/_archive/
