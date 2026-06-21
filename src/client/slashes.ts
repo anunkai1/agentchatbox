@@ -187,8 +187,13 @@ export function handleSlash(arg: string): void {
 			handleSlash("clear");
 			return;
 		case "resume":
-			// Alias for /sessions.
-			handleSlash("sessions");
+			// If a session id is provided (e.g. from the sidebar), resume
+			// that session directly. Otherwise open the sessions picker.
+			if (rest.trim()) {
+				chatControls?.resumeSession(rest.trim());
+			} else {
+				handleSlash("sessions");
+			}
 			return;
 		case "name": {
 			const newName = rest.trim();

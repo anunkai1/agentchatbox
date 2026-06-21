@@ -16,6 +16,7 @@
  */
 
 import { $, el, type LiveAssistantDom } from "./dom.js";
+import type { SessionSummary } from "../shared/protocol.js";
 import { type PersistedMessage, state } from "./state.js";
 
 export function autoSize(): void {
@@ -39,7 +40,18 @@ export function renderHistory(): void {
 	for (const m of state.messages) {
 		list.append(renderMessageNode(m));
 	}
+	updateWelcomeVisibility();
 	scrollToBottom();
+}
+
+/**
+ * Show the welcome / empty-state panel when there are no messages, hide it
+ * as soon as the first row appears. Called from renderHistory, appendNode,
+ * and the send path so the panel never lingers behind a real conversation.
+ */
+export function updateWelcomeVisibility(): void {
+	const w = document.querySelector("#welcome");
+	if (w) w.classList.toggle("hidden", state.messages.length > 0);
 }
 
 export function renderMessageNode(m: PersistedMessage): HTMLElement {
@@ -47,13 +59,12 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		return el(
 			"div",
 			{ class: "row row-user" },
-			el("span", { class: "role role-user" }, "You ›"),
-			el("span", { class: "body" }, m.text),
+			el("div", { class: "bubble" }, m.text),
 		);
 	}
 	if (m.kind === "assistant") {
 		const wrap = el("div", { class: "row row-assistant" });
-		wrap.append(el("span", { class: "role role-assistant" }, "Pi ›"));
+		wrap.append(el("div", { class: "avatar" }, "✦"));
 		const body = el("div", { class: "body" });
 		if (m.thinking) {
 			const t = el("div", { class: "thinking" });
@@ -77,23 +88,28 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	}
 	if (m.kind === "tool") {
 		const wrap = el("div", { class: "row row-tool" });
-		wrap.append(el("span", { class: "role role-tool" }, "Tool ›"));
-		const body = el("div", { class: "tool-body" });
-		body.append(el("div", { class: "tool-name" }, `${m.name} ${summarizeArgs(m.args)}`));
+		const card = el("div", { class: "tool-card" });
+		card.append(
+			el(
+				"div",
+				{ class: "tool-head" },
+				el("span", { class: "tool-icon" }, "⚙"),
+				el("span", { class: "tool-name" }, `${m.name} ${summarizeArgs(m.args)}`),
+			),
+		);
 		if (m.result !== undefined) {
-			body.append(el("pre", { class: `tool-result ${m.isError ? "tool-error" : ""}` }, m.result));
+			card.append(el("pre", { class: `tool-result ${m.isError ? "tool-error" : ""}` }, m.result));
 		} else {
-			body.append(el("div", { class: "tool-pending" }, "running…"));
+			card.append(el("div", { class: "tool-pending" }, "running…"));
 		}
-		wrap.append(body);
+		wrap.append(card);
 		return wrap;
 	}
 	// error
 	return el(
 		"div",
 		{ class: "row row-error" },
-		el("span", { class: "role" }, "!"),
-		el("span", { class: "body" }, m.text),
+		el("div", { class: "body" }, m.text),
 	);
 }
 
@@ -158,6 +174,7 @@ export function scrollToBottomIfPinned(): void {
 
 export function appendNode(node: HTMLElement): void {
 	$("#messages").append(node);
+	updateWelcomeVisibility();
 	scrollToBottom();
 }
 
@@ -172,7 +189,7 @@ export function appendNode(node: HTMLElement): void {
  */
 export function appendAssistantPlaceholder(): LiveAssistantDom {
 	const wrap = el("div", { class: "row row-assistant" });
-	wrap.append(el("span", { class: "role role-assistant" }, "Pi ›"));
+	wrap.append(el("div", { class: "avatar" }, "✦"));
 	const body = el("div", { class: "body" });
 	// Thinking block — created expanded by default; populated as
 	// message_update events stream in thinking content. If the model never
@@ -200,12 +217,18 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 }
 export function appendToolCall(name: string, args: unknown, toolCallId: string): void {
 	const wrap = el("div", { class: "row row-tool" });
-	wrap.append(el("span", { class: "role role-tool" }, "Tool ›"));
-	const body = el("div", { class: "tool-body" });
-	body.append(el("div", { class: "tool-name" }, `${name} ${summarizeArgs(args)}`));
+	const card = el("div", { class: "tool-card" });
+	card.append(
+		el(
+			"div",
+			{ class: "tool-head" },
+			el("span", { class: "tool-icon" }, "⚙"),
+			el("span", { class: "tool-name" }, `${name} ${summarizeArgs(args)}`),
+		),
+	);
 	const pending = el("div", { class: "tool-pending" }, "running…");
-	body.append(pending);
-	wrap.append(body);
+	card.append(pending);
+	wrap.append(card);
 	// Mark the row with the SDK's toolCallId so the matching
 	// `tool_execution_end` (or the subsequent `message_start` for the
 	// toolResult) can find it directly. Falls back to the "last
@@ -244,11 +267,11 @@ export function finalizeToolCall(
 	}
 	if (!row) return;
 	delete row.dataset.toolPending;
+	const card = row.querySelector(".tool-card");
 	const pending = row.querySelector(".tool-pending");
 	if (pending) pending.remove();
-	const body = row.querySelector(".tool-body");
-	if (body && result !== undefined) {
-		body.append(el("pre", { class: `tool-result ${isError ? "tool-error" : ""}` }, result));
+	if (card && result !== undefined) {
+		card.append(el("pre", { class: `tool-result ${isError ? "tool-error" : ""}` }, result));
 	}
 	void name; // unused for now — the tool-name row was already set on append
 }
@@ -258,8 +281,7 @@ export function appendError(text: string): void {
 		el(
 			"div",
 			{ class: "row row-error" },
-			el("span", { class: "role" }, "!"),
-			el("span", { class: "body" }, text),
+			el("div", { class: "body" }, text),
 		),
 	);
 }
@@ -350,6 +372,49 @@ export function renderShell(): void {
 	const root = el("div", { id: "app" });
 	document.body.append(root);
 
+	// ── Sidebar ────────────────────────────────────────────────────
+	const sidebar = el("div", { class: "sidebar", id: "sidebar" });
+	const sidebarHeader = el("div", { class: "sidebar-header" });
+	sidebarHeader.append(
+		el(
+			"button",
+			{
+				class: "icon-btn",
+				title: "Close sidebar",
+				onclick: () => toggleSidebar(true),
+			},
+			"✕",
+		),
+		el("span", { class: "spacer" }),
+	);
+	sidebar.append(sidebarHeader);
+
+	// New chat button
+	sidebar.append(
+		el(
+			"button",
+			{
+				class: "new-chat-btn",
+				onclick: () => {
+					shellHandlers?.handleSlash("clear");
+					toggleSidebar(true); // auto-close on mobile
+				},
+			},
+			"✏️  New chat",
+		),
+	);
+
+	// Session list container — populated by renderSidebarSessions()
+	const sessionsWrap = el("div", { class: "sidebar-sessions", id: "sidebar-sessions" });
+	sessionsWrap.append(el("div", { class: "sidebar-empty" }, "Loading sessions…"));
+	sidebar.append(sessionsWrap);
+
+	root.append(sidebar);
+
+	// ── Main column ────────────────────────────────────────────────
+	const main = el("div", { class: "main" });
+	root.append(main);
+
 	// Header
 	const header = el("div", { class: "header" });
 	header.append(
@@ -357,19 +422,11 @@ export function renderShell(): void {
 			"button",
 			{
 				class: "icon-btn",
-				title: "New chat (/clear)",
-				onclick: () => shellHandlers?.handleSlash("clear"),
+				id: "menu-toggle",
+				title: "Open sidebar",
+				onclick: () => toggleSidebar(false),
 			},
-			"new",
-		),
-		el(
-			"button",
-			{
-				class: "icon-btn",
-				title: "Sessions (/sessions)",
-				onclick: () => shellHandlers?.handleSlash("sessions"),
-			},
-			"≡",
+			"☰",
 		),
 		el("span", { class: "title", id: "title" }, state.title),
 		el("div", { class: "spacer" }),
@@ -402,12 +459,48 @@ export function renderShell(): void {
 			"⋯",
 		),
 	);
-	root.append(header);
+	main.append(header);
 
-	// Messages
-	root.append(el("div", { class: "messages", id: "messages" }));
+	// Messages area — scrollable wrapper containing welcome + messages
+	const messagesWrap = el("div", { class: "messages-wrap" });
+
+	// Welcome / empty state
+	const welcome = el("div", { class: "welcome", id: "welcome" });
+	welcome.append(el("div", { class: "welcome-logo" }, "✦"));
+	welcome.append(el("h1", { class: "welcome-title" }, "AgentChat"));
+	welcome.append(
+		el("p", { class: "welcome-sub" }, "Ask anything — I'll think, use tools, and answer."),
+	);
+	const suggestions = el("div", { class: "welcome-suggestions" });
+	for (const s of WELCOME_SUGGESTIONS) {
+		suggestions.append(
+			el(
+				"button",
+				{
+					class: "suggestion",
+					onclick: () => {
+						const input = document.querySelector("#input") as HTMLTextAreaElement | null;
+						if (input) {
+							input.value = s.prompt;
+							input.dispatchEvent(new Event("input"));
+							shellHandlers?.handleSend();
+						}
+					},
+				},
+				el("span", { class: "s-title" }, s.title),
+				el("span", { class: "s-sub" }, s.sub),
+			),
+		);
+	}
+	welcome.append(suggestions);
+	messagesWrap.append(welcome);
+
+	// Messages list
+	messagesWrap.append(el("div", { class: "messages", id: "messages" }));
+	main.append(messagesWrap);
 
 	// Composer
+	const composerWrap = el("div", { class: "composer-wrap" });
 	const composer = el("div", { class: "composer" });
 	composer.append(
 		el(
@@ -436,35 +529,40 @@ export function renderShell(): void {
 			id: "input",
 			class: "input",
 			rows: 1,
-			placeholder: "Type… (Enter for newline, tap send to submit)",
+			placeholder: "Message AgentChat… (⌘/Ctrl+Enter to send)",
 			autocomplete: "off",
 			autocapitalize: "off",
 			spellcheck: false,
 		}),
 		el(
-			"button",
-			{
-				class: "send-btn",
-				id: "send-btn",
-				title: "Send (⌘/Ctrl+Enter)",
-				onclick: () => shellHandlers?.handleSend(),
-			},
-			"send",
-		),
-		el(
-			"button",
-			{
-				class: "stop-btn",
-				id: "stop-btn",
-				title: "Stop the current run",
-				hidden: true,
-				onclick: () => shellHandlers?.abort(),
-			},
-			"stop",
+			"div",
+			{ class: "composer-actions" },
+			el(
+				"button",
+				{
+					class: "send-btn",
+					id: "send-btn",
+					title: "Send (⌘/Ctrl+Enter)",
+					onclick: () => shellHandlers?.handleSend(),
+				},
+				"↑",
+			),
+			el(
+				"button",
+				{
+					class: "stop-btn",
+					id: "stop-btn",
+					title: "Stop the current run",
+					hidden: true,
+					onclick: () => shellHandlers?.abort(),
+				},
+				"■",
+			),
 		),
 	);
-	root.append(composer);
-	root.append(
+	composerWrap.append(composer);
+	main.append(composerWrap);
+	main.append(
 		el("input", {
 			type: "file",
 			id: "file-input",
@@ -475,7 +573,7 @@ export function renderShell(): void {
 
 	// Status bar
 	const statusBar = el("div", { class: "status-bar", id: "status-bar" }, "connecting…");
-	root.append(statusBar);
+	main.append(statusBar);
 
 	// Hidden audio element for TTS playback. One shared element so a new
 	// speak request stops the current one.
@@ -496,7 +594,7 @@ export function renderShell(): void {
 		state.audioPlaying = false;
 		refreshStatus();
 	});
-	root.append(audio);
+	main.append(audio);
 
 	// File-input handler
 	$("#file-input").addEventListener("change", (e) => {
@@ -531,6 +629,133 @@ export function renderShell(): void {
 	$("#voice-picker").addEventListener("click", () => shellHandlers?.openVoicePicker());
 	$("#tts-toggle").addEventListener("click", () => shellHandlers?.toggleAutoSpeak());
 
+	// Desktop: sidebar open by default. Mobile: collapsed.
+	if (window.innerWidth <= 720) {
+		document.getElementById("sidebar")?.classList.add("collapsed");
+	}
+
 	renderHistory();
 	refreshStatus();
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar helpers
+// ---------------------------------------------------------------------------
+
+/** Welcome-screen suggestion cards (title, subtitle, prompt). */
+const WELCOME_SUGGESTIONS: { title: string; sub: string; prompt: string }[] = [
+	{
+		title: "Explain a concept",
+		sub: "Break down a complex topic simply",
+		prompt: "Explain how transformers work in machine learning, in simple terms.",
+	},
+	{
+		title: "Write code",
+		sub: "Generate a function or script",
+		prompt: "Write a Python function that finds all prime numbers up to N using the Sieve of Eratosthenes.",
+	},
+	{
+		title: "Brainstorm ideas",
+		sub: "Generate creative options",
+		prompt: "Give me 5 creative project ideas for learning Rust.",
+	},
+	{
+		title: "Analyze & decide",
+		sub: "Weigh pros and cons",
+		prompt: "Compare PostgreSQL vs SQLite for a small web app. Pros and cons of each.",
+	},
+];
+
+/**
+ * Toggle the sidebar open/closed. On mobile, a dim overlay is shown when
+ * the sidebar is open so taps outside dismiss it.
+ */
+function toggleSidebar(collapse: boolean): void {
+	const sidebar = document.getElementById("sidebar");
+	if (!sidebar) return;
+	sidebar.classList.toggle("collapsed", collapse);
+
+	// Mobile: manage the dim overlay
+	let dim = document.querySelector(".sidebar-dim");
+	if (!collapse) {
+		if (!dim) {
+			dim = el("div", { class: "sidebar-dim" });
+			dim.addEventListener("click", () => toggleSidebar(true));
+			document.body.append(dim);
+		}
+	} else {
+		dim?.remove();
+	}
+}
+
+/**
+ * Render the list of sessions into the sidebar. Called by main.ts when
+ * the server delivers the session list (via onSessionsUpdated). Sessions
+ * are grouped by date: Today / Yesterday / This week / Older.
+ */
+export function renderSidebarSessions(sessions: SessionSummary[]): void {
+	const container = document.getElementById("sidebar-sessions");
+	if (!container) return;
+	container.innerHTML = "";
+	if (sessions.length === 0) {
+		container.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
+		return;
+	}
+
+	// Sort newest first
+	const sorted = [...sessions].sort(
+		(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
+	);
+
+	// Group by date bucket
+	const now = new Date();
+	const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+	const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
+	const startOfWeek = new Date(startOfToday.getTime() - 6 * 86400000);
+
+	const buckets: { label: string; items: SessionSummary[] }[] = [
+		{ label: "Today", items: [] },
+		{ label: "Yesterday", items: [] },
+		{ label: "This week", items: [] },
+		{ label: "Older", items: [] },
+	];
+	for (const s of sorted) {
+		const d = new Date(s.modifiedAt);
+		if (d >= startOfToday) buckets[0].items.push(s);
+		else if (d >= startOfYesterday) buckets[1].items.push(s);
+		else if (d >= startOfWeek) buckets[2].items.push(s);
+		else buckets[3].items.push(s);
+	}
+
+	for (const bucket of buckets) {
+		if (bucket.items.length === 0) continue;
+		container.append(el("div", { class: "group-label" }, bucket.label));
+		for (const s of bucket.items) {
+			const item = el("div", { class: "session-item" });
+			if (s.id === state.sessionId) item.classList.add("active");
+			item.append(el("div", { class: "session-item-title" }, s.title || "Untitled"));
+			const timeStr = formatRelativeTime(s.modifiedAt);
+			item.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
+			item.addEventListener("click", () => {
+				shellHandlers?.handleSlash(`resume ${s.id}`);
+				toggleSidebar(true); // auto-close on mobile
+			});
+			container.append(item);
+		}
+	}
+}
+
+/** Format a relative time string for session meta. */
+function formatRelativeTime(iso: string): string {
+	const d = new Date(iso);
+	const now = new Date();
+	const diffMs = now.getTime() - d.getTime();
+	const diffMin = Math.floor(diffMs / 60000);
+	const diffHr = Math.floor(diffMin / 60);
+	if (diffMin < 1) return "just now";
+	if (diffMin < 60) return `${diffMin}m ago`;
+	if (diffHr < 24) return `${diffHr}h ago`;
+	const diffDays = Math.floor(diffHr / 24);
+	if (diffDays < 7) return `${diffDays}d ago`;
+	return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

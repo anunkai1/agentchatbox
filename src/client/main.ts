@@ -445,13 +445,20 @@ async function boot(): Promise<void> {
 		state.pendingModelSet = null;
 		state.currentThinking = info.thinkingLevel;
 		refreshStatus();
+		// Request the session list for the sidebar on the first ready event.
+		// Subsequent ready events (reconnects, new sessions) also refresh.
+		chatClient.listSessions();
 	});
 	chatClient.onEvent(onEvent);
 	chatClient.onError((msg) => appendError(msg));
 	// /sessions picker: when the server replies with the list, fill the
 	// open modal. The listener is a no-op if no picker is open.
+	// Also refresh the sidebar session list.
 	chatClient.onSessionsUpdated((sessions) => {
 		renderSessionsIntoPicker(sessions);
+		void import("./render.js").then(({ renderSidebarSessions }) =>
+			renderSidebarSessions(sessions),
+		);
 	});
 	// On resume: replace the renderer cache with the server's replay
 	// transcript, then re-render the chat scrollback so the past
