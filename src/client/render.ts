@@ -480,7 +480,7 @@ export function renderShell(): void {
 	// Welcome / empty state
 	const welcome = el("div", { class: "welcome", id: "welcome" });
 	welcome.append(el("div", { class: "welcome-logo" }, "✦"));
-	welcome.append(el("h1", { class: "welcome-title" }, "AgentChat"));
+	welcome.append(el("h1", { class: "welcome-title" }, "AgentChatBox"));
 	welcome.append(
 		el("p", { class: "welcome-sub" }, "Ask anything — I'll think, use tools, and answer."),
 	);
@@ -542,7 +542,7 @@ export function renderShell(): void {
 			id: "input",
 			class: "input",
 			rows: 1,
-			placeholder: "Message AgentChat… (⌘/Ctrl+Enter to send)",
+			placeholder: "Message AgentChatBox… (⌘/Ctrl+Enter to send)",
 			autocomplete: "off",
 			autocapitalize: "off",
 			spellcheck: false,
