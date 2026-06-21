@@ -492,14 +492,21 @@ async function boot(): Promise<void> {
 	// the model list) or the first available model otherwise.
 	const defaultModel =
 		state.availableModels.find((m) => m.id === "MiniMax-M3") ?? state.availableModels[0];
-	const onOpen = () => {
+	// Send the init handshake every time the WS (re)opens. On mobile
+	// browsers (especially Android Firefox), backgrounding the tab kills
+	// the WebSocket — the OS suspends JS, the TCP connection times out,
+	// and when the user returns the WS auto-reconnects. Without this
+	// handler firing on every "open", the reconnected WS never sends
+	// `init`, the server sits waiting for it, and the user's next message
+	// hits "prompt sent before init".
+	const onWsOpen = (s: "connecting" | "open" | "closed") => {
+		if (s !== "open") return;
 		const modelId = state.currentModelId ?? defaultModel?.id ?? "MiniMax-M3";
 		const provider = state.currentProvider ?? defaultModel?.provider ?? "minimax";
 		const thinkingLevel = state.currentThinking;
 		chatClient.init({ provider, modelId, thinkingLevel });
-		unsubStatus();
 	};
-	const unsubStatus = chatClient.onStatus(onOpen);
+	chatClient.onStatus(onWsOpen);
 
 	// Wire the prompt-send hook used by `sendAsUser` (defined above
 	// at module scope, so the `setSendAsUser` dep injection in

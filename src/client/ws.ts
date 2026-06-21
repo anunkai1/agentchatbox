@@ -208,7 +208,10 @@ export function createChatClient(): ChatClient {
 				...(images && images.length > 0 ? { images } : {}),
 			});
 		},
-		abort: () => send({ type: "abort" }),
+		abort: () => {
+			if (!inited) return; // can't abort before init — server rejects non-init first messages
+			send({ type: "abort" });
+		},
 		setModel: (modelId, provider) => send({ type: "setModel", modelId, provider }),
 		setThinking: (level) => send({ type: "setThinking", level }),
 		renameSession: (name) => send({ type: "renameSession", name }),
