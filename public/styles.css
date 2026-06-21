@@ -3,14 +3,18 @@
  * No frameworks, no third-party CSS.
  */
 
-* { box-sizing: border-box; }
+* {
+	box-sizing: border-box;
+}
 
-html, body {
+html,
+body {
 	margin: 0;
 	height: 100%;
 	background: #0b0b0b;
 	color: #d4d4d4;
-	font-family: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+	font-family:
+		ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
 	font-size: 13px;
 	line-height: 1.5;
 }
@@ -33,8 +37,13 @@ html, body {
 	border-bottom: 1px solid #1f1f1f;
 	background: #0e0e0e;
 }
-.header .spacer { flex: 1; }
-.title { color: #d4d4d4; font-weight: 600; }
+.header .spacer {
+	flex: 1;
+}
+.title {
+	color: #d4d4d4;
+	font-weight: 600;
+}
 .icon-btn {
 	background: transparent;
 	border: 1px solid transparent;
@@ -45,7 +54,10 @@ html, body {
 	font-family: inherit;
 	font-size: 12px;
 }
-.icon-btn:hover { background: #1c1c1c; color: #d4d4d4; }
+.icon-btn:hover {
+	background: #1c1c1c;
+	color: #d4d4d4;
+}
 .picker-btn {
 	background: #161616;
 	border: 1px solid #262626;
@@ -56,7 +68,9 @@ html, body {
 	font-family: inherit;
 	font-size: 11px;
 }
-.picker-btn:hover { background: #1f1f1f; }
+.picker-btn:hover {
+	background: #1f1f1f;
+}
 .picker-btn.active {
 	background: #1c2535;
 	border-color: #4f6dd6;
@@ -64,7 +78,9 @@ html, body {
 }
 
 /* Overflow menu button is hidden on wide screens. */
-.overflow-menu { display: none; }
+.overflow-menu {
+	display: none;
+}
 
 /* ---------- narrow-screen header collapse ----------
  * On phones we hide the four picker pills and the chat-title chip, and show
@@ -76,11 +92,19 @@ html, body {
 		gap: 4px;
 		padding: 6px 8px;
 	}
-	.header .title { display: none; }
-	.header .picker-btn { display: none; }
-	.overflow-menu { display: inline-block; }
+	.header .title {
+		display: none;
+	}
+	.header .picker-btn {
+		display: none;
+	}
+	.overflow-menu {
+		display: inline-block;
+	}
 	/* Stop messages from being cut off on small screens. */
-	.messages { padding: 8px; }
+	.messages {
+		padding: 8px;
+	}
 	.composer {
 		padding: 6px 8px;
 		gap: 4px;
@@ -91,14 +115,27 @@ html, body {
 		min-height: 30px;
 		line-height: 1.3;
 	}
-	.composer .icon-btn { padding: 3px 6px; font-size: 15px; }
-	.send-btn, .stop-btn { padding: 4px 10px; font-size: 12px; }
-	.status-bar { padding: 3px 8px; font-size: 10px; }
+	.composer .icon-btn {
+		padding: 3px 6px;
+		font-size: 15px;
+	}
+	.send-btn,
+	.stop-btn {
+		padding: 4px 10px;
+		font-size: 12px;
+	}
+	.status-bar {
+		padding: 3px 8px;
+		font-size: 10px;
+	}
 }
 
 /* ---------- overflow menu rows ---------- */
 
-.overflow-box { min-width: 260px; max-width: 90vw; }
+.overflow-box {
+	min-width: 260px;
+	max-width: 90vw;
+}
 .overflow-row {
 	display: flex;
 	justify-content: space-between;
@@ -108,10 +145,20 @@ html, body {
 	cursor: pointer;
 	color: #d4d4d4;
 }
-.overflow-row:hover { background: #161616; }
-.overflow-row:last-of-type { border-bottom: none; }
-.overflow-label { color: #9aa0a6; font-size: 12px; }
-.overflow-value { color: #d4d4d4; font-weight: 600; }
+.overflow-row:hover {
+	background: #161616;
+}
+.overflow-row:last-of-type {
+	border-bottom: none;
+}
+.overflow-label {
+	color: #9aa0a6;
+	font-size: 12px;
+}
+.overflow-value {
+	color: #d4d4d4;
+	font-weight: 600;
+}
 
 /* ---------- messages ---------- */
 
@@ -129,20 +176,39 @@ html, body {
 	gap: 8px;
 	padding: 2px 4px;
 }
-.row-user { color: #d4d4d4; }
-.row-assistant { color: #d4d4d4; }
-.row-tool { color: #bb9af7; }
-.row-error { color: #f7768e; background: #2a1517; padding: 4px 8px; border-radius: 3px; }
+.row-user {
+	color: #d4d4d4;
+}
+.row-assistant {
+	color: #d4d4d4;
+}
+.row-tool {
+	color: #bb9af7;
+}
+.row-error {
+	color: #f7768e;
+	background: #2a1517;
+	padding: 4px 8px;
+	border-radius: 3px;
+}
 
 .role {
 	flex-shrink: 0;
 	font-weight: 600;
 	user-select: none;
 }
-.role-user { color: #7aa2f7; }
-.role-assistant { color: #9ece6a; }
-.role-tool { color: #bb9af7; }
-.row-error .role { color: #f7768e; }
+.role-user {
+	color: #7aa2f7;
+}
+.role-assistant {
+	color: #9ece6a;
+}
+.role-tool {
+	color: #bb9af7;
+}
+.row-error .role {
+	color: #f7768e;
+}
 
 .body {
 	flex: 1;
@@ -161,7 +227,11 @@ html, body {
 	animation: blink 1s steps(2) infinite;
 	color: #9ece6a;
 }
-@keyframes blink { 50% { opacity: 0; } }
+@keyframes blink {
+	50% {
+		opacity: 0;
+	}
+}
 
 /* thinking block */
 .thinking {
@@ -174,8 +244,13 @@ html, body {
  * space) until the first thinking chunk arrives — message_update removes
  * this class as soon as the model emits content.
  */
-.thinking.hidden-thinking { display: none; }
-.thinking-toggle { cursor: pointer; user-select: none; }
+.thinking.hidden-thinking {
+	display: none;
+}
+.thinking-toggle {
+	cursor: pointer;
+	user-select: none;
+}
 .thinking-body {
 	margin: 4px 0 4px 12px;
 	font-size: 12px;
@@ -185,7 +260,9 @@ html, body {
 	border-left: 2px solid #2a2a2a;
 	padding-left: 8px;
 }
-.thinking-body.hidden { display: none; }
+.thinking-body.hidden {
+	display: none;
+}
 
 /* tool block */
 .tool-body {
@@ -262,9 +339,14 @@ html, body {
 	max-height: 200px;
 	outline: none;
 }
-.composer .input:focus { border-color: #4f6dd6; }
-.composer .input:disabled { opacity: 0.5; }
-.send-btn, .stop-btn {
+.composer .input:focus {
+	border-color: #4f6dd6;
+}
+.composer .input:disabled {
+	opacity: 0.5;
+}
+.send-btn,
+.stop-btn {
 	background: #4f6dd6;
 	color: white;
 	border: none;
@@ -275,9 +357,18 @@ html, body {
 	font-weight: 600;
 	font-size: 12px;
 }
-.send-btn:disabled, .stop-btn { background: #3a3d46; cursor: not-allowed; }
-.stop-btn { background: #c64545; }
-.stop-btn[hidden], .send-btn[hidden] { display: none; }
+.send-btn:disabled,
+.stop-btn {
+	background: #3a3d46;
+	cursor: not-allowed;
+}
+.stop-btn {
+	background: #c64545;
+}
+.stop-btn[hidden],
+.send-btn[hidden] {
+	display: none;
+}
 
 /* ---------- status bar ---------- */
 
@@ -313,7 +404,10 @@ html, body {
 	max-height: 80vh;
 	overflow-y: auto;
 }
-.modal-box h3 { margin: 0 0 10px 0; color: #d4d4d4; }
+.modal-box h3 {
+	margin: 0 0 10px 0;
+	color: #d4d4d4;
+}
 .modal-box .btn {
 	background: #1c1c1c;
 	color: #d4d4d4;
@@ -325,20 +419,44 @@ html, body {
 	font-family: inherit;
 	font-size: 12px;
 }
-.modal-box .btn:hover { background: #262626; }
-.model-row, .session-row {
+.modal-box .btn:hover {
+	background: #262626;
+}
+.model-row,
+.session-row {
 	padding: 6px 8px;
 	border: 1px solid #262626;
 	border-radius: 4px;
 	margin-bottom: 4px;
 	cursor: pointer;
 }
-.model-row:hover, .session-row:hover { background: #161616; }
-.model-row.active, .session-row.active { border-color: #4f6dd6; background: #14233f; }
-.model-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.model-provider, .session-meta { font-size: 11px; color: #5a5a5a; margin-top: 2px; }
-.session-title { font-weight: 600; }
-.muted { color: #5a5a5a; }
+.model-row:hover,
+.session-row:hover {
+	background: #161616;
+}
+.model-row.active,
+.session-row.active {
+	border-color: #4f6dd6;
+	background: #14233f;
+}
+.model-name {
+	font-weight: 600;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.model-provider,
+.session-meta {
+	font-size: 11px;
+	color: #5a5a5a;
+	margin-top: 2px;
+}
+.session-title {
+	font-weight: 600;
+}
+.muted {
+	color: #5a5a5a;
+}
 
 /* Group header inside the model picker — visual separator between
  * providers, no border around the whole group, just a small label. */
@@ -350,7 +468,9 @@ html, body {
 	margin: 10px 0 4px 0;
 	padding: 0 4px;
 }
-.model-group-header:first-of-type { margin-top: 4px; }
+.model-group-header:first-of-type {
+	margin-top: 4px;
+}
 
 /* Reasoning-capable badge shown next to the model name in the picker. */
 .model-badge {
