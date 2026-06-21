@@ -33,6 +33,7 @@ export async function speakText(text: string): Promise<void> {
 		const blob = await synthesizeSpeech(trimmed, state.ttsVoice ?? undefined);
 		const url = URL.createObjectURL(blob);
 		audio.src = url;
+		audio.playbackRate = 1.4;
 		await audio.play();
 		// Revoke object URL after playback ends (or on next speak).
 		audio.onended = () => {
