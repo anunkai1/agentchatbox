@@ -26,6 +26,7 @@
  */
 
 import type { Server as HttpServer, IncomingMessage } from "node:http";
+import { join } from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
 import type {
 	ClientMessage,
@@ -316,9 +317,15 @@ async function onClientMessage(
 		}
 		case "prompt": {
 			if (!pi) return;
+			// Translate /uploads/<file> web URLs to absolute filesystem paths
+			// so pi's read tool can access uploaded files. The browser inserts
+			// markdown links like [/uploads/<uuid>.csv] in the prompt, but pi
+			// treats the path literally — /uploads/ doesn't exist on disk; the
+			// files live in config.uploadsDir.
+			const message = rewriteUploadUrls(msg.text);
 			pi.send({
 				type: "prompt",
-				message: msg.text,
+				message,
 				...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
 			});
 			break;
@@ -414,6 +421,20 @@ async function onClientMessage(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Rewrite /uploads/<filename> web URLs in prompt text to the absolute
+ * filesystem path where the uploaded file actually lives. The browser
+ * inserts markdown links like `[file: foo.csv](/uploads/<uuid>.csv)`;
+ * pi's `read` tool treats the path literally and fails with ENOENT
+ * because /uploads/ is a web route, not a filesystem path.
+ */
+function rewriteUploadUrls(text: string): string {
+	return text.replace(
+		/\(\/uploads\/([A-Za-z0-9._-]+)\)/g,
+		(_, filename) => `(${join(config.uploadsDir, filename)})`,
+	);
+}
 
 /** Wait for the first message from the WS that matches the given type. */
 function waitForMessage<T>(ws: WebSocket, type: ClientMessage["type"]): Promise<T> {
