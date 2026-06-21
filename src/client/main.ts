@@ -13,7 +13,6 @@
  * voice/file-attach in voice.ts, and the DOM helpers in dom.ts.
  */
 
-import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type {
 	AssistantMessage,
 	TextContent,
@@ -186,12 +185,11 @@ let lastAssistant: PersistedMessage | null = null;
 let lastAssistantDom: LiveAssistantDom | null = null;
 let lastThinking: PersistedMessage | null = null;
 
-function onEvent(event: AgentEvent | Record<string, unknown>): void {
-	// The server is now forwarding raw `pi --mode rpc` events, which
-	// is a superset of the bare `AgentEvent` union. Treat the input
-	// as `Record<string, unknown>` and read the `type` field as a
-	// string; the switch ignores unknown types.
-	const e = event as AgentEvent;
+function onEvent(event: Record<string, unknown>): void {
+	// The server forwards raw `pi --mode rpc` events, which is a
+	// superset of the bare `AgentEvent` union. Cast to a permissive
+	// type for property access; the switch ignores unknown types.
+	const e = event as Record<string, any>;
 	switch (e.type) {
 		case "agent_start":
 			setStreaming(true);
@@ -219,17 +217,17 @@ function onEvent(event: AgentEvent | Record<string, unknown>): void {
 			break;
 
 		case "message_start":
-			if (event.message.role === "assistant") {
+			if (e.message.role === "assistant") {
 				// New assistant message — create a fresh block.
 				lastAssistant = { kind: "assistant", text: "", thinking: "" };
 				state.messages.push(lastAssistant);
 				lastAssistantDom = appendAssistantPlaceholder();
-			} else if (event.message.role === "user") {
+			} else if (e.message.role === "user") {
 				// User message echoed by the server (we already showed it).
-			} else if (event.message.role === "toolResult") {
+			} else if (e.message.role === "toolResult") {
 				// Tool result from a tool the model called. Render as a tool
 				// block in our transcript.
-				const tr = event.message as ToolResultMessage;
+				const tr = e.message as ToolResultMessage;
 				const text = tr.content
 					.filter((c) => c.type === "text")
 					.map((c) => (c as TextContent).text)
@@ -240,7 +238,7 @@ function onEvent(event: AgentEvent | Record<string, unknown>): void {
 			break;
 
 		case "message_update": {
-			const m = event.message as AssistantMessage;
+			const m = e.message as AssistantMessage;
 			// Reconstruct the assistant text from content blocks.
 			let text = "";
 			let thinking = "";
@@ -283,7 +281,7 @@ function onEvent(event: AgentEvent | Record<string, unknown>): void {
 		}
 
 		case "message_end": {
-			const m = event.message as AssistantMessage;
+			const m = e.message as AssistantMessage;
 			if (m.usage) {
 				state.costTotal.input += m.usage.input;
 				state.costTotal.output += m.usage.output;
@@ -323,8 +321,8 @@ function onEvent(event: AgentEvent | Record<string, unknown>): void {
 			// matching tool_execution_end / message_start can find the
 			// right row even when multiple tools are in flight in
 			// parallel.
-			state.messages.push({ kind: "tool", name: event.toolName, args: event.args });
-			appendToolCall(event.toolName, event.args, event.toolCallId);
+			state.messages.push({ kind: "tool", name: e.toolName, args: e.args });
+			appendToolCall(e.toolName, e.args, e.toolCallId);
 			break;
 
 		case "tool_execution_update":
@@ -410,6 +408,8 @@ async function boot(): Promise<void> {
 		refreshStatus();
 	});
 	chatClient.onReady((info) => {
+		// Track the session id for export/display.
+		if (info.sessionId) state.sessionId = info.sessionId;
 		// Don't blindly overwrite the displayed model with the server's
 		// default on every fresh connection — the server sends `ready`
 		// with the *initial* model (MiniMax-M3) on each new connection,
@@ -442,7 +442,8 @@ async function boot(): Promise<void> {
 	// On resume: replace the renderer cache with the server's replay
 	// transcript, then re-render the chat scrollback so the past
 	// conversation is visible.
-	chatClient.onTranscript((_sessionId, messages) => {
+	chatClient.onTranscript((sessionId, messages) => {
+		state.sessionId = sessionId;
 		state.messages = messages.map(projectToPersisted);
 		// Re-render: simplest approach is to nuke the messages div
 		// and re-append every cached message. The render layer's
@@ -457,6 +458,7 @@ async function boot(): Promise<void> {
 	// don't touch the message cache — that's already populated by
 	// the transcript message for resume, or is empty for new.
 	chatClient.onSessionResumed((info) => {
+		state.sessionId = info.sessionId;
 		state.currentModelId = info.modelId;
 		state.currentProvider = info.provider;
 		state.currentThinking = info.thinkingLevel;
@@ -474,9 +476,9 @@ async function boot(): Promise<void> {
 		const provider = state.currentProvider ?? defaultModel?.provider ?? "minimax";
 		const thinkingLevel = state.currentThinking;
 		chatClient.init({ provider, modelId, thinkingLevel });
-		chatClient.offStatus(onOpen);
+		unsubStatus();
 	};
-	chatClient.onStatus(onOpen);
+	const unsubStatus = chatClient.onStatus(onOpen);
 
 	// Wire the prompt-send hook used by `sendAsUser` (defined above
 	// at module scope, so the `setSendAsUser` dep injection in

@@ -610,7 +610,7 @@ export function exportSessionAsHtml(): void {
 	const lines: string[] = [];
 	lines.push(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(state.title)} — agentchatbox export</title><style>${css}</style></head><body>`);
 	lines.push(`<h1>${esc(state.title)}</h1>`);
-	lines.push(`<div class="meta">id: ${esc(state.sessionId.slice(0, 8))} · model: ${esc(state.currentModelId ?? "(unknown)")} · thinking: ${esc(state.currentThinking)} · ${state.messages.length} messages · ${c.input.toLocaleString()}/${c.output.toLocaleString()} tok · $${c.cost.toFixed(6)}</div>`);
+	lines.push(`<div class="meta">id: ${esc((state.sessionId ?? "").slice(0, 8))} · model: ${esc(state.currentModelId ?? "(unknown)")} · thinking: ${esc(state.currentThinking)} · ${state.messages.length} messages · ${c.input.toLocaleString()}/${c.output.toLocaleString()} tok · $${c.cost.toFixed(6)}</div>`);
 	for (const m of state.messages) {
 		if (m.kind === "user") {
 			lines.push(`<div class="msg user"><span class="role">You ›</span><span class="body">${esc(m.text)}</span></div>`);

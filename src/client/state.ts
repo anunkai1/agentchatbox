@@ -37,6 +37,8 @@ export type PersistedMessage =
 export interface AppState {
 	/** Title of the current chat. Set on first user message; updatable via /name. */
 	title: string;
+	/** Current pi session id, from the server's `ready`/`transcript` events. */
+	sessionId: string | null;
 	/** Renderer cache — the messages the browser has painted, in order. */
 	messages: PersistedMessage[];
 	historyIdx: number | null; // null = at the "now" position
@@ -95,6 +97,7 @@ export interface ModelOption {
 
 export const state: AppState = {
 	title: "New chat",
+	sessionId: null,
 	messages: [],
 	historyIdx: null,
 	history: [],
