@@ -34,6 +34,7 @@ import {
 	renderMessageNode,
 	renderShell,
 	type ShellHandlers,
+	scrollToBottom,
 	scrollToBottomIfPinned,
 	setStreaming,
 } from "./render.js";
@@ -173,7 +174,7 @@ let sendPromptHook: SendPromptHook = () => {
 function appendNode(node: HTMLElement): void {
 	$("#messages").append(node);
 	// Always scroll to bottom for user messages.
-	$("#messages").scrollTop = $("#messages").scrollHeight;
+	scrollToBottom();
 }
 
 // ---------------------------------------------------------------------------

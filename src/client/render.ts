@@ -146,20 +146,33 @@ export function summarizeArgs(args: unknown): string {
 }
 
 /**
- * True iff the user is currently sitting at the bottom of the messages list
- * (within a small tolerance). Used to decide whether new streamed tokens
- * should keep the viewport pinned to the latest line, or leave the user
- * alone when they've deliberately scrolled up to re-read something.
+ * The scroll container is `.messages-wrap`, NOT `#messages`. The messages
+ * div is the inner content that grows; .messages-wrap is the one with
+ * overflow-y: auto. If you query #messages for scrollTop/scrollHeight,
+ * both values are wrong (scrollTop is always 0, scrollHeight equals
+ * clientHeight) and scrolling silently does nothing.
+ */
+function getScrollContainer(): HTMLElement {
+	const el = document.querySelector(".messages-wrap");
+	return (el ?? $("#messages")) as HTMLElement;
+}
+
+/**
+ * True iff the user is currently sitting at the bottom of the messages
+ * list (within a small tolerance). Used to decide whether new streamed
+ * tokens should keep the viewport pinned to the latest line, or leave
+ * the user alone when they've deliberately scrolled up to re-read
+ * something.
  */
 export function isAtBottom(): boolean {
-	const list = $("#messages");
-	const slack = 32; // px — small enough that "near the bottom" counts as pinned
-	return list.scrollHeight - list.clientHeight - list.scrollTop <= slack;
+	const scroller = getScrollContainer();
+	const slack = 80; // px — generous so "near the bottom" counts as pinned
+	return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= slack;
 }
 
 export function scrollToBottom(): void {
-	const list = $("#messages");
-	list.scrollTop = list.scrollHeight;
+	const scroller = getScrollContainer();
+	scroller.scrollTop = scroller.scrollHeight;
 }
 
 /**
