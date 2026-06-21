@@ -18,15 +18,13 @@
  * module cache.
  */
 
-import { describe, expect, it } from "vitest";
-import { realpath, stat } from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
-import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { describe, expect, it } from "vitest";
 
 const execFileP = promisify(execFile);
 

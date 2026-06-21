@@ -11,13 +11,13 @@
  * chat module is imported.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server as HttpServer } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 type AnyMsg = { type: string; [k: string]: unknown };
@@ -86,9 +86,11 @@ function makeFakePi(behavior: "echo" | "ack" | "exit-before-session"): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
 	const body =
-		behavior === "echo" ? ECHO_SCRIPT :
-		behavior === "ack" ? ACK_SCRIPT :
-		EXIT_BEFORE_SESSION_SCRIPT;
+		behavior === "echo"
+			? ECHO_SCRIPT
+			: behavior === "ack"
+				? ACK_SCRIPT
+				: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -114,25 +116,33 @@ beforeEach(async () => {
 
 	server = createServer();
 	await new Promise<void>((resolve, reject) => {
-		server!.listen(0, "127.0.0.1", () => resolve());
-		server!.once("error", reject);
+		server?.listen(0, "127.0.0.1", () => resolve());
+		server?.once("error", reject);
 	});
 	port = (server.address() as AddressInfo).port;
 });
 
 afterEach(async () => {
 	if (server) {
-		await new Promise<void>((resolve) => server!.close(() => resolve()));
+		await new Promise<void>((resolve) => server?.close(() => resolve()));
 		server = null;
 	}
 	if (fakePiPath) {
-		try { rmSync(join(fakePiPath, ".."), { recursive: true, force: true }); } catch { /* ignore */ }
+		try {
+			rmSync(join(fakePiPath, ".."), { recursive: true, force: true });
+		} catch {
+			/* ignore */
+		}
 		fakePiPath = null;
 	}
 });
 
 /** Connect a WS, register the inbox listener before `open`, return helpers. */
-async function connectClient(): Promise<{ ws: WebSocket; inbox: Inbox; close: () => void }> {
+async function connectClient(): Promise<{
+	ws: WebSocket;
+	inbox: Inbox;
+	close: () => void;
+}> {
 	const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat`);
 	const inbox = new Inbox(ws);
 	await new Promise<void>((resolve, reject) => {
@@ -147,8 +157,11 @@ class Inbox {
 	constructor(ws: WebSocket) {
 		ws.on("message", (raw) => {
 			const text = (raw as { toString(): string }).toString();
-			try { this.out.push(JSON.parse(text) as AnyMsg); }
-			catch { /* drop */ }
+			try {
+				this.out.push(JSON.parse(text) as AnyMsg);
+			} catch {
+				/* drop */
+			}
 		});
 		ws.on("error", (err) => {
 			console.error("TEST ws error:", err.message);
@@ -157,7 +170,9 @@ class Inbox {
 			console.error("TEST ws close:", code, reason.toString());
 		});
 	}
-	all(): AnyMsg[] { return this.out.slice(); }
+	all(): AnyMsg[] {
+		return this.out.slice();
+	}
 	async waitFor(n: number, timeoutMs = 3000): Promise<AnyMsg[]> {
 		const deadline = Date.now() + timeoutMs;
 		while (this.out.length < n && Date.now() < deadline) {
@@ -174,7 +189,14 @@ describe("mountChatWs — pi subprocess pipe", () => {
 
 		const { ws, inbox, close } = await connectClient();
 		try {
-			ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
 			const ready = await inbox.waitFor(1);
 			expect(ready[0]?.type).toBe("ready");
 			expect((ready[0] as { modelId?: string }).modelId).toBe("m1");
@@ -202,7 +224,14 @@ describe("mountChatWs — pi subprocess pipe", () => {
 
 		const { ws, inbox, close } = await connectClient();
 		try {
-			ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
 			await inbox.waitFor(1);
 
 			ws.send(JSON.stringify({ type: "setModel", modelId: "m2", provider: "p2" }));
@@ -233,7 +262,14 @@ describe("mountChatWs — pi subprocess pipe", () => {
 
 		const { ws, inbox, close } = await connectClient();
 		try {
-			ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
 			await inbox.waitFor(1);
 			ws.send(JSON.stringify({ type: "listSessions" }));
 			const reply = await inbox.waitFor(2);
@@ -255,7 +291,14 @@ describe("mountChatWs — pi subprocess pipe", () => {
 
 		const { ws, inbox, close } = await connectClient();
 		try {
-			ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
 			const msgs = await inbox.waitFor(2, 3000);
 			// Expect an error message about the child exiting.
 			const errMsg = msgs.find((m) => m.type === "error");
@@ -284,7 +327,14 @@ describe("mountChatWs — pi subprocess pipe", () => {
 
 		const { ws, inbox, close } = await connectClient();
 		try {
-			ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
 			await inbox.waitFor(1);
 
 			// Snapshot WS state before respawn.
@@ -294,7 +344,12 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			// a new one with --session <id>. Old child's `exit`
 			// fires while the new one is starting. The WS must
 			// survive that.
-			ws.send(JSON.stringify({ type: "resumeSession", sessionId: "test-session-001" }));
+			ws.send(
+				JSON.stringify({
+					type: "resumeSession",
+					sessionId: "test-session-001",
+				}),
+			);
 
 			// The new child should send a fresh `ready` (its
 			// get_state replies with a sessionId). We wait until
@@ -324,8 +379,3 @@ describe("mountChatWs — pi subprocess pipe", () => {
 		}
 	});
 });
-
-// Keep this as a placeholder so the file ends with a non-empty line
-// after the last test — helps some editors' "did the file end mid
-// statement" linter rule. (No runtime effect.)
-export {};

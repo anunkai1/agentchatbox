@@ -11,10 +11,10 @@
  * as well as the slash menu.
  */
 
-import type { ThinkingLevel, SessionSummary } from "../shared/protocol.js";
+import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { $, el } from "./dom.js";
 import { appendError, appendNode, refreshStatus } from "./render.js";
-import { state, type ModelOption } from "./state.js";
+import { type ModelOption, state } from "./state.js";
 
 /**
  * Small helper for the slash command's help/session/copy messages.
@@ -71,7 +71,9 @@ export function showSlashMenu(): void {
 	} else if (cmd) {
 		$("#status-bar").textContent = `/${cmd} (unknown — will be sent as a prompt)`;
 	} else {
-		$("#status-bar").textContent = Object.entries(SLASH_COMMANDS).map(([k, v]) => `/${k} — ${v}`).join("    ");
+		$("#status-bar").textContent = Object.entries(SLASH_COMMANDS)
+			.map(([k, v]) => `/${k} — ${v}`)
+			.join("    ");
 	}
 }
 
@@ -140,7 +142,13 @@ export function handleSlash(arg: string): void {
 				state.messages = [];
 				state.history = [];
 				state.historyIdx = null;
-				state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+				state.costTotal = {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					cost: 0,
+				};
 				void import("./render.js").then(({ renderShell }) => renderShell());
 			}
 			break;
@@ -150,13 +158,22 @@ export function handleSlash(arg: string): void {
 			break;
 		case "help":
 			appendNode(
-				el_pre("Slash commands:\n" + Object.entries(SLASH_COMMANDS).map(([k, v]) => `  /${k.padEnd(8)} ${v}`).join("\n")),
+				el_pre(
+					"Slash commands:\n" +
+						Object.entries(SLASH_COMMANDS)
+							.map(([k, v]) => `  /${k.padEnd(8)} ${v}`)
+							.join("\n"),
+				),
 			);
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
 		case "cost": {
 			const c = state.costTotal;
-			appendNode(el_pre(`Session totals:\n  in:  ${c.input.toLocaleString()} tok\n  out: ${c.output.toLocaleString()} tok\n  cache read: ${c.cacheRead.toLocaleString()} tok\n  cache write: ${c.cacheWrite.toLocaleString()} tok\n  cost: $${c.cost.toFixed(6)}`));
+			appendNode(
+				el_pre(
+					`Session totals:\n  in:  ${c.input.toLocaleString()} tok\n  out: ${c.output.toLocaleString()} tok\n  cache read: ${c.cacheRead.toLocaleString()} tok\n  cache write: ${c.cacheWrite.toLocaleString()} tok\n  cost: $${c.cost.toFixed(6)}`,
+				),
+			);
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
 		}
@@ -241,17 +258,25 @@ export function handleSlash(arg: string): void {
 			break;
 		}
 		case "changelog": {
-			interface Commit { hash: string; date: string; subject: string; }
-			interface Changelog { commits?: Commit[]; }
+			interface Commit {
+				hash: string;
+				date: string;
+				subject: string;
+			}
+			interface Changelog {
+				commits?: Commit[];
+			}
 			void fetch("/api/changelog?limit=20")
 				.then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
 				.then((data: Changelog) => {
-					const lines = (data.commits ?? []).map((c) =>
-						`  ${c.hash}  ${c.date.slice(0, 10)}  ${c.subject}`,
+					const lines = (data.commits ?? []).map(
+						(c) => `  ${c.hash}  ${c.date.slice(0, 10)}  ${c.subject}`,
 					);
 					appendNode(el_pre(`Recent commits:\n${lines.join("\n") || "  (none)"}`));
 				})
-				.catch((e) => appendError("changelog failed: " + (e instanceof Error ? e.message : String(e))));
+				.catch((e) =>
+					appendError(`changelog failed: ${e instanceof Error ? e.message : String(e)}`),
+				);
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
 		}
@@ -259,7 +284,11 @@ export function handleSlash(arg: string): void {
 			location.reload();
 			return;
 		case "quit":
-			try { window.close(); } catch { /* ignore */ }
+			try {
+				window.close();
+			} catch {
+				/* ignore */
+			}
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
 		case "websearch": {
@@ -267,7 +296,9 @@ export function handleSlash(arg: string): void {
 			if (!query) {
 				appendError("Usage: /websearch <query>");
 			} else {
-				sendAsUserFn(`Use web_search to look up: ${query}\nGive me a 3-sentence summary plus the top 3 source URLs.`);
+				sendAsUserFn(
+					`Use web_search to look up: ${query}\nGive me a 3-sentence summary plus the top 3 source URLs.`,
+				);
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
 			import("./render.js").then(({ autoSize }) => autoSize());
@@ -278,7 +309,9 @@ export function handleSlash(arg: string): void {
 			if (!url) {
 				appendError("Usage: /fetch <url>");
 			} else {
-				sendAsUserFn(`Use fetch_content to grab ${url} and summarise the key points in 5 bullet points.`);
+				sendAsUserFn(
+					`Use fetch_content to grab ${url} and summarise the key points in 5 bullet points.`,
+				);
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
 			import("./render.js").then(({ autoSize }) => autoSize());
@@ -289,7 +322,9 @@ export function handleSlash(arg: string): void {
 			if (!query) {
 				appendError("Usage: /codesearch <query>");
 			} else {
-				sendAsUserFn(`Use code_search to find: ${query}\nGive me 2 short code snippets with source URLs.`);
+				sendAsUserFn(
+					`Use code_search to find: ${query}\nGive me 2 short code snippets with source URLs.`,
+				);
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
 			import("./render.js").then(({ autoSize }) => autoSize());
@@ -301,7 +336,10 @@ export function handleSlash(arg: string): void {
 	}
 }
 
-interface ModalRefs { overlay: HTMLDivElement; box: HTMLDivElement; }
+interface ModalRefs {
+	overlay: HTMLDivElement;
+	box: HTMLDivElement;
+}
 function openModal(title: string, extraClass?: string): ModalRefs {
 	const overlay = el("div", { class: "modal-overlay" });
 	const box = el("div", { class: "modal-box" });
@@ -346,7 +384,9 @@ export function openModelPicker(): void {
 			const row = el("div", { class: "model-row" });
 			const main = el("div", { class: "model-name" }, m.name ?? m.id);
 			if (m.reasoning) {
-				main.append(el("span", { class: "model-badge", title: "Supports extended thinking" }, "thinking"));
+				main.append(
+					el("span", { class: "model-badge", title: "Supports extended thinking" }, "thinking"),
+				);
 			}
 			row.append(main);
 			row.append(el("div", { class: "model-provider" }, m.id === m.name ? "" : m.id));
@@ -369,7 +409,13 @@ export function openModelPicker(): void {
 		}
 	}
 
-	box.append(el("button", { class: "btn", text: "Close", onclick: () => overlay.remove() }));
+	box.append(
+		el("button", {
+			class: "btn",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
 }
 
 export function openThinkPicker(): void {
@@ -387,7 +433,13 @@ export function openThinkPicker(): void {
 		});
 		box.append(row);
 	}
-	box.append(el("button", { class: "btn", text: "Close", onclick: () => overlay.remove() }));
+	box.append(
+		el("button", {
+			class: "btn",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
 }
 
 export async function openSessionsDialog(): Promise<void> {
@@ -405,7 +457,12 @@ export async function openSessionsDialog(): Promise<void> {
 	setTimeout(() => {
 		if (pendingSessionsBox === box) {
 			box.innerHTML = "";
-			box.append(el("p", { class: "muted", text: "No saved sessions (or server didn't reply)." }));
+			box.append(
+				el("p", {
+					class: "muted",
+					text: "No saved sessions (or server didn't reply).",
+				}),
+			);
 		}
 	}, 3000);
 }
@@ -444,7 +501,13 @@ export function renderSessionsIntoPicker(sessions: SessionSummary[]): void {
 			box.append(row);
 		}
 	}
-	box.append(el("button", { class: "btn", text: "Close", onclick: () => overlay.remove() }));
+	box.append(
+		el("button", {
+			class: "btn",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
 }
 
 export async function openVoicePicker(): Promise<void> {
@@ -458,7 +521,7 @@ export async function openVoicePicker(): Promise<void> {
 		voices = v.available;
 		defaultVoice = v.default;
 	} catch (e) {
-		appendError("could not list voices: " + (e instanceof Error ? e.message : String(e)));
+		appendError(`could not list voices: ${e instanceof Error ? e.message : String(e)}`);
 		return;
 	}
 	if (voices.length === 0) {
@@ -479,7 +542,13 @@ export async function openVoicePicker(): Promise<void> {
 		});
 		box.append(row);
 	}
-	box.append(el("button", { class: "btn", text: "Close", onclick: () => overlay.remove() }));
+	box.append(
+		el("button", {
+			class: "btn",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +599,13 @@ export function openOverflowMenu(): void {
 	});
 	box.append(ttsLine);
 
-	box.append(el("button", { class: "btn", text: "Close", onclick: () => overlay.remove() }));
+	box.append(
+		el("button", {
+			class: "btn",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -608,37 +683,63 @@ export function exportSessionAsHtml(): void {
 	`;
 	const c = state.costTotal;
 	const lines: string[] = [];
-	lines.push(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(state.title)} — agentchatbox export</title><style>${css}</style></head><body>`);
+	lines.push(
+		`<!doctype html><html><head><meta charset="utf-8"><title>${esc(state.title)} — agentchatbox export</title><style>${css}</style></head><body>`,
+	);
 	lines.push(`<h1>${esc(state.title)}</h1>`);
-	lines.push(`<div class="meta">id: ${esc((state.sessionId ?? "").slice(0, 8))} · model: ${esc(state.currentModelId ?? "(unknown)")} · thinking: ${esc(state.currentThinking)} · ${state.messages.length} messages · ${c.input.toLocaleString()}/${c.output.toLocaleString()} tok · $${c.cost.toFixed(6)}</div>`);
+	lines.push(
+		`<div class="meta">id: ${esc((state.sessionId ?? "").slice(0, 8))} · model: ${esc(state.currentModelId ?? "(unknown)")} · thinking: ${esc(state.currentThinking)} · ${state.messages.length} messages · ${c.input.toLocaleString()}/${c.output.toLocaleString()} tok · $${c.cost.toFixed(6)}</div>`,
+	);
 	for (const m of state.messages) {
 		if (m.kind === "user") {
-			lines.push(`<div class="msg user"><span class="role">You ›</span><span class="body">${esc(m.text)}</span></div>`);
+			lines.push(
+				`<div class="msg user"><span class="role">You ›</span><span class="body">${esc(m.text)}</span></div>`,
+			);
 		} else if (m.kind === "assistant") {
 			lines.push(`<div class="msg assistant"><span class="role">Pi ›</span><span class="body">`);
-			if (m.thinking) lines.push(`<details class="thinking"><summary>▸ thinking</summary><pre class="thinking-body">${esc(m.thinking)}</pre></details>`);
+			if (m.thinking)
+				lines.push(
+					`<details class="thinking"><summary>▸ thinking</summary><pre class="thinking-body">${esc(m.thinking)}</pre></details>`,
+				);
 			lines.push(esc(m.text));
 			lines.push(`</span></div>`);
 		} else if (m.kind === "tool") {
 			const args = (() => {
-				try { return JSON.stringify(m.args); } catch { return String(m.args); }
+				try {
+					return JSON.stringify(m.args);
+				} catch {
+					return String(m.args);
+				}
 			})();
-			lines.push(`<div class="msg tool"><span class="role">Tool ›</span><div class="tool-body"><div class="tool-name">${esc(m.name)} ${esc(args)}</div>`);
+			lines.push(
+				`<div class="msg tool"><span class="role">Tool ›</span><div class="tool-body"><div class="tool-name">${esc(m.name)} ${esc(args)}</div>`,
+			);
 			if (m.result !== undefined) {
-				lines.push(`<pre class="tool-result${m.isError ? " tool-error" : ""}">${esc(m.result)}</pre>`);
+				lines.push(
+					`<pre class="tool-result${m.isError ? " tool-error" : ""}">${esc(m.result)}</pre>`,
+				);
 			}
 			lines.push(`</div></div>`);
 		} else if (m.kind === "error") {
-			lines.push(`<div class="msg error"><span class="role">!</span><span class="body">${esc(m.text)}</span></div>`);
+			lines.push(
+				`<div class="msg error"><span class="role">!</span><span class="body">${esc(m.text)}</span></div>`,
+			);
 		}
 	}
 	lines.push(`<footer>Exported from agentchatbox · ${new Date().toISOString()}</footer>`);
 	lines.push(`</body></html>`);
-	const blob = new Blob([lines.join("\n")], { type: "text/html;charset=utf-8" });
+	const blob = new Blob([lines.join("\n")], {
+		type: "text/html;charset=utf-8",
+	});
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement("a");
 	a.href = url;
-	a.download = `${state.title.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase().slice(0, 40) || "session"}-${new Date().toISOString().slice(0, 10)}.html`;
+	a.download = `${
+		state.title
+			.replace(/[^a-z0-9_-]+/gi, "-")
+			.toLowerCase()
+			.slice(0, 40) || "session"
+	}-${new Date().toISOString().slice(0, 10)}.html`;
 	document.body.appendChild(a);
 	a.click();
 	document.body.removeChild(a);

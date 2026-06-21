@@ -16,16 +16,15 @@
  * { text, language, duration }.
  */
 
-import { Router } from "express";
-import express from "express";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import express, { type Router } from "express";
 import multer from "multer";
+import type { TranscribeResponse } from "../shared/protocol.js";
 import { projectRoot } from "./paths.js";
 import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
-import type { TranscribeResponse } from "../shared/protocol.js";
 
 const upload = multer({
 	storage: multer.memoryStorage(),
@@ -58,7 +57,7 @@ export function createTranscribeRouter(): Router {
 		let dir: string | undefined;
 		try {
 			dir = await mkdtemp(join(tmpdir(), "agentchatbox-transcribe-"));
-			const safeStem = (file.originalname || "voice.webm").replace(/[^\w.\-]+/g, "_").slice(0, 64);
+			const safeStem = (file.originalname || "voice.webm").replace(/[^\w.-]+/g, "_").slice(0, 64);
 			const audioPath = join(dir, safeStem || "voice.webm");
 			await writeFile(audioPath, file.buffer);
 
@@ -70,11 +69,15 @@ export function createTranscribeRouter(): Router {
 			});
 
 			if (timedOut) {
-				res.status(504).json({ error: `transcribe.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms` });
+				res.status(504).json({
+					error: `transcribe.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms`,
+				});
 				return;
 			}
 			if (code !== 0) {
-				res.status(500).json({ error: `transcribe.py exited ${code}: ${stderr.slice(0, 500)}` });
+				res.status(500).json({
+					error: `transcribe.py exited ${code}: ${stderr.slice(0, 500)}`,
+				});
 				return;
 			}
 
@@ -82,7 +85,9 @@ export function createTranscribeRouter(): Router {
 			try {
 				parsed = JSON.parse(stdout) as HelperOutput;
 			} catch {
-				res.status(500).json({ error: `transcribe.py: malformed JSON output: ${stdout.slice(0, 200)}` });
+				res.status(500).json({
+					error: `transcribe.py: malformed JSON output: ${stdout.slice(0, 200)}`,
+				});
 				return;
 			}
 
@@ -117,7 +122,10 @@ interface HealthCache {
 }
 let whisperHealthCache: HealthCache | null = null;
 
-export async function checkWhisperAvailable(): Promise<{ available: boolean; reason?: string }> {
+export async function checkWhisperAvailable(): Promise<{
+	available: boolean;
+	reason?: string;
+}> {
 	const now = Date.now();
 	if (whisperHealthCache && now - whisperHealthCache.at < HEALTH_CACHE_MS) {
 		return whisperHealthCache.result;
@@ -129,7 +137,10 @@ export async function checkWhisperAvailable(): Promise<{ available: boolean; rea
 		// immediately. Saves a process spawn when the server's deploy
 		// tree is missing the python scripts (e.g. partial install).
 		if (!existsSync(HELPER_PATH)) {
-			result = { available: false, reason: `helper not found at ${HELPER_PATH}` };
+			result = {
+				available: false,
+				reason: `helper not found at ${HELPER_PATH}`,
+			};
 		} else {
 			const { stdout, code, timedOut } = await runPython({
 				bin: process.env.PYTHON_BIN || "python3",
@@ -142,7 +153,10 @@ export async function checkWhisperAvailable(): Promise<{ available: boolean; rea
 			else result = { available: true };
 		}
 	} catch (e) {
-		result = { available: false, reason: e instanceof Error ? e.message : String(e) };
+		result = {
+			available: false,
+			reason: e instanceof Error ? e.message : String(e),
+		};
 	}
 	whisperHealthCache = { at: now, result };
 	return result;

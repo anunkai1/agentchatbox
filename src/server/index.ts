@@ -1,7 +1,7 @@
 /**
  * Agentchatbox server entry.
  *
- * Serves the built web UI from `public/`, exposes the proxy / upload
+ * Serves the built web UI from `public/`, exposes the upload
  * / transcribe endpoints under `/api/*`, and runs a per-connection
  * server-side pi Agent over WebSocket at `/api/chat`.
  *
@@ -15,21 +15,20 @@
 
 import "dotenv/config";
 
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync, mkdirSync } from "node:fs";
+import { resolve } from "node:path";
+import { getModels } from "@earendil-works/pi-ai";
 import cors from "cors";
 import express from "express";
-import { existsSync, mkdirSync } from "node:fs";
-import { execFile, execFileSync } from "node:child_process";
-import { resolve } from "node:path";
-import { config } from "./config.js";
-import { handleStream } from "./proxy.js";
-import { createUploadsRouter } from "./uploads.js";
-import { createTranscribeRouter, checkWhisperAvailable } from "./transcribe.js";
-import { createTtsRouter, checkTtsAvailable } from "./tts.js";
 import { mountChatWs } from "./chat.js";
+import { config } from "./config.js";
 import { projectRoot } from "./paths.js";
-import { SDK_PROVIDERS } from "./providers.js";
-import { getModels } from "@earendil-works/pi-ai";
+import { EXTRA_MODELS, SDK_PROVIDERS } from "./providers.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
+import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
+import { checkTtsAvailable, createTtsRouter } from "./tts.js";
+import { createUploadsRouter } from "./uploads.js";
 
 mkdirSync(config.uploadsDir, { recursive: true });
 
@@ -54,17 +53,17 @@ app.use((req, _res, next) => {
 // back to "(unknown)" rather than blocking the server.
 let COMMIT_HASH = "(unknown)";
 try {
-	COMMIT_HASH = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-		cwd: projectRoot,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "ignore"],
-	}).trim() || "(unknown)";
+	COMMIT_HASH =
+		execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+			cwd: projectRoot,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim() || "(unknown)";
 } catch {
 	/* not a git checkout — leave the placeholder */
 }
 
 // API routes
-app.post("/api/stream", handleStream);
 app.use("/api/upload", createUploadsRouter());
 app.use("/api/transcribe", createTranscribeRouter());
 app.use("/api/tts", createTtsRouter());
@@ -127,19 +126,19 @@ app.get("/api/changelog", (req, res) => {
 		["log", `-n${String(limit)}`, "--pretty=format:%h%x09%ad%x09%s", "--date=iso"],
 		{ cwd: projectRoot, maxBuffer: 1024 * 1024 },
 		(err, stdout) => {
-		if (err) {
-			res.status(500).json({ error: `git log failed: ${err.message}` });
-			return;
-		}
-		const commits = stdout
-			.split("\n")
-			.filter((l) => l.length > 0)
-			.map((l) => {
-				const [hash, date, ...rest] = l.split("	");
-				return { hash, date, subject: rest.join("	") };
-			});
-		res.json({ commits });
-	},
+			if (err) {
+				res.status(500).json({ error: `git log failed: ${err.message}` });
+				return;
+			}
+			const commits = stdout
+				.split("\n")
+				.filter((l) => l.length > 0)
+				.map((l) => {
+					const [hash, date, ...rest] = l.split("	");
+					return { hash, date, subject: rest.join("	") };
+				});
+			res.json({ commits });
+		},
 	);
 });
 
@@ -181,33 +180,45 @@ app.get("/api/health", async (_req, res) => {
  * (See providers.ts for the source of truth on which providers exist.)
  */
 app.get("/api/models", (_req, res) => {
-	const out: Array<{ id: string; provider: string; name: string; reasoning: boolean }> = [];
+	const out: Array<{
+		id: string;
+		provider: string;
+		name: string;
+		reasoning: boolean;
+	}> = [];
 
 	for (const provider of SDK_PROVIDERS) {
 		if (!config.apiKeys[provider]) continue;
 		try {
 			const models = getModels(provider);
 			for (const m of models) {
-				out.push({ id: m.id, provider, name: m.name, reasoning: !!m.reasoning });
+				out.push({
+					id: m.id,
+					provider,
+					name: m.name,
+					reasoning: !!m.reasoning,
+				});
 			}
 		} catch (e) {
 			// If the SDK doesn't know this provider, skip it rather than
 			// 500ing the whole endpoint.
-			console.warn(`[models] failed to list models for ${provider}:`, e instanceof Error ? e.message : e);
+			console.warn(
+				`[models] failed to list models for ${provider}:`,
+				e instanceof Error ? e.message : e,
+			);
 		}
 	}
 
-	// Custom "minimax" provider — not in the SDK registry, but used by
-	// this app as the default. Match the construction in agent.ts so the
-	// model id the client picks is the same one the server resolves.
-	// input: ["text","image"] marks M3 as multimodal — image uploads work
-	// when this model is selected.
-	if (config.apiKeys["minimax"]) {
+	// Models not in the SDK registry (custom provider, or newer than the
+	// generated list). See providers.ts::EXTRA_MODELS — gated on each
+	// entry's provider having a configured key.
+	for (const m of EXTRA_MODELS) {
+		if (!config.apiKeys[m.provider]) continue;
 		out.push({
-			id: "MiniMax-M3",
-			provider: "minimax",
-			name: "MiniMax M3",
-			reasoning: true,
+			id: m.id,
+			provider: m.provider,
+			name: m.name,
+			reasoning: m.reasoning,
 		});
 	}
 
@@ -254,10 +265,14 @@ const server = app.listen(config.port, config.host, () => {
 	console.log(`agentchatbox listening on http://${config.host}:${config.port}`);
 	console.log(`  commit:        ${COMMIT_HASH}`);
 	console.log(`  uploads dir:   ${config.uploadsDir}`);
-	console.log(`  providers:     ${providers.length ? providers.join(", ") : "(none — set API keys in .env)"}`);
+	console.log(
+		`  providers:     ${providers.length ? providers.join(", ") : "(none — set API keys in .env)"}`,
+	);
 	console.log(`  pi binary:     ${config.piBin}`);
 	console.log(`  pi cwd:        ${config.piCwd}`);
-	console.log(`  whisper:       ${config.openaiApiKey ? "openai (disabled, using local faster-whisper)" : "local faster-whisper (CPU)"}`);
+	console.log(
+		`  whisper:       ${config.openaiApiKey ? "openai (disabled, using local faster-whisper)" : "local faster-whisper (CPU)"}`,
+	);
 	console.log(`  tts:           local piper (CPU)`);
 });
 

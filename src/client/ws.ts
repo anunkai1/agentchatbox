@@ -13,7 +13,8 @@
  * waiting for it and won't process any other messages.
  */
 
-import type { ThinkingLevel, SessionSummary, PromptImage } from "../shared/protocol.js";
+import type { Message } from "@earendil-works/pi-ai";
+import type { PromptImage, SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 
 export type EventListener = (event: Record<string, unknown>) => void;
 export type ReadyListener = (info: {
@@ -25,8 +26,13 @@ export type ReadyListener = (info: {
 export type ErrorListener = (message: string) => void;
 export type StatusListener = (status: "connecting" | "open" | "closed") => void;
 export type SessionsListener = (sessions: SessionSummary[]) => void;
-export type TranscriptListener = (sessionId: string, messages: unknown[]) => void;
-export type SessionResumedListener = (info: { sessionId: string; modelId: string; provider: string; thinkingLevel: ThinkingLevel }) => void;
+export type TranscriptListener = (sessionId: string, messages: Message[]) => void;
+export type SessionResumedListener = (info: {
+	sessionId: string;
+	modelId: string;
+	provider: string;
+	thinkingLevel: ThinkingLevel;
+}) => void;
 
 export interface ChatClient {
 	/**
@@ -34,7 +40,12 @@ export interface ChatClient {
 	 * after the WS opens, before any other method. Spawns `pi --mode rpc`
 	 * on the server with the given args.
 	 */
-	init(opts: { provider: string; modelId: string; thinkingLevel: ThinkingLevel; sessionId?: string }): void;
+	init(opts: {
+		provider: string;
+		modelId: string;
+		thinkingLevel: ThinkingLevel;
+		sessionId?: string;
+	}): void;
 	/** Send a user prompt. Optionally attach images (base64 + mimeType). */
 	prompt(text: string, images?: PromptImage[]): void;
 	/** Abort the current run, if any. */
@@ -131,7 +142,7 @@ export function createChatClient(): ChatClient {
 					break;
 				case "transcript":
 					for (const l of transcriptListeners) {
-						l(String(msg.sessionId ?? ""), (msg.messages as unknown[]) ?? []);
+						l(String(msg.sessionId ?? ""), (msg.messages as Message[]) ?? []);
 					}
 					break;
 				case "sessionResumed":
@@ -191,7 +202,11 @@ export function createChatClient(): ChatClient {
 				for (const l of errorListeners) l("prompt sent before init");
 				return;
 			}
-			send({ type: "prompt", text, ...(images && images.length > 0 ? { images } : {}) });
+			send({
+				type: "prompt",
+				text,
+				...(images && images.length > 0 ? { images } : {}),
+			});
 		},
 		abort: () => send({ type: "abort" }),
 		setModel: (modelId, provider) => send({ type: "setModel", modelId, provider }),
@@ -200,13 +215,34 @@ export function createChatClient(): ChatClient {
 		listSessions: () => send({ type: "listSessions" }),
 		newSession: () => send({ type: "newSession" }),
 		resumeSession: (sessionId) => send({ type: "resumeSession", sessionId }),
-		onEvent: (l) => { eventListeners.add(l); return () => eventListeners.delete(l); },
-		onReady: (l) => { readyListeners.add(l); return () => readyListeners.delete(l); },
-		onError: (l) => { errorListeners.add(l); return () => errorListeners.delete(l); },
-		onStatus: (l) => { statusListeners.add(l); return () => statusListeners.delete(l); },
-		onSessionsUpdated: (l) => { sessionsListeners.add(l); return () => sessionsListeners.delete(l); },
-		onTranscript: (l) => { transcriptListeners.add(l); return () => transcriptListeners.delete(l); },
-		onSessionResumed: (l) => { sessionResumedListeners.add(l); return () => sessionResumedListeners.delete(l); },
+		onEvent: (l) => {
+			eventListeners.add(l);
+			return () => eventListeners.delete(l);
+		},
+		onReady: (l) => {
+			readyListeners.add(l);
+			return () => readyListeners.delete(l);
+		},
+		onError: (l) => {
+			errorListeners.add(l);
+			return () => errorListeners.delete(l);
+		},
+		onStatus: (l) => {
+			statusListeners.add(l);
+			return () => statusListeners.delete(l);
+		},
+		onSessionsUpdated: (l) => {
+			sessionsListeners.add(l);
+			return () => sessionsListeners.delete(l);
+		},
+		onTranscript: (l) => {
+			transcriptListeners.add(l);
+			return () => transcriptListeners.delete(l);
+		},
+		onSessionResumed: (l) => {
+			sessionResumedListeners.add(l);
+			return () => sessionResumedListeners.delete(l);
+		},
 		reconnect: () => {
 			if (ws) ws.close();
 			attempt = 0;

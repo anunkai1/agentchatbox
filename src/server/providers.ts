@@ -105,3 +105,35 @@ export const SDK_PROVIDERS: ReadonlyArray<KnownProvider> = SDK_PROVIDER_KEYS;
 export function isSdkProvider(provider: string): provider is KnownProvider {
 	return (SDK_PROVIDER_KEYS as readonly string[]).includes(provider);
 }
+
+/**
+ * Models not in the SDK's built-in registry — either a custom provider
+ * the server builds by hand (minimax) or a model newer than the
+ * registry's generated list (glm-5.2). The `/api/models` endpoint
+ * appends these after the SDK-listed models, gated on each entry's
+ * provider having a configured API key.
+ *
+ * This replaces the per-model hand-built `out.push(...)` blocks that
+ * used to live in index.ts — adding a new extra model is now a one-line
+ * edit here, not a new code block.
+ */
+export interface ExtraModel {
+	id: string;
+	provider: string;
+	name: string;
+	reasoning: boolean;
+}
+
+export const EXTRA_MODELS: readonly ExtraModel[] = [
+	// Custom provider — constructed by hand, not in the SDK registry.
+	// input: ["text","image"] marks M3 as multimodal.
+	{
+		id: "MiniMax-M3",
+		provider: "minimax",
+		name: "MiniMax M3",
+		reasoning: true,
+	},
+	// Newer than this SDK build's registry (which tops out at glm-5.1);
+	// `pi` resolves it fine as a zai model.
+	{ id: "glm-5.2", provider: "zai", name: "GLM-5.2", reasoning: true },
+];

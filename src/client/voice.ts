@@ -10,10 +10,10 @@
  *     paste the transcript into the input
  */
 
+import { transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
 import { appendError, refreshStatus } from "./render.js";
 import { state } from "./state.js";
-import { transcribeAudio, uploadFile } from "./api.js";
 
 /**
  * Synthesize the given text via /api/tts and play it on the shared <audio>.
@@ -41,7 +41,7 @@ export async function speakText(text: string): Promise<void> {
 			audio.onended = null;
 		};
 	} catch (err) {
-		appendError("tts failed: " + (err instanceof Error ? err.message : String(err)));
+		appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
 	} finally {
 		state.ttsInFlight--;
 		refreshStatus();
@@ -73,17 +73,18 @@ export async function handleFileAttach(e: Event): Promise<void> {
 			// during the uploadFile await, and the base64 wouldn't
 			// be in state.uploadedImages yet — so the model never
 			// saw the image bytes.)
-			const [res, data] = await Promise.all([
-				uploadFile(file),
-				blobToBase64(file),
-			]);
+			const [res, data] = await Promise.all([uploadFile(file), blobToBase64(file)]);
 			if (res.mimeType.startsWith("image/")) {
-				state.uploadedImages.set(res.url, { data, mimeType: res.mimeType, filename: res.filename });
+				state.uploadedImages.set(res.url, {
+					data,
+					mimeType: res.mimeType,
+					filename: res.filename,
+				});
 			}
 			const insertion = res.mimeType.startsWith("image/")
 				? `\n[image: ${res.filename}](${res.url})`
 				: `\n[file: ${res.filename}](${res.url})`;
-			ta.value = (ta.value + " " + insertion).trim();
+			ta.value = `${ta.value} ${insertion}`.trim();
 			import("./render.js").then(({ autoSize }) => autoSize());
 		} catch (err) {
 			appendError(err instanceof Error ? err.message : String(err));
@@ -132,7 +133,9 @@ export async function handleVoiceRecord(): Promise<void> {
 			if (e.data.size > 0) recordedChunks.push(e.data);
 		};
 		mediaRecorder.onstop = async () => {
-			stream.getTracks().forEach((t) => t.stop());
+			stream.getTracks().forEach((t) => {
+				t.stop();
+			});
 			const blob = new Blob(recordedChunks, { type: "audio/webm" });
 			const secs = (Date.now() - recordingStart) / 1000;
 			$("#status-bar").textContent = `transcribing ${secs.toFixed(1)}s of audio…`;
@@ -142,7 +145,7 @@ export async function handleVoiceRecord(): Promise<void> {
 				import("./render.js").then(({ autoSize }) => autoSize());
 				$("#status-bar").textContent = `transcribed (${text.length} chars). Press Enter to send.`;
 			} catch (err) {
-				appendError("transcription failed: " + (err instanceof Error ? err.message : String(err)));
+				appendError(`transcription failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		};
 		recordingStart = Date.now();
@@ -150,6 +153,6 @@ export async function handleVoiceRecord(): Promise<void> {
 		$<HTMLButtonElement>("#voice-btn").textContent = "⏹";
 		$("#status-bar").textContent = "recording… click ⏹ to stop";
 	} catch (err) {
-		appendError("microphone access denied: " + (err instanceof Error ? err.message : String(err)));
+		appendError(`microphone access denied: ${err instanceof Error ? err.message : String(err)}`);
 	}
 }

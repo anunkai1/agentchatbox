@@ -8,10 +8,10 @@
  * summaries and reads back the right messages.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 let root: string | null = null;
 let cwd: string;
@@ -27,7 +27,11 @@ beforeEach(() => {
 
 afterEach(() => {
 	if (root) {
-		try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+		try {
+			rmSync(root, { recursive: true, force: true });
+		} catch {
+			/* ignore */
+		}
 		root = null;
 	}
 	delete process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -40,9 +44,7 @@ function writeSession(
 	timestamp: string,
 	userTexts: string[],
 ): void {
-	const lines: string[] = [
-		JSON.stringify({ type: "session", version: 3, id, timestamp, cwd }),
-	];
+	const lines: string[] = [JSON.stringify({ type: "session", version: 3, id, timestamp, cwd })];
 	for (const text of userTexts) {
 		// We add both the user and assistant message so messageCount
 		// counts user+assistant. (Real pi JSONL includes tool results
@@ -50,7 +52,11 @@ function writeSession(
 		lines.push(
 			JSON.stringify({
 				type: "message",
-				message: { role: "user", content: [{ type: "text", text }], timestamp: 1 },
+				message: {
+					role: "user",
+					content: [{ type: "text", text }],
+					timestamp: 1,
+				},
 			}),
 		);
 		lines.push(
@@ -64,13 +70,16 @@ function writeSession(
 			}),
 		);
 	}
-	writeFileSync(join(root!, cwdDir, name), lines.join("\n") + "\n");
+	writeFileSync(join(root!, cwdDir, name), `${lines.join("\n")}\n`);
 }
 
 describe("listPiSessions", () => {
 	it("returns an empty array when the cwd directory does not exist", async () => {
 		// Fresh root, no --<cwd>-- subdir at all.
-		rmSync(join(root!, "--home-test-project--"), { recursive: true, force: true });
+		rmSync(join(root!, "--home-test-project--"), {
+			recursive: true,
+			force: true,
+		});
 		const { listPiSessions } = await import("../src/server/session-list.js");
 		expect(listPiSessions(cwd)).toEqual([]);
 	});
@@ -154,7 +163,7 @@ describe("readPiSessionMessages", () => {
 		expect((msgs[0] as { role: string }).role).toBe("user");
 		expect((msgs[2] as { role: string }).role).toBe("user");
 		// The first user message text is preserved.
-		expect(((msgs[0] as { content: Array<{ text: string }> }).content[0].text)).toBe("hi");
-		expect(((msgs[2] as { content: Array<{ text: string }> }).content[0].text)).toBe("follow up");
+		expect((msgs[0] as { content: Array<{ text: string }> }).content[0].text).toBe("hi");
+		expect((msgs[2] as { content: Array<{ text: string }> }).content[0].text).toBe("follow up");
 	});
 });

@@ -7,12 +7,16 @@ const JSZip = class {};
 
 // @lmstudio/sdk
 class LMStudioClient {
-	async list() { return []; }
+	async list() {
+		return [];
+	}
 }
 
 // ollama/browser
 class Ollama {
-	async list() { return []; }
+	async list() {
+		return [];
+	}
 }
 
 export default JSZip;

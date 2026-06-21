@@ -12,7 +12,6 @@
  */
 
 import type { ThinkingLevel } from "../shared/protocol.js";
-import { uuid } from "./dom.js";
 
 // ---------------------------------------------------------------------------
 // Renderer cache: messages the browser shows in the chat scrollback
@@ -27,7 +26,13 @@ import { uuid } from "./dom.js";
 export type PersistedMessage =
 	| { kind: "user"; text: string }
 	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean }
-	| { kind: "tool"; name: string; args: unknown; result?: string; isError?: boolean }
+	| {
+			kind: "tool";
+			name: string;
+			args: unknown;
+			result?: string;
+			isError?: boolean;
+	  }
 	| { kind: "error"; text: string };
 
 // ---------------------------------------------------------------------------
@@ -45,7 +50,13 @@ export interface AppState {
 	history: string[]; // user prompts typed in this session
 	isStreaming: boolean;
 	toolSpinner: HTMLElement | null;
-	costTotal: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+	costTotal: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		cost: number;
+	};
 	availableModels: ModelOption[];
 	currentModelId: string | null;
 	currentProvider: string | null;

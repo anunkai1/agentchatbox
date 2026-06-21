@@ -25,12 +25,18 @@
  * the transport layer, nothing more.
  */
 
-import { WebSocketServer, type WebSocket } from "ws";
-import type { IncomingMessage, Server as HttpServer } from "node:http";
+import type { Server as HttpServer, IncomingMessage } from "node:http";
+import { type WebSocket, WebSocketServer } from "ws";
+import type {
+	ClientMessage,
+	ServerMessage,
+	SessionSummary,
+	ThinkingLevel,
+	TranscriptPayload,
+} from "../shared/protocol.js";
 import { config, getServerApiKey } from "./config.js";
-import { spawnPi, type PiProcess } from "./pi-process.js";
+import { type PiProcess, spawnPi } from "./pi-process.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
-import type { ClientMessage, ServerMessage, SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 
 /** Every live `pi --mode rpc` child, so SIGTERM can reach all of them. */
 const liveChildren = new Set<PiProcess>();
@@ -41,7 +47,11 @@ const liveChildren = new Set<PiProcess>();
 // must propagate to children even if the HTTP server is busy.
 process.on("SIGTERM", () => {
 	for (const child of liveChildren) {
-		try { child.kill(); } catch { /* ignore */ }
+		try {
+			child.kill();
+		} catch {
+			/* ignore */
+		}
 	}
 });
 
@@ -52,7 +62,11 @@ export function mountChatWs(server: HttpServer): void {
 		handleConnection(ws).catch((err) => {
 			const message = err instanceof Error ? err.message : String(err);
 			sendError(ws, `failed to start session: ${message}`);
-			try { ws.close(); } catch { /* ignore */ }
+			try {
+				ws.close();
+			} catch {
+				/* ignore */
+			}
 		});
 	});
 
@@ -71,7 +85,7 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 	// `resumeSession` tear down the current child and spawn a new one.
 	let pi: PiProcess | null = null;
 	let currentInit: InitMessage | null = null;
-	let pendingTranscript: { sessionId: string; messages: unknown[] } | null = null;
+	let pendingTranscript: TranscriptPayload | null = null;
 
 	// The first message from the client must be an `init` (the protocol
 	// requires it; we don't have a sensible default to fall back to).
@@ -93,7 +107,15 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 	// `pi` is a Node EventEmitter that buffers events for late
 	// subscribers (no, actually it doesn't — it drops them). So we
 	// attach synchronously before any async wait.
-	attachEventForwarding(ws, pi, init, () => pendingTranscript, (t) => { pendingTranscript = t; });
+	attachEventForwarding(
+		ws,
+		pi,
+		init,
+		() => pendingTranscript,
+		(t) => {
+			pendingTranscript = t;
+		},
+	);
 
 	// Handle subsequent client messages: forward to `pi` or handle
 	// session-control messages locally (those respawn the child).
@@ -105,17 +127,28 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 			sendError(ws, "malformed JSON");
 			return;
 		}
-		void onClientMessage(ws, msg, currentInit!, (newInit) => {
-			currentInit = newInit;
-		}, (newChild) => {
-			pi = newChild;
-		}, (t) => {
-			pendingTranscript = t;
-		});
+		void onClientMessage(
+			ws,
+			msg,
+			currentInit!,
+			(newInit) => {
+				currentInit = newInit;
+			},
+			(newChild) => {
+				pi = newChild;
+			},
+			(t) => {
+				pendingTranscript = t;
+			},
+		);
 	});
 
 	ws.on("close", () => {
-		try { pi?.kill(); } catch { /* ignore */ }
+		try {
+			pi?.kill();
+		} catch {
+			/* ignore */
+		}
 	});
 	// If the child dies for any reason (e.g. provider key invalid),
 	// close the WS so the browser's reconnect logic kicks in.
@@ -153,10 +186,9 @@ function attachEventForwarding(
 	ws: WebSocket,
 	pi: PiProcess,
 	init: InitMessage,
-	getPending: () => { sessionId: string; messages: unknown[] } | null,
-	setPending: (t: { sessionId: string; messages: unknown[] } | null) => void,
+	getPending: () => TranscriptPayload | null,
+	setPending: (t: TranscriptPayload | null) => void,
 ): void {
-	let sessionIdSent = false;
 	let readySent = false;
 	let statePoll: NodeJS.Timeout | null = null;
 
@@ -175,7 +207,10 @@ function attachEventForwarding(
 				const id = String(data?.sessionId ?? "");
 				if (id) {
 					readySent = true;
-					if (statePoll) { clearInterval(statePoll); statePoll = null; }
+					if (statePoll) {
+						clearInterval(statePoll);
+						statePoll = null;
+					}
 					send(ws, {
 						type: "ready",
 						modelId: init.modelId,
@@ -186,10 +221,13 @@ function attachEventForwarding(
 					// Replay the prior transcript, if the client asked to resume one.
 					const pending = getPending();
 					if (pending && pending.messages.length > 0) {
-						send(ws, { type: "transcript", sessionId: pending.sessionId, messages: pending.messages });
+						send(ws, {
+							type: "transcript",
+							sessionId: pending.sessionId,
+							messages: pending.messages,
+						});
 					}
 					setPending(null);
-					sessionIdSent = true;
 				}
 			}
 			return;
@@ -214,7 +252,10 @@ function attachEventForwarding(
 	});
 
 	pi.on("exit", (info) => {
-		if (statePoll) { clearInterval(statePoll); statePoll = null; }
+		if (statePoll) {
+			clearInterval(statePoll);
+			statePoll = null;
+		}
 		// If we never sent `ready`, the spawn failed (e.g. binary
 		// not found, or get_state never returned a sessionId). Tell
 		// the client so it doesn't hang on the initial connect.
@@ -227,7 +268,10 @@ function attachEventForwarding(
 		// is up. If the new child also fails, it will emit
 		// its own error/exit and the client will see the chain.
 		if (!readySent) {
-			sendError(ws, `pi exited before ready (code=${info.code}, signal=${info.signal}): ${pi.getStderr().slice(-200)}`);
+			sendError(
+				ws,
+				`pi exited before ready (code=${info.code}, signal=${info.signal}): ${pi.getStderr().slice(-200)}`,
+			);
 		}
 	});
 
@@ -257,7 +301,7 @@ async function onClientMessage(
 	currentInit: InitMessage,
 	setInit: (i: InitMessage) => void,
 	setPi: (p: PiProcess | null) => void,
-	setPending: (t: { sessionId: string; messages: unknown[] } | null) => void,
+	setPending: (t: TranscriptPayload | null) => void,
 ): Promise<void> {
 	// Get the current child off the WS (we stashed it in attachEventForwarding).
 	const pi = (ws as WebSocket & { _pi?: PiProcess })._pi ?? null;
@@ -286,7 +330,11 @@ async function onClientMessage(
 		}
 		case "setModel": {
 			if (!pi) return;
-			pi.send({ type: "set_model", provider: msg.provider, modelId: msg.modelId });
+			pi.send({
+				type: "set_model",
+				provider: msg.provider,
+				modelId: msg.modelId,
+			});
 			break;
 		}
 		case "setThinking": {
@@ -306,14 +354,26 @@ async function onClientMessage(
 		}
 		case "newSession": {
 			// Kill the current child, spawn fresh (no --session).
-			try { pi?.kill(); } catch { /* ignore */ }
+			try {
+				pi?.kill();
+			} catch {
+				/* ignore */
+			}
 			const newInit: InitMessage = {
 				provider: currentInit.provider,
 				modelId: currentInit.modelId,
 				thinkingLevel: currentInit.thinkingLevel,
 			};
 			const newChild = spawnChild(newInit);
-			attachEventForwarding(ws, newChild, newInit, () => null, () => { /* no pending transcript */ });
+			attachEventForwarding(
+				ws,
+				newChild,
+				newInit,
+				() => null,
+				() => {
+					/* no pending transcript */
+				},
+			);
 			setInit(newInit);
 			setPi(newChild);
 			(ws as WebSocket & { _pi?: PiProcess })._pi = newChild;
@@ -322,7 +382,11 @@ async function onClientMessage(
 		case "resumeSession": {
 			// Kill current child, spawn with --session <id>, replay
 			// the prior transcript before live events.
-			try { pi?.kill(); } catch { /* ignore */ }
+			try {
+				pi?.kill();
+			} catch {
+				/* ignore */
+			}
 			const newInit: InitMessage = {
 				provider: currentInit.provider,
 				modelId: currentInit.modelId,

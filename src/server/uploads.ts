@@ -11,19 +11,29 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
 import multer from "multer";
-import { config } from "./config.js";
 import type { UploadResponse } from "../shared/protocol.js";
+import { config } from "./config.js";
 
 interface UploadMeta {
 	id: string;
 	filename: string;
 	mimeType: string;
+	/** Absolute path to the stored file body. */
 	storedPath: string;
+	createdAt: number;
+}
+
+/** Shape written to `<uploadsDir>/<id>.meta.json`. */
+interface SidecarFile {
+	id: string;
+	filename: string;
+	mimeType: string;
+	storedName: string;
 	createdAt: number;
 }
 
@@ -47,7 +57,46 @@ function safeExtension(name: string): string {
 	return "";
 }
 
+function sidecarPath(id: string): string {
+	return join(config.uploadsDir, `${id}.meta.json`);
+}
+
+/** Load every `<id>.meta.json` in the uploads dir into the in-memory map.
+ *  Called once at router construction (server boot) so uploads survive
+ *  restarts. Orphaned sidecars whose body file is missing are skipped
+ *  here — the GET handler also re-checks on disk, so this is just a
+ *  boot-time tidy. */
+async function loadSidecars(): Promise<void> {
+	let names: string[];
+	try {
+		names = await readdir(config.uploadsDir);
+	} catch {
+		return; // dir doesn't exist yet
+	}
+	for (const name of names) {
+		if (!name.endsWith(".meta.json")) continue;
+		let parsed: SidecarFile;
+		try {
+			parsed = JSON.parse(await readFile(join(config.uploadsDir, name), "utf8")) as SidecarFile;
+		} catch {
+			continue; // corrupt sidecar — ignore
+		}
+		if (!parsed.id || !parsed.storedName) continue;
+		meta.set(parsed.id, {
+			id: parsed.id,
+			filename: parsed.filename,
+			mimeType: parsed.mimeType,
+			storedPath: join(config.uploadsDir, parsed.storedName),
+			createdAt: parsed.createdAt,
+		});
+	}
+}
+
 export function createUploadsRouter(): Router {
+	// Rehydrate metadata from disk so previously uploaded files are still
+	// downloadable after a server restart.
+	void loadSidecars();
+
 	const router = express.Router();
 
 	router.post("/", upload.single("file"), async (req: Request, res: Response) => {
@@ -78,6 +127,26 @@ export function createUploadsRouter(): Router {
 			storedPath,
 			createdAt: Date.now(),
 		};
+
+		// Persist the sidecar so the upload survives a server restart.
+		// If this write fails we still serve the file for the lifetime of
+		// this process, but log it so an operator notices.
+		const sidecar: SidecarFile = {
+			id,
+			filename: entry.filename,
+			mimeType: entry.mimeType,
+			storedName,
+			createdAt: entry.createdAt,
+		};
+		try {
+			await writeFile(sidecarPath(id), JSON.stringify(sidecar));
+		} catch (e) {
+			console.warn(
+				`[uploads] failed to persist sidecar for ${id}:`,
+				e instanceof Error ? e.message : e,
+			);
+		}
+
 		meta.set(id, entry);
 
 		const response: UploadResponse = {
@@ -103,11 +172,19 @@ export function createUploadsRouter(): Router {
 			await stat(entry.storedPath);
 		} catch {
 			meta.delete(id);
+			try {
+				await unlink(sidecarPath(id));
+			} catch {
+				/* best effort */
+			}
 			res.status(404).json({ error: "file missing on disk" });
 			return;
 		}
 		res.setHeader("Content-Type", entry.mimeType);
-		res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(entry.filename)}"`);
+		res.setHeader(
+			"Content-Disposition",
+			`inline; filename="${encodeURIComponent(entry.filename)}"`,
+		);
 		res.sendFile(entry.storedPath);
 	});
 
@@ -122,7 +199,12 @@ export function createUploadsRouter(): Router {
 		try {
 			await unlink(entry.storedPath);
 		} catch {
-			// best effort
+			// best effort — body may already be gone
+		}
+		try {
+			await unlink(sidecarPath(id));
+		} catch {
+			// best effort — sidecar may already be gone
 		}
 		meta.delete(id);
 		res.status(204).end();

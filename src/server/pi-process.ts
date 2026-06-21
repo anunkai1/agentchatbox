@@ -28,7 +28,7 @@
  * from the server's existing `config.apiKeys[provider]` lookup.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 
 export interface PiProcessOptions {
@@ -72,10 +72,16 @@ export interface PiProcessEvents {
  *   pi.kill();                                  // on WS close
  */
 export declare interface PiProcess {
-	on<U extends keyof PiProcessEvents>(event: U, listener: (...args: PiProcessEvents[U]) => void): this;
+	on<U extends keyof PiProcessEvents>(
+		event: U,
+		listener: (...args: PiProcessEvents[U]) => void,
+	): this;
 	emit<U extends keyof PiProcessEvents>(event: U, ...args: PiProcessEvents[U]): boolean;
 }
 
+// merging this interface into the class is the canonical TS pattern for
+// strongly typing the inherited EventEmitter on/emit overloads.
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: intentional — merges the PiProcess interface into the class to type the inherited EventEmitter on/emit overloads.
 export class PiProcess extends EventEmitter {
 	private readonly child: ChildProcessWithoutNullStreams;
 	private stdoutBuf = "";
@@ -86,10 +92,14 @@ export class PiProcess extends EventEmitter {
 	constructor(opts: PiProcessOptions) {
 		super();
 		const args = [
-			"--mode", "rpc",
-			"--provider", opts.provider,
-			"--model", opts.modelId,
-			"--api-key", opts.apiKey,
+			"--mode",
+			"rpc",
+			"--provider",
+			opts.provider,
+			"--model",
+			opts.modelId,
+			"--api-key",
+			opts.apiKey,
 		];
 		if (opts.thinkingLevel) {
 			args.push("--thinking", opts.thinkingLevel);
@@ -148,7 +158,7 @@ export class PiProcess extends EventEmitter {
 			return;
 		}
 		try {
-			this.child.stdin.write(JSON.stringify(cmd) + "\n");
+			this.child.stdin.write(`${JSON.stringify(cmd)}\n`);
 		} catch (err) {
 			// EPIPE if the child died between our last write and this
 			// one. Emit and let the caller close the WS.
@@ -194,8 +204,9 @@ export class PiProcess extends EventEmitter {
 
 	private handleStdout(chunk: string): void {
 		this.stdoutBuf += chunk;
-		let idx: number;
-		while ((idx = this.stdoutBuf.indexOf("\n")) >= 0) {
+		for (;;) {
+			const idx = this.stdoutBuf.indexOf("\n");
+			if (idx < 0) break;
 			const line = this.stdoutBuf.slice(0, idx);
 			this.stdoutBuf = this.stdoutBuf.slice(idx + 1);
 			if (!line) continue;

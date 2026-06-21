@@ -3,11 +3,8 @@
  *
  * The client (in the browser) talks to the server (Node) using these shapes.
  *
- * Two transport channels:
- *   1. POST /api/stream (legacy) — raw LLM streaming proxy (SSE out).
- *      Used as a back-compat path while the WS-based agent lives in /api/chat.
- *   2. WS  /api/chat   (new)     — bidirectional: client sends prompts,
- *      server forwards every `pi --mode rpc` event as JSON.
+ * Transport: a single WebSocket at `/api/chat` — the client sends prompts,
+ * the server forwards every `pi --mode rpc` event as JSON.
  *
  * The `/api/chat` WS protocol is a thin envelope around the upstream
  * `pi --mode rpc` protocol (see /usr/lib/node_modules/@earendil-works/
@@ -16,24 +13,8 @@
  * `pi` event the TUI would see, unchanged.
  */
 
-import type {
-	Api,
-	AssistantMessageEvent,
-	Context,
-	Model,
-	SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
-
-/** POST body for /api/stream: a single LLM call proxied through the server. */
-export interface StreamRequest {
-	model: Model<Api>;
-	context: Context;
-	options?: SimpleStreamOptions;
-}
-
-/** An SSE frame is just an AssistantMessageEvent from the LLM stream. */
-export type StreamEvent = AssistantMessageEvent;
+import type { Message } from "@earendil-works/pi-ai";
 
 /** Multipart upload response. */
 export interface UploadResponse {
@@ -134,18 +115,45 @@ export interface SessionSummary {
 	messageCount: number;
 }
 
+/** A replayed prior transcript: the session id plus its `Message` entries,
+ *  read back from `pi`'s session JSONL. Typed as the SDK's `Message` union
+ *  (user / assistant / toolResult) because that's exactly what `pi` writes
+ *  to disk on every `type: "message"` line. */
+export interface TranscriptPayload {
+	sessionId: string;
+	messages: Message[];
+}
+
 /** Server → client. */
 export type ServerMessage =
-	| { type: "ready"; modelId: string; provider: string; thinkingLevel: ThinkingLevel; sessionId?: string }
+	| {
+			type: "ready";
+			modelId: string;
+			provider: string;
+			thinkingLevel: ThinkingLevel;
+			sessionId?: string;
+	  }
 	| { type: "event"; event: Record<string, unknown> }
 	| { type: "sessions"; sessions: SessionSummary[] }
-	| { type: "transcript"; sessionId: string; messages: unknown[] }
-	| { type: "sessionResumed"; sessionId: string; modelId: string; provider: string; thinkingLevel: ThinkingLevel }
+	| { type: "transcript"; sessionId: string; messages: Message[] }
+	| {
+			type: "sessionResumed";
+			sessionId: string;
+			modelId: string;
+			provider: string;
+			thinkingLevel: ThinkingLevel;
+	  }
 	| { type: "error"; message: string };
 
 /** Client → server. */
 export type ClientMessage =
-	| { type: "init"; provider: string; modelId: string; thinkingLevel: ThinkingLevel; sessionId?: string }
+	| {
+			type: "init";
+			provider: string;
+			modelId: string;
+			thinkingLevel: ThinkingLevel;
+			sessionId?: string;
+	  }
 	| { type: "prompt"; text: string; images?: PromptImage[] }
 	| { type: "abort" }
 	| { type: "setModel"; modelId: string; provider: string }

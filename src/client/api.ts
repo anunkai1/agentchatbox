@@ -11,7 +11,7 @@
  *   - /api/health — server liveness + configured providers
  */
 
-import type { UploadResponse, TranscribeResponse, VoicesResponse } from "../shared/protocol.js";
+import type { TranscribeResponse, UploadResponse, VoicesResponse } from "../shared/protocol.js";
 
 const BASE = ""; // same origin
 
@@ -29,7 +29,10 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
 export async function transcribeAudio(blob: Blob, filename = "voice.webm"): Promise<string> {
 	const form = new FormData();
 	form.append("audio", blob, filename);
-	const res = await fetch(`${BASE}/api/transcribe`, { method: "POST", body: form });
+	const res = await fetch(`${BASE}/api/transcribe`, {
+		method: "POST",
+		body: form,
+	});
 	if (!res.ok) {
 		const text = await res.text();
 		throw new Error(`transcribe failed: ${res.status} ${text}`);

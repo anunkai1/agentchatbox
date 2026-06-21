@@ -13,9 +13,10 @@ export function uuid(): string {
 		return crypto.randomUUID();
 	}
 	const b = new Uint8Array(16);
-	const get = (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function")
-		? crypto.getRandomValues.bind(crypto)
-		: (a: Uint8Array) => a.map(() => Math.floor(Math.random() * 256));
+	const get =
+		typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function"
+			? crypto.getRandomValues.bind(crypto)
+			: (a: Uint8Array) => a.map(() => Math.floor(Math.random() * 256));
 	get(b);
 	b[6] = (b[6] & 0x0f) | 0x40;
 	b[8] = (b[8] & 0x3f) | 0x80;

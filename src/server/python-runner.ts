@@ -83,7 +83,7 @@ export function runPython(args: {
 			clearTimeout(timer);
 			resolveP({
 				stdout: "",
-				stderr: Buffer.concat(errChunks).toString("utf8") + "\nspawn error",
+				stderr: `${Buffer.concat(errChunks).toString("utf8")}\nspawn error`,
 				code: -1,
 				timedOut: false,
 				spawnError: true,

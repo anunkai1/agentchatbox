@@ -62,7 +62,7 @@ describe("unifiedDiff end-trim", () => {
 
 	it("keeps the full diff when no changes are present", () => {
 		const out = [" a", " b", " c"];
-		const { start, end } = trimEnd(out, 3);
+		const { end } = trimEnd(out, 3);
 		expect(end).toBe(out.length);
 	});
 

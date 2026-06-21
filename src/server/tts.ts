@@ -15,11 +15,10 @@
  * config). Override via PIPER_VOICE env var.
  */
 
-import { Router } from "express";
-import express, { type Request, type Response } from "express";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import express, { type Request, type Response, type Router } from "express";
 import { projectRoot } from "./paths.js";
 import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 
@@ -68,7 +67,9 @@ export function createTtsRouter(): Router {
 			});
 
 			if (timedOut) {
-				res.status(504).json({ error: `tts.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms` });
+				res.status(504).json({
+					error: `tts.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms`,
+				});
 				return;
 			}
 			if (code !== 0) {
@@ -102,7 +103,10 @@ export function createTtsRouter(): Router {
 	router.get("/voices", async (_req, res) => {
 		try {
 			const voices = await listVoices();
-			res.json({ default: process.env.PIPER_VOICE || "en_US-amy-medium", available: voices });
+			res.json({
+				default: process.env.PIPER_VOICE || "en_US-amy-medium",
+				available: voices,
+			});
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
 			res.status(500).json({ error: `voice list failed: ${message}` });
@@ -135,7 +139,11 @@ interface TtsHealthCache {
 }
 let ttsHealthCache: TtsHealthCache | null = null;
 
-export async function checkTtsAvailable(): Promise<{ available: boolean; reason?: string; voice?: string }> {
+export async function checkTtsAvailable(): Promise<{
+	available: boolean;
+	reason?: string;
+	voice?: string;
+}> {
 	const now = Date.now();
 	if (ttsHealthCache && now - ttsHealthCache.at < TTS_HEALTH_CACHE_MS) {
 		return ttsHealthCache.result;

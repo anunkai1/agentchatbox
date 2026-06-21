@@ -25,13 +25,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import type { Message } from "@earendil-works/pi-ai";
 
 /**
  * Default root for `pi`'s session storage. Overridable via the
  * PI_CODING_AGENT_SESSION_DIR env var (the env var `pi` itself reads).
  */
 function defaultSessionsRoot(): string {
-	return process.env.PI_CODING_AGENT_SESSION_DIR ?? homedir() + "/.pi/agent/sessions";
+	return process.env.PI_CODING_AGENT_SESSION_DIR ?? `${homedir()}/.pi/agent/sessions`;
 }
 
 /**
@@ -47,7 +48,7 @@ function defaultSessionsRoot(): string {
  */
 function sessionsDirFor(cwd: string, root: string = defaultSessionsRoot()): string {
 	const stripped = cwd.startsWith("/") ? cwd.slice(1) : cwd;
-	return root + "/" + "--" + stripped.replace(/\//g, "-") + "--";
+	return `${root}/--${stripped.replace(/\//g, "-")}--`;
 }
 
 export interface SessionSummary {
@@ -78,7 +79,7 @@ export function listPiSessions(cwd: string): SessionSummary[] {
 	for (const name of readdirSync(dir)) {
 		if (!name.endsWith(".jsonl")) continue;
 		const file = join(dir, name);
-		let st;
+		let st: ReturnType<typeof statSync>;
 		try {
 			st = statSync(file);
 		} catch {
@@ -100,7 +101,7 @@ export function listPiSessions(cwd: string): SessionSummary[] {
 			}
 			break;
 		}
-		if (!firstLine || firstLine.type !== "session") continue;
+		if (firstLine?.type !== "session") continue;
 
 		const sessionCwd = String(firstLine.cwd ?? "");
 		// Filter to only this cwd — sessions from a different project
@@ -157,7 +158,7 @@ export function listPiSessions(cwd: string): SessionSummary[] {
  * ToolResultMessage`). The renderer can hand these straight to its
  * existing message-node projection.
  */
-export function readPiSessionMessages(cwd: string, sessionId: string): unknown[] {
+export function readPiSessionMessages(cwd: string, sessionId: string): Message[] {
 	const dir = sessionsDirFor(resolve(cwd));
 	// Find the JSONL whose first line has matching id.
 	if (!existsSync(dir)) return [];
@@ -176,14 +177,16 @@ export function readPiSessionMessages(cwd: string, sessionId: string): unknown[]
 		if (parsed?.type !== "session" || String(parsed.id) !== sessionId) continue;
 
 		// Walk every line, collect `type: "message"` entries' `.message` field.
-		const messages: unknown[] = [];
+		// pi writes SDK-shape `Message` objects here; cast through unknown
+		// since JSON.parse returns unknown and we trust the writer.
+		const messages: Message[] = [];
 		for (const l of raw.split("\n")) {
 			const t = l.trim();
 			if (!t) continue;
 			try {
 				const e = JSON.parse(t) as Record<string, unknown>;
 				if (e.type === "message" && e.message) {
-					messages.push(e.message);
+					messages.push(e.message as Message);
 				}
 			} catch {
 				/* skip malformed */
@@ -213,5 +216,5 @@ function extractText(content: unknown): string {
 
 function truncate(s: string, n: number): string {
 	if (s.length <= n) return s;
-	return s.slice(0, n - 1) + "…";
+	return `${s.slice(0, n - 1)}…`;
 }

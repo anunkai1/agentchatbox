@@ -16,12 +16,12 @@
  */
 
 import { $, el, type LiveAssistantDom } from "./dom.js";
-import { state, type PersistedMessage } from "./state.js";
+import { type PersistedMessage, state } from "./state.js";
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
 	ta.style.height = "auto";
-	ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+	ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
 }
 
 export function setStreaming(s: boolean): void {
@@ -44,7 +44,12 @@ export function renderHistory(): void {
 
 export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	if (m.kind === "user") {
-		return el("div", { class: "row row-user" }, el("span", { class: "role role-user" }, "You ›"), el("span", { class: "body" }, m.text));
+		return el(
+			"div",
+			{ class: "row row-user" },
+			el("span", { class: "role role-user" }, "You ›"),
+			el("span", { class: "body" }, m.text),
+		);
 	}
 	if (m.kind === "assistant") {
 		const wrap = el("div", { class: "row row-assistant" });
@@ -58,7 +63,9 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 			t.append(pre);
 			t.addEventListener("click", () => {
 				pre.classList.toggle("hidden");
-				t.querySelector(".thinking-toggle")!.textContent = pre.classList.contains("hidden") ? "▸ thinking" : "▾ thinking";
+				t.querySelector(".thinking-toggle")!.textContent = pre.classList.contains("hidden")
+					? "▸ thinking"
+					: "▾ thinking";
 			});
 			body.append(t);
 		}
@@ -82,7 +89,12 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		return wrap;
 	}
 	// error
-	return el("div", { class: "row row-error" }, el("span", { class: "role" }, "!"), el("span", { class: "body" }, m.text));
+	return el(
+		"div",
+		{ class: "row row-error" },
+		el("span", { class: "role" }, "!"),
+		el("span", { class: "body" }, m.text),
+	);
 }
 
 /**
@@ -111,7 +123,8 @@ export function summarizeArgs(args: unknown): string {
 	if (!args || typeof args !== "object") return String(args ?? "");
 	const a = args as Record<string, unknown>;
 	if (typeof a.command === "string") return a.command;
-	if (typeof a.path === "string" && typeof a.content === "string") return `${a.path} (${a.content.length} chars)`;
+	if (typeof a.path === "string" && typeof a.content === "string")
+		return `${a.path} (${a.content.length} chars)`;
 	if (typeof a.path === "string") return a.path;
 	return JSON.stringify(a);
 }
@@ -173,7 +186,9 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	thinkingWrap.append(thinkingPre);
 	thinkingWrap.addEventListener("click", () => {
 		thinkingPre.classList.toggle("hidden");
-		thinkingToggle.textContent = thinkingPre.classList.contains("hidden") ? "▸ thinking" : "▾ thinking";
+		thinkingToggle.textContent = thinkingPre.classList.contains("hidden")
+			? "▸ thinking"
+			: "▾ thinking";
 	});
 	body.append(thinkingWrap);
 	const pre = el("pre", { class: "text streaming" });
@@ -202,7 +217,12 @@ export function appendToolCall(name: string, args: unknown, toolCallId: string):
 	appendNode(wrap);
 }
 
-export function finalizeToolCall(toolCallId: string, name: string, result: string | undefined, isError: boolean): void {
+export function finalizeToolCall(
+	toolCallId: string,
+	name: string,
+	result: string | undefined,
+	isError: boolean,
+): void {
 	const list = $("#messages");
 	const target = toolCallId
 		? list.querySelector(`[data-tool-call-id="${CSS.escape(toolCallId)}"]`)
@@ -234,7 +254,14 @@ export function finalizeToolCall(toolCallId: string, name: string, result: strin
 }
 
 export function appendError(text: string): void {
-	appendNode(el("div", { class: "row row-error" }, el("span", { class: "role" }, "!"), el("span", { class: "body" }, text)));
+	appendNode(
+		el(
+			"div",
+			{ class: "row row-error" },
+			el("span", { class: "role" }, "!"),
+			el("span", { class: "body" }, text),
+		),
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +335,9 @@ export function registerShellHandlers(h: ShellHandlers): void {
 
 export function renderShell(): void {
 	if (!shellHandlers) {
-		throw new Error("renderShell called before registerShellHandlers — main.ts must wire the UI handlers first");
+		throw new Error(
+			"renderShell called before registerShellHandlers — main.ts must wire the UI handlers first",
+		);
 	}
 	// Reset transient audio state BEFORE wiping the DOM. The shared
 	// <audio> element is about to be removed (its `pause` event won't
@@ -326,34 +355,38 @@ export function renderShell(): void {
 	header.append(
 		el(
 			"button",
-			{ class: "icon-btn", title: "New chat (/clear)", onclick: () => shellHandlers!.handleSlash("clear") },
+			{
+				class: "icon-btn",
+				title: "New chat (/clear)",
+				onclick: () => shellHandlers?.handleSlash("clear"),
+			},
 			"new",
 		),
 		el(
 			"button",
-			{ class: "icon-btn", title: "Sessions (/sessions)", onclick: () => shellHandlers!.handleSlash("sessions") },
+			{
+				class: "icon-btn",
+				title: "Sessions (/sessions)",
+				onclick: () => shellHandlers?.handleSlash("sessions"),
+			},
 			"≡",
 		),
 		el("span", { class: "title", id: "title" }, state.title),
 		el("div", { class: "spacer" }),
-		el(
-			"button",
-			{ class: "picker-btn", id: "model-picker", title: "Model (/model)" },
-			"model: …",
-		),
+		el("button", { class: "picker-btn", id: "model-picker", title: "Model (/model)" }, "model: …"),
 		el(
 			"button",
 			{ class: "picker-btn", id: "think-picker", title: "Thinking (/think)" },
 			"think: …",
 		),
+		el("button", { class: "picker-btn", id: "voice-picker", title: "TTS voice" }, "voice: …"),
 		el(
 			"button",
-			{ class: "picker-btn", id: "voice-picker", title: "TTS voice" },
-			"voice: …",
-		),
-		el(
-			"button",
-			{ class: "picker-btn", id: "tts-toggle", title: "Auto-speak assistant messages" },
+			{
+				class: "picker-btn",
+				id: "tts-toggle",
+				title: "Auto-speak assistant messages",
+			},
 			"🔇 off",
 		),
 		// Overflow menu — only visible on narrow screens, where the picker pills
@@ -364,7 +397,7 @@ export function renderShell(): void {
 				class: "icon-btn overflow-menu",
 				id: "overflow-menu",
 				title: "Settings",
-				onclick: () => shellHandlers!.openOverflowMenu(),
+				onclick: () => shellHandlers?.openOverflowMenu(),
 			},
 			"⋯",
 		),
@@ -377,18 +410,28 @@ export function renderShell(): void {
 	// Composer
 	const composer = el("div", { class: "composer" });
 	composer.append(
-		el("button", {
-			class: "icon-btn",
-			id: "attach-btn",
-			title: "Attach file",
-			onclick: () => $<HTMLInputElement>("#file-input").click(),
-		}, "📎"),
-		el("button", {
-			class: "icon-btn",
-			id: "voice-btn",
-			title: "Voice note (transcribes locally on server)",
-			onclick: () => { void shellHandlers!.handleVoiceRecord(); },
-		}, "🎙"),
+		el(
+			"button",
+			{
+				class: "icon-btn",
+				id: "attach-btn",
+				title: "Attach file",
+				onclick: () => $<HTMLInputElement>("#file-input").click(),
+			},
+			"📎",
+		),
+		el(
+			"button",
+			{
+				class: "icon-btn",
+				id: "voice-btn",
+				title: "Voice note (transcribes locally on server)",
+				onclick: () => {
+					void shellHandlers?.handleVoiceRecord();
+				},
+			},
+			"🎙",
+		),
 		el("textarea", {
 			id: "input",
 			class: "input",
@@ -398,11 +441,37 @@ export function renderShell(): void {
 			autocapitalize: "off",
 			spellcheck: false,
 		}),
-		el("button", { class: "send-btn", id: "send-btn", title: "Send (⌘/Ctrl+Enter)", onclick: () => shellHandlers!.handleSend() }, "send"),
-		el("button", { class: "stop-btn", id: "stop-btn", title: "Stop the current run", hidden: true, onclick: () => shellHandlers!.abort() }, "stop"),
+		el(
+			"button",
+			{
+				class: "send-btn",
+				id: "send-btn",
+				title: "Send (⌘/Ctrl+Enter)",
+				onclick: () => shellHandlers?.handleSend(),
+			},
+			"send",
+		),
+		el(
+			"button",
+			{
+				class: "stop-btn",
+				id: "stop-btn",
+				title: "Stop the current run",
+				hidden: true,
+				onclick: () => shellHandlers?.abort(),
+			},
+			"stop",
+		),
 	);
 	root.append(composer);
-	root.append(el("input", { type: "file", id: "file-input", hidden: true, multiple: true }));
+	root.append(
+		el("input", {
+			type: "file",
+			id: "file-input",
+			hidden: true,
+			multiple: true,
+		}),
+	);
 
 	// Status bar
 	const statusBar = el("div", { class: "status-bar", id: "status-bar" }, "connecting…");
@@ -430,7 +499,9 @@ export function renderShell(): void {
 	root.append(audio);
 
 	// File-input handler
-	$("#file-input").addEventListener("change", (e) => { void shellHandlers!.handleFileAttach(e); });
+	$("#file-input").addEventListener("change", (e) => {
+		void shellHandlers?.handleFileAttach(e);
+	});
 
 	// Input handlers
 	const input = $<HTMLTextAreaElement>("#input");
@@ -442,23 +513,23 @@ export function renderShell(): void {
 		// mobile users who tapped return expecting a line break.
 		if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
 			e.preventDefault();
-			shellHandlers!.handleSend();
+			shellHandlers?.handleSend();
 		} else if (e.key === "ArrowUp" && (input.value === "" || input.selectionStart === 0)) {
 			e.preventDefault();
-			shellHandlers!.historyBack();
+			shellHandlers?.historyBack();
 		} else if (e.key === "ArrowDown") {
 			e.preventDefault();
-			shellHandlers!.historyForward();
+			shellHandlers?.historyForward();
 		} else if (e.key === "/") {
 			// Slash menu opens on the next tick after the value updates.
-			setTimeout(() => shellHandlers!.showSlashMenu(), 0);
+			setTimeout(() => shellHandlers?.showSlashMenu(), 0);
 		}
 	});
 	input.addEventListener("input", autoSize);
-	$("#model-picker").addEventListener("click", () => shellHandlers!.openModelPicker());
-	$("#think-picker").addEventListener("click", () => shellHandlers!.openThinkPicker());
-	$("#voice-picker").addEventListener("click", () => shellHandlers!.openVoicePicker());
-	$("#tts-toggle").addEventListener("click", () => shellHandlers!.toggleAutoSpeak());
+	$("#model-picker").addEventListener("click", () => shellHandlers?.openModelPicker());
+	$("#think-picker").addEventListener("click", () => shellHandlers?.openThinkPicker());
+	$("#voice-picker").addEventListener("click", () => shellHandlers?.openVoicePicker());
+	$("#tts-toggle").addEventListener("click", () => shellHandlers?.toggleAutoSpeak());
 
 	renderHistory();
 	refreshStatus();

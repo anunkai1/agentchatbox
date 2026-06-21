@@ -15,33 +15,28 @@
 
 import type {
 	AssistantMessage,
+	Message,
 	TextContent,
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { $, el, type LiveAssistantDom } from "./dom.js";
-import { createChatClient } from "./ws.js";
 import { getHealth, getModels, type ModelInfo } from "./api.js";
-import { renderSessionsIntoPicker } from "./slashes.js";
+import type { LiveAssistantDom } from "./dom.js";
+import { $ } from "./dom.js";
 import {
 	appendAssistantPlaceholder,
 	appendError,
 	appendToolCall,
 	autoSize,
 	finalizeToolCall,
-	renderShell,
-	renderMessageNode,
 	refreshStatus,
 	registerShellHandlers,
+	renderMessageNode,
+	renderShell,
+	type ShellHandlers,
 	scrollToBottomIfPinned,
 	setStreaming,
-	type ShellHandlers,
 } from "./render.js";
-import {
-	handleFileAttach,
-	handleVoiceRecord,
-	toggleAutoSpeak,
-} from "./voice.js";
 import {
 	handleSlash,
 	isKnownSlash,
@@ -49,11 +44,14 @@ import {
 	openOverflowMenu,
 	openThinkPicker,
 	openVoicePicker,
+	renderSessionsIntoPicker,
 	setChatControls,
 	setSendAsUser,
 	showSlashMenu,
 } from "./slashes.js";
-import { state, type PersistedMessage } from "./state.js";
+import { type PersistedMessage, state } from "./state.js";
+import { handleFileAttach, handleVoiceRecord, toggleAutoSpeak } from "./voice.js";
+import { createChatClient } from "./ws.js";
 
 // ---------------------------------------------------------------------------
 // History (↑/↓)
@@ -61,7 +59,8 @@ import { state, type PersistedMessage } from "./state.js";
 
 function historyBack(): void {
 	if (state.history.length === 0) return;
-	const idx = state.historyIdx === null ? state.history.length - 1 : Math.max(0, state.historyIdx - 1);
+	const idx =
+		state.historyIdx === null ? state.history.length - 1 : Math.max(0, state.historyIdx - 1);
 	state.historyIdx = idx;
 	const input = $<HTMLTextAreaElement>("#input");
 	input.value = state.history[idx];
@@ -183,12 +182,12 @@ function appendNode(node: HTMLElement): void {
 
 let lastAssistant: PersistedMessage | null = null;
 let lastAssistantDom: LiveAssistantDom | null = null;
-let lastThinking: PersistedMessage | null = null;
 
 function onEvent(event: Record<string, unknown>): void {
 	// The server forwards raw `pi --mode rpc` events, which is a
 	// superset of the bare `AgentEvent` union. Cast to a permissive
 	// type for property access; the switch ignores unknown types.
+	// biome-ignore lint/suspicious/noExplicitAny: pi RPC events are an undocumented superset of AgentEvent; permissive cast is intentional for property access, the switch ignores unknown types.
 	const e = event as Record<string, any>;
 	switch (e.type) {
 		case "agent_start":
@@ -206,7 +205,6 @@ function onEvent(event: Record<string, unknown>): void {
 			// gets created on the first message_start.
 			lastAssistant = null;
 			lastAssistantDom = null;
-			lastThinking = null;
 			// Don't reset spoken here — spoken is per-message, not per-turn.
 			break;
 
@@ -232,7 +230,13 @@ function onEvent(event: Record<string, unknown>): void {
 					.filter((c) => c.type === "text")
 					.map((c) => (c as TextContent).text)
 					.join("");
-				state.messages.push({ kind: "tool", name: tr.toolName, args: "(see above)", result: text, isError: tr.isError });
+				state.messages.push({
+					kind: "tool",
+					name: tr.toolName,
+					args: "(see above)",
+					result: text,
+					isError: tr.isError,
+				});
 				finalizeToolCall(tr.toolCallId, tr.toolName, text, tr.isError);
 			}
 			break;
@@ -304,11 +308,18 @@ function onEvent(event: Record<string, unknown>): void {
 			// that turn (we use the in-place edit of the .text node as a
 			// proxy: if text is non-empty and we haven't spoken it yet,
 			// speak).
-			if (m.role === "assistant" && state.autoSpeak && lastAssistant && lastAssistant.kind === "assistant") {
+			if (
+				m.role === "assistant" &&
+				state.autoSpeak &&
+				lastAssistant &&
+				lastAssistant.kind === "assistant"
+			) {
 				const t = lastAssistant.text;
-				if (t && t.trim() && !lastAssistant.spoken) {
+				if (t?.trim() && !lastAssistant.spoken) {
 					lastAssistant.spoken = true;
-					void import("./voice.js").then(({ speakText }) => { void speakText(t); });
+					void import("./voice.js").then(({ speakText }) => {
+						void speakText(t);
+					});
 				}
 			}
 			refreshStatus();
@@ -357,10 +368,13 @@ async function boot(): Promise<void> {
 		// returns nothing (older server) — we still get *something* in
 		// the picker so the user isn't stuck.
 		if (state.availableModels.length === 0) {
-			state.availableModels = h.providers.map((p) => ({ id: "MiniMax-M3", provider: p }));
+			state.availableModels = h.providers.map((p) => ({
+				id: "MiniMax-M3",
+				provider: p,
+			}));
 		}
 	} catch (e) {
-		appendError("server health check failed: " + (e instanceof Error ? e.message : String(e)));
+		appendError(`server health check failed: ${e instanceof Error ? e.message : String(e)}`);
 	}
 
 	// Build the WS client FIRST so the shell-handler closures below
@@ -469,8 +483,8 @@ async function boot(): Promise<void> {
 	// waiting for this before it spawns the `pi` child. If we have
 	// no model picked yet, default to MiniMax-M3 (if available in
 	// the model list) or the first available model otherwise.
-	const defaultModel = state.availableModels.find((m) => m.id === "MiniMax-M3")
-		?? state.availableModels[0];
+	const defaultModel =
+		state.availableModels.find((m) => m.id === "MiniMax-M3") ?? state.availableModels[0];
 	const onOpen = () => {
 		const modelId = state.currentModelId ?? defaultModel?.id ?? "MiniMax-M3";
 		const provider = state.currentProvider ?? defaultModel?.provider ?? "minimax";
@@ -498,26 +512,28 @@ async function boot(): Promise<void> {
  * messages and toolResult messages get merged into a single
  * "tool" cache row that the renderer already knows how to paint.
  */
-function projectToPersisted(m: unknown): PersistedMessage {
-	if (!m || typeof m !== "object") {
-		return { kind: "error", text: String(m) };
-	}
-	const msg = m as { role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean };
-	switch (msg.role) {
-		case "user": {
-			const text = extractText(msg.content);
-			return { kind: "user", text };
-		}
-		case "assistant": {
-			const text = extractText(msg.content);
-			const thinking = extractThinking(msg.content);
-			return { kind: "assistant", text, thinking };
-		}
-		case "toolResult": {
-			const text = extractText(msg.content);
-			return { kind: "tool", name: msg.toolName ?? "tool", args: "(replayed)", result: text, isError: msg.isError };
-		}
+function projectToPersisted(m: Message): PersistedMessage {
+	switch (m.role) {
+		case "user":
+			return { kind: "user", text: extractText(m.content) };
+		case "assistant":
+			return {
+				kind: "assistant",
+				text: extractText(m.content),
+				thinking: extractThinking(m.content),
+			};
+		case "toolResult":
+			return {
+				kind: "tool",
+				name: m.toolName,
+				args: "(replayed)",
+				result: extractText(m.content),
+				isError: m.isError,
+			};
 		default:
+			// Defensive: a torn JSONL write could yield a runtime role the
+			// static `Message` union doesn't cover. Surface it rather than
+			// drop the row silently.
 			return { kind: "error", text: JSON.stringify(m).slice(0, 500) };
 	}
 }
