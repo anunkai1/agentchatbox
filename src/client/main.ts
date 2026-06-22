@@ -20,7 +20,7 @@ import type {
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { getHealth, getModels, type ModelInfo } from "./api.js";
+import { getCapabilities, getHealth, getModels, type ModelInfo } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
 import {
@@ -43,6 +43,7 @@ import {
 	isKnownSlash,
 	openModelPicker,
 	openOverflowMenu,
+	openSpeedPicker,
 	openThinkPicker,
 	openVoicePicker,
 	renderSessionsIntoPicker,
@@ -365,7 +366,17 @@ async function boot(): Promise<void> {
 			name: m.name,
 			reasoning: m.reasoning,
 		}));
-		// Fall back to the legacy single-provider shape if /api/models
+		// Fetch capabilities (tools, skills, packages) for the header badge.
+	getCapabilities()
+		.then((caps) => {
+			state.capabilities = caps;
+			void import("./render.js").then(({ refreshStatus }) => refreshStatus());
+		})
+		.catch(() => {
+			// capabilities fetch is best-effort — don't block the app
+		});
+
+	// Fall back to the legacy single-provider shape if /api/models
 		// returns nothing (older server) — we still get *something* in
 		// the picker so the user isn't stuck.
 		if (state.availableModels.length === 0) {
@@ -398,6 +409,7 @@ async function boot(): Promise<void> {
 		openModelPicker,
 		openThinkPicker,
 		openVoicePicker,
+		openSpeedPicker,
 		openOverflowMenu,
 		toggleAutoSpeak,
 		handleVoiceRecord,

@@ -12,6 +12,7 @@
  */
 
 import type { ThinkingLevel } from "../shared/protocol.js";
+import type { CapabilitiesInfo } from "./api.js";
 
 // ---------------------------------------------------------------------------
 // Renderer cache: messages the browser shows in the chat scrollback
@@ -83,10 +84,17 @@ export interface AppState {
 	autoSpeak: boolean;
 	/** Currently selected TTS voice id. */
 	ttsVoice: string | null;
+	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). */
+	ttsSpeed: number;
 	/** Number of TTS requests in flight (for the status bar indicator). */
 	ttsInFlight: number;
 	/** Set true while audio is playing (for the play/pause indicator). */
 	audioPlaying: boolean;
+	/**
+	 * Capabilities reported by the server (tools, skills, packages).
+	 * Populated by boot() on startup.
+	 */
+	capabilities: CapabilitiesInfo | null;
 	/**
 	 * Plain string snapshot of `state.messages` last assistant text, kept
 	 * in sync by main.ts's event dispatcher. The render layer reads this
@@ -124,7 +132,9 @@ export const state: AppState = {
 	connectionStatus: "connecting",
 	autoSpeak: false,
 	ttsVoice: null,
+	ttsSpeed: 1.4,
 	ttsInFlight: 0,
 	audioPlaying: false,
 	lastAssistantText: "",
+	capabilities: null,
 };

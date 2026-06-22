@@ -13,7 +13,7 @@
 
 import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { $, el } from "./dom.js";
-import { appendError, appendNode, refreshStatus } from "./render.js";
+import { appendError, appendNode, refreshStatus, toggleCapabilitiesPopover } from "./render.js";
 import { type ModelOption, state } from "./state.js";
 
 /**
@@ -447,6 +447,30 @@ export function openThinkPicker(): void {
 	);
 }
 
+export function openSpeedPicker(): void {
+	const speeds = [1, 1.25, 1.4, 1.5, 2];
+	const { overlay, box } = openModal("TTS playback speed");
+	for (const rate of speeds) {
+		const row = el("div", { class: "model-row" });
+		row.append(el("div", { class: "model-name" }, `${rate}×`));
+		if (rate === 1) row.append(el("div", { class: "model-provider" }, "(normal)"));
+		if (rate === state.ttsSpeed) row.classList.add("active");
+		row.addEventListener("click", () => {
+			state.ttsSpeed = rate;
+			overlay.remove();
+			refreshStatus();
+		});
+		box.append(row);
+	}
+	box.append(
+		el("button", {
+			class: "btn",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
+}
+
 export async function openSessionsDialog(): Promise<void> {
 	// The actual list is delivered asynchronously via the WS
 	// `onSessionsUpdated` callback (set up in main.ts). The picker
@@ -594,6 +618,15 @@ export function openOverflowMenu(): void {
 	});
 	box.append(voiceLine);
 
+	const speedLine = el("div", { class: "overflow-row" });
+	speedLine.append(el("div", { class: "overflow-label" }, "speed"));
+	speedLine.append(el("div", { class: "overflow-value" }, `${state.ttsSpeed}×`));
+	speedLine.addEventListener("click", () => {
+		overlay.remove();
+		openSpeedPicker();
+	});
+	box.append(speedLine);
+
 	const ttsLine = el("div", { class: "overflow-row" });
 	ttsLine.append(el("div", { class: "overflow-label" }, "auto-speak"));
 	ttsLine.append(el("div", { class: "overflow-value" }, state.autoSpeak ? "on" : "off"));
@@ -602,7 +635,25 @@ export function openOverflowMenu(): void {
 		toggleAutoSpeak();
 		ttsLine.querySelector(".overflow-value")!.textContent = state.autoSpeak ? "on" : "off";
 	});
-	box.append(ttsLine);
+	
+	// --- loaded capabilities (mobile: badge hidden, show in overflow) ---
+	if (state.capabilities) {
+		const caps = state.capabilities;
+		const parts: string[] = [];
+		if (caps.tools.length) parts.push(`${caps.tools.length} tool${caps.tools.length !== 1 ? "s" : ""}`);
+		if (caps.skills.length) parts.push(`${caps.skills.length} skill${caps.skills.length !== 1 ? "s" : ""}`);
+		if (parts.length > 0) {
+			const capsLine = el("div", { class: "overflow-row" });
+			capsLine.append(el("div", { class: "overflow-label" }, "loaded"));
+			capsLine.append(el("div", { class: "overflow-value" }, parts.join(" · ")));
+			capsLine.addEventListener("click", () => {
+				overlay.remove();
+				toggleCapabilitiesPopover();
+			});
+			box.append(capsLine);
+		}
+	}
+box.append(ttsLine);
 
 	box.append(
 		el("button", {

@@ -17,7 +17,7 @@ import "dotenv/config";
 
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { getModels } from "@earendil-works/pi-ai";
 import cors from "cors";
 import express from "express";
@@ -28,6 +28,7 @@ import { EXTRA_MODELS, SDK_PROVIDERS } from "./providers.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
+import { getCapabilities } from "./capabilities.js";
 import { createUploadsRouter } from "./uploads.js";
 
 mkdirSync(config.uploadsDir, { recursive: true });
@@ -223,6 +224,28 @@ app.get("/api/models", (_req, res) => {
 	}
 
 	res.json({ models: out });
+});
+
+/**
+ * GET /api/capabilities
+ *
+ * Returns the tools, skills, and extensions that pi has loaded.
+ * Runs `pi list`, parses each installed package's package.json,
+ * and extracts registered tool names and skill directories.
+ *
+ * Shape: { packages: [...], tools: [...], skills: [...] }
+ */
+app.get("/api/capabilities", async (_req, res) => {
+	try {
+		const caps = await getCapabilities();
+		res.json(caps);
+	} catch (e) {
+		console.error(
+			"[capabilities] failed:",
+			e instanceof Error ? e.message : e,
+		);
+		res.json({ packages: [], tools: [], skills: [] });
+	}
 });
 
 // Static files (built client). Resolved against the project root so the

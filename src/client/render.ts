@@ -303,6 +303,85 @@ export function appendError(text: string): void {
 // Status bar
 // ---------------------------------------------------------------------------
 
+/** Update the capabilities badge in the header. */
+function refreshCapabilitiesBadge(): void {
+	const caps = state.capabilities;
+	const badge = document.getElementById("caps-badge");
+	if (!badge) return;
+	if (!caps || (caps.tools.length === 0 && caps.skills.length === 0 && caps.packages.length === 0)) {
+		badge.style.display = "none";
+		return;
+	}
+	const parts: string[] = [];
+	if (caps.tools.length) parts.push(`${caps.tools.length} tool${caps.tools.length !== 1 ? "s" : ""}`);
+	if (caps.skills.length) parts.push(`${caps.skills.length} skill${caps.skills.length !== 1 ? "s" : ""}`);
+	badge.textContent = parts.join(" · ") || `${caps.packages.length} pkg${caps.packages.length !== 1 ? "s" : ""}`;
+	badge.style.display = "";
+}
+
+/** Show/hide the capabilities popover. */
+export function toggleCapabilitiesPopover(): void {
+	const existing = document.getElementById("caps-popover");
+	if (existing) {
+		existing.remove();
+		return;
+	}
+	const caps = state.capabilities;
+	if (!caps) return;
+
+	const overlay = el("div", { class: "modal-overlay", id: "caps-popover" });
+	const box = el("div", { class: "caps-popover-box" });
+	overlay.addEventListener("click", (e) => {
+		if (e.target === overlay) overlay.remove();
+	});
+
+	box.append(el("h3", { text: "Loaded capabilities" }));
+
+	// Tools section
+	if (caps.tools.length > 0) {
+		box.append(el("div", { class: "caps-section-header" }, "Tools"));
+		for (const t of caps.tools) {
+			const row = el("div", { class: "caps-row" });
+			row.append(el("span", { class: "caps-name" }, t.name));
+			row.append(el("span", { class: "caps-pkg" }, t.package));
+			box.append(row);
+		}
+	}
+
+	// Skills section
+	if (caps.skills.length > 0) {
+		box.append(el("div", { class: "caps-section-header" }, "Skills"));
+		for (const s of caps.skills) {
+			const row = el("div", { class: "caps-row" });
+			row.append(el("span", { class: "caps-name" }, s.name));
+			row.append(el("span", { class: "caps-pkg" }, s.package));
+			box.append(row);
+		}
+	}
+
+	// Packages section
+	if (caps.packages.length > 0) {
+		box.append(el("div", { class: "caps-section-header" }, "Extensions"));
+		for (const p of caps.packages) {
+			const row = el("div", { class: "caps-row caps-pkg-row" });
+			const ver = p.version ? ` v${p.version}` : "";
+			row.append(el("span", { class: "caps-name" }, `${p.name}${ver}`));
+			if (p.description) {
+				row.append(el("span", { class: "caps-desc" }, p.description));
+			}
+			box.append(row);
+		}
+	}
+
+	if (caps.tools.length === 0 && caps.skills.length === 0 && caps.packages.length === 0) {
+		box.append(el("p", { class: "caps-empty" }, "No extensions loaded."));
+	}
+
+	box.append(el("button", { class: "btn caps-close-btn", text: "Close", onclick: () => overlay.remove() }));
+	overlay.append(box);
+	document.body.append(overlay);
+}
+
 export function refreshStatus(): void {
 	// Helper: prefer the human-readable name from /api/models over the
 	// raw model id (which is the same as the name for MiniMax-M3 but
@@ -325,6 +404,7 @@ export function refreshStatus(): void {
 	if (state.audioPlaying) parts.push("♪ playing");
 	if (state.connectionStatus !== "open") parts.push(`[${state.connectionStatus}]`);
 	$("#status-bar").textContent = parts.join(" · ");
+	refreshCapabilitiesBadge();
 
 	const mp = $<HTMLButtonElement>("#model-picker");
 	// Show the human-readable name when we have it (e.g. "DeepSeek V4
@@ -336,6 +416,8 @@ export function refreshStatus(): void {
 	tp.textContent = `think: ${state.currentThinking}`;
 	const vp = $<HTMLButtonElement>("#voice-picker");
 	vp.textContent = `voice: ${state.ttsVoice ?? "default"}`;
+	const sp = $<HTMLButtonElement>("#speed-picker");
+	sp.textContent = `speed: ${state.ttsSpeed}×`;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +438,7 @@ export interface ShellHandlers {
 	openModelPicker: () => void;
 	openThinkPicker: () => void;
 	openVoicePicker: () => void;
+	openSpeedPicker: () => void;
 	openOverflowMenu: () => void;
 	toggleAutoSpeak: () => void;
 	handleVoiceRecord: () => Promise<void>;
@@ -443,6 +526,17 @@ export function renderShell(): void {
 		),
 		el("span", { class: "title", id: "title" }, state.title),
 		el("div", { class: "spacer" }),
+		el(
+			"button",
+			{
+				class: "picker-btn caps-badge",
+				id: "caps-badge",
+				title: "Loaded tools, skills, extensions — click for details",
+				onclick: () => toggleCapabilitiesPopover(),
+				style: "display:none",
+			},
+			"",
+		),
 		el("button", { class: "picker-btn", id: "model-picker", title: "Model (/model)" }, "model: …"),
 		el(
 			"button",
@@ -450,6 +544,7 @@ export function renderShell(): void {
 			"think: …",
 		),
 		el("button", { class: "picker-btn", id: "voice-picker", title: "TTS voice" }, "voice: …"),
+		el("button", { class: "picker-btn", id: "speed-picker", title: "TTS playback speed" }, "speed: …"),
 		el(
 			"button",
 			{
@@ -640,6 +735,7 @@ export function renderShell(): void {
 	$("#model-picker").addEventListener("click", () => shellHandlers?.openModelPicker());
 	$("#think-picker").addEventListener("click", () => shellHandlers?.openThinkPicker());
 	$("#voice-picker").addEventListener("click", () => shellHandlers?.openVoicePicker());
+	$("#speed-picker").addEventListener("click", () => shellHandlers?.openSpeedPicker());
 	$("#tts-toggle").addEventListener("click", () => shellHandlers?.toggleAutoSpeak());
 
 	// Desktop: sidebar open by default. Mobile: collapsed.

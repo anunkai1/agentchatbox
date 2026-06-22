@@ -94,6 +94,39 @@ export async function synthesizeSpeech(text: string, voice?: string): Promise<Bl
 	return await res.blob();
 }
 
+/** Capabilities of the pi Agent — what tools, skills, extensions are loaded. */
+export interface CapabilitiesInfo {
+  packages: CapabilityPackage[];
+  tools: CapabilityTool[];
+  skills: CapabilitySkill[];
+}
+
+export interface CapabilityPackage {
+  name: string;
+  path: string;
+  version?: string;
+  description?: string;
+}
+
+export interface CapabilityTool {
+  name: string;
+  /** Package that provides this tool */
+  package: string;
+}
+
+export interface CapabilitySkill {
+  name: string;
+  /** Package that provides this skill */
+  package: string;
+}
+
+/** Returns the tools, skills, and extensions that pi has loaded. */
+export async function getCapabilities(): Promise<CapabilitiesInfo> {
+  const res = await fetch(`${BASE}/api/capabilities`);
+  if (!res.ok) throw new Error(`capabilities failed: ${res.status}`);
+  return (await res.json()) as CapabilitiesInfo;
+}
+
 export async function listVoices(): Promise<VoicesResponse> {
 	const res = await fetch(`${BASE}/api/tts/voices`);
 	if (!res.ok) throw new Error(`voices failed: ${res.status}`);
