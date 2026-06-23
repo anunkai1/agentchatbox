@@ -21,15 +21,75 @@
  * Model switch mid-conversation does NOT respawn — `pi` supports in-process
  * model switching via the `set_model` RPC command.
  *
- * On `--api-key` vs env: we use `--api-key <key>` on the command line
- * (visible in `ps`, but `pi` does not log it or write it to disk). The
- * alternative — injecting the key into the child's env — leaks it to
- * `/proc/<pid>/environ` and is harder to audit. The key value comes
- * from the server's existing `config.apiKeys[provider]` lookup.
+ * On `--api-key` vs env: the provider key is injected into the child's
+ * env (`providerApiKeyEnvVar` → the name `pi` reads for that provider),
+ * NOT passed on the command line. `/proc/<pid>/cmdline` (and `ps`) are
+ * world-readable, so `--api-key <key>` leaks the secret to every user on
+ * the box; the child's env (`/proc/<pid>/environ`) is mode 0400 — owner
+ * and root only. `pi` resolves the key from env at priority 4 (below its
+ * own `--api-key` / auth.json), so this is functionally equivalent while
+ * keeping the key off the command line. The key value comes from the
+ * server's `config.apiKeys[provider]` lookup.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+
+/**
+ * Maps a provider id to the `*_API_KEY` environment-variable name `pi` reads
+ * for it. `pi` falls back to env (priority 4 in its key resolution) when no
+ * `--api-key` arg / auth.json entry is present, so injecting the key here is
+ * the secure alternative to putting it on the command line.
+ *
+ * This mirrors `getApiKeyEnvVars()` in `@earendil-works/pi-ai`, which is not
+ * exported — keep this in sync if pi-ai adds providers. Note these names can
+ * differ from the env vars `config.ts` reads (e.g. pi wants `MINIMAX_API_KEY`,
+ * config.ts reads `MiniMax_API_KEY`); `pi-process.ts` is the only place that
+ * needs pi's own names, so the translation lives here.
+ */
+const PROVIDER_API_KEY_ENV: Record<string, string> = {
+	"github-copilot": "COPILOT_GITHUB_TOKEN",
+	anthropic: "ANTHROPIC_API_KEY",
+	"ant-ling": "ANT_LING_API_KEY",
+	openai: "OPENAI_API_KEY",
+	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
+	nvidia: "NVIDIA_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
+	google: "GEMINI_API_KEY",
+	"google-vertex": "GOOGLE_CLOUD_API_KEY",
+	groq: "GROQ_API_KEY",
+	cerebras: "CEREBRAS_API_KEY",
+	xai: "XAI_API_KEY",
+	openrouter: "OPENROUTER_API_KEY",
+	"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+	zai: "ZAI_API_KEY",
+	"zai-coding-cn": "ZAI_CODING_CN_API_KEY",
+	mistral: "MISTRAL_API_KEY",
+	minimax: "MINIMAX_API_KEY",
+	"minimax-cn": "MINIMAX_CN_API_KEY",
+	moonshotai: "MOONSHOT_API_KEY",
+	"moonshotai-cn": "MOONSHOT_API_KEY",
+	huggingface: "HF_TOKEN",
+	fireworks: "FIREWORKS_API_KEY",
+	together: "TOGETHER_API_KEY",
+	opencode: "OPENCODE_API_KEY",
+	"opencode-go": "OPENCODE_API_KEY",
+	"kimi-coding": "KIMI_API_KEY",
+	"cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
+	"cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
+	xiaomi: "XIAOMI_API_KEY",
+	"xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+	"xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+	"xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+};
+
+/**
+ * Returns the env-var name `pi` reads for `provider`'s API key. Falls back to
+ * the `<PROVIDER>_API_KEY` convention for providers not yet listed above.
+ */
+function providerApiKeyEnvVar(provider: string): string {
+	return PROVIDER_API_KEY_ENV[provider] ?? `${provider.toUpperCase()}_API_KEY`;
+}
 
 export interface PiProcessOptions {
 	/** Path to the `pi` binary, or just "pi" for $PATH resolution. */
@@ -42,7 +102,8 @@ export interface PiProcessOptions {
 	thinkingLevel?: string;
 	/** Optional session id to resume. Omit to start a fresh session. */
 	sessionId?: string;
-	/** API key for the provider. Passed as `--api-key` to the CLI. */
+	/** API key for the provider. Injected into the child's env as the
+	 * provider's `*_API_KEY` var (see `providerApiKeyEnvVar`). */
 	apiKey: string;
 	/** Working directory — the project root `pi` treats as the session scope. */
 	cwd: string;
@@ -91,16 +152,7 @@ export class PiProcess extends EventEmitter {
 
 	constructor(opts: PiProcessOptions) {
 		super();
-		const args = [
-			"--mode",
-			"rpc",
-			"--provider",
-			opts.provider,
-			"--model",
-			opts.modelId,
-			"--api-key",
-			opts.apiKey,
-		];
+		const args = ["--mode", "rpc", "--provider", opts.provider, "--model", opts.modelId];
 		if (opts.thinkingLevel) {
 			args.push("--thinking", opts.thinkingLevel);
 		}
@@ -119,6 +171,7 @@ export class PiProcess extends EventEmitter {
 		const child = spawn(opts.bin, args, {
 			cwd: opts.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
+			env: { ...process.env, [providerApiKeyEnvVar(opts.provider)]: opts.apiKey },
 		});
 		this.child = child;
 		this.pid = child.pid ?? -1;
