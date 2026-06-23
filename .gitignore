@@ -47,3 +47,4 @@ uploads/*
 .hermes/
 AGENTS.md
 scripts/_archive/
+.venv/
