@@ -21,6 +21,7 @@ import { join, resolve } from "node:path";
 import { getModels } from "@earendil-works/pi-ai";
 import cors from "cors";
 import express from "express";
+import { getCapabilities } from "./capabilities.js";
 import { mountChatWs } from "./chat.js";
 import { config } from "./config.js";
 import { projectRoot } from "./paths.js";
@@ -28,7 +29,6 @@ import { EXTRA_MODELS, SDK_PROVIDERS } from "./providers.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
-import { getCapabilities } from "./capabilities.js";
 import { createUploadsRouter } from "./uploads.js";
 
 mkdirSync(config.uploadsDir, { recursive: true });
@@ -240,10 +240,7 @@ app.get("/api/capabilities", async (_req, res) => {
 		const caps = await getCapabilities();
 		res.json(caps);
 	} catch (e) {
-		console.error(
-			"[capabilities] failed:",
-			e instanceof Error ? e.message : e,
-		);
+		console.error("[capabilities] failed:", e instanceof Error ? e.message : e);
 		res.json({ packages: [], tools: [], skills: [] });
 	}
 });

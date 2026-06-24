@@ -15,8 +15,8 @@
  * into state.lastAssistant.
  */
 
-import { $, el, type LiveAssistantDom } from "./dom.js";
 import type { SessionSummary } from "../shared/protocol.js";
+import { $, el, type LiveAssistantDom } from "./dom.js";
 import { type PersistedMessage, state } from "./state.js";
 
 export function autoSize(): void {
@@ -56,11 +56,7 @@ export function updateWelcomeVisibility(): void {
 
 export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	if (m.kind === "user") {
-		return el(
-			"div",
-			{ class: "row row-user" },
-			el("div", { class: "bubble" }, m.text),
-		);
+		return el("div", { class: "row row-user" }, el("div", { class: "bubble" }, m.text));
 	}
 	if (m.kind === "assistant") {
 		const wrap = el("div", { class: "row row-assistant" });
@@ -106,11 +102,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		return wrap;
 	}
 	// error
-	return el(
-		"div",
-		{ class: "row row-error" },
-		el("div", { class: "body" }, m.text),
-	);
+	return el("div", { class: "row row-error" }, el("div", { class: "body" }, m.text));
 }
 
 /**
@@ -290,13 +282,7 @@ export function finalizeToolCall(
 }
 
 export function appendError(text: string): void {
-	appendNode(
-		el(
-			"div",
-			{ class: "row row-error" },
-			el("div", { class: "body" }, text),
-		),
-	);
+	appendNode(el("div", { class: "row row-error" }, el("div", { class: "body" }, text)));
 }
 
 // ---------------------------------------------------------------------------
@@ -308,14 +294,20 @@ function refreshCapabilitiesBadge(): void {
 	const caps = state.capabilities;
 	const badge = document.getElementById("caps-badge");
 	if (!badge) return;
-	if (!caps || (caps.tools.length === 0 && caps.skills.length === 0 && caps.packages.length === 0)) {
+	if (
+		!caps ||
+		(caps.tools.length === 0 && caps.skills.length === 0 && caps.packages.length === 0)
+	) {
 		badge.style.display = "none";
 		return;
 	}
 	const parts: string[] = [];
-	if (caps.tools.length) parts.push(`${caps.tools.length} tool${caps.tools.length !== 1 ? "s" : ""}`);
-	if (caps.skills.length) parts.push(`${caps.skills.length} skill${caps.skills.length !== 1 ? "s" : ""}`);
-	badge.textContent = parts.join(" · ") || `${caps.packages.length} pkg${caps.packages.length !== 1 ? "s" : ""}`;
+	if (caps.tools.length)
+		parts.push(`${caps.tools.length} tool${caps.tools.length !== 1 ? "s" : ""}`);
+	if (caps.skills.length)
+		parts.push(`${caps.skills.length} skill${caps.skills.length !== 1 ? "s" : ""}`);
+	badge.textContent =
+		parts.join(" · ") || `${caps.packages.length} pkg${caps.packages.length !== 1 ? "s" : ""}`;
 	badge.style.display = "";
 }
 
@@ -377,7 +369,9 @@ export function toggleCapabilitiesPopover(): void {
 		box.append(el("p", { class: "caps-empty" }, "No extensions loaded."));
 	}
 
-	box.append(el("button", { class: "btn caps-close-btn", text: "Close", onclick: () => overlay.remove() }));
+	box.append(
+		el("button", { class: "btn caps-close-btn", text: "Close", onclick: () => overlay.remove() }),
+	);
 	overlay.append(box);
 	document.body.append(overlay);
 }
@@ -544,7 +538,11 @@ export function renderShell(): void {
 			"think: …",
 		),
 		el("button", { class: "picker-btn", id: "voice-picker", title: "TTS voice" }, "voice: …"),
-		el("button", { class: "picker-btn", id: "speed-picker", title: "TTS playback speed" }, "speed: …"),
+		el(
+			"button",
+			{ class: "picker-btn", id: "speed-picker", title: "TTS playback speed" },
+			"speed: …",
+		),
 		el(
 			"button",
 			{
@@ -761,7 +759,8 @@ const WELCOME_SUGGESTIONS: { title: string; sub: string; prompt: string }[] = [
 	{
 		title: "Write code",
 		sub: "Generate a function or script",
-		prompt: "Write a Python function that finds all prime numbers up to N using the Sieve of Eratosthenes.",
+		prompt:
+			"Write a Python function that finds all prime numbers up to N using the Sieve of Eratosthenes.",
 	},
 	{
 		title: "Brainstorm ideas",

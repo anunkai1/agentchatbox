@@ -635,13 +635,15 @@ export function openOverflowMenu(): void {
 		toggleAutoSpeak();
 		ttsLine.querySelector(".overflow-value")!.textContent = state.autoSpeak ? "on" : "off";
 	});
-	
+
 	// --- loaded capabilities (mobile: badge hidden, show in overflow) ---
 	if (state.capabilities) {
 		const caps = state.capabilities;
 		const parts: string[] = [];
-		if (caps.tools.length) parts.push(`${caps.tools.length} tool${caps.tools.length !== 1 ? "s" : ""}`);
-		if (caps.skills.length) parts.push(`${caps.skills.length} skill${caps.skills.length !== 1 ? "s" : ""}`);
+		if (caps.tools.length)
+			parts.push(`${caps.tools.length} tool${caps.tools.length !== 1 ? "s" : ""}`);
+		if (caps.skills.length)
+			parts.push(`${caps.skills.length} skill${caps.skills.length !== 1 ? "s" : ""}`);
 		if (parts.length > 0) {
 			const capsLine = el("div", { class: "overflow-row" });
 			capsLine.append(el("div", { class: "overflow-label" }, "loaded"));
@@ -653,7 +655,7 @@ export function openOverflowMenu(): void {
 			box.append(capsLine);
 		}
 	}
-box.append(ttsLine);
+	box.append(ttsLine);
 
 	box.append(
 		el("button", {

@@ -56,10 +56,10 @@
 	--chat-max: 820px;
 
 	/* Type */
-	--font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-		"Helvetica Neue", Arial, "Noto Sans", sans-serif;
-	--font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Code",
-		Consolas, monospace;
+	--font-sans:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans",
+		sans-serif;
+	--font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Code", Consolas, monospace;
 }
 
 * {
@@ -159,7 +159,9 @@ body {
 	border-radius: var(--radius-sm);
 	cursor: pointer;
 	color: var(--text-secondary);
-	transition: background 0.12s, color 0.12s;
+	transition:
+		background 0.12s,
+		color 0.12s;
 }
 .session-item:hover {
 	background: var(--surface-hover);
@@ -234,7 +236,9 @@ body {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	transition: background 0.12s, color 0.12s;
+	transition:
+		background 0.12s,
+		color 0.12s;
 }
 .icon-btn:hover {
 	background: var(--surface-hover);
@@ -251,7 +255,10 @@ body {
 	cursor: pointer;
 	font-family: inherit;
 	font-size: 12.5px;
-	transition: background 0.12s, border-color 0.12s, color 0.12s;
+	transition:
+		background 0.12s,
+		border-color 0.12s,
+		color 0.12s;
 }
 .picker-btn:hover {
 	background: var(--surface-hover);
@@ -344,7 +351,9 @@ body {
 	color: var(--text);
 	font-family: inherit;
 	font-size: 14px;
-	transition: background 0.12s, border-color 0.12s;
+	transition:
+		background 0.12s,
+		border-color 0.12s;
 }
 .suggestion:hover {
 	background: var(--surface-hover);
@@ -556,7 +565,9 @@ body {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
-	transition: background 0.12s, color 0.12s;
+	transition:
+		background 0.12s,
+		color 0.12s;
 }
 .speak-btn:hover {
 	background: var(--surface-hover);
@@ -594,7 +605,9 @@ body {
 	display: flex;
 	align-items: flex-end;
 	gap: 8px;
-	transition: border-color 0.15s, box-shadow 0.15s;
+	transition:
+		border-color 0.15s,
+		box-shadow 0.15s;
 }
 .composer:focus-within {
 	border-color: var(--accent-border);
@@ -640,7 +653,9 @@ body {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	transition: background 0.15s, transform 0.1s;
+	transition:
+		background 0.15s,
+		transform 0.1s;
 }
 .send-btn:hover {
 	background: var(--accent-hover);
@@ -734,7 +749,9 @@ body {
 	border-radius: var(--radius);
 	margin-bottom: 6px;
 	cursor: pointer;
-	transition: background 0.12s, border-color 0.12s;
+	transition:
+		background 0.12s,
+		border-color 0.12s;
 }
 .model-row:hover,
 .session-row:hover {
@@ -836,93 +853,92 @@ body {
 /* Mobile / narrow screens                                             */
 /* ------------------------------------------------------------------ */
 
-
 /* ---------- capabilities badge ---------- */
 .caps-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  background: #1a2a1a;
-  color: #9ece6a;
-  border: 1px solid #2a4a2a;
-  border-radius: 10px;
-  cursor: pointer;
-  white-space: nowrap;
+	font-size: 11px;
+	padding: 2px 8px;
+	background: #1a2a1a;
+	color: #9ece6a;
+	border: 1px solid #2a4a2a;
+	border-radius: 10px;
+	cursor: pointer;
+	white-space: nowrap;
 }
 .caps-badge:hover {
-  background: #243624;
+	background: #243624;
 }
 
 /* ---------- capabilities popover ---------- */
 .caps-popover-box {
-  background: #161616;
-  border: 1px solid #2a2a2a;
-  border-radius: 8px;
-  padding: 16px;
-  max-width: 420px;
-  max-height: 70vh;
-  overflow-y: auto;
-  font-size: 13px;
+	background: #161616;
+	border: 1px solid #2a2a2a;
+	border-radius: 8px;
+	padding: 16px;
+	max-width: 420px;
+	max-height: 70vh;
+	overflow-y: auto;
+	font-size: 13px;
 }
 .caps-popover-box h3 {
-  margin: 0 0 12px;
-  font-size: 14px;
-  font-weight: 600;
+	margin: 0 0 12px;
+	font-size: 14px;
+	font-weight: 600;
 }
 .caps-section-header {
-  margin: 12px 0 4px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid #2a2a2a;
-  font-weight: 600;
-  font-size: 11px;
-  text-transform: uppercase;
-  color: #9aa0a6;
+	margin: 12px 0 4px;
+	padding-bottom: 4px;
+	border-bottom: 1px solid #2a2a2a;
+	font-weight: 600;
+	font-size: 11px;
+	text-transform: uppercase;
+	color: #9aa0a6;
 }
 .caps-section-header:first-of-type {
-  margin-top: 0;
+	margin-top: 0;
 }
 .caps-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 3px 4px;
-  gap: 12px;
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	padding: 3px 4px;
+	gap: 12px;
 }
 .caps-row + .caps-row {
-  border-top: 1px solid #1f1f1f;
+	border-top: 1px solid #1f1f1f;
 }
 .caps-name {
-  font-weight: 500;
-  color: #d4d4d4;
+	font-weight: 500;
+	color: #d4d4d4;
 }
 .caps-pkg {
-  font-size: 11px;
-  color: #5a5a5a;
-  flex-shrink: 0;
+	font-size: 11px;
+	color: #5a5a5a;
+	flex-shrink: 0;
 }
 .caps-pkg-row {
-  flex-wrap: wrap;
+	flex-wrap: wrap;
 }
 .caps-desc {
-  font-size: 11px;
-  color: #6a6a6a;
-  flex-basis: 100%;
-  margin-top: 2px;
+	font-size: 11px;
+	color: #6a6a6a;
+	flex-basis: 100%;
+	margin-top: 2px;
 }
 .caps-empty {
-  color: #5a5a5a;
-  font-size: 12px;
-  margin: 12px 0;
+	color: #5a5a5a;
+	font-size: 12px;
+	margin: 12px 0;
 }
 .caps-close-btn {
-  margin-top: 12px;
-  width: 100%;
+	margin-top: 12px;
+	width: 100%;
 }
 
 /* Mobile: move badge into overflow on narrow screens */
 @media (max-width: 720px) {
-  .caps-badge {
-    display: none !important;
-  }
+	.caps-badge {
+		display: none !important;
+	}
 }
 
 @media (max-width: 720px) {

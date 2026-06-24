@@ -367,16 +367,16 @@ async function boot(): Promise<void> {
 			reasoning: m.reasoning,
 		}));
 		// Fetch capabilities (tools, skills, packages) for the header badge.
-	getCapabilities()
-		.then((caps) => {
-			state.capabilities = caps;
-			void import("./render.js").then(({ refreshStatus }) => refreshStatus());
-		})
-		.catch(() => {
-			// capabilities fetch is best-effort — don't block the app
-		});
+		getCapabilities()
+			.then((caps) => {
+				state.capabilities = caps;
+				void import("./render.js").then(({ refreshStatus }) => refreshStatus());
+			})
+			.catch(() => {
+				// capabilities fetch is best-effort — don't block the app
+			});
 
-	// Fall back to the legacy single-provider shape if /api/models
+		// Fall back to the legacy single-provider shape if /api/models
 		// returns nothing (older server) — we still get *something* in
 		// the picker so the user isn't stuck.
 		if (state.availableModels.length === 0) {
@@ -469,9 +469,7 @@ async function boot(): Promise<void> {
 	// Also refresh the sidebar session list.
 	chatClient.onSessionsUpdated((sessions) => {
 		renderSessionsIntoPicker(sessions);
-		void import("./render.js").then(({ renderSidebarSessions }) =>
-			renderSidebarSessions(sessions),
-		);
+		void import("./render.js").then(({ renderSidebarSessions }) => renderSidebarSessions(sessions));
 	});
 	// On resume: replace the renderer cache with the server's replay
 	// transcript, then re-render the chat scrollback so the past
