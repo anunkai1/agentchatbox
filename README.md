@@ -9,6 +9,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - Streaming responses, model picker, thinking levels
 - **Steering** — type while the agent is working and your message is queued for the next turn (mirrors the CLI; delivered after the current turn's tool calls finish)
 - File / image / voice attachments (image bytes go straight to multimodal models)
+- **Agent → you file delivery** — every tool call that touches a `path` (write / edit / read) gets a `⬇ download` link on its card, served from the project dir via `GET /api/file`
 - Persistent sessions on disk (`pi` manages JSONL files — survive page reloads and server restarts)
 - Local TTS (Piper, 1.4× playback) and STT (faster-whisper) — no paid cloud APIs
 - Slash commands, model switching mid-conversation, session history / resume / rename
@@ -20,6 +21,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 Browser (vanilla DOM, no framework)
   │  WS /api/chat       — bidirectional: init handshake, prompts ↔ pi events
   │  POST /api/upload   — multipart file upload
+  │  GET  /api/file    — download a file the agent created (path-contained to piCwd)
   │  POST /api/transcribe — audio → text (Whisper)
   │  POST /api/tts      — text → audio (Piper)
   │  GET  /api/models   — list of models with configured API keys
@@ -66,6 +68,7 @@ src/
     paths.ts              # projectRoot (cwd-independent)
     providers.ts          # SDK_PROVIDERS + KNOWN_PROVIDERS (source of truth for provider list)
     uploads.ts            # /api/upload
+    files.ts              # /api/file (download agent-created files, piCwd-contained)
     transcribe.ts         # /api/transcribe (faster-whisper)
     tts.ts                # /api/tts (piper)
     proxy.ts              # legacy POST /api/stream (SSE) — back-compat only

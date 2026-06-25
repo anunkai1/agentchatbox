@@ -17,6 +17,7 @@
 
 import type { SessionSummary } from "../shared/protocol.js";
 import { $, el, type LiveAssistantDom } from "./dom.js";
+import { setRichText } from "./linkify.js";
 import { type PersistedMessage, state } from "./state.js";
 
 export function autoSize(): void {
@@ -97,7 +98,8 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 			});
 			body.append(t);
 		}
-		const text = el("pre", { class: "text" }, m.text || " ");
+		const text = el("pre", { class: "text" }, " ");
+		setRichText(text, m.text || " ");
 		body.append(text);
 		body.append(makeSpeakButton(() => m.text));
 		wrap.append(body);
@@ -106,14 +108,15 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	if (m.kind === "tool") {
 		const wrap = el("div", { class: "row row-tool" });
 		const card = el("div", { class: "tool-card" });
-		card.append(
-			el(
-				"div",
-				{ class: "tool-head" },
-				el("span", { class: "tool-icon" }, "⚙"),
-				el("span", { class: "tool-name" }, `${m.name} ${summarizeArgs(m.args)}`),
-			),
+		const head = el(
+			"div",
+			{ class: "tool-head" },
+			el("span", { class: "tool-icon" }, "⚙"),
+			el("span", { class: "tool-name" }, `${m.name} ${summarizeArgs(m.args)}`),
 		);
+		const toolPath = toolPathFromArgs(m.args);
+		if (toolPath) head.append(makeFileDownloadLink(toolPath));
+		card.append(head);
 		if (m.result !== undefined) {
 			card.append(el("pre", { class: `tool-result ${m.isError ? "tool-error" : ""}` }, m.result));
 		} else {
@@ -176,6 +179,46 @@ export function summarizeArgs(args: unknown): string {
 		return `${a.path} (${a.content.length} chars)`;
 	if (typeof a.path === "string") return a.path;
 	return JSON.stringify(a);
+}
+
+/**
+ * Extract a filesystem path from a tool call's args, if it has one.
+ * Covers the write / edit / read tools (which take `path`) and any
+ * future tool that follows the same convention. Returns null for
+ * tools whose args don't carry a path (bash, web_search, …).
+ */
+function toolPathFromArgs(args: unknown): string | null {
+	if (!args || typeof args !== "object") return null;
+	const a = args as Record<string, unknown>;
+	return typeof a.path === "string" && a.path.length > 0 ? a.path : null;
+}
+
+/**
+ * Build a download link anchor for a file the agent touched. Points
+ * at the server's /api/file route, which streams any file inside the
+ * agent project directory. Returns null if the path is empty.
+ */
+function makeFileDownloadLink(path: string): HTMLAnchorElement {
+	const url = `/api/file?path=${encodeURIComponent(path)}`;
+	return el(
+		"a",
+		{
+			class: "tool-download",
+			href: url,
+			download: "", // hint the browser to save rather than navigate
+			target: "_blank",
+			rel: "noopener",
+			title: `Download ${path}`,
+			onclick: (e: Event) => {
+				// Allow the default anchor navigation to happen (the `download`
+				// attribute + Content-Disposition: attachment triggers a save).
+				// Stop propagation so the click doesn't bubble into any
+				// future card-level handler.
+				e.stopPropagation();
+			},
+		},
+		"⬇ download",
+	) as HTMLAnchorElement;
 }
 
 /**
@@ -266,14 +309,15 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 export function appendToolCall(name: string, args: unknown, toolCallId: string): void {
 	const wrap = el("div", { class: "row row-tool" });
 	const card = el("div", { class: "tool-card" });
-	card.append(
-		el(
-			"div",
-			{ class: "tool-head" },
-			el("span", { class: "tool-icon" }, "⚙"),
-			el("span", { class: "tool-name" }, `${name} ${summarizeArgs(args)}`),
-		),
+	const head = el(
+		"div",
+		{ class: "tool-head" },
+		el("span", { class: "tool-icon" }, "⚙"),
+		el("span", { class: "tool-name" }, `${name} ${summarizeArgs(args)}`),
 	);
+	const toolPath = toolPathFromArgs(args);
+	if (toolPath) head.append(makeFileDownloadLink(toolPath));
+	card.append(head);
 	const pending = el("div", { class: "tool-pending" }, "running…");
 	card.append(pending);
 	wrap.append(card);

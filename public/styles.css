@@ -566,6 +566,17 @@ body {
 	color: var(--accent);
 	margin-left: 1px;
 }
+/* Inline links rendered inside assistant text (markdown [text](url)
+   and bare URLs — see src/client/linkify.ts). Open in a new tab. */
+.body .text .rich-link {
+	color: var(--accent);
+	text-decoration: underline;
+	word-break: break-all;
+}
+.body .text .rich-link:hover {
+	text-decoration: none;
+	opacity: 0.85;
+}
 @keyframes blink {
 	50% {
 		opacity: 0;
@@ -633,6 +644,23 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	font-family: var(--font-mono);
+}
+.tool-download {
+	margin-left: auto;
+	color: var(--accent);
+	font-size: 12px;
+	font-weight: 600;
+	text-decoration: none;
+	white-space: nowrap;
+	padding: 2px 8px;
+	border-radius: var(--radius);
+	border: 1px solid var(--border);
+	background: var(--surface);
+	transition: background 0.12s ease, border-color 0.12s ease;
+}
+.tool-download:hover {
+	background: var(--border);
+	border-color: var(--accent);
 }
 .tool-pending {
 	color: var(--text-muted);

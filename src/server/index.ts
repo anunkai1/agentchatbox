@@ -23,6 +23,7 @@ import cors from "cors";
 import express from "express";
 import { getCapabilities } from "./capabilities.js";
 import { mountChatWs } from "./chat.js";
+import { createFilesRouter } from "./files.js";
 import { config } from "./config.js";
 import { log } from "./logger.js";
 import { projectRoot } from "./paths.js";
@@ -68,6 +69,7 @@ try {
 
 // API routes
 app.use("/api/upload", createUploadsRouter());
+app.use("/api/file", createFilesRouter());
 app.use("/api/transcribe", createTranscribeRouter());
 app.use("/api/tts", createTtsRouter());
 

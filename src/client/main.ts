@@ -55,6 +55,7 @@ import {
 import { type PersistedMessage, state } from "./state.js";
 import { handleFileAttach, handleVoiceRecord, toggleAutoSpeak } from "./voice.js";
 import { createChatClient } from "./ws.js";
+import { setRichText } from "./linkify.js";
 
 // ---------------------------------------------------------------------------
 // History (↑/↓)
@@ -362,7 +363,7 @@ function onEvent(event: Record<string, unknown>): void {
 			// render.ts) always replays the final text.
 			state.lastAssistantText = text;
 			if (lastAssistantDom) {
-				lastAssistantDom.textPre.textContent = text || " ";
+				setRichText(lastAssistantDom.textPre, text || " ");
 				// Stream thinking content into the (collapsed) thinking block.
 				// If this is the first non-empty chunk, remove the
 				// hidden-thinking marker so the toggle is visible.
@@ -588,14 +589,25 @@ async function boot(): Promise<void> {
 	});
 	// On resume: replace the renderer cache with the server's replay
 	// transcript, then re-render the chat scrollback so the past
-	// conversation is visible.
+	// conversation is visible. On a silent reconnect (same session we
+	// already have displayed), skip the re-render if the transcript
+	// matches what's on screen — avoids a flicker + scroll jump every
+	// time the mobile WS drops and reconnects.
 	chatClient.onTranscript((sessionId, messages) => {
+		const projected = messages.map(projectToPersisted);
+		const sameSession = state.sessionId === sessionId;
+		const sameLength = state.messages.length === projected.length;
+		const lastMatches =
+			sameLength &&
+			(state.messages.length === 0 ||
+				JSON.stringify(state.messages[state.messages.length - 1]) ===
+					JSON.stringify(projected[projected.length - 1]));
 		state.sessionId = sessionId;
-		state.messages = messages.map(projectToPersisted);
-		// Re-render: simplest approach is to nuke the messages div
-		// and re-append every cached message. The render layer's
-		// renderMessageNode is the source of truth for what a
-		// single PersistedMessage looks like.
+		state.messages = projected;
+		// Only nuke + rebuild the DOM if something actually changed.
+		// On a background reconnect for the same session this is a no-op,
+		// preserving scroll position and avoiding a flicker.
+		if (sameSession && sameLength && lastMatches) return;
 		void import("./render.js").then(({ renderShell }) => {
 			renderShell();
 		});
@@ -630,7 +642,18 @@ async function boot(): Promise<void> {
 		const modelId = state.currentModelId ?? defaultModel?.id ?? "glm-5.2";
 		const provider = state.currentProvider ?? defaultModel?.provider ?? "zai";
 		const thinkingLevel = state.currentThinking;
-		chatClient.init({ provider, modelId, thinkingLevel });
+		// On reconnect (after a dropped/stalled connection), pass the
+		// current session id so the server spawns `pi --session <id>`
+		// and resumes the prior conversation — instead of starting a
+		// fresh session with no context. On the very first connect,
+		// state.sessionId is null, so this is omitted and a new session
+		// is created as expected.
+		chatClient.init({
+			provider,
+			modelId,
+			thinkingLevel,
+			...(state.sessionId ? { sessionId: state.sessionId } : {}),
+		});
 	};
 	chatClient.onStatus(onWsOpen);
 
