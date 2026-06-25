@@ -43,6 +43,18 @@ import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 /** Every live `pi --mode rpc` child, so SIGTERM can reach all of them. */
 const liveChildren = new Set<PiProcess>();
 
+/**
+ * Heartbeat interval. Every connection gets a ws-level ping every
+ * HEARTBEAT_INTERVAL_MS; if no pong comes back within HEARTBEAT_TIMEOUT_MS
+ * we terminate the socket. This is what catches the Android case:
+ * when the OS backgrounds the tab it suspends JS, so the browser stops
+ * responding to ping frames, and we forcibly close the dead connection
+ * instead of holding the `pi` child open for minutes waiting on a TCP
+ * timeout. The client's own watchdog also pings at the app level.
+ */
+const HEARTBEAT_INTERVAL_MS = 20_000;
+const HEARTBEAT_TIMEOUT_MS = 30_000;
+
 // Register a single SIGTERM handler that kills every child before the
 // process exits. This is in addition to the server.close() handler in
 // index.ts — both are needed because SIGTERM to the server process
@@ -60,7 +72,51 @@ process.on("SIGTERM", () => {
 export function mountChatWs(server: HttpServer): void {
 	const wss = new WebSocketServer({ server, path: "/api/chat" });
 
+	// Server-wide heartbeat. pings every client on a fixed cadence and
+	// terminates any that haven't ponged back within the timeout. Each
+	// connection also tracks `isAlive` flipped to false on ping and back
+	// to true on the pong handler below.
+	const heartbeatTimer = setInterval(() => {
+		for (const ws of wss.clients) {
+			const s = ws as PiSocket & { isAlive?: boolean };
+			if (s.isAlive === false) {
+				// No pong since last ping — the client is gone (Android
+				// suspended the tab, network dropped, etc.). Terminate
+				// rather than hold the `pi` child open for a TCP timeout.
+				try {
+					ws.terminate();
+				} catch {
+					/* ignore */
+				}
+				continue;
+			}
+			s.isAlive = false;
+			try {
+				ws.ping();
+			} catch {
+				/* socket may have just closed */
+			}
+		}
+	}, HEARTBEAT_INTERVAL_MS);
+	// Don't keep the event loop alive just for the heartbeat.
+	if (typeof heartbeatTimer.unref === "function") heartbeatTimer.unref();
+
 	wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
+		const s = ws as PiSocket & { isAlive?: boolean };
+		s.isAlive = true;
+		// Browser automatically replies to ping frames with pong. Flip
+		// isAlive back so the next heartbeat cycle doesn't terminate us.
+		ws.on("pong", () => {
+			s.isAlive = true;
+		});
+		// Also send an app-level ping so the client watchdog (which only
+		// sees application messages, not ping frames) can measure liveness
+		// independently of the ws library's frame-level pings.
+		const appPing = setInterval(() => {
+			send(ws as PiSocket, { type: "ping" });
+		}, HEARTBEAT_INTERVAL_MS);
+		ws.on("close", () => clearInterval(appPing));
+
 		handleConnection(ws as PiSocket).catch((err) => {
 			const message = err instanceof Error ? err.message : String(err);
 			sendError(ws, `failed to start session: ${message}`);
@@ -71,6 +127,8 @@ export function mountChatWs(server: HttpServer): void {
 			}
 		});
 	});
+
+	wss.on("close", () => clearInterval(heartbeatTimer));
 
 	log.info("chat ws listening", { path: "/api/chat", piCwd: config.piCwd });
 }

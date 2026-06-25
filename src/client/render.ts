@@ -440,7 +440,13 @@ export function refreshStatus(): void {
 	if (state.pendingSteerCount > 0) parts.push(`⟳ ${state.pendingSteerCount} queued`);
 	if (state.ttsInFlight > 0) parts.push("● tts");
 	if (state.audioPlaying) parts.push("♪ playing");
-	if (state.connectionStatus !== "open") parts.push(`[${state.connectionStatus}]`);
+	if (state.connectionStatus !== "open") {
+		const tag =
+			state.connectionStatus === "stalled"
+				? "⚠ stalled — reconnecting"
+				: `[${state.connectionStatus}]`;
+		parts.push(tag);
+	}
 	$("#status-bar").textContent = parts.join(" · ");
 	refreshCapabilitiesBadge();
 

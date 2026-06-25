@@ -62,6 +62,11 @@ export interface VoicesResponse {
 //       on resume: the prior transcript replayed before live events flow
 //   { type: "error", message }
 //       unrecoverable error (child spawn failed, etc.)
+//   { type: "ping" }
+//       heartbeat sent every ~20s. The client uses it to detect
+//       dead connections (e.g. Android killing the WS when the tab
+//       is backgrounded) — if no message arrives for ~40s the client
+//       treats the socket as wedged and reconnects.
 //
 // Client → server:
 //   { type: "init", provider, modelId, thinkingLevel, sessionId? }
@@ -147,6 +152,7 @@ export type ServerMessage =
 			provider: string;
 			thinkingLevel: ThinkingLevel;
 	  }
+	| { type: "ping" }
 	| { type: "error"; message: string };
 
 /** Client → server. */

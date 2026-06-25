@@ -88,12 +88,23 @@ export interface ChatClient {
 }
 
 const RECONNECT_BACKOFF_MS = [500, 1000, 2000, 5000, 10000];
+/** Server sends an app-level ping every ~20s (see chat.ts HEARTBEAT_INTERVAL_MS). */
+const HEARTBEAT_INTERVAL_MS = 20_000;
+/** No message (heartbeat or otherwise) for this long => socket is wedged. ~2x heartbeat. */
+const STALE_AFTER_MS = 2 * HEARTBEAT_INTERVAL_MS;
+/** How often the watchdog wakes up to check for staleness. */
+const WATCHDOG_TICK_MS = 5_000;
 
 export function createChatClient(): ChatClient {
 	let ws: WebSocket | null = null;
 	let attempt = 0;
 	let manualClose = false;
 	let inited = false;
+	let currentStatus: "connecting" | "open" | "closed" | "stalled" = "connecting";
+	/** Timestamp of the last message received from the server (any type). */
+	let lastMessageAt = Date.now();
+	/** Watchdog interval id, shared across reconnects. */
+	let watchdog: ReturnType<typeof setInterval> | null = null;
 
 	const eventListeners = new Set<EventListener>();
 	const readyListeners = new Set<ReadyListener>();
@@ -103,7 +114,8 @@ export function createChatClient(): ChatClient {
 	const transcriptListeners = new Set<TranscriptListener>();
 	const sessionResumedListeners = new Set<SessionResumedListener>();
 
-	function setStatus(status: "connecting" | "open" | "closed") {
+	function setStatus(status: "connecting" | "open" | "closed" | "stalled") {
+		currentStatus = status;
 		for (const l of statusListeners) l(status);
 	}
 
@@ -121,6 +133,15 @@ export function createChatClient(): ChatClient {
 		});
 
 		ws.addEventListener("message", (e) => {
+			// Any frame from the server proves the connection is alive —
+			// this includes the heartbeat `{type:"ping"}`. Refreshing here
+			// is what lets the watchdog detect a wedged socket.
+			lastMessageAt = Date.now();
+			if (currentStatus === "stalled") {
+				// Server came back alive (e.g. transient stall). Clear the
+				// warning indicator.
+				setStatus("open");
+			}
 			let msg: Record<string, unknown> & { type?: string };
 			try {
 				msg = JSON.parse(e.data as string) as typeof msg;
@@ -129,6 +150,10 @@ export function createChatClient(): ChatClient {
 				return;
 			}
 			switch (msg.type) {
+				case "ping":
+					// Heartbeat from the server. Already accounted for by
+					// refreshing lastMessageAt above; nothing else to do.
+					break;
 				case "ready":
 					for (const l of readyListeners) {
 						l({
@@ -196,6 +221,39 @@ export function createChatClient(): ChatClient {
 	}
 
 	connect();
+
+	/**
+	 * Liveness watchdog. Runs on a fixed cadence and checks whether we've
+	 * heard from the server recently. If the socket claims OPEN but we
+	 * haven't received any frame (heartbeat or otherwise) within
+	 * STALE_AFTER_MS, the connection is wedged — usually because Android
+	 * suspended the tab and the OS killed the underlying TCP socket while
+	 * the browser still believes it's OPEN. We surface a "stalled" status
+	 * and force a reconnect so the user is told something is wrong and we
+	 * recover, instead of hanging silently until the browser's own TCP
+	 * timeout fires (which can take minutes).
+	 */
+	function checkStale() {
+		if (currentStatus !== "open") return;
+		if (Date.now() - lastMessageAt < STALE_AFTER_MS) return;
+		// Wedged. Tell the UI, then force a reconnect.
+		setStatus("stalled");
+		try {
+			if (ws) ws.close();
+		} catch {
+			/* ignore */
+		}
+		// The close handler will schedule a reconnect; reset attempt so
+		// it happens fast rather than after a long backoff.
+		attempt = 0;
+	}
+	watchdog = setInterval(checkStale, WATCHDOG_TICK_MS);
+	// When the user returns to a backgrounded tab, JS resumes. Run the
+	// check immediately instead of waiting up to WATCHDOG_TICK_MS for the
+	// next tick — this is the primary case the watchdog exists for.
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "visible") checkStale();
+	});
 
 	return {
 		init: (opts) => {
@@ -269,6 +327,7 @@ export function createChatClient(): ChatClient {
 		},
 		close: () => {
 			manualClose = true;
+			if (watchdog) clearInterval(watchdog);
 			if (ws) ws.close();
 		},
 	};

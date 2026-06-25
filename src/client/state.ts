@@ -88,7 +88,13 @@ export interface AppState {
 	 * the picture, not just the markdown link.
 	 */
 	uploadedImages: Map<string, { data: string; mimeType: string; filename: string }>;
-	connectionStatus: "connecting" | "open" | "closed";
+	/**
+		 * Connection state reported by the WS client. "stalled" means the
+		 * socket reports OPEN but no messages (including heartbeats) have
+		 * arrived for a while — typically Android backgrounding the tab.
+		 * The client will be actively reconnecting when this is set.
+		 */
+	connectionStatus: "connecting" | "open" | "closed" | "stalled";
 	/** When true, every final assistant message is spoken automatically. */
 	autoSpeak: boolean;
 	/** Currently selected TTS voice id. */

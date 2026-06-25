@@ -625,7 +625,7 @@ async function boot(): Promise<void> {
 	// handler firing on every "open", the reconnected WS never sends
 	// `init`, the server sits waiting for it, and the user's next message
 	// hits "prompt sent before init".
-	const onWsOpen = (s: "connecting" | "open" | "closed") => {
+	const onWsOpen = (s: "connecting" | "open" | "closed" | "stalled") => {
 		if (s !== "open") return;
 		const modelId = state.currentModelId ?? defaultModel?.id ?? "glm-5.2";
 		const provider = state.currentProvider ?? defaultModel?.provider ?? "zai";
