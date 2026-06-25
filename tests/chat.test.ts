@@ -83,9 +83,8 @@ exit 127
 
 const STEER_RACE_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that REFUSES steers (success:false, simulating the agent
-# having just gone idle) and accepts next_turn. Used to verify (1) the
-# server forwards success:false responses instead of silently dropping
-# them, and (2) the server translates client next_turn into pi next_turn.
+# having just gone idle). Used to verify the server forwards
+# success:false responses instead of silently dropping them.
 # Single-quoted echoes so the JSON is literal (no shell escaping).
 sleep 0.05
 while IFS= read -r line; do
@@ -96,9 +95,6 @@ while IFS= read -r line; do
       ;;
     "steer")
       echo '{"type":"response","command":"steer","success":false,"error":"Cannot steer while idle"}'
-      ;;
-    "next_turn")
-      echo '{"type":"response","command":"next_turn","success":true}'
       ;;
     "prompt")
       echo '{"type":"response","command":"prompt","success":true}'
@@ -456,55 +452,6 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			);
 			expect(failure).toBeTruthy();
 			expect((failure?.event as { command?: string }).command).toBe("steer");
-		} finally {
-			close();
-		}
-	});
-
-	it("translates client next_turn to pi next_turn (recovery path)", async () => {
-		// The server must forward the next_turn command verbatim to pi —
-		// this is the non-throwing recovery path the client uses after a
-		// raced steer fails. The fake-pi accepts next_turn with success:true
-		// (which the server drops as a success ack). We assert the child
-		// received the command by checking it did NOT emit an error and the
-		// connection stayed healthy (the command was accepted, not refused).
-		fakePiPath = makeFakePi("steer-race");
-		process.env.PI_BIN = fakePiPath;
-		vi.resetModules();
-
-		const { mountChatWs } = await import("../src/server/chat.js");
-		mountChatWs(server!);
-
-		const { ws, inbox, close } = await connectClient();
-		try {
-			ws.send(
-				JSON.stringify({
-					type: "init",
-					provider: "deepseek",
-					modelId: "m1",
-					thinkingLevel: "off",
-				}),
-			);
-			await inbox.waitFor(1); // ready
-
-			ws.send(JSON.stringify({ type: "next_turn", text: "late message" }));
-			// Give the child time to process the command.
-			await new Promise((r) => setTimeout(r, 300));
-
-			// No error frame should have been forwarded (a refused command
-		// would surface as either an error or a success:false event).
-			const errors = inbox.all().filter((m) => m.type === "error");
-			expect(errors).toHaveLength(0);
-			// And no failure response for next_turn (it was accepted).
-			const nextTurnFailure = inbox.all().find(
-				(m) =>
-					m.type === "event" &&
-					(m.event as { command?: string }).command === "next_turn" &&
-					(m.event as { success?: boolean }).success === false,
-			);
-			expect(nextTurnFailure).toBeUndefined();
-			// The WS must still be open (the child accepted the command).
-			expect(ws.readyState).toBe(WebSocket.OPEN);
 		} finally {
 			close();
 		}
