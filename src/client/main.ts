@@ -37,6 +37,7 @@ import {
 	scrollToBottom,
 	scrollToBottomIfPinned,
 	setStreaming,
+	syncSteerBadges,
 } from "./render.js";
 import {
 	handleSlash,
@@ -104,6 +105,14 @@ function handleSend(): void {
 			// unknown slash — fall through and send as prompt
 		}
 	}
+	// While the agent is streaming, a typed message is a steering
+	// comment: queued and delivered after the current turn's tool
+	// calls finish. This mirrors the CLI, where you can keep typing
+	// while the agent works.
+	if (state.isStreaming) {
+		sendSteer(trimmed);
+		return;
+	}
 	sendAsUser(trimmed);
 }
 
@@ -169,6 +178,25 @@ type SendPromptHook = (text: string, images?: Array<{ data: string; mimeType: st
 let sendPromptHook: SendPromptHook = () => {
 	/* will be replaced by boot() */
 };
+/** Closure over `chatClient.steer`, wired in boot(). */
+let steerHook: SendPromptHook = () => {
+	/* will be replaced by boot() */
+};
+
+/**
+ * The most recently sent steer, remembered so we can retry it as
+ * `next_turn` if pi refuses it (the agent went idle between the
+ * client's isStreaming check and the WS send — an inherent race).
+ * Cleared on successful delivery or after retry.
+ */
+let lastSteerSent: { text: string; images?: Array<{ data: string; mimeType: string }> } | null = null;
+
+/** Closure over `chatClient.nextTurn`, wired in boot(). Used by the
+ * steer-race recovery in `onEvent` (a module-scope function that can't
+ * see the boot-local `chatClient`). */
+let nextTurnHook: SendPromptHook = () => {
+	/* will be replaced by boot() */
+};
 
 // Local appendNode — main.ts only uses it once (in sendAsUser), so we
 // keep the dep on render.ts for the bulk of the API and call it inline.
@@ -176,6 +204,62 @@ function appendNode(node: HTMLElement): void {
 	$("#messages").append(node);
 	// Always scroll to bottom for user messages.
 	scrollToBottom();
+}
+
+/**
+ * Queue a steering message while the agent is running. Rendered as a
+ * user-style bubble with a "queued" badge; the badge flips to
+ * "delivered" once `queue_update` reports the agent has consumed it.
+ * Steering text is NOT pushed into `state.history` — it's an inline
+ * course-correction, not a standalone prompt you'd recall with ↑/↓.
+ */
+function sendSteer(trimmed: string): void {
+	if (!trimmed) return;
+	const msg: PersistedMessage = { kind: "steer", text: trimmed, delivered: false };
+	state.messages.push(msg);
+	appendNode(renderMessageNode(msg));
+	state.pendingSteerCount += 1;
+	refreshStatus();
+	// Upload-URL rewriting mirrors sendAsUser so attached files resolve.
+	const urlRegex = /(\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)/g;
+	const seen = new Set<string>();
+	const images: Array<{ data: string; mimeType: string }> = [];
+	const uploadedUrls: string[] = [];
+	for (const m of trimmed.matchAll(urlRegex)) {
+		const url = m[1];
+		if (seen.has(url)) continue;
+		seen.add(url);
+		const img = state.uploadedImages.get(url);
+		if (img) {
+			images.push({ data: img.data, mimeType: img.mimeType });
+			uploadedUrls.push(url);
+		}
+	}
+	for (const url of uploadedUrls) state.uploadedImages.delete(url);
+	steerHook(trimmed, images.length > 0 ? images : undefined);
+}
+
+/**
+ * Reconcile queued steering messages against a `queue_update` event.
+ * The server reports the current steering queue contents; we mark the
+ * oldest still-queued steer entries as delivered until the local
+ * pending count matches the server's queue length.
+ */
+function reconcileSteerQueue(serverSteering: unknown[]): void {
+	const queued = state.messages.filter((m) => m.kind === "steer" && !m.delivered);
+	const remaining = Math.max(0, Math.min(serverSteering.length, queued.length));
+	const toDeliver = queued.length - remaining;
+	let delivered = 0;
+	for (const m of state.messages) {
+		if (delivered >= toDeliver) break;
+		if (m.kind === "steer" && !m.delivered) {
+			m.delivered = true;
+			delivered += 1;
+		}
+	}
+	state.pendingSteerCount = serverSteering.length;
+	syncSteerBadges();
+	refreshStatus();
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +276,19 @@ function onEvent(event: Record<string, unknown>): void {
 	// biome-ignore lint/suspicious/noExplicitAny: pi RPC events are an undocumented superset of AgentEvent; permissive cast is intentional for property access, the switch ignores unknown types.
 	const e = event as Record<string, any>;
 	switch (e.type) {
+		case "response": {
+			// The server forwards pi's success:false response frames (it
+			// drops success acks as noise). A failed steer means the
+			// agent went idle between our isStreaming check and the send —
+			// an inherent race. Recover transparently by retrying the
+			// same message as next_turn, which pi never refuses.
+			if (e.command === "steer" && e.success === false && lastSteerSent) {
+				const { text, images } = lastSteerSent;
+				lastSteerSent = null;
+				nextTurnHook(text, images);
+			}
+			break;
+		}
 		case "agent_start":
 			setStreaming(true);
 			break;
@@ -283,6 +380,16 @@ function onEvent(event: Record<string, unknown>): void {
 			// only scrolls when they were already near the bottom.
 			scrollToBottomIfPinned();
 			refreshStatus();
+			break;
+		}
+
+		case "queue_update": {
+			// pi reports the current steering/follow-up queue. We use the
+			// steering array to flip our queued steer bubbles to
+			// "delivered" as the agent consumes them.
+			reconcileSteerQueue(
+				Array.isArray(e.steering) ? (e.steering as unknown[]) : [],
+			);
 			break;
 		}
 
@@ -499,10 +606,10 @@ async function boot(): Promise<void> {
 
 	// Send the init handshake as soon as the WS opens. The server is
 	// waiting for this before it spawns the `pi` child. If we have
-	// no model picked yet, default to MiniMax-M3 (if available in
+	// no model picked yet, default to GLM-5.2 (if available in
 	// the model list) or the first available model otherwise.
 	const defaultModel =
-		state.availableModels.find((m) => m.id === "MiniMax-M3") ?? state.availableModels[0];
+		state.availableModels.find((m) => m.id === "glm-5.2") ?? state.availableModels[0];
 	// Send the init handshake every time the WS (re)opens. On mobile
 	// browsers (especially Android Firefox), backgrounding the tab kills
 	// the WebSocket — the OS suspends JS, the TCP connection times out,
@@ -512,8 +619,8 @@ async function boot(): Promise<void> {
 	// hits "prompt sent before init".
 	const onWsOpen = (s: "connecting" | "open" | "closed") => {
 		if (s !== "open") return;
-		const modelId = state.currentModelId ?? defaultModel?.id ?? "MiniMax-M3";
-		const provider = state.currentProvider ?? defaultModel?.provider ?? "minimax";
+		const modelId = state.currentModelId ?? defaultModel?.id ?? "glm-5.2";
+		const provider = state.currentProvider ?? defaultModel?.provider ?? "zai";
 		const thinkingLevel = state.currentThinking;
 		chatClient.init({ provider, modelId, thinkingLevel });
 	};
@@ -527,6 +634,13 @@ async function boot(): Promise<void> {
 	// can only fire after `renderShell` has wired the handlers.
 	sendPromptHook = (text, images) => {
 		chatClient.prompt(text, images);
+	};
+	steerHook = (text, images) => {
+		lastSteerSent = { text, images };
+		chatClient.steer(text, images);
+	};
+	nextTurnHook = (text, images) => {
+		chatClient.nextTurn(text, images);
 	};
 }
 

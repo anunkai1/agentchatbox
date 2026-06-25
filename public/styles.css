@@ -13,45 +13,45 @@
 /* ------------------------------------------------------------------ */
 
 :root {
-	/* Surfaces (z.ai dark palette) */
-	--bg: #141618;
-	--bg-sidebar: #0f1110;
-	--surface: #1a1d1f;
-	--surface-hover: #23272a;
-	--surface-active: #2a2e31;
-	--input-bg: #1f2326;
-	--overlay: rgba(0, 0, 0, 0.6);
+	/* Surfaces — z.ai pure-black look */
+	--bg: #000000;
+	--bg-sidebar: #0a0a0a;
+	--surface: #161616;
+	--surface-hover: #1f1f1f;
+	--surface-active: #262626;
+	--input-bg: #1c1c1c;
+	--overlay: rgba(0, 0, 0, 0.72);
 
 	/* Text */
-	--text: #e8e8e8;
-	--text-secondary: #a4a8ae;
-	--text-muted: #6b7178;
+	--text: #f5f5f5;
+	--text-secondary: #b4b4b4;
+	--text-muted: #6e6e6e;
 
-	/* Accent (z.ai blue) */
-	--accent: #4a9eff;
-	--accent-hover: #62b0ff;
-	--accent-soft: rgba(74, 158, 255, 0.13);
-	--accent-border: rgba(74, 158, 255, 0.4);
+	/* Accent — warm orange/red like z.ai */
+	--accent: #eb5b3c;
+	--accent-hover: #ff6f4d;
+	--accent-soft: rgba(235, 91, 60, 0.12);
+	--accent-border: rgba(235, 91, 60, 0.45);
 
-	/* User bubble — a desaturated blue-grey */
-	--user-bubble: #2b3744;
-	--user-bubble-border: rgba(74, 158, 255, 0.18);
+	/* User bubble — a desaturated dark grey */
+	--user-bubble: #1c1c1c;
+	--user-bubble-border: rgba(255, 255, 255, 0.08);
 
-	/* Semantic accents (kept from the prior terminal theme) */
+	/* Semantic accents */
 	--c-tool: #c4a7fb;
 	--c-ok: #9ece6a;
 	--c-err: #f7768e;
 	--c-warn: #e0af68;
 
 	/* Lines */
-	--border: rgba(255, 255, 255, 0.07);
-	--border-strong: rgba(255, 255, 255, 0.13);
+	--border: rgba(255, 255, 255, 0.06);
+	--border-strong: rgba(255, 255, 255, 0.14);
 
 	/* Geometry */
 	--radius-sm: 8px;
 	--radius: 12px;
 	--radius-lg: 16px;
-	--radius-pill: 24px;
+	--radius-pill: 28px;
 	--sidebar-w: 264px;
 	--chat-max: 820px;
 
@@ -59,6 +59,8 @@
 	--font-sans:
 		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans",
 		sans-serif;
+	--font-serif:
+		"Georgia", "Times New Roman", "Source Serif Pro", "Cambria", "Cochin", serif;
 	--font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Code", Consolas, monospace;
 }
 
@@ -86,6 +88,11 @@ body {
 #app {
 	display: flex;
 	height: 100vh;
+	/* Fall back to 100vh on browsers without dvh (e.g. older Android Chrome
+	 * versions <108). On supporting browsers this matches the actually
+	 * visible viewport — minus the URL bar and the Android nav bar — so
+	 * the composer sits inside the fold instead of below it. */
+	height: 100dvh;
 	overflow: hidden;
 }
 
@@ -196,6 +203,9 @@ body {
 	display: flex;
 	flex-direction: column;
 	height: 100vh;
+	/* Match the dynamic viewport so the composer stays above the fold
+	 * even when the URL bar / nav bar overlay is visible. */
+	height: 100dvh;
 }
 
 /* ---------- header ---------- */
@@ -204,18 +214,18 @@ body {
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	padding: 8px 14px;
-	border-bottom: 1px solid var(--border);
+	padding: 10px 16px;
+	border-bottom: 1px solid transparent;
 	background: var(--bg);
-	min-height: 52px;
+	min-height: 56px;
 }
 .header .spacer {
 	flex: 1;
 }
 .title {
 	color: var(--text);
-	font-weight: 600;
-	font-size: 15px;
+	font-weight: 500;
+	font-size: 14.5px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -245,16 +255,45 @@ body {
 	color: var(--text);
 }
 
+/* Header brand block — ACB mark + the current chat title.
+ * The mark lives on the dark UI, so it's the light-ink variant of
+ * the logo (cream stroke + cream letters on transparent background). */
+.header-brand {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--text);
+	font-weight: 600;
+	font-size: 14px;
+	padding: 6px 10px;
+	border-radius: var(--radius);
+}
+.header-mark {
+	width: 24px;
+	height: 24px;
+	display: block;
+	flex-shrink: 0;
+	/* Ink color follows the brand "paper" tone so the mark reads on
+	 * the dark UI; the SVG's `currentColor` inherits this value. */
+	color: #f5f4ef;
+	/* Subtle drop so the cream ink reads cleanly against #000 and
+	 * #161616 surfaces without becoming a hard rectangle. */
+	filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.4));
+	user-select: none;
+	-webkit-user-drag: none;
+}
+
 /* Picker pills in the header */
 .picker-btn {
-	background: var(--surface);
-	border: 1px solid var(--border);
-	color: var(--text-secondary);
-	padding: 5px 11px;
-	border-radius: 999px;
+	background: transparent;
+	border: 1px solid var(--border-strong);
+	color: var(--text);
+	padding: 5px 12px;
+	border-radius: var(--radius-pill);
 	cursor: pointer;
 	font-family: inherit;
-	font-size: 12.5px;
+	font-size: 13px;
+	font-weight: 500;
 	transition:
 		background 0.12s,
 		border-color 0.12s,
@@ -263,17 +302,57 @@ body {
 .picker-btn:hover {
 	background: var(--surface-hover);
 	color: var(--text);
-	border-color: var(--border-strong);
+	border-color: rgba(255, 255, 255, 0.28);
 }
 .picker-btn.active {
 	background: var(--accent-soft);
 	border-color: var(--accent-border);
 	color: var(--accent);
 }
+/* Show a trailing chevron on the model picker to match z.ai's "GLM-4.7 ▾". */
+.header-model::after {
+	content: "▾";
+	margin-left: 6px;
+	color: var(--text-secondary);
+	font-size: 11px;
+}
 
 /* Overflow menu button is hidden on wide screens. */
 .overflow-menu {
 	display: none;
+}
+
+/* Pills hidden on all screen sizes — accessible via the overflow menu. */
+.picker-hidden {
+	display: none !important;
+}
+
+/* The "API ↗" header affordance — z.ai style icon-label-arrow button. */
+.header-overflow {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	background: transparent;
+	border: 1px solid var(--border-strong);
+	color: var(--text);
+	padding: 6px 10px 6px 8px;
+	border-radius: var(--radius-pill);
+	cursor: pointer;
+	font-family: inherit;
+	font-size: 13px;
+	font-weight: 500;
+	transition:
+		background 0.12s,
+		border-color 0.12s;
+}
+.header-overflow:hover {
+	background: var(--surface-hover);
+	border-color: rgba(255, 255, 255, 0.28);
+}
+.header-overflow > span:first-child {
+	color: var(--accent);
+	display: inline-flex;
+	align-items: center;
 }
 
 /* ------------------------------------------------------------------ */
@@ -283,7 +362,9 @@ body {
 .messages-wrap {
 	flex: 1;
 	overflow-y: auto;
-	scroll-behavior: smooth;
+	/* No scroll-behavior: smooth — it queues animations that fight the
+	   user's manual scroll during streaming (each token would queue a
+	   new glide, dragging the user back down even after they pull up). */
 }
 
 .messages {
@@ -300,7 +381,7 @@ body {
 .welcome {
 	max-width: var(--chat-max);
 	margin: 0 auto;
-	padding: 12vh 24px 0;
+	padding: 4vh 24px 0;
 	text-align: center;
 	display: flex;
 	flex-direction: column;
@@ -310,63 +391,77 @@ body {
 .welcome.hidden {
 	display: none;
 }
-.welcome-logo {
-	width: 60px;
-	height: 60px;
-	border-radius: 18px;
-	background: linear-gradient(135deg, var(--accent), #7c5cff);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 30px;
-	color: #fff;
-	box-shadow: 0 8px 30px rgba(74, 158, 255, 0.3);
+/* ACB mark on the welcome / empty state. Sized for ~72px display,
+ * capped so it never gets visually heavy on wide screens. */
+.welcome-mark {
+	width: 72px;
+	height: 72px;
+	display: block;
+	margin-top: clamp(8px, 4vh, 36px);
+	/* Cream ink on the dark welcome surface (see --text token). */
+	color: var(--text);
+	filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.5));
+	user-select: none;
+	-webkit-user-drag: none;
 }
 .welcome-title {
 	margin: 0;
+	font-family: var(--font-serif);
 	font-size: 28px;
-	font-weight: 700;
-	letter-spacing: -0.02em;
+	font-weight: 500;
+	letter-spacing: -0.01em;
+	color: var(--text);
 }
 .welcome-sub {
 	margin: 0;
 	color: var(--text-secondary);
 	font-size: 15px;
+	display: none; /* hidden in z.ai style; the question is enough */
 }
-.welcome-suggestions {
-	display: grid;
-	grid-template-columns: repeat(2, 1fr);
+.welcome-modes {
+	display: flex;
+	flex-wrap: wrap;
 	gap: 10px;
-	width: 100%;
-	max-width: 620px;
-	margin-top: 8px;
+	justify-content: center;
+	margin-top: 6px;
 }
-.suggestion {
-	text-align: left;
-	background: var(--surface);
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	padding: 14px 16px;
-	cursor: pointer;
+.welcome-mode {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	background: transparent;
+	border: 1px solid var(--border-strong);
 	color: var(--text);
+	padding: 10px 18px;
+	border-radius: var(--radius-pill);
+	cursor: pointer;
 	font-family: inherit;
 	font-size: 14px;
+	font-weight: 500;
 	transition:
 		background 0.12s,
-		border-color 0.12s;
+		border-color 0.12s,
+		color 0.12s,
+		transform 0.08s;
 }
-.suggestion:hover {
+.welcome-mode:hover {
 	background: var(--surface-hover);
-	border-color: var(--border-strong);
+	border-color: rgba(255, 255, 255, 0.28);
+	color: var(--text);
 }
-.suggestion .s-title {
-	font-weight: 600;
-	display: block;
-	margin-bottom: 2px;
+.welcome-mode:active {
+	transform: scale(0.97);
 }
-.suggestion .s-sub {
-	font-size: 12.5px;
-	color: var(--text-muted);
+.welcome-mode-icon {
+	width: 16px;
+	height: 16px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-secondary);
+}
+.welcome-mode:hover .welcome-mode-icon {
+	color: var(--text);
 }
 
 /* ---------- message rows ---------- */
@@ -401,19 +496,47 @@ body {
 	line-height: 1.55;
 }
 
+/* Steering message — queued while the agent is running. Same shape as
+   a user bubble but dashed/muted to signal it's not yet consumed. */
+.steer-bubble {
+	border: 1px dashed var(--user-bubble-border);
+	background: color-mix(in srgb, var(--user-bubble) 70%, transparent);
+	position: relative;
+}
+.steer-badge {
+	display: inline-block;
+	margin-left: 8px;
+	padding: 1px 7px;
+	font-size: 11px;
+	font-weight: 600;
+	border-radius: 999px;
+	background: var(--surface-active);
+	color: var(--text-muted);
+	white-space: nowrap;
+	vertical-align: middle;
+}
+.steer-badge.delivered {
+	background: color-mix(in srgb, var(--c-ok, #3ddc84) 22%, transparent);
+	color: var(--c-ok, #3ddc84);
+}
+
 /* Assistant message — avatar + body, no bubble */
 .avatar {
 	flex-shrink: 0;
 	width: 30px;
 	height: 30px;
-	border-radius: 9px;
-	background: linear-gradient(135deg, var(--accent), #7c5cff);
+	border-radius: 8px;
+	background: transparent;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 15px;
-	color: #fff;
-	margin-top: 2px;
+	margin-top: 4px;
+}
+.avatar-icon {
+	font-size: 18px;
+	line-height: 1;
+	color: var(--accent);
+	transform: translateY(-1px);
 }
 .row-assistant .body,
 .row-tool .tool-body,
@@ -593,7 +716,7 @@ body {
 /* ------------------------------------------------------------------ */
 
 .composer-wrap {
-	padding: 8px 20px 6px;
+	padding: 10px 20px 8px;
 }
 .composer {
 	max-width: var(--chat-max);
@@ -601,17 +724,27 @@ body {
 	background: var(--input-bg);
 	border: 1px solid var(--border-strong);
 	border-radius: var(--radius-pill);
-	padding: 8px 8px 8px 16px;
+	padding: 8px 8px 8px 6px;
 	display: flex;
 	align-items: flex-end;
-	gap: 8px;
+	gap: 4px;
 	transition:
 		border-color 0.15s,
 		box-shadow 0.15s;
 }
 .composer:focus-within {
-	border-color: var(--accent-border);
-	box-shadow: 0 0 0 3px var(--accent-soft);
+	border-color: rgba(255, 255, 255, 0.28);
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.composer .icon-btn {
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	color: var(--text-secondary);
+}
+.composer .icon-btn:hover {
+	background: var(--surface-hover);
+	color: var(--text);
 }
 .composer .input {
 	flex: 1;
@@ -619,7 +752,7 @@ body {
 	background: transparent;
 	color: var(--text);
 	border: none;
-	padding: 8px 0;
+	padding: 9px 4px;
 	font-family: inherit;
 	font-size: 15px;
 	line-height: 1.5;
@@ -640,43 +773,55 @@ body {
 }
 .send-btn,
 .stop-btn {
-	background: var(--accent);
-	color: #fff;
+	background: var(--surface-active);
+	color: var(--text);
 	border: none;
 	width: 36px;
 	height: 36px;
 	border-radius: 50%;
 	cursor: pointer;
 	font-family: inherit;
-	font-weight: 700;
-	font-size: 15px;
+	font-weight: 600;
+	font-size: 16px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	transition:
 		background 0.15s,
-		transform 0.1s;
+		transform 0.1s,
+		color 0.12s;
 }
 .send-btn:hover {
-	background: var(--accent-hover);
+	background: var(--text);
+	color: #000;
 }
 .send-btn:active {
 	transform: scale(0.94);
 }
 .send-btn:disabled {
-	background: var(--surface-active);
+	background: var(--surface);
 	color: var(--text-muted);
 	cursor: not-allowed;
 }
 .stop-btn {
 	background: var(--c-err);
+	color: #fff;
 }
 .stop-btn:hover {
 	background: #ff5577;
+	color: #fff;
 }
 .stop-btn[hidden],
 .send-btn[hidden] {
 	display: none;
+}
+/* Send button in steer mode (agent is streaming): muted accent to hint
+   that the message will be queued rather than sent immediately. */
+.send-btn.steer-mode {
+	background: color-mix(in srgb, var(--c-ok, #3ddc84) 30%, var(--surface-active));
+}
+.send-btn.steer-mode:hover {
+	background: color-mix(in srgb, var(--c-ok, #3ddc84) 55%, var(--text));
 }
 
 /* ------------------------------------------------------------------ */
@@ -968,16 +1113,16 @@ body {
 
 	.header {
 		gap: 4px;
-		padding: 8px 10px;
+		padding: 6px 10px;
 	}
 	.header .title {
-		max-width: 50vw;
+		max-width: 40vw;
+		font-size: 13.5px;
 	}
-	.header .picker-btn {
-		display: none;
-	}
-	.overflow-menu {
-		display: inline-flex;
+	/* On mobile, hide the inline model pill — it's still reachable via
+	 * the overflow menu. */
+	.header-model {
+		display: none !important;
 	}
 
 	.messages {
@@ -988,28 +1133,39 @@ body {
 	}
 
 	.welcome {
-		padding-top: 8vh;
+		padding-top: 3vh;
+		gap: 14px;
+	}
+	.welcome-mark {
+		width: 56px;
+		height: 56px;
+		margin-top: 12px;
 	}
 	.welcome-title {
-		font-size: 23px;
+		font-size: 21px;
+		padding: 0 8px;
 	}
-	.welcome-suggestions {
-		grid-template-columns: 1fr;
+	.welcome-modes {
+		gap: 8px;
+	}
+	.welcome-mode {
+		padding: 7px 12px;
+		font-size: 13px;
 	}
 
 	.composer-wrap {
-		padding: 6px 10px 4px;
+		padding: 4px 10px 2px;
 	}
 	.composer {
-		padding: 6px 6px 6px 14px;
+		padding: 5px 5px 5px 5px;
 	}
 	.composer .input {
 		font-size: 16px; /* prevents iOS zoom-on-focus */
-		padding: 7px 0;
+		padding: 6px 4px;
 	}
 
 	.status-bar {
-		padding: 3px 12px 6px;
+		padding: 2px 12px 4px;
 		font-size: 10px;
 	}
 }

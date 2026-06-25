@@ -53,6 +53,13 @@ export function toggleAutoSpeak(): void {
 	const btn = $<HTMLButtonElement>("#tts-toggle");
 	btn.classList.toggle("active", state.autoSpeak);
 	btn.textContent = state.autoSpeak ? "🔊 on" : "🔇 off";
+	// Turning it off should also stop any speech that's playing,
+	// so a 2nd press actually silences the audio.
+	if (!state.autoSpeak) {
+		const audio = $<HTMLAudioElement>("#tts-audio");
+		audio.pause();
+		audio.currentTime = 0;
+	}
 	refreshStatus();
 }
 

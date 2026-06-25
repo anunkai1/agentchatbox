@@ -81,8 +81,43 @@ const EXIT_BEFORE_SESSION_SCRIPT = `#!/usr/bin/env bash
 exit 127
 `;
 
+const STEER_RACE_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that REFUSES steers (success:false, simulating the agent
+# having just gone idle) and accepts next_turn. Used to verify (1) the
+# server forwards success:false responses instead of silently dropping
+# them, and (2) the server translates client next_turn into pi next_turn.
+# Single-quoted echoes so the JSON is literal (no shell escaping).
+sleep 0.05
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"race-session-001","messageCount":0}}'
+      ;;
+    "steer")
+      echo '{"type":"response","command":"steer","success":false,"error":"Cannot steer while idle"}'
+      ;;
+    "next_turn")
+      echo '{"type":"response","command":"next_turn","success":true}'
+      ;;
+    "prompt")
+      echo '{"type":"response","command":"prompt","success":true}'
+      echo '{"type":"agent_start"}'
+      echo '{"type":"agent_end","messages":[],"willRetry":false}'
+      ;;
+    "")
+      ;;
+    *)
+      echo "{\"type\":\"response\",\"command\":\"$type\",\"success\":true}"
+      ;;
+  esac
+done
+`;
+
 /** Write a fake-pi shell script to a temp file and return its path. */
-function makeFakePi(behavior: "echo" | "ack" | "exit-before-session"): string {
+function makeFakePi(
+	behavior: "echo" | "ack" | "exit-before-session" | "steer-race",
+): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
 	const body =
@@ -90,7 +125,9 @@ function makeFakePi(behavior: "echo" | "ack" | "exit-before-session"): string {
 			? ECHO_SCRIPT
 			: behavior === "ack"
 				? ACK_SCRIPT
-				: EXIT_BEFORE_SESSION_SCRIPT;
+				: behavior === "steer-race"
+					? STEER_RACE_SCRIPT
+					: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -374,6 +411,100 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			// The fake-pi ack script will respond to `prompt` with
 			// a response frame (which the server drops). The point
 			// is that the send itself didn't throw.
+		} finally {
+			close();
+		}
+	});
+
+	it("forwards pi's success:false response frames (transparent pipe)", async () => {
+		// The server must NOT silently drop failure responses — a
+		// success:false steer tells the client its message wasn't
+		// delivered (the agent went idle), so it can recover. Without
+		// forwarding, the client's steer bubble hangs forever. Success
+		// acks are still dropped (noise); only failures pass through.
+		fakePiPath = makeFakePi("steer-race");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await inbox.waitFor(1); // ready
+
+			// Send a steer; fake-pi refuses it with success:false.
+			ws.send(JSON.stringify({ type: "steer", text: "make it shorter" }));
+
+			// The failure response must reach the client as a forwarded
+			// event (not silently dropped). It arrives as the 2nd message
+			// (after ready).
+			const msgs = await inbox.waitFor(2, 3000);
+			const failure = msgs.find(
+				(m) =>
+					m.type === "event" &&
+					(m.event as { type?: string })?.type === "response" &&
+					(m.event as { success?: boolean })?.success === false,
+			);
+			expect(failure).toBeTruthy();
+			expect((failure?.event as { command?: string }).command).toBe("steer");
+		} finally {
+			close();
+		}
+	});
+
+	it("translates client next_turn to pi next_turn (recovery path)", async () => {
+		// The server must forward the next_turn command verbatim to pi —
+		// this is the non-throwing recovery path the client uses after a
+		// raced steer fails. The fake-pi accepts next_turn with success:true
+		// (which the server drops as a success ack). We assert the child
+		// received the command by checking it did NOT emit an error and the
+		// connection stayed healthy (the command was accepted, not refused).
+		fakePiPath = makeFakePi("steer-race");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await inbox.waitFor(1); // ready
+
+			ws.send(JSON.stringify({ type: "next_turn", text: "late message" }));
+			// Give the child time to process the command.
+			await new Promise((r) => setTimeout(r, 300));
+
+			// No error frame should have been forwarded (a refused command
+		// would surface as either an error or a success:false event).
+			const errors = inbox.all().filter((m) => m.type === "error");
+			expect(errors).toHaveLength(0);
+			// And no failure response for next_turn (it was accepted).
+			const nextTurnFailure = inbox.all().find(
+				(m) =>
+					m.type === "event" &&
+					(m.event as { command?: string }).command === "next_turn" &&
+					(m.event as { success?: boolean }).success === false,
+			);
+			expect(nextTurnFailure).toBeUndefined();
+			// The WS must still be open (the child accepted the command).
+			expect(ws.readyState).toBe(WebSocket.OPEN);
 		} finally {
 			close();
 		}

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  agentchatbox brand mark, light-ink variant — for use on dark UI
+  surfaces. Same proportions as logo-mark.svg but with cream stroke
+  and text (#f5f4ef, the brand "paper" color) so it reads on the
+  black/grey header + welcome canvas.
+
+  Needed as a separate file because SVG-as-<img> doesn't inherit
+  `currentColor` from the host page — the CSS color property on a
+  parent <div> doesn't reach inside an <img src="*.svg">.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 498 498"
+     role="img"
+     aria-label="ACB — agentchatbox">
+	<title>agentchatbox</title>
+	<rect x="21" y="21" width="456" height="456"
+	      rx="14" ry="14"
+	      fill="none" stroke="#f5f4ef" stroke-width="26"/>
+	<text x="249" y="249"
+	      text-anchor="middle"
+	      dominant-baseline="central"
+	      font-family="'Helvetica Neue', 'Arial Black', Arial, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+	      font-weight="900"
+	      font-size="172"
+	      letter-spacing="2"
+	      fill="#f5f4ef">ACB</text>
+</svg>

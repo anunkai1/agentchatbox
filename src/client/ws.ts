@@ -48,6 +48,17 @@ export interface ChatClient {
 	}): void;
 	/** Send a user prompt. Optionally attach images (base64 + mimeType). */
 	prompt(text: string, images?: PromptImage[]): void;
+	/**
+	 * Queue a steering message while the agent is running. Delivered
+	 * after the current assistant turn finishes its tool calls.
+	 */
+	steer(text: string, images?: PromptImage[]): void;
+	/**
+	 * Queue a message for the NEXT prompt, regardless of agent phase.
+	 * Never refused — persists across agent_end. Recovery path for a
+	 * steer that arrived after the agent went idle.
+	 */
+	nextTurn(text: string, images?: PromptImage[]): void;
 	/** Abort the current run, if any. */
 	abort(): void;
 	/** Switch to a different model mid-session. */
@@ -204,6 +215,28 @@ export function createChatClient(): ChatClient {
 			}
 			send({
 				type: "prompt",
+				text,
+				...(images && images.length > 0 ? { images } : {}),
+			});
+		},
+		steer: (text, images) => {
+			if (!inited) {
+				for (const l of errorListeners) l("steer sent before init");
+				return;
+			}
+			send({
+				type: "steer",
+				text,
+				...(images && images.length > 0 ? { images } : {}),
+			});
+		},
+		nextTurn: (text, images) => {
+			if (!inited) {
+				for (const l of errorListeners) l("next_turn sent before init");
+				return;
+			}
+			send({
+				type: "next_turn",
 				text,
 				...(images && images.length > 0 ? { images } : {}),
 			});

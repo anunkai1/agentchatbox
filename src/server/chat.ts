@@ -194,9 +194,14 @@ function attachEventForwarding(
 	let statePoll: NodeJS.Timeout | null = null;
 
 	pi.on("event", (line) => {
-		// Drop request/response ack frames — the renderer is event-driven,
-		// the `pi` RPC docs are explicit that `response` is for
-		// request/response correlation, irrelevant to the WS stream.
+		// Request/response ack frames: the renderer is event-driven, so
+		// success acks are noise (pi's events are the real confirmation)
+		// and are dropped. The ONE exception is get_state (used to harvest
+		// the sessionId on init) and failure responses — a success:false
+		// frame signals an undelivered command (e.g. a steer that arrived
+		// after the agent went idle) and MUST reach the client so it can
+		// recover (retry as next_turn). Forwarding failures is what makes
+		// this a transparent pipe rather than a silent dropper.
 		if (line.type === "response") {
 			// Pull sessionId out of get_state's response. The pi
 			// process doesn't emit a "session" line on startup the
@@ -231,7 +236,11 @@ function attachEventForwarding(
 					setPending(null);
 				}
 			}
-			return;
+			// Success acks are noise — drop them. But fall through for
+			// success:false so the failure reaches the client.
+			if (line.success !== false) {
+				return;
+			}
 		}
 
 		// Forward every other `pi` event verbatim. The renderer's
@@ -325,6 +334,40 @@ async function onClientMessage(
 			const message = rewriteUploadUrls(msg.text);
 			pi.send({
 				type: "prompt",
+				message,
+				...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
+			});
+			break;
+		}
+		case "steer": {
+			if (!pi) return;
+			// Steering messages are queued while the agent runs and
+			// delivered after the current assistant turn finishes its
+			// tool calls, before the next LLM call. Same upload-URL
+			// rewriting as `prompt` so attached files resolve on disk.
+			// If the agent has already gone idle, pi refuses this with a
+			// success:false response (forwarded to the client, which
+			// retries as next_turn).
+			const message = rewriteUploadUrls(msg.text);
+			pi.send({
+				type: "steer",
+				message,
+				...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
+			});
+			break;
+		}
+		case "next_turn": {
+			if (!pi) return;
+			// Queue a message for the NEXT prompt regardless of agent phase.
+			// pi never refuses this — it persists across agent_end and is
+			// drained at the top of the next prompt() call. This is the
+			// recovery path for a steer that arrived too late (the client
+			// retries here), and also the correct command for any message
+			// the user wants delivered even if the agent is idle. Same
+			// upload-URL rewriting as `prompt`.
+			const message = rewriteUploadUrls(msg.text);
+			pi.send({
+				type: "next_turn",
 				message,
 				...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
 			});

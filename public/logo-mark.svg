@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  agentchatbox brand mark — square frame around "ACB".
+  Renders crisply at any size (favicon, header, README badge).
+
+  Ink color uses `currentColor` so the host CSS can flip the mark
+  between the cream paper color (for the dark UI) and the navy ink
+  color (for the cream README / light contexts) without bundling two
+  separate files. The default `color: #002858` on the <svg> element
+  is the navy ink so the favicon reads correctly when CSS isn't
+  available.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 498 498"
+     color="#002858"
+     role="img"
+     aria-label="ACB — agentchatbox">
+	<title>agentchatbox</title>
+	<rect x="21" y="21" width="456" height="456"
+	      rx="14" ry="14"
+	      fill="none" stroke="currentColor" stroke-width="26"/>
+	<text x="249" y="249"
+	      text-anchor="middle"
+	      dominant-baseline="central"
+	      font-family="'Helvetica Neue', 'Arial Black', Arial, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+	      font-weight="900"
+	      font-size="172"
+	      letter-spacing="2"
+	      fill="currentColor">ACB</text>
+</svg>

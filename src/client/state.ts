@@ -34,7 +34,16 @@ export type PersistedMessage =
 			result?: string;
 			isError?: boolean;
 	  }
-	| { kind: "error"; text: string };
+	| { kind: "error"; text: string }
+	/**
+	 * A steering message the user queued while the agent was running.
+	 * Rendered like a user bubble but visually marked as queued until
+	 * `delivered` flips true (when the agent consumes it for the next
+	 * turn). Not persisted in session JSONL under this shape — pi
+	 * re-inserts it as a normal user message once delivered, which is
+	 * why resume transcripts never contain `kind: "steer"` rows.
+	 */
+	| { kind: "steer"; text: string; delivered: boolean };
 
 // ---------------------------------------------------------------------------
 // In-memory app state
@@ -103,6 +112,11 @@ export interface AppState {
 	 * the messages array.
 	 */
 	lastAssistantText: string;
+	/**
+	 * Number of steering messages queued but not yet consumed by the
+	 * agent. Driven by `queue_update` events; shown in the status bar.
+	 */
+	pendingSteerCount: number;
 }
 
 export interface ModelOption {
@@ -136,5 +150,6 @@ export const state: AppState = {
 	ttsInFlight: 0,
 	audioPlaying: false,
 	lastAssistantText: "",
+	pendingSteerCount: 0,
 	capabilities: null,
 };

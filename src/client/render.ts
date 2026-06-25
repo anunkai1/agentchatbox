@@ -27,9 +27,17 @@ export function autoSize(): void {
 
 export function setStreaming(s: boolean): void {
 	state.isStreaming = s;
-	$("#send-btn").hidden = s;
+	// Keep the input enabled while streaming so the user can queue
+	// steering messages (mirrors the CLI, where you can type while the
+	// agent works). The send button stays visible and switches to
+	// "steer" mode; the stop button appears alongside it.
+	const sendBtn = $<HTMLButtonElement>("#send-btn");
+	sendBtn.hidden = false;
+	sendBtn.classList.toggle("steer-mode", s);
+	sendBtn.title = s
+		? "Steer — queue this for after the current turn (⌘/Ctrl+Enter)"
+		: "Send (⌘/Ctrl+Enter)";
 	$("#stop-btn").hidden = !s;
-	$<HTMLTextAreaElement>("#input").disabled = s;
 	if (!s) state.toolSpinner = null;
 	refreshStatus();
 }
@@ -58,9 +66,22 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	if (m.kind === "user") {
 		return el("div", { class: "row row-user" }, el("div", { class: "bubble" }, m.text));
 	}
+	if (m.kind === "steer") {
+		// Steering message queued while the agent was running. Same
+		// right-aligned bubble as a user message, but with a badge so
+		// it's clear it's queued (not yet consumed by the agent) vs
+		// delivered (folded into the next turn).
+		const bubble = el("div", { class: "bubble steer-bubble" }, m.text);
+		bubble.append(
+			el("span", { class: `steer-badge${m.delivered ? " delivered" : ""}` }, m.delivered ? "✓ delivered" : "⏳ queued"),
+		);
+		return el("div", { class: "row row-user row-steer" }, bubble);
+	}
 	if (m.kind === "assistant") {
 		const wrap = el("div", { class: "row row-assistant" });
-		wrap.append(el("div", { class: "avatar" }, "✦"));
+		const avatar = el("div", { class: "avatar" });
+		avatar.append(el("span", { class: "avatar-icon" }, "✦"));
+		wrap.append(avatar);
 		const body = el("div", { class: "body" });
 		if (m.thinking) {
 			const t = el("div", { class: "thinking" });
@@ -103,6 +124,26 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	}
 	// error
 	return el("div", { class: "row row-error" }, el("div", { class: "body" }, m.text));
+}
+
+/**
+ * Sync the queued/delivered badges on rendered steering bubbles to the
+ * current `state.messages`. Steering messages flip `delivered` from
+ * false → true as the agent consumes them (driven by `queue_update`),
+ * and we update the DOM in place rather than re-rendering the whole
+ * transcript. Steer bubbles are matched to cache entries in DOM order,
+ * which matches `state.messages` order.
+ */
+export function syncSteerBadges(): void {
+	const steered = state.messages.filter((m) => m.kind === "steer");
+	const nodes = document.querySelectorAll<HTMLElement>(".row-steer .steer-badge");
+	steered.forEach((m, i) => {
+		if (m.kind !== "steer") return;
+		const node = nodes[i];
+		if (!node) return;
+		node.textContent = m.delivered ? "✓ delivered" : "⏳ queued";
+		node.classList.toggle("delivered", m.delivered);
+	});
 }
 
 /**
@@ -194,7 +235,9 @@ export function appendNode(node: HTMLElement): void {
  */
 export function appendAssistantPlaceholder(): LiveAssistantDom {
 	const wrap = el("div", { class: "row row-assistant" });
-	wrap.append(el("div", { class: "avatar" }, "✦"));
+	const avatar = el("div", { class: "avatar" });
+	avatar.append(el("span", { class: "avatar-icon" }, "✦"));
+	wrap.append(avatar);
 	const body = el("div", { class: "body" });
 	// Thinking block — created expanded by default; populated as
 	// message_update events stream in thinking content. If the model never
@@ -394,6 +437,7 @@ export function refreshStatus(): void {
 	parts.push(`${(c.input + c.output).toLocaleString()} tok`);
 	if (c.cost > 0) parts.push(`$${c.cost.toFixed(4)}`);
 	if (state.isStreaming) parts.push("● streaming");
+	if (state.pendingSteerCount > 0) parts.push(`⟳ ${state.pendingSteerCount} queued`);
 	if (state.ttsInFlight > 0) parts.push("● tts");
 	if (state.audioPlaying) parts.push("♪ playing");
 	if (state.connectionStatus !== "open") parts.push(`[${state.connectionStatus}]`);
@@ -505,7 +549,10 @@ export function renderShell(): void {
 	const main = el("div", { class: "main" });
 	root.append(main);
 
-	// Header
+	// Header — left hamburger, title, model picker in the middle
+	// (like "GLM-4.7 ▾"), and a single wrench "Settings" affordance on
+	// the right. The full picker pills (voice/speed/tts) are moved into
+	// the overflow menu on every screen size to keep the bar clean.
 	const header = el("div", { class: "header" });
 	header.append(
 		el(
@@ -518,7 +565,30 @@ export function renderShell(): void {
 			},
 			"☰",
 		),
-		el("span", { class: "title", id: "title" }, state.title),
+		el(
+			"div",
+			{ class: "header-brand" },
+			// ACB brand mark on the left, then the chat title.
+			// `logo-mark-light.png` is the navy-in-ink recolored to
+			// cream so it reads on the dark UI; the SVG version is
+			// used at smaller sizes for crispness, with the PNG
+			// as a fallback for browsers that drop the SVG <img>
+			// (Safari on some iOS builds).
+			el("img", {
+				class: "header-mark",
+				src: "/logo-mark-light.svg",
+				alt: "ACB",
+				width: 24,
+				height: 24,
+				draggable: false,
+				onerror: (e: Event) => {
+					// Fall back to the PNG if the SVG can't load.
+					const img = e.currentTarget as HTMLImageElement;
+					if (img.src.endsWith(".svg")) img.src = "/logo-mark-light.png";
+				},
+			}),
+			el("span", { class: "title", id: "title" }, state.title),
+		),
 		el("div", { class: "spacer" }),
 		el(
 			"button",
@@ -531,38 +601,68 @@ export function renderShell(): void {
 			},
 			"",
 		),
-		el("button", { class: "picker-btn", id: "model-picker", title: "Model (/model)" }, "model: …"),
 		el(
 			"button",
-			{ class: "picker-btn", id: "think-picker", title: "Thinking (/think)" },
+			{ class: "picker-btn header-model", id: "model-picker", title: "Model (/model)" },
+			"model: …",
+		),
+		// The hidden pickers still exist in the DOM so refreshStatus() can
+		// update them; they're just visually hidden via the .picker-hidden
+		// class. The overflow menu gives the user access to all of them.
+		el(
+			"button",
+			{
+				class: "picker-btn picker-hidden",
+				id: "think-picker",
+				title: "Thinking (/think)",
+			},
 			"think: …",
 		),
-		el("button", { class: "picker-btn", id: "voice-picker", title: "TTS voice" }, "voice: …"),
 		el(
 			"button",
-			{ class: "picker-btn", id: "speed-picker", title: "TTS playback speed" },
+			{
+				class: "picker-btn picker-hidden",
+				id: "voice-picker",
+				title: "TTS voice",
+			},
+			"voice: …",
+		),
+		el(
+			"button",
+			{
+				class: "picker-btn picker-hidden",
+				id: "speed-picker",
+				title: "TTS playback speed",
+			},
 			"speed: …",
 		),
 		el(
 			"button",
 			{
-				class: "picker-btn",
+				class: "picker-btn picker-hidden",
 				id: "tts-toggle",
 				title: "Auto-speak assistant messages",
 			},
 			"🔇 off",
 		),
-		// Overflow menu — only visible on narrow screens, where the picker pills
-		// are hidden via the @media block in styles.css.
+		// Right-side single icon-button that opens the overflow menu
+		// where every option lives. Wrench glyph signals "settings" and
+		// replaces the old sparkle "API ↗" treatment.
 		el(
 			"button",
 			{
-				class: "icon-btn overflow-menu",
+				class: "header-overflow",
 				id: "overflow-menu",
 				title: "Settings",
 				onclick: () => shellHandlers?.openOverflowMenu(),
 			},
-			"⋯",
+			el(
+				"span",
+				{
+					html: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 105.66 5.66l-1.42-1.42a2 2 0 11-2.82-2.82l-1.42-1.42zM3 21l3.5-1 9.9-9.9-2.5-2.5L4 17.5 3 21z"/></svg>`,
+				},
+			),
+			el("span", { text: "Settings" }),
 		),
 	);
 	main.append(header);
@@ -570,20 +670,35 @@ export function renderShell(): void {
 	// Messages area — scrollable wrapper containing welcome + messages
 	const messagesWrap = el("div", { class: "messages-wrap" });
 
-	// Welcome / empty state
+	// Welcome / empty state — ACB brand mark, question heading, and a
+	// row of mode chips that act like quick-start buttons. The mark is
+	// centered above the heading so the empty state reads as a brand
+	// surface rather than a wall of text.
 	const welcome = el("div", { class: "welcome", id: "welcome" });
-	welcome.append(el("div", { class: "welcome-logo" }, "✦"));
-	welcome.append(el("h1", { class: "welcome-title" }, "AgentChatBox"));
 	welcome.append(
-		el("p", { class: "welcome-sub" }, "Ask anything — I'll think, use tools, and answer."),
+		el("img", {
+			class: "welcome-mark",
+			src: "/logo-mark-light.svg",
+			alt: "agentchatbox",
+			width: 72,
+			height: 72,
+			draggable: false,
+			onerror: (e: Event) => {
+				const img = e.currentTarget as HTMLImageElement;
+				if (img.src.endsWith(".svg")) img.src = "/logo-mark-light.png";
+			},
+		}),
 	);
-	const suggestions = el("div", { class: "welcome-suggestions" });
+	welcome.append(el("h1", { class: "welcome-title" }, "What can I build for you?"));
+	welcome.append(el("p", { class: "welcome-sub" }, "Ask anything — I'll think, use tools, and answer."));
+	const modes = el("div", { class: "welcome-modes" });
 	for (const s of WELCOME_SUGGESTIONS) {
-		suggestions.append(
+		modes.append(
 			el(
 				"button",
 				{
-					class: "suggestion",
+					class: "welcome-mode",
+					title: s.sub,
 					onclick: () => {
 						const input = document.querySelector("#input") as HTMLTextAreaElement | null;
 						if (input) {
@@ -593,19 +708,22 @@ export function renderShell(): void {
 						}
 					},
 				},
-				el("span", { class: "s-title" }, s.title),
-				el("span", { class: "s-sub" }, s.sub),
+				el("span", { class: "welcome-mode-icon", html: s.icon }),
+				el("span", { class: "welcome-mode-label" }, s.title),
 			),
 		);
 	}
-	welcome.append(suggestions);
+	welcome.append(modes);
 	messagesWrap.append(welcome);
 
 	// Messages list
 	messagesWrap.append(el("div", { class: "messages", id: "messages" }));
 	main.append(messagesWrap);
 
-	// Composer
+	// Composer — pill with attach + voice buttons on the left, textarea
+	// in the middle, and a dark up-arrow send button on the right.
+	// The old globe/reasoning buttons were removed because they had no
+	// direct effect (they opened other menus instead).
 	const composerWrap = el("div", { class: "composer-wrap" });
 	const composer = el("div", { class: "composer" });
 	composer.append(
@@ -617,7 +735,7 @@ export function renderShell(): void {
 				title: "Attach file",
 				onclick: () => $<HTMLInputElement>("#file-input").click(),
 			},
-			"📎",
+			"+",
 		),
 		el(
 			"button",
@@ -635,7 +753,7 @@ export function renderShell(): void {
 			id: "input",
 			class: "input",
 			rows: 1,
-			placeholder: "Message AgentChatBox… (⌘/Ctrl+Enter to send)",
+			placeholder: "Send a message",
 			autocomplete: "off",
 			autocapitalize: "off",
 			spellcheck: false,
@@ -749,28 +867,36 @@ export function renderShell(): void {
 // Sidebar helpers
 // ---------------------------------------------------------------------------
 
-/** Welcome-screen suggestion cards (title, subtitle, prompt). */
-const WELCOME_SUGGESTIONS: { title: string; sub: string; prompt: string }[] = [
+/**
+ * Welcome-screen mode chips (title, tooltip, inline SVG icon, prompt).
+ * Icons are inline SVGs so they look crisp at any size and inherit the
+ * current text color via `currentColor`.
+ */
+const WELCOME_SUGGESTIONS: {
+	title: string;
+	sub: string;
+	prompt: string;
+	icon: string;
+}[] = [
 	{
-		title: "Explain a concept",
-		sub: "Break down a complex topic simply",
-		prompt: "Explain how transformers work in machine learning, in simple terms.",
+		title: "Magic Design",
+		sub: "Spin up an interactive UI from a description",
+		prompt: "Design and build a small interactive web page for me. Pick the layout, colors, and copy.",
+		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.39 4.84L20 8l-4 3.9.94 5.5L12 14.77 7.06 17.4 8 11.9 4 8l5.61-1.16L12 2z"/></svg>`,
 	},
 	{
-		title: "Write code",
-		sub: "Generate a function or script",
+		title: "Full-Stack",
+		sub: "Build a complete app — front, back, and data",
 		prompt:
-			"Write a Python function that finds all prime numbers up to N using the Sieve of Eratosthenes.",
+			"Help me build a small full-stack web app: pick a stack, sketch the data model, and scaffold the project.",
+		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>`,
 	},
 	{
-		title: "Brainstorm ideas",
-		sub: "Generate creative options",
-		prompt: "Give me 5 creative project ideas for learning Rust.",
-	},
-	{
-		title: "Analyze & decide",
-		sub: "Weigh pros and cons",
-		prompt: "Compare PostgreSQL vs SQLite for a small web app. Pros and cons of each.",
+		title: "Write",
+		sub: "Draft, edit, and refine long-form text",
+		prompt:
+			"Help me write a clear, well-structured piece on a topic of my choosing. Ask me what the topic is first.",
+		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6L8 22H2v-6L14 4z"/><path d="M13 5l6 6"/></svg>`,
 	},
 ];
 

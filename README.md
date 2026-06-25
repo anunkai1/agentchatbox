@@ -1,8 +1,13 @@
 # agentchatbox
 
+<p align="center">
+	<img src="assets/brand/logo-square.png" alt="agentchatbox — ACB" width="160" />
+</p>
+
 A web chat interface for the [pi coding agent](https://pi.dev). The browser is a thin renderer — the server is a thin transport layer that spawns a `pi --mode rpc` subprocess per WebSocket connection, forwards its events to the browser, and translates client messages into pi RPC commands. The actual agent logic (tools, model routing, system prompt, streaming) lives entirely inside the `pi` subprocess.
 
 - Streaming responses, model picker, thinking levels
+- **Steering** — type while the agent is working and your message is queued for the next turn (mirrors the CLI; delivered after the current turn's tool calls finish)
 - File / image / voice attachments (image bytes go straight to multimodal models)
 - Persistent sessions on disk (`pi` manages JSONL files — survive page reloads and server restarts)
 - Local TTS (Piper, 1.4× playback) and STT (faster-whisper) — no paid cloud APIs
