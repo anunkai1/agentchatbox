@@ -34,8 +34,8 @@
 	--accent-border: rgba(235, 91, 60, 0.45);
 
 	/* User bubble — a desaturated dark grey */
-	--user-bubble: #1c1c1c;
-	--user-bubble-border: rgba(255, 255, 255, 0.08);
+	--user-bubble: color-mix(in srgb, var(--accent) 16%, #050505); /* tinted so user turns pop against the black bg when fast-scrolling */
+	--user-bubble-border: rgba(235, 91, 60, 0.35);
 
 	/* Semantic accents */
 	--c-tool: #c4a7fb;
@@ -485,6 +485,9 @@ body {
 .row-user .bubble {
 	background: var(--user-bubble);
 	border: 1px solid var(--user-bubble-border);
+	/* Hard accent stripe on the trailing edge — a visual anchor even when
+	   blurring past the text during fast scroll. */
+	border-right: 3px solid var(--accent);
 	color: var(--text);
 	padding: 10px 15px;
 	border-radius: var(--radius-lg);
