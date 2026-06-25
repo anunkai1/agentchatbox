@@ -17,13 +17,14 @@ import "dotenv/config";
 
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { getModels } from "@earendil-works/pi-ai";
 import cors from "cors";
 import express from "express";
 import { getCapabilities } from "./capabilities.js";
 import { mountChatWs } from "./chat.js";
 import { config } from "./config.js";
+import { log } from "./logger.js";
 import { projectRoot } from "./paths.js";
 import { EXTRA_MODELS, SDK_PROVIDERS } from "./providers.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
@@ -39,11 +40,12 @@ app.use(express.json({ limit: "2mb" }));
 
 // Lightweight access log so we can see what the browser is actually doing.
 app.use((req, _res, next) => {
-	const ts = new Date().toISOString().slice(11, 23);
-	const line = `${ts} ${req.method} ${req.url}`;
 	if (req.url.startsWith("/api/")) {
-		const len = req.headers["content-length"];
-		console.log(`${line} (${len ?? 0} bytes)`);
+		log.info("http request", {
+			method: req.method,
+			path: req.url,
+			bytes: Number(req.headers["content-length"] ?? 0),
+		});
 	}
 	next();
 });
@@ -203,10 +205,10 @@ app.get("/api/models", (_req, res) => {
 		} catch (e) {
 			// If the SDK doesn't know this provider, skip it rather than
 			// 500ing the whole endpoint.
-			console.warn(
-				`[models] failed to list models for ${provider}:`,
-				e instanceof Error ? e.message : e,
-			);
+			log.warn("failed to list models for provider", {
+				provider,
+				error: e instanceof Error ? e.message : String(e),
+			});
 		}
 	}
 
@@ -240,7 +242,9 @@ app.get("/api/capabilities", async (_req, res) => {
 		const caps = await getCapabilities();
 		res.json(caps);
 	} catch (e) {
-		console.error("[capabilities] failed:", e instanceof Error ? e.message : e);
+		log.error("capabilities fetch failed", {
+			error: e instanceof Error ? e.message : String(e),
+		});
 		res.json({ packages: [], tools: [], skills: [] });
 	}
 });
@@ -282,18 +286,26 @@ if (existsSync(publicDir)) {
 
 const server = app.listen(config.port, config.host, () => {
 	const providers = Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]);
-	console.log(`agentchatbox listening on http://${config.host}:${config.port}`);
-	console.log(`  commit:        ${COMMIT_HASH}`);
-	console.log(`  uploads dir:   ${config.uploadsDir}`);
-	console.log(
-		`  providers:     ${providers.length ? providers.join(", ") : "(none — set API keys in .env)"}`,
+	log.info("agentchatbox listening", {
+		url: `http://${config.host}:${config.port}`,
+		commit: COMMIT_HASH,
+		uploadsDir: config.uploadsDir,
+		providers: providers.length ? providers : [],
+		piBin: config.piBin,
+		piCwd: config.piCwd,
+	});
+
+	// Warm the Whisper + TTS health caches in the background. The first
+	// /api/health call would otherwise block for seconds (faster-whisper
+	// model load / piper voice init); pre-running the probes at boot means
+	// the browser's first poll returns instantly from cache. Fire-and-forget
+	// — failure here just means the cache fills lazily on first request.
+	void checkWhisperAvailable().then((w) =>
+		log.info("whisper probe ready", { available: w.available, reason: w.reason }),
 	);
-	console.log(`  pi binary:     ${config.piBin}`);
-	console.log(`  pi cwd:        ${config.piCwd}`);
-	console.log(
-		`  whisper:       ${config.openaiApiKey ? "openai (disabled, using local faster-whisper)" : "local faster-whisper (CPU)"}`,
+	void checkTtsAvailable().then((t) =>
+		log.info("tts probe ready", { available: t.available, voice: t.voice, reason: t.reason }),
 	);
-	console.log(`  tts:           local piper (CPU)`);
 });
 
 // WebSocket endpoint. Mounted on the same HTTP server so we don't need a
@@ -305,7 +317,7 @@ mountChatWs(server);
 // The `pi` process appends to its session file on every event, so a
 // fast SIGKILL would lose the last few events of an active session.
 process.on("SIGTERM", () => {
-	console.log("SIGTERM received, shutting down...");
+	log.info("SIGTERM received, shutting down");
 	server.close(() => {
 		// mountChatWs owns the child lifecycle; it has its own
 		// SIGTERM listener that iterates the live set.
@@ -314,7 +326,7 @@ process.on("SIGTERM", () => {
 	// Failsafe: if the server.close() callback never fires (e.g. a
 	// stuck keep-alive connection), force-exit after 3 seconds.
 	setTimeout(() => {
-		console.warn("server.close timed out, forcing exit");
+		log.warn("server.close timed out, forcing exit");
 		process.exit(1);
 	}, 3000).unref();
 });

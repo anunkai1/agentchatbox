@@ -36,6 +36,7 @@ import type {
 	TranscriptPayload,
 } from "../shared/protocol.js";
 import { config, getServerApiKey } from "./config.js";
+import { log } from "./logger.js";
 import { type PiProcess, spawnPi } from "./pi-process.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 
@@ -60,7 +61,7 @@ export function mountChatWs(server: HttpServer): void {
 	const wss = new WebSocketServer({ server, path: "/api/chat" });
 
 	wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
-		handleConnection(ws).catch((err) => {
+		handleConnection(ws as PiSocket).catch((err) => {
 			const message = err instanceof Error ? err.message : String(err);
 			sendError(ws, `failed to start session: ${message}`);
 			try {
@@ -71,7 +72,7 @@ export function mountChatWs(server: HttpServer): void {
 		});
 	});
 
-	console.log(`chat: ws listening on /api/chat (pi cwd: ${config.piCwd})`);
+	log.info("chat ws listening", { path: "/api/chat", piCwd: config.piCwd });
 }
 
 interface InitMessage {
@@ -81,10 +82,32 @@ interface InitMessage {
 	sessionId?: string;
 }
 
-async function handleConnection(ws: WebSocket): Promise<void> {
-	// Per-connection state. We keep these as `let` because `newSession` /
-	// `resumeSession` tear down the current child and spawn a new one.
-	let pi: PiProcess | null = null;
+/**
+ * The single source of truth for the live `pi` child of a WS connection.
+ * Stashed on the ws object so every handler (message dispatch, close,
+ * respawn) reads the same reference instead of maintaining a parallel
+ * closure variable that can drift out of sync during respawn.
+ */
+interface PiSocket extends WebSocket {
+	_pi?: PiProcess;
+}
+
+/**
+ * Per-send WS output backpressure guard. `ws.bufferedAmount` is the
+ * number of bytes Node has accepted but not yet flushed to the kernel.
+ * Under heavy `message_update` streaming a slow/stuck tab can let this
+ * grow without bound → server OOM. Past the high-water mark we treat the
+ * client as wedged and close the socket (the browser reconnects and gets
+ * fresh state via transcript replay). This is cheaper than tracking
+ * per-connection drain timers and is the standard ws-library pattern.
+ */
+const WS_BACKPRESSURE_HIGH_WATER = 16 * 1024 * 1024; // 16 MiB
+
+async function handleConnection(ws: PiSocket): Promise<void> {
+	// Per-connection mutable state. `currentInit` and `pendingTranscript`
+	// are `let` because newSession / resumeSession swap them; the live
+	// child itself is NOT kept here — it lives on `ws._pi` so every
+	// handler (including the message dispatcher) reads one reference.
 	let currentInit: InitMessage | null = null;
 	let pendingTranscript: TranscriptPayload | null = null;
 
@@ -101,16 +124,14 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 		pendingTranscript = { sessionId: init.sessionId, messages };
 	}
 
-	pi = spawnChild(init);
-	(ws as WebSocket & { _pi?: PiProcess })._pi = pi;
-	// attachEventForwarding synchronously subscribes to pi's events
-	// and starts a get_state poll. There's no race here because
-	// `pi` is a Node EventEmitter that buffers events for late
-	// subscribers (no, actually it doesn't — it drops them). So we
-	// attach synchronously before any async wait.
+	ws._pi = spawnChild(init);
+	// attachEventForwarding synchronously subscribes to pi's events.
+	// There's no race because we attach before yielding to any async
+	// wait — pi is a Node EventEmitter that drops events for late
+	// subscribers, so we must subscribe synchronously after spawn.
 	attachEventForwarding(
 		ws,
-		pi,
+		ws._pi,
 		init,
 		() => pendingTranscript,
 		(t) => {
@@ -135,9 +156,6 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 			(newInit) => {
 				currentInit = newInit;
 			},
-			(newChild) => {
-				pi = newChild;
-			},
 			(t) => {
 				pendingTranscript = t;
 			},
@@ -146,14 +164,11 @@ async function handleConnection(ws: WebSocket): Promise<void> {
 
 	ws.on("close", () => {
 		try {
-			pi?.kill();
+			ws._pi?.kill();
 		} catch {
 			/* ignore */
 		}
 	});
-	// If the child dies for any reason (e.g. provider key invalid),
-	// close the WS so the browser's reconnect logic kicks in.
-	// (Per-child handler is attached in attachEventForwarding.)
 }
 
 // ---------------------------------------------------------------------------
@@ -184,24 +199,22 @@ function spawnChild(init: InitMessage): PiProcess {
 }
 
 function attachEventForwarding(
-	ws: WebSocket,
+	ws: PiSocket,
 	pi: PiProcess,
 	init: InitMessage,
 	getPending: () => TranscriptPayload | null,
 	setPending: (t: TranscriptPayload | null) => void,
 ): void {
 	let readySent = false;
-	let statePoll: NodeJS.Timeout | null = null;
 
 	pi.on("event", (line) => {
 		// Request/response ack frames: the renderer is event-driven, so
 		// success acks are noise (pi's events are the real confirmation)
 		// and are dropped. The ONE exception is get_state (used to harvest
 		// the sessionId on init) and failure responses — a success:false
-		// frame signals an undelivered command (e.g. a steer that arrived
-		// after the agent went idle) and MUST reach the client so it can
-		// recover (retry as next_turn). Forwarding failures is what makes
-		// this a transparent pipe rather than a silent dropper.
+		// frame signals an undelivered command and is forwarded to the
+		// client so it can react. Forwarding failures is what makes this
+		// a transparent pipe rather than a silent dropper.
 		if (line.type === "response") {
 			// Pull sessionId out of get_state's response. The pi
 			// process doesn't emit a "session" line on startup the
@@ -213,10 +226,6 @@ function attachEventForwarding(
 				const id = String(data?.sessionId ?? "");
 				if (id) {
 					readySent = true;
-					if (statePoll) {
-						clearInterval(statePoll);
-						statePoll = null;
-					}
 					send(ws, {
 						type: "ready",
 						modelId: init.modelId,
@@ -262,10 +271,6 @@ function attachEventForwarding(
 	});
 
 	pi.on("exit", (info) => {
-		if (statePoll) {
-			clearInterval(statePoll);
-			statePoll = null;
-		}
 		// If we never sent `ready`, the spawn failed (e.g. binary
 		// not found, or get_state never returned a sessionId). Tell
 		// the client so it doesn't hang on the initial connect.
@@ -285,20 +290,36 @@ function attachEventForwarding(
 		}
 	});
 
-	// Ask pi for its session id. We do this on a 200ms poll instead
-	// of "send once and wait" because pi doesn't acknowledge the
-	// get_state immediately — it emits it after the AgentSession
-	// is constructed. The poll stops as soon as we get a sessionId
-	// (or the child exits).
-	pi.send({ type: "get_state" });
-	statePoll = setInterval(() => {
-		if (readySent) return;
-		pi.send({ type: "get_state" });
-	}, 200);
+	// Ask pi for its session id. pi doesn't acknowledge get_state
+	// immediately — it emits the response after the AgentSession is
+	// constructed, which may take a few hundred ms. Retry on a schedule
+	// until we get a sessionId (handled above) or the child exits.
+	// Bounded attempts prevent an unbounded retry loop if pi is wedged;
+	// the retry is also cleared by the exit handler implicitly (once the
+	// child is gone, `pi.send` is a no-op and `readySent` never flips).
+	requestSessionId(pi, () => readySent);
+}
 
-	// Stash the ws reference on the child for the abort/clear paths.
-	// (No-op if already stashed; idempotent.)
-	(pi as PiProcess & { _ws?: WebSocket })._ws = ws;
+/**
+ * Send `get_state` on a bounded retry schedule until `isDone()` returns
+ * true. pi doesn't ack get_state until its AgentSession is constructed,
+ * so a single send isn't enough. Retries stop after `maxAttempts` to
+ * avoid an unbounded loop on a wedged child; the per-child exit handler
+ * sends the error frame in that case.
+ */
+function requestSessionId(pi: PiProcess, isDone: () => boolean): void {
+	const intervalMs = 200;
+	const maxAttempts = 50; // ~10s ceiling — pi startup is normally <1s
+	let attempts = 0;
+	const retry = () => {
+		if (isDone() || attempts >= maxAttempts) return;
+		attempts++;
+		pi.send({ type: "get_state" });
+		setTimeout(retry, intervalMs);
+	};
+	pi.send({ type: "get_state" });
+	attempts++;
+	setTimeout(retry, intervalMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -306,15 +327,15 @@ function attachEventForwarding(
 // ---------------------------------------------------------------------------
 
 async function onClientMessage(
-	ws: WebSocket,
+	ws: PiSocket,
 	msg: ClientMessage,
 	currentInit: InitMessage,
 	setInit: (i: InitMessage) => void,
-	setPi: (p: PiProcess | null) => void,
 	setPending: (t: TranscriptPayload | null) => void,
 ): Promise<void> {
-	// Get the current child off the WS (we stashed it in attachEventForwarding).
-	const pi = (ws as WebSocket & { _pi?: PiProcess })._pi ?? null;
+	// The live child is stashed on the socket — the single source of
+	// truth shared with attachEventForwarding and the close handler.
+	const pi = ws._pi ?? null;
 
 	switch (msg.type) {
 		case "init": {
@@ -345,29 +366,12 @@ async function onClientMessage(
 			// delivered after the current assistant turn finishes its
 			// tool calls, before the next LLM call. Same upload-URL
 			// rewriting as `prompt` so attached files resolve on disk.
-			// If the agent has already gone idle, pi refuses this with a
-			// success:false response (forwarded to the client, which
-			// retries as next_turn).
+			// Note: pi always accepts a steer (it queues it). If the agent
+			// goes idle before draining the queue, the client recovers by
+			// re-sending the stranded text as a prompt (see recoverStrandedSteer).
 			const message = rewriteUploadUrls(msg.text);
 			pi.send({
 				type: "steer",
-				message,
-				...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
-			});
-			break;
-		}
-		case "next_turn": {
-			if (!pi) return;
-			// Queue a message for the NEXT prompt regardless of agent phase.
-			// pi never refuses this — it persists across agent_end and is
-			// drained at the top of the next prompt() call. This is the
-			// recovery path for a steer that arrived too late (the client
-			// retries here), and also the correct command for any message
-			// the user wants delivered even if the agent is idle. Same
-			// upload-URL rewriting as `prompt`.
-			const message = rewriteUploadUrls(msg.text);
-			pi.send({
-				type: "next_turn",
 				message,
 				...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
 			});
@@ -415,6 +419,7 @@ async function onClientMessage(
 				thinkingLevel: currentInit.thinkingLevel,
 			};
 			const newChild = spawnChild(newInit);
+			ws._pi = newChild;
 			attachEventForwarding(
 				ws,
 				newChild,
@@ -425,8 +430,6 @@ async function onClientMessage(
 				},
 			);
 			setInit(newInit);
-			setPi(newChild);
-			(ws as WebSocket & { _pi?: PiProcess })._pi = newChild;
 			break;
 		}
 		case "resumeSession": {
@@ -447,10 +450,9 @@ async function onClientMessage(
 			const pending = { sessionId: msg.sessionId, messages };
 			setPending(pending);
 			const newChild = spawnChild(newInit);
+			ws._pi = newChild;
 			attachEventForwarding(ws, newChild, newInit, () => pending, setPending);
 			setInit(newInit);
-			setPi(newChild);
-			(ws as WebSocket & { _pi?: PiProcess })._pi = newChild;
 			break;
 		}
 		default: {
@@ -514,8 +516,25 @@ function waitForMessage<T>(ws: WebSocket, type: ClientMessage["type"]): Promise<
 	});
 }
 
+/**
+ * Send a message to the client. Guards on readyState and applies a
+ * backpressure check: if the socket has buffered more than
+ * `WS_BACKPRESSURE_HIGH_WATER` bytes (a stuck/slow tab under heavy
+ * streaming), we terminate the connection rather than let the buffer
+ * grow unbounded into OOM. The browser reconnects and replays state.
+ */
 function send(ws: WebSocket, msg: ServerMessage): void {
 	if (ws.readyState !== ws.OPEN) return;
+	if (ws.bufferedAmount > WS_BACKPRESSURE_HIGH_WATER) {
+		// Client isn't draining. Close so it reconnects cleanly
+		// rather than letting us OOM buffering for it.
+		try {
+			ws.close(1011, "backpressure: client not draining");
+		} catch {
+			/* ignore */
+		}
+		return;
+	}
 	try {
 		ws.send(JSON.stringify(msg));
 	} catch {

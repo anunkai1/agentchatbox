@@ -17,6 +17,7 @@
 
 import { resolve } from "node:path";
 import { projectRoot } from "./paths.js";
+import { PROVIDER_KEYS, providerApiKeyEnvVar } from "./providers.js";
 
 export interface ServerConfig {
 	port: number;
@@ -49,6 +50,20 @@ function readKey(name: string): string | undefined {
 	return v && v.trim().length > 0 ? v.trim() : undefined;
 }
 
+/**
+ * Build the apiKeys map from the single provider→env-var table in
+ * providers.ts. Each provider's key is read from the same env-var name
+ * that pi itself reads (see providerApiKeyEnvVar), so adding a provider
+ * is a one-line change in providers.ts — no second map to keep in sync.
+ */
+function readApiKeys(): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const provider of PROVIDER_KEYS) {
+		out[provider] = readKey(providerApiKeyEnvVar(provider)) ?? "";
+	}
+	return out;
+}
+
 export const config: ServerConfig = {
 	port: Number.parseInt(process.env.PORT ?? "3000", 10),
 	host: process.env.HOST ?? "0.0.0.0",
@@ -56,25 +71,7 @@ export const config: ServerConfig = {
 		? resolve(process.env.UPLOADS_DIR)
 		: resolve(projectRoot, "uploads"),
 	maxUploadBytes: Number.parseInt(process.env.MAX_UPLOAD_BYTES ?? `${50 * 1024 * 1024}`, 10),
-	apiKeys: {
-		anthropic: readKey("ANTHROPIC_API_KEY") ?? "",
-		openai: readKey("OPENAI_API_KEY") ?? "",
-		google: readKey("GOOGLE_API_KEY") ?? "",
-		xai: readKey("XAI_API_KEY") ?? "",
-		groq: readKey("GROQ_API_KEY") ?? "",
-		cerebras: readKey("CEREBRAS_API_KEY") ?? "",
-		openrouter: readKey("OPENROUTER_API_KEY") ?? "",
-		deepseek: readKey("DEEPSEEK_API_KEY") ?? "",
-		mistral: readKey("MISTRAL_API_KEY") ?? "",
-		minimax: readKey("MiniMax_API_KEY") ?? "",
-		huggingface: readKey("HUGGINGFACE_API_KEY") ?? "",
-		fireworks: readKey("FIREWORKS_API_KEY") ?? "",
-		together: readKey("TOGETHER_API_KEY") ?? "",
-		"vercel-ai-gateway": readKey("VERCEL_AI_GATEWAY_API_KEY") ?? "",
-		zai: readKey("ZAI_API_KEY") ?? "",
-		"kimi-coding": readKey("KIMI_API_KEY") ?? "",
-		opencode: readKey("OPENCODE_API_KEY") ?? "",
-	},
+	apiKeys: readApiKeys(),
 	openaiApiKey: readKey("OPENAI_API_KEY"),
 	// `piBin` and `piCwd` are read lazily — they need to reflect the
 	// process state at boot time, not at module-load time (which could

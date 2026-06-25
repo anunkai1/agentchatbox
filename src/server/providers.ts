@@ -35,7 +35,7 @@ import type { KnownProvider } from "@earendil-works/pi-ai";
  * because "minimax" (and the other custom keys like "kimi-coding")
  * don't appear in the SDK's narrower `KnownProvider` union.
  */
-const PROVIDER_KEYS = [
+export const PROVIDER_KEYS = [
 	"anthropic",
 	"openai",
 	"google",
@@ -66,6 +66,66 @@ export type SupportedProvider = (typeof PROVIDER_KEYS)[number];
 export const KNOWN_PROVIDERS: ReadonlySet<string> = new Set<string>(
 	PROVIDER_KEYS as unknown as string[],
 );
+
+/**
+ * Maps a provider id to the `*_API_KEY` environment-variable name `pi`
+ * reads for it. This is the **single source of truth** for both:
+ *
+ *   - `config.ts`  — which env var to READ at boot to populate apiKeys
+ *   - `pi-process.ts` — which env var to INJECT into the child's env
+ *
+ * Keeping both sides reading from one table means a new provider is a
+ * one-line edit here, not a coordinated change across two files (which
+ * previously drifted: config.ts read `MiniMax_API_KEY`, pi-process.ts
+ * injected `MINIMAX_API_KEY`; same value flowed through, but the two
+ * maps had to be maintained by hand and nothing checked they matched).
+ *
+ * Mirrors `getApiKeyEnvVars()` in `@earendil-works/pi-ai`, which is not
+ * exported. Keep this in sync if pi-ai adds providers.
+ */
+const PROVIDER_API_KEY_ENV: Record<string, string> = {
+	"github-copilot": "COPILOT_GITHUB_TOKEN",
+	anthropic: "ANTHROPIC_API_KEY",
+	"ant-ling": "ANT_LING_API_KEY",
+	openai: "OPENAI_API_KEY",
+	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
+	nvidia: "NVIDIA_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
+	google: "GEMINI_API_KEY",
+	"google-vertex": "GOOGLE_CLOUD_API_KEY",
+	groq: "GROQ_API_KEY",
+	cerebras: "CEREBRAS_API_KEY",
+	xai: "XAI_API_KEY",
+	openrouter: "OPENROUTER_API_KEY",
+	"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+	zai: "ZAI_API_KEY",
+	"zai-coding-cn": "ZAI_CODING_CN_API_KEY",
+	mistral: "MISTRAL_API_KEY",
+	minimax: "MINIMAX_API_KEY",
+	"minimax-cn": "MINIMAX_CN_API_KEY",
+	moonshotai: "MOONSHOT_API_KEY",
+	"moonshotai-cn": "MOONSHOT_API_KEY",
+	huggingface: "HF_TOKEN",
+	fireworks: "FIREWORKS_API_KEY",
+	together: "TOGETHER_API_KEY",
+	opencode: "OPENCODE_API_KEY",
+	"opencode-go": "OPENCODE_API_KEY",
+	"kimi-coding": "KIMI_API_KEY",
+	"cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
+	"cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
+	xiaomi: "XIAOMI_API_KEY",
+	"xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+	"xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+	"xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+};
+
+/**
+ * Returns the env-var name `pi` reads for `provider`'s API key. Falls back
+ * to the `<PROVIDER>_API_KEY` convention for providers not yet listed.
+ */
+export function providerApiKeyEnvVar(provider: string): string {
+	return PROVIDER_API_KEY_ENV[provider] ?? `${provider.toUpperCase()}_API_KEY`;
+}
 
 /**
  * Subset of PROVIDER_KEYS that map to SDK-registered providers (i.e.

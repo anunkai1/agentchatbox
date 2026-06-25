@@ -18,6 +18,7 @@ import express from "express";
 import multer from "multer";
 import type { UploadResponse } from "../shared/protocol.js";
 import { config } from "./config.js";
+import { log } from "./logger.js";
 
 interface UploadMeta {
 	id: string;
@@ -141,10 +142,10 @@ export function createUploadsRouter(): Router {
 		try {
 			await writeFile(sidecarPath(id), JSON.stringify(sidecar));
 		} catch (e) {
-			console.warn(
-				`[uploads] failed to persist sidecar for ${id}:`,
-				e instanceof Error ? e.message : e,
-			);
+			log.warn("failed to persist upload sidecar", {
+				id,
+				error: e instanceof Error ? e.message : String(e),
+			});
 		}
 
 		meta.set(id, entry);

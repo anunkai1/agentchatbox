@@ -116,7 +116,7 @@ Everything goes through `.env`. Keys for the providers you want to use; an empty
 | `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
 | `*_API_KEY`                    | (unset)                       | One per provider — see `src/server/config.ts`  |
 
-Provider keys currently recognised: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `MiniMax_API_KEY`, `HUGGINGFACE_API_KEY`, `FIREWORKS_API_KEY`, `TOGETHER_API_KEY`, `VERCEL_AI_GATEWAY_API_KEY`, `ZAI_API_KEY`, `KIMI_API_KEY`, `OPENCODE_API_KEY`. Only providers with a key are exposed via `/api/models`.
+Provider keys currently recognised: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `MINIMAX_API_KEY`, `HF_TOKEN`, `FIREWORKS_API_KEY`, `TOGETHER_API_KEY`, `AI_GATEWAY_API_KEY`, `ZAI_API_KEY`, `KIMI_API_KEY`, `OPENCODE_API_KEY`. These names match the env vars `pi` itself reads (single source of truth in `src/server/providers.ts::providerApiKeyEnvVar`). Only providers with a key are exposed via `/api/models`.
 
 ## Endpoints
 
