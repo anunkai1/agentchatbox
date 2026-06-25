@@ -73,12 +73,6 @@ export interface VoicesResponse {
 //       queue a steering message while the agent is running. Delivered
 //       after the current assistant turn finishes its tool calls,
 //       before the next LLM call. Translated to `pi` `steer`.
-//   { type: "next_turn", text, images? }
-//       queue a message for the NEXT prompt, regardless of agent phase.
-//       Never throws — works whether the agent is streaming or idle, and
-//       persists across agent_end. Use this as the fallback when a `steer`
-//       arrives too late (pi returns success:false "Cannot steer while
-//       idle"). Translated to `pi` `next_turn`.
 //   { type: "abort" }
 //       abort the current run. Translated to `pi` `abort`.
 //   { type: "setModel", modelId, provider }
@@ -166,7 +160,6 @@ export type ClientMessage =
 	  }
 	| { type: "prompt"; text: string; images?: PromptImage[] }
 	| { type: "steer"; text: string; images?: PromptImage[] }
-	| { type: "next_turn"; text: string; images?: PromptImage[] }
 	| { type: "abort" }
 	| { type: "setModel"; modelId: string; provider: string }
 	| { type: "setThinking"; level: ThinkingLevel }

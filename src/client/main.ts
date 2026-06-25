@@ -184,19 +184,32 @@ let steerHook: SendPromptHook = () => {
 };
 
 /**
- * The most recently sent steer, remembered so we can retry it as
- * `next_turn` if pi refuses it (the agent went idle between the
- * client's isStreaming check and the WS send — an inherent race).
- * Cleared on successful delivery or after retry.
+ * Recover a steering message that pi can no longer drain on its own.
+ *
+ * pi only drains its steering queue mid-run (after tool calls, before
+ * the next LLM call). If the agent goes idle with a steer still queued —
+ * it finished its turn in the window after the steer landed, or the
+ * steer arrived after idle (an inherent race, since `isStreaming` is
+ * checked client-side) — the message would sit in pi's queue forever
+ * and the "⏳ queued" badge would never clear.
+ *
+ * Re-send the stranded steer as a prompt: pi drains any leftover
+ * steering queue at the top of every run, so the steer is honored, and
+ * the prompt itself is what triggers the turn that delivers it. (The
+ * steer text may also appear as the prompt; that's harmless — it just
+ * reinforces the instruction. Images were already handed to pi with
+ * the original steer and live in its queue, so they are not re-sent.)
  */
-let lastSteerSent: { text: string; images?: Array<{ data: string; mimeType: string }> } | null = null;
-
-/** Closure over `chatClient.nextTurn`, wired in boot(). Used by the
- * steer-race recovery in `onEvent` (a module-scope function that can't
- * see the boot-local `chatClient`). */
-let nextTurnHook: SendPromptHook = () => {
-	/* will be replaced by boot() */
-};
+function recoverStrandedSteer(): void {
+	if (state.isStreaming) return;
+	const stranded = state.messages.find(
+		(m): m is Extract<PersistedMessage, { kind: "steer" }> => m.kind === "steer" && !m.delivered,
+	);
+	if (!stranded) return;
+	if (!stranded.text) return;
+	sendPromptHook(stranded.text);
+	setStreaming(true);
+}
 
 // Local appendNode — main.ts only uses it once (in sendAsUser), so we
 // keep the dep on render.ts for the bulk of the API and call it inline.
@@ -276,19 +289,6 @@ function onEvent(event: Record<string, unknown>): void {
 	// biome-ignore lint/suspicious/noExplicitAny: pi RPC events are an undocumented superset of AgentEvent; permissive cast is intentional for property access, the switch ignores unknown types.
 	const e = event as Record<string, any>;
 	switch (e.type) {
-		case "response": {
-			// The server forwards pi's success:false response frames (it
-			// drops success acks as noise). A failed steer means the
-			// agent went idle between our isStreaming check and the send —
-			// an inherent race. Recover transparently by retrying the
-			// same message as next_turn, which pi never refuses.
-			if (e.command === "steer" && e.success === false && lastSteerSent) {
-				const { text, images } = lastSteerSent;
-				lastSteerSent = null;
-				nextTurnHook(text, images);
-			}
-			break;
-		}
 		case "agent_start":
 			setStreaming(true);
 			break;
@@ -297,6 +297,10 @@ function onEvent(event: Record<string, unknown>): void {
 			setStreaming(false);
 			// No local save — the server's `pi` child auto-persists
 			// every event to its JSONL session file as it happens.
+			// A steer stranded in pi's queue when the agent went idle
+			// (it finished before draining the steer) can't be delivered
+			// until the next run — recover now.
+			recoverStrandedSteer();
 			break;
 
 		case "turn_start":
@@ -387,9 +391,13 @@ function onEvent(event: Record<string, unknown>): void {
 			// pi reports the current steering/follow-up queue. We use the
 			// steering array to flip our queued steer bubbles to
 			// "delivered" as the agent consumes them.
-			reconcileSteerQueue(
-				Array.isArray(e.steering) ? (e.steering as unknown[]) : [],
-			);
+			const steering = Array.isArray(e.steering) ? (e.steering as unknown[]) : [];
+			reconcileSteerQueue(steering);
+			// If a steer lands while the agent is already idle (the race:
+			// isStreaming was true when we sent, but the agent finished
+			// before the steer reached pi), pi will never drain it on its
+			// own — recover.
+			if (!state.isStreaming && steering.length > 0) recoverStrandedSteer();
 			break;
 		}
 
@@ -636,11 +644,7 @@ async function boot(): Promise<void> {
 		chatClient.prompt(text, images);
 	};
 	steerHook = (text, images) => {
-		lastSteerSent = { text, images };
 		chatClient.steer(text, images);
-	};
-	nextTurnHook = (text, images) => {
-		chatClient.nextTurn(text, images);
 	};
 }
 

@@ -53,12 +53,6 @@ export interface ChatClient {
 	 * after the current assistant turn finishes its tool calls.
 	 */
 	steer(text: string, images?: PromptImage[]): void;
-	/**
-	 * Queue a message for the NEXT prompt, regardless of agent phase.
-	 * Never refused — persists across agent_end. Recovery path for a
-	 * steer that arrived after the agent went idle.
-	 */
-	nextTurn(text: string, images?: PromptImage[]): void;
 	/** Abort the current run, if any. */
 	abort(): void;
 	/** Switch to a different model mid-session. */
@@ -226,17 +220,6 @@ export function createChatClient(): ChatClient {
 			}
 			send({
 				type: "steer",
-				text,
-				...(images && images.length > 0 ? { images } : {}),
-			});
-		},
-		nextTurn: (text, images) => {
-			if (!inited) {
-				for (const l of errorListeners) l("next_turn sent before init");
-				return;
-			}
-			send({
-				type: "next_turn",
 				text,
 				...(images && images.length > 0 ? { images } : {}),
 			});
