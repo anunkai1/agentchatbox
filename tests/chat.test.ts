@@ -11,7 +11,7 @@
  * chat module is imported.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { Server as HttpServer } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -81,6 +81,31 @@ const EXIT_BEFORE_SESSION_SCRIPT = `#!/usr/bin/env bash
 exit 127
 `;
 
+const TRACK_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that records every spawn by appending its PID to the file
+# named in $AGENTCHATBOX_FAKE_PI_MARKER. Used by the detach/reattach
+# tests to prove a reconnect reuses the SAME child (one spawn) rather
+# than respawning (two spawns) — the core guarantee of the session
+# registry.
+if [ -n "\${AGENTCHATBOX_FAKE_PI_MARKER}" ]; then
+  echo "$$" >> "\${AGENTCHATBOX_FAKE_PI_MARKER}"
+fi
+sleep 0.05
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"track-session-001","messageCount":0}}'
+      ;;
+    "")
+      ;;
+    *)
+      echo '{"type":"response","command":"'"$type"'","success":true}'
+      ;;
+  esac
+done
+`;
+
 const STEER_RACE_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that REFUSES steers (success:false, simulating the agent
 # having just gone idle). Used to verify the server forwards
@@ -104,7 +129,7 @@ while IFS= read -r line; do
     "")
       ;;
     *)
-      echo "{\"type\":\"response\",\"command\":\"$type\",\"success\":true}"
+      echo "{"type":"response","command":"$type","success":true}"
       ;;
   esac
 done
@@ -112,7 +137,7 @@ done
 
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
-	behavior: "echo" | "ack" | "exit-before-session" | "steer-race",
+	behavior: "echo" | "ack" | "exit-before-session" | "steer-race" | "track",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -123,7 +148,9 @@ function makeFakePi(
 				? ACK_SCRIPT
 				: behavior === "steer-race"
 					? STEER_RACE_SCRIPT
-					: EXIT_BEFORE_SESSION_SCRIPT;
+					: behavior === "track"
+						? TRACK_SCRIPT
+						: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -456,4 +483,134 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			close();
 		}
 	});
+
+	it("does NOT kill the child on disconnect; a reconnect reattaches to the same child", async () => {
+		// The core fix: backgrounding/locking the phone drops the WS,
+		// but the `pi` child must keep running so work isn't interrupted.
+		// On reconnect the client sends init with the sessionId it got
+		// from `ready`; the registry reattaches to the still-live child
+		// instead of spawning a new one. We prove "same child" by having
+		// the fake-pi append its PID to a marker file on every spawn —
+		// exactly one spawn across the disconnect/reconnect.
+		fakePiPath = makeFakePi("track");
+		process.env.PI_BIN = fakePiPath;
+		const marker = join(mkdtempSync(join(tmpdir(), "marker-")), "spawns");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		// --- first connection: fresh session ---
+		const c1 = await connectClient();
+		try {
+			c1.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			const ready1 = await c1.inbox.waitFor(1);
+			expect(ready1[0]?.type).toBe("ready");
+			expect((ready1[0] as { sessionId?: string }).sessionId).toBe("track-session-001");
+		} finally {
+			c1.close();
+		}
+
+		// Let the server process the close → detach (the child must NOT die).
+		await new Promise((r) => setTimeout(r, 250));
+		expect(spawnCount(marker)).toBe(1); // still exactly one child
+
+		// --- second connection: reattach by sessionId ---
+		const c2 = await connectClient();
+		try {
+			c2.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+					sessionId: "track-session-001",
+				}),
+			);
+			const ready2 = await c2.inbox.waitFor(1, 3000);
+			expect(ready2[0]?.type).toBe("ready");
+		} finally {
+			c2.close();
+		}
+
+		// Decisive: still only ONE spawn. A respawn (the old behavior)
+		// would have written a second PID.
+		expect(spawnCount(marker)).toBe(1);
+		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+	});
+
+	it("idle detached session is reaped after the grace period", async () => {
+		// A finished + abandoned session is cleaned up so children don't
+		// leak forever — but only once idle AND detached. Tiny grace via
+		// env to exercise the reaping path quickly.
+		fakePiPath = makeFakePi("track");
+		process.env.PI_BIN = fakePiPath;
+		const marker = join(mkdtempSync(join(tmpdir(), "marker-")), "spawns");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		process.env.AGENTCHATBOX_IDLE_GRACE_MS = "300";
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const c1 = await connectClient();
+		try {
+			c1.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await c1.inbox.waitFor(1); // ready
+		} finally {
+			c1.close(); // detach — session is idle (no turn in flight)
+		}
+
+		// After the grace period, the idle detached child is reaped.
+		await new Promise((r) => setTimeout(r, 900));
+		const pids = readPids(marker);
+		expect(pids.length).toBe(1);
+		expect(isAlive(pids[0])).toBe(false);
+
+		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+		delete process.env.AGENTCHATBOX_IDLE_GRACE_MS;
+	});
 });
+
+/** Number of fake-pi spawns recorded in the marker file. */
+function spawnCount(marker: string): number {
+	return readPids(marker).length;
+}
+
+/** Read the recorded spawn PIDs from the marker file. */
+function readPids(marker: string): number[] {
+	try {
+		const raw = readFileSync(marker, "utf8") as string;
+		return raw
+			.split("\n")
+			.map((l) => Number.parseInt(l.trim(), 10))
+			.filter((n) => Number.isFinite(n));
+	} catch {
+		return [];
+	}
+}
+
+/** Whether a process with the given pid is currently alive. */
+function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}

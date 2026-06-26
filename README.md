@@ -30,10 +30,13 @@ Browser (vanilla DOM, no framework)
   │  GET  /api/changelog — last N commits
   ▼
 Node server (this repo) — TRANSPORT LAYER
-  │  one `pi --mode rpc` subprocess per WebSocket connection
+  │  one `pi --mode rpc` subprocess per session, owned by a session registry
   │  forwards pi stdout NDJSON → browser as {type:"event", event:<line>}
   │  translates client WS messages → pi RPC commands on stdin
   │  session resume: kill child, respawn with --session <id>, replay transcript
+  │  detach-on-disconnect: dropping the WS parks the child (does NOT kill it);
+  │     a reconnect reattaches to the still-live session, so backgrounding the
+  │     tab on Android no longer interrupts in-flight work
   ▼
 pi --mode rpc subprocess (the actual coding agent)
   │  tools: bash, read, write, edit, ls, web_search, fetch_content, code_search
@@ -62,6 +65,8 @@ src/
   server/
     index.ts              # Express bootstrap + route mounting
     chat.ts               # WS /api/chat: thin pipe to pi --mode rpc subprocess
+    session-registry.ts   # detachable session registry: parks children across
+                          #   WS disconnects, reattaches on reconnect, reaps idle
     pi-process.ts         # PiProcess: spawns pi, strict \n NDJSON splitter, kill with SIGTERM→SIGKILL
     session-list.ts       # listPiSessions / readPiSessionMessages (reads pi JSONL files)
     config.ts             # .env → ServerConfig (piBin, piCwd, apiKeys)
@@ -167,6 +172,8 @@ One connection per session. The client must send `init` as its first message; th
 The `event` frames are whatever `pi --mode rpc` emits on stdout — the same event stream the TUI would see (`message_update` for streaming tokens, `tool_execution_start`/`end`, `agent_end`, etc.). The client's renderer handles the full `pi` event surface; unknown types are ignored.
 
 **Session lifecycle:** `newSession` kills the current child and spawns a fresh one (no `--session`). `resumeSession` kills the current child, spawns with `--session <id>`, and replays the prior transcript (read from disk) as a `transcript` message before live events flow. The WS is NOT closed during respawn — the client gets a new `ready` when the new child comes up.
+
+**Disconnect = detach, not kill.** When the WS drops (Android backgrounding the tab, locking the phone, a network blip), the server does **not** kill the `pi` child. The session registry parks it and keeps it running, so in-flight work is not interrupted. When the browser reconnects and sends `init` with the same `sessionId`, the server reattaches to the still-live child, replays the on-disk transcript, and — if the agent is mid-turn — replays the buffered current-turn events so the streaming UI reconstructs exactly. A parked session is only reaped after it has gone idle (its turn ended) **and** stayed unattached past a grace period (`AGENTCHATBOX_IDLE_GRACE_MS`, default 5 minutes); a session mid-turn is never reaped. This is the mobile-robustness fix — it makes the agent survive a phone lock the way a `tmux` session survives closing a terminal.
 
 ## Run as a system service
 

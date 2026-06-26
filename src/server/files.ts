@@ -35,7 +35,7 @@ const ROOT = resolve(config.piCwd);
  */
 function isWithinRoot(target: string): boolean {
 	const rel = relative(ROOT, target);
-	return rel === "" || (!rel.startsWith("..") && !resolve(target).startsWith(".."));
+	return rel === "" || !rel.startsWith("..");
 }
 
 export function createFilesRouter(): Router {
@@ -60,7 +60,7 @@ export function createFilesRouter(): Router {
 			return;
 		}
 
-		let s;
+		let s: Awaited<ReturnType<typeof stat>>;
 		try {
 			s = await stat(target);
 		} catch {

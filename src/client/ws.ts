@@ -24,15 +24,9 @@ export type ReadyListener = (info: {
 	sessionId?: string;
 }) => void;
 export type ErrorListener = (message: string) => void;
-export type StatusListener = (status: "connecting" | "open" | "closed") => void;
+export type StatusListener = (status: "connecting" | "open" | "closed" | "stalled") => void;
 export type SessionsListener = (sessions: SessionSummary[]) => void;
 export type TranscriptListener = (sessionId: string, messages: Message[]) => void;
-export type SessionResumedListener = (info: {
-	sessionId: string;
-	modelId: string;
-	provider: string;
-	thinkingLevel: ThinkingLevel;
-}) => void;
 
 export interface ChatClient {
 	/**
@@ -73,14 +67,12 @@ export interface ChatClient {
 	onReady(listener: ReadyListener): () => void;
 	/** Called on protocol-level errors. */
 	onError(listener: ErrorListener): () => void;
-	/** Called on connection status changes. */
+	/** Called on connection status changes ("stalled" = OPEN but no heartbeat within the watchdog window). */
 	onStatus(listener: StatusListener): () => void;
 	/** Called with the session list in response to listSessions(). */
 	onSessionsUpdated(listener: SessionsListener): () => void;
 	/** Called on resume with the prior transcript, before live events flow. */
 	onTranscript(listener: TranscriptListener): () => void;
-	/** Called after newSession / resumeSession completes. */
-	onSessionResumed(listener: SessionResumedListener): () => void;
 	/** Force a reconnect. */
 	reconnect(): void;
 	/** Permanently close. */
@@ -112,7 +104,6 @@ export function createChatClient(): ChatClient {
 	const statusListeners = new Set<StatusListener>();
 	const sessionsListeners = new Set<SessionsListener>();
 	const transcriptListeners = new Set<TranscriptListener>();
-	const sessionResumedListeners = new Set<SessionResumedListener>();
 
 	function setStatus(status: "connecting" | "open" | "closed" | "stalled") {
 		currentStatus = status;
@@ -173,16 +164,6 @@ export function createChatClient(): ChatClient {
 				case "transcript":
 					for (const l of transcriptListeners) {
 						l(String(msg.sessionId ?? ""), (msg.messages as Message[]) ?? []);
-					}
-					break;
-				case "sessionResumed":
-					for (const l of sessionResumedListeners) {
-						l({
-							sessionId: String(msg.sessionId ?? ""),
-							modelId: String(msg.modelId ?? ""),
-							provider: String(msg.provider ?? ""),
-							thinkingLevel: msg.thinkingLevel as ThinkingLevel,
-						});
 					}
 					break;
 				case "error":
@@ -315,10 +296,6 @@ export function createChatClient(): ChatClient {
 		onTranscript: (l) => {
 			transcriptListeners.add(l);
 			return () => transcriptListeners.delete(l);
-		},
-		onSessionResumed: (l) => {
-			sessionResumedListeners.add(l);
-			return () => sessionResumedListeners.delete(l);
 		},
 		reconnect: () => {
 			if (ws) ws.close();

@@ -61,6 +61,10 @@ export interface VoicesResponse {
 //   { type: "transcript", sessionId, messages: Message[] }
 //       on resume: the prior transcript replayed before live events flow
 //   { type: "error", message }
+//
+// Note: there is no separate "sessionResumed" message. newSession /
+// resumeSession respawn the `pi` child, which re-emits `ready` (and
+// `transcript` for resume) — the client reacts to those.
 //       unrecoverable error (child spawn failed, etc.)
 //   { type: "ping" }
 //       heartbeat sent every ~20s. The client uses it to detect
@@ -90,11 +94,11 @@ export interface VoicesResponse {
 //       directory; replies with `{type:"sessions",...}`).
 //   { type: "resumeSession", sessionId }
 //       kill current child, spawn `pi --session <id>`, replay
-//       transcript, then forward live events. Replies with
-//       `{type:"sessionResumed",...}`.
+//       transcript, then forward live events. The new child emits a
+//       fresh `ready` (and a `transcript` replay) the client reacts to.
 //   { type: "newSession" }
-//       kill current child, spawn a fresh one (no --session). Replies
-//       with `{type:"sessionResumed",...}`.
+//       kill current child, spawn a fresh one (no --session). The new
+//       child emits a fresh `ready` the client reacts to.
 //   { type: "renameSession", name }
 //       Translated to `pi` `set_session_name`.
 
@@ -145,13 +149,6 @@ export type ServerMessage =
 	| { type: "event"; event: Record<string, unknown> }
 	| { type: "sessions"; sessions: SessionSummary[] }
 	| { type: "transcript"; sessionId: string; messages: Message[] }
-	| {
-			type: "sessionResumed";
-			sessionId: string;
-			modelId: string;
-			provider: string;
-			thinkingLevel: ThinkingLevel;
-	  }
 	| { type: "ping" }
 	| { type: "error"; message: string };
 
