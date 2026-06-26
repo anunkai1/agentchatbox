@@ -15,7 +15,6 @@
 
 import type {
 	AssistantMessage,
-	Message,
 	TextContent,
 	ThinkingContent,
 	ToolResultMessage,
@@ -23,6 +22,8 @@ import type {
 import { getCapabilities, getHealth, getModels, type ModelInfo } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
+import { setRichText } from "./linkify.js";
+import { projectTranscript } from "./project.js";
 import {
 	appendAssistantPlaceholder,
 	appendError,
@@ -55,7 +56,6 @@ import {
 import { type PersistedMessage, state } from "./state.js";
 import { handleFileAttach, handleVoiceRecord, toggleAutoSpeak } from "./voice.js";
 import { createChatClient } from "./ws.js";
-import { setRichText } from "./linkify.js";
 
 // ---------------------------------------------------------------------------
 // History (↑/↓)
@@ -594,7 +594,7 @@ async function boot(): Promise<void> {
 	// matches what's on screen — avoids a flicker + scroll jump every
 	// time the mobile WS drops and reconnects.
 	chatClient.onTranscript((sessionId, messages) => {
-		const projected = messages.map(projectToPersisted);
+		const projected = projectTranscript(messages);
 		const sameSession = state.sessionId === sessionId;
 		const sameLength = state.messages.length === projected.length;
 		const lastMatches =
@@ -616,14 +616,6 @@ async function boot(): Promise<void> {
 	// the new session's metadata. We adopt it (model/thinking) but
 	// don't touch the message cache — that's already populated by
 	// the transcript message for resume, or is empty for new.
-	chatClient.onSessionResumed((info) => {
-		state.sessionId = info.sessionId;
-		state.currentModelId = info.modelId;
-		state.currentProvider = info.provider;
-		state.currentThinking = info.thinkingLevel;
-		refreshStatus();
-	});
-
 	// Send the init handshake as soon as the WS opens. The server is
 	// waiting for this before it spawns the `pi` child. If we have
 	// no model picked yet, default to GLM-5.2 (if available in
@@ -669,60 +661,6 @@ async function boot(): Promise<void> {
 	steerHook = (text, images) => {
 		chatClient.steer(text, images);
 	};
-}
-
-/**
- * Project an SDK-shaped Message (from the server's transcript
- * replay) to the renderer's flat PersistedMessage cache type. The
- * types are mostly equivalent for user/assistant messages; tool
- * messages and toolResult messages get merged into a single
- * "tool" cache row that the renderer already knows how to paint.
- */
-function projectToPersisted(m: Message): PersistedMessage {
-	switch (m.role) {
-		case "user":
-			return { kind: "user", text: extractText(m.content) };
-		case "assistant":
-			return {
-				kind: "assistant",
-				text: extractText(m.content),
-				thinking: extractThinking(m.content),
-			};
-		case "toolResult":
-			return {
-				kind: "tool",
-				name: m.toolName,
-				args: "(replayed)",
-				result: extractText(m.content),
-				isError: m.isError,
-			};
-		default:
-			// Defensive: a torn JSONL write could yield a runtime role the
-			// static `Message` union doesn't cover. Surface it rather than
-			// drop the row silently.
-			return { kind: "error", text: JSON.stringify(m).slice(0, 500) };
-	}
-}
-
-function extractText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (Array.isArray(content)) {
-		return content
-			.filter((b: { type?: string }) => b && b.type === "text")
-			.map((b: { text?: string }) => b.text ?? "")
-			.join("");
-	}
-	return "";
-}
-
-function extractThinking(content: unknown): string {
-	if (Array.isArray(content)) {
-		return content
-			.filter((b: { type?: string }) => b && b.type === "thinking")
-			.map((b: { thinking?: string }) => b.thinking ?? "")
-			.join("");
-	}
-	return "";
 }
 
 boot();

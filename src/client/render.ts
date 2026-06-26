@@ -119,6 +119,11 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		card.append(head);
 		if (m.result !== undefined) {
 			card.append(el("pre", { class: `tool-result ${m.isError ? "tool-error" : ""}` }, m.result));
+		} else if (m.interrupted) {
+			// A replayed tool call whose session died before a result was
+			// written. Nothing is executing it, so don't show the indefinite
+			// "running…" spinner — surface it as interrupted instead.
+			card.append(el("div", { class: "tool-interrupted" }, "⚠ interrupted (session ended)"));
 		} else {
 			card.append(el("div", { class: "tool-pending" }, "running…"));
 		}

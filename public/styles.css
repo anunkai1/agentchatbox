@@ -705,6 +705,16 @@ body {
 .tool-result.tool-error {
 	color: var(--c-err);
 }
+/* A replayed tool call whose session was interrupted before a result
+   was written. Distinct from the live "running…" spinner — nothing
+   is executing the call, so we surface it as ended rather than pending. */
+.tool-interrupted {
+	color: var(--c-err);
+	font-size: 12.5px;
+	font-style: italic;
+	padding: 0 12px 8px;
+	opacity: 0.85;
+}
 
 /* speak button on each assistant message */
 .speak-btn {

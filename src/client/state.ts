@@ -33,6 +33,14 @@ export type PersistedMessage =
 			args: unknown;
 			result?: string;
 			isError?: boolean;
+			/**
+			 * Set when a replayed tool call never received a result — the
+			 * session was interrupted mid-turn (e.g. the `pi` child died
+			 * while a tool was running). Rendered as "interrupted" rather
+			 * than the indefinite "running…" spinner, since nothing is
+			 * actually executing the call anymore.
+			 */
+			interrupted?: boolean;
 	  }
 	| { kind: "error"; text: string }
 	/**
