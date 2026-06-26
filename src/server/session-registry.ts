@@ -204,6 +204,17 @@ class SessionRegistry {
 	 * session id. Cancels any pending idle reap — somebody is watching.
 	 */
 	attach(session: LiveSession, ws: PiSocket): void {
+		// If a DIFFERENT view is already bound to this session (the user
+		// opened the same session in a second tab, or a reconnect raced a
+		// not-yet-closed old socket), eject it cleanly instead of silently
+		// orphaning it — the prior tab would otherwise keep its `_session`
+		// set but never receive another event, leaving it frozen with no
+		// error. Tell it why, then close so its close handler runs (→
+		// detach, which is a no-op here because `session.ws` no longer
+		// points at it). Note `ejectView` unbinds `session.ws` itself.
+		const prior = session.ws;
+		if (prior && prior !== ws) this.ejectView(prior);
+
 		ws._session = session;
 		session.ws = ws;
 		if (session.idleTimer) {
@@ -211,6 +222,31 @@ class SessionRegistry {
 			session.idleTimer = null;
 		}
 		if (session.ready) this.sendReadyAndCatchup(session);
+	}
+
+	/**
+	 * Eject a view that has been displaced by another attach. Sends an
+	 * error frame so the client can show a readable reason, then closes
+	 * with code 4001 ("session taken over"). The displaced client treats
+	 * 4001 as TERMINAL — it does not auto-reconnect — so the two tabs
+	 * don't ping-pong the session back and forth forever (A ejected →
+	 * reconnects → re-init with sessionId → steals back → B ejected →
+	 * ...). A normal drop (heartbeat timeout, reconnect race) closes with
+	 * a different code and reconnects as usual. Clears the ws's `_session`
+	 * so a late message on it isn't routed back into the session it lost.
+	 */
+	private ejectView(ws: PiSocket): void {
+		ws._session = null;
+		deliver(ws, {
+			type: "error",
+			message:
+				"this session was opened in another tab. Reconnect there to continue, or reload here to start a fresh chat.",
+		});
+		try {
+			ws.close(4001, "session taken over by another connection");
+		} catch {
+			/* ignore */
+		}
 	}
 
 	/**

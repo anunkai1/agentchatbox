@@ -172,9 +172,19 @@ export function createChatClient(): ChatClient {
 			}
 		});
 
-		ws.addEventListener("close", () => {
+		ws.addEventListener("close", (ev) => {
 			setStatus("closed");
 			ws = null;
+			// 4001 = "session taken over by another connection" (see
+			// session-registry.ts ejectView). This is terminal for THIS tab:
+			// the session is now owned elsewhere, and auto-reconnecting would
+			// just re-init with the same sessionId and steal it back, starting
+			// a reconnect war between the tabs. Show the error (already
+			// delivered as a {type:"error"} frame just before close) and STOP.
+			// The user reloads this tab to start fresh, or uses the other tab.
+			// Any other close code (heartbeat timeout, reconnect race,
+			// transient network drop) reconnects normally below.
+			if (ev.code === 4001) return;
 			if (!manualClose) {
 				const base = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
 				// Apply ±20% jitter so multiple browser tabs reconnecting

@@ -625,7 +625,7 @@ describe("mountChatWs — pi subprocess pipe", () => {
 
 			// The actual regression check: a prompt now MUST reach child B
 			// and come back as a live event stream. With the bug, the prompt
-		// went to killed child A and we'd time out with no new events.
+			// went to killed child A and we'd time out with no new events.
 			const before = inbox.all().length;
 			ws.send(JSON.stringify({ type: "prompt", text: "after resume" }));
 			const events = await waitForEventOfType(inbox, "agent_start", before, 3000);
@@ -636,9 +636,76 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			close();
 		}
 	});
-});
 
-/** Poll the inbox until it has seen `count` ready frames, or time out. */
+	it("a second tab attaching to a live session ejects the first (error + 4001), no silent orphan", async () => {
+		// Regression: attach() used to silently overwrite session.ws,
+		// leaving the displaced tab deaf forever (no error, just no
+		// events). The fix ejects the prior view: delivers an error frame
+		// and closes with code 4001 ("session taken over"), which the
+		// client treats as terminal so the two tabs don't reconnect-war.
+		fakePiPath = makeFakePi("track");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		// --- tab A: fresh connect, acquires session track-session-001 ---
+		const c1 = await connectClient();
+		const c1Close: { code?: number; reason?: string } = {};
+		c1.ws.on("close", (code, reason) => {
+			c1Close.code = code;
+			c1Close.reason = reason.toString();
+		});
+		try {
+			c1.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			const ready1 = await c1.inbox.waitFor(1);
+			expect(ready1[0]?.type).toBe("ready");
+			expect((ready1[0] as { sessionId?: string }).sessionId).toBe("track-session-001");
+
+			// --- tab B: reconnect by the SAME sessionId → reattach → ejects A ---
+			const c2 = await connectClient();
+			try {
+				c2.ws.send(
+					JSON.stringify({
+						type: "init",
+						provider: "deepseek",
+						modelId: "m1",
+						thinkingLevel: "off",
+						sessionId: "track-session-001",
+					}),
+				);
+				const ready2 = await c2.inbox.waitFor(1, 3000);
+				expect(ready2[0]?.type).toBe("ready");
+
+				// Tab A must have been closed with code 4001 AND received an
+				// error frame explaining why (the readable reason lives in
+				// the error message, not the close reason, so the UI can
+				// show it).
+				await new Promise((r) => setTimeout(r, 400));
+				expect(c1Close.code).toBe(4001);
+				const errs = c1.inbox.all().filter((m) => m.type === "error");
+				expect(errs.length).toBe(1);
+				expect(String((errs[0] as { message?: string }).message ?? "")).toMatch(/another tab/i);
+				// (Prompt routing from the winning tab is covered by the
+				// stale-closure test above; success acks from this fake-pi
+				// are dropped as noise by the server, so we don't re-check.)
+			} finally {
+				c2.close();
+			}
+		} finally {
+			// c1 may already be closed by the ejection; close() is idempotent.
+			c1.close();
+		}
+	});
+});
 async function waitForReadyCount(inbox: Inbox, count: number, timeoutMs: number): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -661,9 +728,7 @@ async function waitForEventOfType(
 	while (Date.now() < deadline) {
 		const recent = inbox.all().slice(afterIndex);
 		const hit = recent.filter(
-			(m) =>
-				m.type === "event" &&
-				(m.event as { type?: string } | undefined)?.type === innerType,
+			(m) => m.type === "event" && (m.event as { type?: string } | undefined)?.type === innerType,
 		);
 		if (hit.length > 0) return hit;
 		await new Promise((r) => setTimeout(r, 20));
