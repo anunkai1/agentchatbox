@@ -157,7 +157,18 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 			deliverError(ws, "malformed JSON");
 			return;
 		}
-		onClientMessage(ws, msg, session);
+		// Read the CURRENTLY bound session off the socket — NOT the
+		// `session` captured at init time. newSession / resumeSession swap
+		// the bound session via registry.attach (which sets ws._session);
+		// the captured variable would still point at the now-killed old
+		// child, whose pi.send() silently drops commands (PiProcess.killed),
+		// and the prompt would vanish into the void — the hang bug.
+		const current = ws._session;
+		if (!current) {
+			deliverError(ws, "no active session");
+			return;
+		}
+		onClientMessage(ws, msg, current);
 	});
 
 	// Detach on disconnect — the agent keeps running. The registry reaps

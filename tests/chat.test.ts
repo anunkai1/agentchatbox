@@ -585,7 +585,91 @@ describe("mountChatWs — pi subprocess pipe", () => {
 		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
 		delete process.env.AGENTCHATBOX_IDLE_GRACE_MS;
 	});
+
+	it("prompts after resumeSession reach the NEW child (no stale-session hang)", async () => {
+		// Regression: the ws.on("message") handler used to close over the
+		// `session` captured at init time. resumeSession / newSession swap
+		// the bound session via registry.attach (which updates ws._session),
+		// but the captured variable still pointed at the now-killed old
+		// child — whose pi.send() silently drops commands (PiProcess.killed).
+		// The prompt vanished into the void and the UI hung forever. The
+		// fix reads ws._session fresh on every message; this test proves a
+		// prompt sent AFTER a resumeSession still produces a full event
+		// stream from the live child.
+		fakePiPath = makeFakePi("echo");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			const ready1 = await inbox.waitFor(1);
+			expect(ready1[0]?.type).toBe("ready");
+
+			// Switch to a different session. replaceSession kills child A
+			// and spawns + binds child B.
+			ws.send(JSON.stringify({ type: "resumeSession", sessionId: "other-session-xyz" }));
+			// Wait for B's ready (the respawn re-emits ready).
+			const gotSecondReady = await waitForReadyCount(inbox, 2, 3000);
+			expect(gotSecondReady).toBe(true);
+
+			// The actual regression check: a prompt now MUST reach child B
+			// and come back as a live event stream. With the bug, the prompt
+		// went to killed child A and we'd time out with no new events.
+			const before = inbox.all().length;
+			ws.send(JSON.stringify({ type: "prompt", text: "after resume" }));
+			const events = await waitForEventOfType(inbox, "agent_start", before, 3000);
+			expect(events).toContainEqual(
+				expect.objectContaining({ type: "event", event: { type: "agent_start" } }),
+			);
+		} finally {
+			close();
+		}
+	});
 });
+
+/** Poll the inbox until it has seen `count` ready frames, or time out. */
+async function waitForReadyCount(inbox: Inbox, count: number, timeoutMs: number): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const readies = inbox.all().filter((m) => m.type === "ready");
+		if (readies.length >= count) return true;
+		await new Promise((r) => setTimeout(r, 20));
+	}
+	return false;
+}
+
+/** Poll the inbox until an `event` wrapper whose inner event has the
+ * given type arrives after index `afterIndex`. Returns matching msgs. */
+async function waitForEventOfType(
+	inbox: Inbox,
+	innerType: string,
+	afterIndex: number,
+	timeoutMs: number,
+): Promise<AnyMsg[]> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const recent = inbox.all().slice(afterIndex);
+		const hit = recent.filter(
+			(m) =>
+				m.type === "event" &&
+				(m.event as { type?: string } | undefined)?.type === innerType,
+		);
+		if (hit.length > 0) return hit;
+		await new Promise((r) => setTimeout(r, 20));
+	}
+	return [];
+}
 
 /** Number of fake-pi spawns recorded in the marker file. */
 function spawnCount(marker: string): number {
