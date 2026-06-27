@@ -67,12 +67,17 @@ export function toggleAutoSpeak(): void {
 // File attach
 // ---------------------------------------------------------------------------
 
-export async function handleFileAttach(e: Event): Promise<void> {
-	const input = e.target as HTMLInputElement;
-	const files = input.files;
-	if (!files || files.length === 0) return;
+/**
+ * Shared core: take a list of File objects (from the file picker, a
+ * paste, or a drag-and-drop) and upload each one, remembering image
+ * bytes for multimodal models and inserting a markdown link into the
+ * input. The file picker resets its own .value; callers that don't
+ * come from an <input type=file> simply pass an empty Event-less path.
+ */
+export async function attachFiles(files: File[]): Promise<void> {
+	if (files.length === 0) return;
 	const ta = $<HTMLTextAreaElement>("#input");
-	for (const file of Array.from(files)) {
+	for (const file of files) {
 		try {
 			// Run the upload and the base64 conversion in parallel —
 			// they're independent. (Previously these were sequential,
@@ -97,7 +102,42 @@ export async function handleFileAttach(e: Event): Promise<void> {
 			appendError(err instanceof Error ? err.message : String(err));
 		}
 	}
+}
+
+export async function handleFileAttach(e: Event): Promise<void> {
+	const input = e.target as HTMLInputElement;
+	const files = input.files;
+	if (!files || files.length === 0) return;
+	await attachFiles(Array.from(files));
 	input.value = "";
+}
+
+/**
+ * Paste handler for the input textarea. Plain-text paste behaves as
+ * normal; this only intercepts pastes that carry File objects
+ * (screenshots copied to clipboard, files copied from a file manager,
+ * etc.) and routes them through attachFiles() so they upload just like
+ * a picker-selected file. When files are present we cancel the default
+ * text insertion to avoid dumping binary/placeholder text into the box.
+ */
+export async function handlePaste(e: ClipboardEvent): Promise<void> {
+	const files = e.clipboardData?.files;
+	if (!files || files.length === 0) return;
+	e.preventDefault();
+	await attachFiles(Array.from(files));
+}
+
+/**
+ * Drag-and-drop handler for the input textarea. Same idea as paste:
+ * route any dropped files through attachFiles(). preventDefault on
+ * both dragover (so the drop event fires) and drop (so the browser
+ * doesn't navigate to the file).
+ */
+export async function handleDrop(e: DragEvent): Promise<void> {
+	const files = e.dataTransfer?.files;
+	if (!files || files.length === 0) return;
+	e.preventDefault();
+	await attachFiles(Array.from(files));
 }
 
 /** Convert a Blob to a base64 string (no data: URL prefix). */

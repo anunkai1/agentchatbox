@@ -479,14 +479,25 @@ export function refreshStatus(): void {
 		return opt?.name ?? id;
 	})();
 
+	// Escape the dynamic bits we interpolate into innerHTML below.
+	const esc = (s: string) =>
+		s
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/"/g, "&quot;")
+			.replace(/'/g, "&#39;");
+
 	const parts: string[] = [];
-	parts.push(modelLabel);
-	parts.push(`think: ${state.currentThinking}`);
+	parts.push(esc(modelLabel));
+	parts.push(`think: ${esc(state.currentThinking)}`);
 	const c = state.costTotal;
 	parts.push(`${(c.input + c.output).toLocaleString()} tok`);
 	if (c.cost > 0) parts.push(`$${c.cost.toFixed(4)}`);
-	if (state.isStreaming) parts.push("● streaming");
-	if (state.pendingSteerCount > 0) parts.push(`⟳ ${state.pendingSteerCount} queued`);
+	if (state.isStreaming)
+		parts.push('<span class="streaming-dot"></span> streaming');
+	if (state.pendingSteerCount > 0)
+		parts.push(`⟳ ${state.pendingSteerCount} queued`);
 	if (state.ttsInFlight > 0) parts.push("● tts");
 	if (state.audioPlaying) parts.push("♪ playing");
 	if (state.connectionStatus !== "open") {
@@ -494,9 +505,11 @@ export function refreshStatus(): void {
 			state.connectionStatus === "stalled"
 				? "⚠ stalled — reconnecting"
 				: `[${state.connectionStatus}]`;
-		parts.push(tag);
+		parts.push(esc(tag));
 	}
-	$("#status-bar").textContent = parts.join(" · ");
+	// innerHTML (not textContent) so the streaming dot can be a styled,
+	// flashing <span>. All interpolated bits are escaped above.
+	$("#status-bar").innerHTML = parts.join(" · ");
 	refreshCapabilitiesBadge();
 
 	const mp = $<HTMLButtonElement>("#model-picker");
@@ -536,6 +549,8 @@ export interface ShellHandlers {
 	toggleAutoSpeak: () => void;
 	handleVoiceRecord: () => Promise<void>;
 	handleFileAttach: (e: Event) => Promise<void>;
+	handlePaste: (e: ClipboardEvent) => Promise<void>;
+	handleDrop: (e: DragEvent) => Promise<void>;
 	abort: () => void;
 }
 
@@ -808,7 +823,9 @@ export function renderShell(): void {
 			id: "input",
 			class: "input",
 			rows: 1,
-			placeholder: "Send a message",
+			placeholder: `Send a message  ·  ${
+				navigator.platform.includes("Mac") ? "⌘+Enter" : "Ctrl+Enter"
+			} to send`,
 			autocomplete: "off",
 			autocapitalize: "off",
 			spellcheck: false,
@@ -903,6 +920,18 @@ export function renderShell(): void {
 		}
 	});
 	input.addEventListener("input", autoSize);
+	// Paste files (e.g. screenshots copied to clipboard) and drag-and-drop
+	// files route through the same attach pipeline as the file picker.
+	input.addEventListener("paste", (e) => {
+		void shellHandlers?.handlePaste(e);
+	});
+	input.addEventListener("dragover", (e) => {
+		// A dragover must be canceled for the subsequent drop event to fire.
+		if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+	});
+	input.addEventListener("drop", (e) => {
+		void shellHandlers?.handleDrop(e);
+	});
 	$("#model-picker").addEventListener("click", () => shellHandlers?.openModelPicker());
 	$("#think-picker").addEventListener("click", () => shellHandlers?.openThinkPicker());
 	$("#voice-picker").addEventListener("click", () => shellHandlers?.openVoicePicker());

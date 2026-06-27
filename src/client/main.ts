@@ -54,7 +54,7 @@ import {
 	showSlashMenu,
 } from "./slashes.js";
 import { type PersistedMessage, state } from "./state.js";
-import { handleFileAttach, handleVoiceRecord, toggleAutoSpeak } from "./voice.js";
+import { handleDrop, handleFileAttach, handlePaste, handleVoiceRecord, toggleAutoSpeak } from "./voice.js";
 import { createChatClient } from "./ws.js";
 
 // ---------------------------------------------------------------------------
@@ -530,6 +530,8 @@ async function boot(): Promise<void> {
 		toggleAutoSpeak,
 		handleVoiceRecord,
 		handleFileAttach,
+		handlePaste,
+		handleDrop,
 		abort: () => chatClient.abort(),
 	};
 	registerShellHandlers(shellHandlers);

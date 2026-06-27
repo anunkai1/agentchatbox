@@ -881,6 +881,30 @@ body {
 	font-family: var(--font-mono);
 	letter-spacing: 0.01em;
 }
+/* Flashing green dot shown next to "streaming" in the status bar.
+   Pulses while the agent is actively generating, like a live LED. */
+.status-bar .streaming-dot {
+	display: inline-block;
+	width: 7px;
+	height: 7px;
+	margin-right: 4px;
+	border-radius: 50%;
+	background: #22c55e;
+	box-shadow: 0 0 4px rgba(34, 195, 94, 0.7);
+	vertical-align: middle;
+	animation: streaming-pulse 1.1s ease-in-out infinite;
+}
+@keyframes streaming-pulse {
+	0%,
+	100% {
+		opacity: 0.3;
+		transform: scale(0.85);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1.1);
+	}
+}
 
 /* ------------------------------------------------------------------ */
 /* Modals                                                              */
