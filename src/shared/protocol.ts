@@ -145,6 +145,14 @@ export type ServerMessage =
 			provider: string;
 			thinkingLevel: ThinkingLevel;
 			sessionId?: string;
+			/**
+			 * Whether pi is mid-run (between agent_start and agent_end),
+			 * reported by the server from the events it already observes as
+			 * a transport pipe. Lets a freshly-loaded tab (hard refresh,
+			 * which wipes the browser's local isStreaming) recover the
+			 * correct state so the Stop button stays visible/correct.
+			 */
+			isStreaming?: boolean;
 	  }
 	| { type: "event"; event: Record<string, unknown> }
 	| { type: "sessions"; sessions: SessionSummary[] }

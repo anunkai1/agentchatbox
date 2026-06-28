@@ -109,6 +109,16 @@ export interface LiveSession {
 	ws: PiSocket | null;
 	ready: boolean;
 	busy: boolean;
+	/**
+	 * Whether the agent is mid-run (between agent_start and agent_end).
+	 * Broader than `busy` (which is per-turn): a multi-turn run has
+	 * brief gaps between turns where busy=false but streaming=true.
+	 * Tracked by observing the agent_start/agent_end events the pipe
+	 * already forwards — no derivation — so it survives a tab refresh:
+	 * the server reports it in `ready` and the client recovers its
+	 * isStreaming (and the Stop button) correctly.
+	 */
+	streaming: boolean;
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	currentTurn: unknown[];
 }
@@ -157,6 +167,7 @@ class SessionRegistry {
 			ws: null,
 			ready: false,
 			busy: false,
+			streaming: false,
 			idleTimer: null,
 			currentTurn: [],
 		};
@@ -311,6 +322,14 @@ class SessionRegistry {
 		// is immune to idle reaping. The current-turn buffer is replayed on
 		// reattach to reconstruct an in-flight assistant message whose
 		// `message_start` the client missed while disconnected.
+		if (line.type === "agent_start") {
+			// The agent run as a whole (possibly multiple turns). Mirror the
+			// client's isStreaming so a tab refresh can recover it from the
+			// server's `ready` (the browser's local copy is wiped on reload).
+			session.streaming = true;
+		} else if (line.type === "agent_end") {
+			session.streaming = false;
+		}
 		if (line.type === "turn_start") {
 			session.busy = true;
 			session.currentTurn = [line];
@@ -360,6 +379,7 @@ class SessionRegistry {
 			provider: session.init.provider,
 			thinkingLevel: session.init.thinkingLevel,
 			sessionId: session.sessionId,
+			isStreaming: session.streaming,
 		});
 		const messages = readPiSessionMessages(config.piCwd, session.sessionId);
 		if (messages.length > 0) {

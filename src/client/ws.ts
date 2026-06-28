@@ -22,6 +22,7 @@ export type ReadyListener = (info: {
 	provider: string;
 	thinkingLevel: ThinkingLevel;
 	sessionId?: string;
+	isStreaming?: boolean;
 }) => void;
 export type ErrorListener = (message: string) => void;
 export type StatusListener = (status: "connecting" | "open" | "closed" | "stalled") => void;
@@ -158,6 +159,7 @@ export function createChatClient(): ChatClient {
 							provider: String(msg.provider ?? ""),
 							thinkingLevel: msg.thinkingLevel as ThinkingLevel,
 							sessionId: msg.sessionId as string | undefined,
+							isStreaming: msg.isStreaming as boolean | undefined,
 						});
 					}
 					break;

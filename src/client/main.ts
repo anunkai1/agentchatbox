@@ -620,6 +620,15 @@ async function boot(): Promise<void> {
 		}
 		state.pendingModelSet = null;
 		state.currentThinking = info.thinkingLevel;
+		// Recover isStreaming from the server's ground truth. A hard refresh
+		// wipes the browser's local isStreaming (and the Stop button with
+		// it); the server tracks this from the agent_start/agent_end events
+		// it already forwards as a transport pipe, so its value survives
+		// the refresh. Without this, the Stop button vanishes mid-run after
+		// a refresh — leaving the user with no way to abort. Trust the
+		// server unconditionally (it sees pi; the browser only sees events
+		// since it connected).
+		if (typeof info.isStreaming === "boolean") setStreaming(info.isStreaming);
 		refreshStatus();
 		// Request the session list for the sidebar on the first ready event.
 		// Subsequent ready events (reconnects, new sessions) also refresh.

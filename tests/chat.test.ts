@@ -106,6 +106,38 @@ while IFS= read -r line; do
 done
 `;
 
+const RUNNING_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that, on \`prompt\`, starts an agent run (agent_start +
+# turn_start) and then stays running indefinitely — never emits
+# turn_end/agent_end. Simulates a mid-run agent (a long tool call, a
+# slow model stream). Used to prove the server reports isStreaming=true
+# in \`ready\` on reattach, so a refreshed tab recovers the Stop button.
+if [ -n "\${AGENTCHATBOX_FAKE_PI_MARKER}" ]; then
+  echo "$$" >> "\${AGENTCHATBOX_FAKE_PI_MARKER}"
+fi
+sleep 0.05
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"running-session-001","messageCount":0}}'
+      ;;
+    "prompt")
+      echo '{"type":"response","command":"prompt","success":true}'
+      echo '{"type":"agent_start"}'
+      echo '{"type":"turn_start"}'
+      # Stay mid-run — keep the child alive so the run is still in
+      # flight when the test reconnects.
+      ;;
+    "")
+      ;;
+    *)
+      echo '{"type":"response","command":"'"$type"'","success":true}'
+      ;;
+  esac
+done
+`;
+
 const RETRY_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that emits the auto_retry lifecycle on \`prompt\` and records
 # every command type it receives to the marker file. Used to prove two
@@ -190,7 +222,7 @@ done
 
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
-	behavior: "echo" | "ack" | "exit-before-session" | "steer-race" | "track" | "retry",
+	behavior: "echo" | "ack" | "exit-before-session" | "steer-race" | "track" | "retry" | "running",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -205,7 +237,9 @@ function makeFakePi(
 						? TRACK_SCRIPT
 						: behavior === "retry"
 							? RETRY_SCRIPT
-							: EXIT_BEFORE_SESSION_SCRIPT;
+							: behavior === "running"
+								? RUNNING_SCRIPT
+								: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -602,6 +636,84 @@ describe("mountChatWs — pi subprocess pipe", () => {
 		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
 	});
 
+	it("reports isStreaming in `ready` on reattach so a refreshed tab recovers the Stop button", async () => {
+		// Regression: a hard refresh mid-run wipes the browser's local
+		// isStreaming, so the Stop button vanished and the user lost their
+		// abort lever. The server observes agent_start/agent_end as a
+		// transport pipe (no derivation) and reports the bit in `ready`,
+		// so the reattaching tab recovers isStreaming correctly. Prove it:
+		// start a run on connection 1, disconnect, reconnect to the same
+		// session — the SECOND ready must carry isStreaming:true.
+		fakePiPath = makeFakePi("running");
+		process.env.PI_BIN = fakePiPath;
+		const marker = join(mkdtempSync(join(tmpdir(), "marker-")), "spawns");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		// --- connection 1: start a run, then drop (simulates refresh) ---
+		const c1 = await connectClient();
+		try {
+			c1.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			const ready1 = await c1.inbox.waitFor(1);
+			expect((ready1[0] as { isStreaming?: boolean }).isStreaming).toBe(false);
+			expect((ready1[0] as { sessionId?: string }).sessionId).toBe("running-session-001");
+
+			// Kick off a run. The fake emits agent_start + turn_start then
+			// stays mid-run indefinitely.
+			c1.ws.send(JSON.stringify({ type: "prompt", text: "go" }));
+			// Wait until the server has seen agent_start (streaming flips true).
+			await waitForEventOfType(c1.inbox, "agent_start", 0, 3000);
+		} finally {
+			c1.close(); // detach — child keeps running (busy, immune to reap)
+		}
+
+		// Let the server process the close → detach.
+		await new Promise((r) => setTimeout(r, 250));
+		expect(spawnCount(marker)).toBe(1); // still the same child, mid-run
+
+		// --- connection 2: reattach by sessionId (the refreshed tab) ---
+		const c2 = await connectClient();
+		try {
+			c2.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+					sessionId: "running-session-001",
+				}),
+			);
+			const ready2 = await c2.inbox.waitFor(1, 3000);
+			expect(ready2[0]?.type).toBe("ready");
+			// The decisive assertion: the server tells the refreshed tab the
+			// agent is mid-run, so the client recovers isStreaming and the
+			// Stop button stays visible.
+			expect((ready2[0] as { isStreaming?: boolean }).isStreaming).toBe(true);
+		} finally {
+			c2.close();
+		}
+
+		// Clean up the lingering mid-run child so it doesn't outlive the test.
+		for (const pid of readPids(marker)) {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {
+				/* already dead */
+			}
+		}
+		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+	});
+
 	it("idle detached session is reaped after the grace period", async () => {
 		// A finished + abandoned session is cleaned up so children don't
 		// leak forever — but only once idle AND detached. Tiny grace via
@@ -798,8 +910,7 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			expect(inner).toContain("auto_retry_end");
 			// And the start event carries the fields the client renders from.
 			const retryStart = msgs.find(
-				(m) =>
-					m.type === "event" && (m.event as { type?: string })?.type === "auto_retry_start",
+				(m) => m.type === "event" && (m.event as { type?: string })?.type === "auto_retry_start",
 			) as { event?: Record<string, unknown> } | undefined;
 			expect(retryStart?.event).toMatchObject({
 				attempt: 1,
@@ -851,9 +962,9 @@ describe("mountChatWs — pi subprocess pipe", () => {
 				const log = readMarkerLog(marker);
 				if (log.includes("cmd:abort_retry")) {
 					saw = true;
-				break;
-			}
-			await new Promise((r) => setTimeout(r, 30));
+					break;
+				}
+				await new Promise((r) => setTimeout(r, 30));
 			}
 			expect(saw).toBe(true);
 		} finally {
