@@ -54,7 +54,13 @@ import {
 	showSlashMenu,
 } from "./slashes.js";
 import { type PersistedMessage, state } from "./state.js";
-import { handleDrop, handleFileAttach, handlePaste, handleVoiceRecord, toggleAutoSpeak } from "./voice.js";
+import {
+	handleDrop,
+	handleFileAttach,
+	handlePaste,
+	handleVoiceRecord,
+	toggleAutoSpeak,
+} from "./voice.js";
 import { createChatClient } from "./ws.js";
 
 // ---------------------------------------------------------------------------
@@ -294,10 +300,13 @@ function onEvent(event: Record<string, unknown>): void {
 	switch (e.type) {
 		case "agent_start":
 			setStreaming(true);
+			state.streamingStartedAt = Date.now();
 			break;
 
 		case "agent_end":
 			setStreaming(false);
+			state.streamingStartedAt = null;
+			state.retry = null;
 			// No local save — the server's `pi` child auto-persists
 			// every event to its JSONL session file as it happens.
 			// A steer stranded in pi's queue when the agent went idle
@@ -465,6 +474,32 @@ function onEvent(event: Record<string, unknown>): void {
 			// for the toolResult. Nothing to do here; finalizeToolCall is
 			// called from there.
 			break;
+
+		case "auto_retry_start": {
+			// pi hit a recoverable error (transient model/transport fault)
+			// and is backing off before the next attempt — the SAME event
+			// the CLI renders as "Retrying (1/3) in 8s… (interrupt to
+			// cancel)". Surface it so a retrying agent is visibly working,
+			// not frozen, and so the reason (errorMessage) is shown —
+			// previously these events arrived and were silently dropped,
+			// which is why a mid-retry agent looked indistinguishable from
+			// a hang.
+			state.retry = {
+				attempt: Number(e.attempt) || 0,
+				maxAttempts: Number(e.maxAttempts) || 0,
+				remainingMs: Number(e.delayMs) || 0,
+				errorMessage: String(e.errorMessage ?? "Unknown error"),
+			};
+			refreshStatus();
+			break;
+		}
+
+		case "auto_retry_end":
+			// Retry resolved (either the next attempt succeeded, failed out,
+			// or the user cancelled via abortRetry). Clear the banner.
+			state.retry = null;
+			refreshStatus();
+			break;
 	}
 }
 
@@ -534,7 +569,15 @@ async function boot(): Promise<void> {
 		handleFileAttach,
 		handlePaste,
 		handleDrop,
-		abort: () => chatClient.abort(),
+		abort: () => {
+			// Mirror the CLI: while a retry backoff is counting down,
+			// Stop cancels the retry (the CLI binds the same key to
+			// "interrupt to cancel" during a retry). Otherwise Stop
+			// aborts the whole run.
+			if (state.retry) chatClient.abortRetry();
+			else chatClient.abort();
+		},
+		abortRetry: () => chatClient.abortRetry(),
 	};
 	registerShellHandlers(shellHandlers);
 	setSendAsUser(sendAsUser);

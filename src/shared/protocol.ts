@@ -164,6 +164,7 @@ export type ClientMessage =
 	| { type: "prompt"; text: string; images?: PromptImage[] }
 	| { type: "steer"; text: string; images?: PromptImage[] }
 	| { type: "abort" }
+	| { type: "abortRetry" }
 	| { type: "setModel"; modelId: string; provider: string }
 	| { type: "setThinking"; level: ThinkingLevel }
 	| { type: "listSessions" }

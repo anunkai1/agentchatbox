@@ -38,9 +38,44 @@ export function setStreaming(s: boolean): void {
 	sendBtn.title = s
 		? "Steer — queue this for after the current turn (⌘/Ctrl+Enter)"
 		: "Send (⌘/Ctrl+Enter)";
-	$("#stop-btn").hidden = !s;
+	const stopBtn = $<HTMLButtonElement>("#stop-btn");
+	stopBtn.hidden = !s;
+	// Context-aware label mirroring the CLI: while a retry backoff is
+	// counting down, Stop cancels the retry ("interrupt to cancel");
+	// otherwise it aborts the whole run.
+	stopBtn.title = state.retry ? "Cancel retry backoff" : "Stop the current run";
 	if (!s) state.toolSpinner = null;
+	startOrStopWorkingTick(s);
 	refreshStatus();
+}
+
+/**
+ * 1s tick while streaming so the status bar's elapsed timer and retry
+ * countdown stay live — the CLI updates these on every render frame;
+ * the browser only re-renders on events, so without a tick the elapsed
+ * counter would freeze between tokens and the retry countdown would
+ * never decrement. One interval covers both; stopped when idle.
+ */
+let workingTick: ReturnType<typeof setInterval> | null = null;
+function startOrStopWorkingTick(streaming: boolean): void {
+	if (streaming) {
+		if (workingTick) return;
+		workingTick = setInterval(() => {
+			// Decrement the retry countdown (pi sends delayMs once at
+			// auto_retry_start; we tick it down locally so the banner
+			// counts 8…7…6… like the CLI).
+			if (state.retry && state.retry.remainingMs > 0) {
+				state.retry = {
+					...state.retry,
+					remainingMs: Math.max(0, state.retry.remainingMs - 1000),
+				};
+			}
+			refreshStatus();
+		}, 1000);
+	} else if (workingTick) {
+		clearInterval(workingTick);
+		workingTick = null;
+	}
 }
 
 export function renderHistory(): void {
@@ -74,7 +109,11 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		// delivered (folded into the next turn).
 		const bubble = el("div", { class: "bubble steer-bubble" }, m.text);
 		bubble.append(
-			el("span", { class: `steer-badge${m.delivered ? " delivered" : ""}` }, m.delivered ? "✓ delivered" : "⏳ queued"),
+			el(
+				"span",
+				{ class: `steer-badge${m.delivered ? " delivered" : ""}` },
+				m.delivered ? "✓ delivered" : "⏳ queued",
+			),
 		);
 		return el("div", { class: "row row-user row-steer" }, bubble);
 	}
@@ -266,10 +305,7 @@ export function scrollToBottomIfPinned(): void {
 	if (isAtBottom()) scrollToBottom();
 }
 
-export function appendNode(
-	node: HTMLElement,
-	opts: { pin?: boolean } = {},
-): void {
+export function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
 	$("#messages").append(node);
 	updateWelcomeVisibility();
 	// `pin` = only follow if the user is already near the bottom. Use this
@@ -503,10 +539,37 @@ export function refreshStatus(): void {
 	const c = state.costTotal;
 	parts.push(`${(c.input + c.output).toLocaleString()} tok`);
 	if (c.cost > 0) parts.push(`$${c.cost.toFixed(4)}`);
-	if (state.isStreaming)
-		parts.push('<span class="streaming-dot"></span> streaming');
-	if (state.pendingSteerCount > 0)
-		parts.push(`⟳ ${state.pendingSteerCount} queued`);
+	if (state.isStreaming) {
+		// Elapsed-time working indicator — the CLI shows a spinner +
+		// elapsed counter while a turn runs; agentchatbox used to show
+		// only a static "streaming" dot, which made a slow-but-working
+		// turn look identical to a hang. `streamingStartedAt` is set on
+		// agent_start and cleared on agent_end. The elapsed tick is driven
+		// by the retry-countdown interval below (1s cadence) so no extra
+		// timer is needed when not retrying — fall back to a one-shot.
+		const elapsed = state.streamingStartedAt
+			? Math.max(0, Math.floor((Date.now() - state.streamingStartedAt) / 1000))
+			: 0;
+		const mm = Math.floor(elapsed / 60);
+		const ss = elapsed % 60;
+		parts.push(
+			`<span class="streaming-dot"></span> streaming ${mm}:${ss.toString().padStart(2, "0")}`,
+		);
+	}
+	if (state.retry) {
+		// Mirror the CLI's retry loader verbatim:
+		//   "Retrying (1/3) in 8s… (interrupt to cancel)"
+		// plus the error message (the bit the CLI folds into the spinner
+		// context but agentchatbox surfaces explicitly so you can see WHY
+		// it's retrying — a transient 429 reads very differently from a
+		// dead socket). Countdown is live-updated by startRetryCountdown.
+		const r = state.retry;
+		const secs = Math.max(0, Math.ceil(r.remainingMs / 1000));
+		parts.push(
+			`<span class="retry-banner">↻ Retrying (${r.attempt}/${r.maxAttempts}) in ${secs}s — ${esc(r.errorMessage)}</span>`,
+		);
+	}
+	if (state.pendingSteerCount > 0) parts.push(`⟳ ${state.pendingSteerCount} queued`);
 	if (state.ttsInFlight > 0) parts.push("● tts");
 	if (state.audioPlaying) parts.push("♪ playing");
 	if (state.connectionStatus !== "open") {
@@ -561,6 +624,7 @@ export interface ShellHandlers {
 	handlePaste: (e: ClipboardEvent) => Promise<void>;
 	handleDrop: (e: DragEvent) => Promise<void>;
 	abort: () => void;
+	abortRetry: () => void;
 }
 
 let shellHandlers: ShellHandlers | null = null;
@@ -735,12 +799,9 @@ export function renderShell(): void {
 				title: "Settings",
 				onclick: () => shellHandlers?.openOverflowMenu(),
 			},
-			el(
-				"span",
-				{
-					html: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 105.66 5.66l-1.42-1.42a2 2 0 11-2.82-2.82l-1.42-1.42zM3 21l3.5-1 9.9-9.9-2.5-2.5L4 17.5 3 21z"/></svg>`,
-				},
-			),
+			el("span", {
+				html: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 105.66 5.66l-1.42-1.42a2 2 0 11-2.82-2.82l-1.42-1.42zM3 21l3.5-1 9.9-9.9-2.5-2.5L4 17.5 3 21z"/></svg>`,
+			}),
 			el("span", { text: "Settings" }),
 		),
 	);
@@ -769,7 +830,9 @@ export function renderShell(): void {
 		}),
 	);
 	welcome.append(el("h1", { class: "welcome-title" }, "What can I build for you?"));
-	welcome.append(el("p", { class: "welcome-sub" }, "Ask anything — I'll think, use tools, and answer."));
+	welcome.append(
+		el("p", { class: "welcome-sub" }, "Ask anything — I'll think, use tools, and answer."),
+	);
 	const modes = el("div", { class: "welcome-modes" });
 	for (const s of WELCOME_SUGGESTIONS) {
 		modes.append(
@@ -974,7 +1037,8 @@ const WELCOME_SUGGESTIONS: {
 	{
 		title: "Magic Design",
 		sub: "Spin up an interactive UI from a description",
-		prompt: "Design and build a small interactive web page for me. Pick the layout, colors, and copy.",
+		prompt:
+			"Design and build a small interactive web page for me. Pick the layout, colors, and copy.",
 		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.39 4.84L20 8l-4 3.9.94 5.5L12 14.77 7.06 17.4 8 11.9 4 8l5.61-1.16L12 2z"/></svg>`,
 	},
 	{

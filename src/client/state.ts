@@ -97,11 +97,11 @@ export interface AppState {
 	 */
 	uploadedImages: Map<string, { data: string; mimeType: string; filename: string }>;
 	/**
-		 * Connection state reported by the WS client. "stalled" means the
-		 * socket reports OPEN but no messages (including heartbeats) have
-		 * arrived for a while — typically Android backgrounding the tab.
-		 * The client will be actively reconnecting when this is set.
-		 */
+	 * Connection state reported by the WS client. "stalled" means the
+	 * socket reports OPEN but no messages (including heartbeats) have
+	 * arrived for a while — typically Android backgrounding the tab.
+	 * The client will be actively reconnecting when this is set.
+	 */
 	connectionStatus: "connecting" | "open" | "closed" | "stalled";
 	/** When true, every final assistant message is spoken automatically. */
 	autoSpeak: boolean;
@@ -131,6 +131,29 @@ export interface AppState {
 	 * agent. Driven by `queue_update` events; shown in the status bar.
 	 */
 	pendingSteerCount: number;
+	/**
+	 * Active auto-retry state, or null when the agent isn't retrying.
+	 * Driven by pi's `auto_retry_start`/`auto_retry_end` events — the
+	 * same events the CLI uses to render its "Retrying (1/3) in 8s…"
+	 * loader. Surfaced in the status bar so a retrying agent is
+	 * visibly working (not frozen) and abortable, matching the CLI.
+	 */
+	retry: {
+		attempt: number;
+		maxAttempts: number;
+		/** Remaining backoff ms at the moment of the last tick. */
+		remainingMs: number;
+		/** What went wrong (the model/transport error). */
+		errorMessage: string;
+	} | null;
+	/**
+	 * Epoch ms the current streaming run started (agent_start), or null
+	 * when idle. Drives the elapsed-time working indicator next to
+	 * "streaming" in the status bar — the CLI equivalent is the spinner
+	 * + elapsed counter shown while a turn runs. Makes "working but
+	 * slow" visually distinct from "frozen".
+	 */
+	streamingStartedAt: number | null;
 }
 
 export interface ModelOption {
@@ -165,5 +188,7 @@ export const state: AppState = {
 	audioPlaying: false,
 	lastAssistantText: "",
 	pendingSteerCount: 0,
+	retry: null,
+	streamingStartedAt: null,
 	capabilities: null,
 };

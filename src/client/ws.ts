@@ -49,6 +49,12 @@ export interface ChatClient {
 	steer(text: string, images?: PromptImage[]): void;
 	/** Abort the current run, if any. */
 	abort(): void;
+	/**
+	 * Abort an in-flight auto-retry backoff (the CLI's "interrupt to
+	 * cancel" while the retry countdown is showing). No-op if no retry
+	 * is pending.
+	 */
+	abortRetry(): void;
 	/** Switch to a different model mid-session. */
 	setModel(modelId: string, provider: string): void;
 	/** Set the thinking level. */
@@ -276,6 +282,10 @@ export function createChatClient(): ChatClient {
 		abort: () => {
 			if (!inited) return; // can't abort before init — server rejects non-init first messages
 			send({ type: "abort" });
+		},
+		abortRetry: () => {
+			if (!inited) return;
+			send({ type: "abortRetry" });
 		},
 		setModel: (modelId, provider) => send({ type: "setModel", modelId, provider }),
 		setThinking: (level) => send({ type: "setThinking", level }),

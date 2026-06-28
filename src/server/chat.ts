@@ -224,6 +224,13 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			pi.send({ type: "abort" });
 			break;
 		}
+		case "abortRetry": {
+			// Cancel an in-flight auto-retry backoff (the CLI's "interrupt to
+			// cancel" during a retry countdown). Mirrors pi rpc's
+			// `abort_retry` command — pure forwarding, no server logic.
+			pi.send({ type: "abort_retry" });
+			break;
+		}
 		case "setModel": {
 			pi.send({ type: "set_model", provider: msg.provider, modelId: msg.modelId });
 			break;
