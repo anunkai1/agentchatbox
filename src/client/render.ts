@@ -306,15 +306,24 @@ export function scrollToBottomIfPinned(): void {
 }
 
 export function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
+	// Capture pinning BEFORE appending. The new node may be tall (a ⚙
+	// tool card, a thinking block, a result <pre>), and once it's in the
+	// DOM it grows scrollHeight while scrollTop stays put — so an
+	// after-append isAtBottom() check would falsely report "not at
+	// bottom" (the 80px slack is consumed by the new block itself) and
+	// silently skip the scroll. Worse, that poisons pinning for the
+	// rest of the turn: every later streamed token's
+	// scrollToBottomIfPinned() would then no-op because isAtBottom()
+	// stays false. Capturing pre-append fixes both.
+	const wasPinned = isAtBottom();
 	$("#messages").append(node);
 	updateWelcomeVisibility();
-	// `pin` = only follow if the user is already near the bottom. Use this
-	// for blocks that appear mid-stream (a new assistant turn, a tool/
-	// bash card) so we don't yank someone who has scrolled up to re-read.
-	// Default (false) force-scrolls — correct for the user's own messages
-	// and for explicit commands like /help where they just typed.
-	if (opts.pin) scrollToBottomIfPinned();
-	else scrollToBottom();
+	// `pin` = only follow if the user was already near the bottom before
+	// this block landed. Use this for blocks that appear mid-stream (a
+	// new assistant turn, a tool/bash card) so we don't yank someone who
+	// has scrolled up to re-read. Default (false) force-scrolls — correct
+	// for the user's own messages and for explicit commands like /help.
+	if (!opts.pin || wasPinned) scrollToBottom();
 }
 
 // Live rendering for the streaming case: we mutate the last assistant
@@ -388,6 +397,11 @@ export function finalizeToolCall(
 	result: string | undefined,
 	isError: boolean,
 ): void {
+	// Capture pinning BEFORE mutating — the result <pre> can be tall and
+	// would otherwise falsely flip isAtBottom() to false, poisoning
+	// pinning for the rest of the turn (see appendNode for the full
+	// rationale).
+	const wasPinned = isAtBottom();
 	const list = $("#messages");
 	const target = toolCallId
 		? list.querySelector(`[data-tool-call-id="${CSS.escape(toolCallId)}"]`)
@@ -416,14 +430,11 @@ export function finalizeToolCall(
 		card.append(el("pre", { class: `tool-result ${isError ? "tool-error" : ""}` }, result));
 	}
 	void name; // unused for now — the tool-name row was already set on append
-	// The result <pre> can be tall — it grows the page. If we DON'T scroll
-	// here, the viewport stays put and the user ends up above the bottom,
-	// which makes isAtBottom() false and silently kills pinning for every
-	// subsequent streamed token (scrollToBottomIfPinned no-ops). So a
-	// missing scroll here doesn't just skip this block — it breaks
-	// autoscroll for the rest of the turn. Polite scroll: only follow if
-	// the user was already pinned (don't yank someone scrolled up).
-	scrollToBottomIfPinned();
+	// Polite scroll based on pre-mutation pinning state. Without this,
+	// the tall result <pre> grows the page without the viewport
+	// following, leaving the user above the bottom and silently killing
+	// autoscroll for every subsequent streamed token.
+	if (wasPinned) scrollToBottom();
 }
 
 export function appendError(text: string): void {

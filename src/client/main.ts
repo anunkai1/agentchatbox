@@ -27,6 +27,7 @@ import { projectTranscript } from "./project.js";
 import {
 	appendAssistantPlaceholder,
 	appendError,
+	isAtBottom,
 	appendToolCall,
 	autoSize,
 	finalizeToolCall,
@@ -222,10 +223,12 @@ function recoverStrandedSteer(): void {
 // the user just typed, so they want to see their message land) and
 // sendSteer (pin: a steer arrives mid-stream while the agent is
 // running, and the reader may have scrolled up to re-read; don't yank).
+// Capture pinning BEFORE appending so a tall new block doesn't itself
+// flip isAtBottom() false (see render.ts appendNode for the rationale).
 function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
+	const wasPinned = isAtBottom();
 	$("#messages").append(node);
-	if (opts.pin) scrollToBottomIfPinned();
-	else scrollToBottom();
+	if (!opts.pin || wasPinned) scrollToBottom();
 }
 
 /**
