@@ -212,12 +212,14 @@ function recoverStrandedSteer(): void {
 	setStreaming(true);
 }
 
-// Local appendNode — main.ts only uses it once (in sendAsUser), so we
-// keep the dep on render.ts for the bulk of the API and call it inline.
-function appendNode(node: HTMLElement): void {
+// Local appendNode — main.ts uses it for sendAsUser (force-scroll:
+// the user just typed, so they want to see their message land) and
+// sendSteer (pin: a steer arrives mid-stream while the agent is
+// running, and the reader may have scrolled up to re-read; don't yank).
+function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
 	$("#messages").append(node);
-	// Always scroll to bottom for user messages.
-	scrollToBottom();
+	if (opts.pin) scrollToBottomIfPinned();
+	else scrollToBottom();
 }
 
 /**
@@ -231,7 +233,7 @@ function sendSteer(trimmed: string): void {
 	if (!trimmed) return;
 	const msg: PersistedMessage = { kind: "steer", text: trimmed, delivered: false };
 	state.messages.push(msg);
-	appendNode(renderMessageNode(msg));
+	appendNode(renderMessageNode(msg), { pin: true });
 	state.pendingSteerCount += 1;
 	refreshStatus();
 	// Upload-URL rewriting mirrors sendAsUser so attached files resolve.

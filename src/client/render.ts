@@ -266,10 +266,19 @@ export function scrollToBottomIfPinned(): void {
 	if (isAtBottom()) scrollToBottom();
 }
 
-export function appendNode(node: HTMLElement): void {
+export function appendNode(
+	node: HTMLElement,
+	opts: { pin?: boolean } = {},
+): void {
 	$("#messages").append(node);
 	updateWelcomeVisibility();
-	scrollToBottom();
+	// `pin` = only follow if the user is already near the bottom. Use this
+	// for blocks that appear mid-stream (a new assistant turn, a tool/
+	// bash card) so we don't yank someone who has scrolled up to re-read.
+	// Default (false) force-scrolls — correct for the user's own messages
+	// and for explicit commands like /help where they just typed.
+	if (opts.pin) scrollToBottomIfPinned();
+	else scrollToBottom();
 }
 
 // Live rendering for the streaming case: we mutate the last assistant
@@ -308,7 +317,7 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	body.append(pre);
 	body.append(makeSpeakButton(() => state.lastAssistantText));
 	wrap.append(body);
-	appendNode(wrap);
+	appendNode(wrap, { pin: true });
 	return { textPre: pre, thinkingWrap, thinkingPre };
 }
 export function appendToolCall(name: string, args: unknown, toolCallId: string): void {
@@ -334,7 +343,7 @@ export function appendToolCall(name: string, args: unknown, toolCallId: string):
 	// calls — the second's result would fill the first's pending row.)
 	wrap.dataset.toolCallId = toolCallId;
 	wrap.dataset.toolPending = "1";
-	appendNode(wrap);
+	appendNode(wrap, { pin: true });
 }
 
 export function finalizeToolCall(
