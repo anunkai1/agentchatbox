@@ -27,10 +27,10 @@ import { projectTranscript } from "./project.js";
 import {
 	appendAssistantPlaceholder,
 	appendError,
-	isAtBottom,
 	appendToolCall,
 	autoSize,
 	finalizeToolCall,
+	isAtBottom,
 	refreshStatus,
 	registerShellHandlers,
 	renderMessageNode,
@@ -667,8 +667,16 @@ async function boot(): Promise<void> {
 		// On a background reconnect for the same session this is a no-op,
 		// preserving scroll position and avoiding a flicker.
 		if (sameSession && sameLength && lastMatches) return;
-		void import("./render.js").then(({ renderShell }) => {
+		void import("./render.js").then(({ renderShell, setStreaming }) => {
 			renderShell();
+			// renderShell rebuilds the entire DOM, including a fresh
+			// #stop-btn created hidden. If we're mid-run (server reported
+			// isStreaming=true in the ready that preceded this transcript,
+			// or we never left a run), re-apply that state so the Stop
+			// button is visible after resume. Without this the button we
+			// unhid in onReady is destroyed and replaced by a hidden one —
+			// the "Stop button missing after refresh/resume" bug.
+			setStreaming(state.isStreaming);
 		});
 	});
 	// After resumeSession/newSession completes, the server reports
