@@ -76,7 +76,6 @@ src/
     files.ts              # /api/file (download agent-created files, piCwd-contained)
     transcribe.ts         # /api/transcribe (faster-whisper)
     tts.ts                # /api/tts (piper)
-    proxy.ts              # legacy POST /api/stream (SSE) — back-compat only
   shared/
     protocol.ts           # types shared by client and server
 tests/                    # vitest, server-side
@@ -130,7 +129,6 @@ Provider keys currently recognised: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMI
 
 | Method | Path                  | Purpose                                                |
 |--------|-----------------------|--------------------------------------------------------|
-| POST   | `/api/stream`         | Legacy SSE proxy (single LLM call) — back-compat only  |
 | POST   | `/api/upload`         | Multipart file upload                                  |
 | GET    | `/uploads/:filename`  | Download a previously uploaded file                    |
 | DELETE | `/uploads/:filename`  | Remove an upload                                       |

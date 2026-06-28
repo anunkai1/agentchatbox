@@ -6,10 +6,14 @@ node_modules/
 # Build output
 dist/
 build/
+# Everything in public/ is build output EXCEPT brand assets (logos,
+# favicons, og-image), which are the binary source of truth and copied
+# in from assets/brand/ by scripts/build-client.mjs at build time.
 public/app.js
 public/app.js.map
 public/app.css
 public/index.html
+public/styles.css
 *.tsbuildinfo
 
 # Environment
