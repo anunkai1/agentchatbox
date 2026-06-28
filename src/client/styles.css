@@ -604,7 +604,7 @@ body {
 .thinking-body {
 	margin: 6px 0 6px 0;
 	font-size: 13px;
-	max-height: 220px;
+	max-height: 440px;
 	overflow: auto;
 	white-space: pre-wrap;
 	border-left: 2px solid var(--border-strong);
