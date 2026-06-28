@@ -106,6 +106,59 @@ while IFS= read -r line; do
 done
 `;
 
+const RETRY_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that emits the auto_retry lifecycle on \`prompt\` and records
+# every command type it receives to the marker file. Used to prove two
+# transport-layer guarantees of the retry-visibility feature:
+#   1. the server FORWARDS auto_retry_start/end events to the client
+#      (doesn't drop them as response acks) — so the banner renders.
+#   2. the client's {type:"abortRetry"} reaches pi as {type:"abort_retry"}
+#      on stdin (the server forwards it, not swallowed by dispatch).
+# The marker file doubles as a command log: every received command type
+# is appended, so the test can assert "abort_retry" was delivered.
+if [ -n "\${AGENTCHATBOX_FAKE_PI_MARKER}" ]; then
+  echo "$$" >> "\${AGENTCHATBOX_FAKE_PI_MARKER}"
+fi
+sleep 0.05
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  if [ -n "\${AGENTCHATBOX_FAKE_PI_MARKER}" ] && [ -n "$type" ]; then
+    echo "cmd:$type" >> "\${AGENTCHATBOX_FAKE_PI_MARKER}"
+  fi
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"retry-session-001","messageCount":0}}'
+      ;;
+    "prompt")
+      echo '{"type":"response","command":"prompt","success":true}'
+      echo '{"type":"agent_start"}'
+      echo '{"type":"turn_start"}'
+      # The retry lifecycle: a recoverable error, then a backoff, then
+      # success on the next attempt. Mirrors what real pi emits.
+      echo '{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":5000,"errorMessage":"rate limited (test 429)"}'
+      sleep 0.3
+      echo '{"type":"auto_retry_end","success":true,"attempt":1}'
+      # Then a normal assistant turn.
+      echo '{"type":"message_start","message":{"role":"assistant","content":[],"timestamp":1}}'
+      echo '{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"timestamp":2}}'
+      echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"timestamp":2}}'
+      echo '{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"timestamp":2},"toolResults":[]}'
+      echo '{"type":"agent_end","messages":[],"willRetry":false}'
+      ;;
+    "abort_retry")
+      # Real pi cancels the backoff and emits auto_retry_end success:false.
+      echo '{"type":"response","command":"abort_retry","success":true}'
+      echo '{"type":"auto_retry_end","success":false,"attempt":1,"finalError":"Retry cancelled"}'
+      ;;
+    "")
+      ;;
+    *)
+      echo '{"type":"response","command":"'"$type"'","success":true}'
+      ;;
+  esac
+done
+`;
+
 const STEER_RACE_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that REFUSES steers (success:false, simulating the agent
 # having just gone idle). Used to verify the server forwards
@@ -137,7 +190,7 @@ done
 
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
-	behavior: "echo" | "ack" | "exit-before-session" | "steer-race" | "track",
+	behavior: "echo" | "ack" | "exit-before-session" | "steer-race" | "track" | "retry",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -150,7 +203,9 @@ function makeFakePi(
 					? STEER_RACE_SCRIPT
 					: behavior === "track"
 						? TRACK_SCRIPT
-						: EXIT_BEFORE_SESSION_SCRIPT;
+						: behavior === "retry"
+							? RETRY_SCRIPT
+							: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -705,6 +760,107 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			c1.close();
 		}
 	});
+
+	it("forwards pi's auto_retry events to the client (retry banner has a signal)", async () => {
+		// The retry-visibility feature hinges on the server NOT dropping
+		// auto_retry_start/end events. They're plain events (not response
+		// acks), so they must reach the client WS for the banner to render.
+		// This test proves the transport pipe is open for them.
+		fakePiPath = makeFakePi("retry");
+		process.env.PI_BIN = fakePiPath;
+		const marker = join(mkdtempSync(join(tmpdir(), "marker-")), "log");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await inbox.waitFor(1); // ready
+
+			ws.send(JSON.stringify({ type: "prompt", text: "go" }));
+			// Wait long enough for: agent_start, turn_start, auto_retry_start,
+			// auto_retry_end, message_*, turn_end, agent_end.
+			const msgs = await inbox.waitFor(10, 5000);
+			const inner = msgs
+				.filter((m) => m.type === "event")
+				.map((m) => (m.event as { type?: string })?.type);
+			expect(inner).toContain("auto_retry_start");
+			expect(inner).toContain("auto_retry_end");
+			// And the start event carries the fields the client renders from.
+			const retryStart = msgs.find(
+				(m) =>
+					m.type === "event" && (m.event as { type?: string })?.type === "auto_retry_start",
+			) as { event?: Record<string, unknown> } | undefined;
+			expect(retryStart?.event).toMatchObject({
+				attempt: 1,
+				maxAttempts: 3,
+				errorMessage: expect.stringMatching(/429/),
+			});
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+		}
+	});
+
+	it("client abortRetry reaches pi as abort_retry on stdin", async () => {
+		// The Stop-during-retry affordance sends {type:"abortRetry"}; the
+		// server must forward it to pi as {type:"abort_retry"} (the rpc
+		// command). Prove the dispatch isn't swallowed and the wire name
+		// is translated correctly. The fake-pi logs every command type it
+		// receives to the marker file.
+		fakePiPath = makeFakePi("retry");
+		process.env.PI_BIN = fakePiPath;
+		const marker = join(mkdtempSync(join(tmpdir(), "marker-")), "log");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await inbox.waitFor(1); // ready
+
+			// Fire abortRetry directly (the client does this when Stop is
+			// clicked during a retry backoff).
+			ws.send(JSON.stringify({ type: "abortRetry" }));
+
+			// The fake-pi appends "cmd:<type>" for every command it reads.
+			// Wait for abort_retry to show up on its stdin.
+			const deadline = Date.now() + 3000;
+			let saw = false;
+			while (Date.now() < deadline) {
+				const log = readMarkerLog(marker);
+				if (log.includes("cmd:abort_retry")) {
+					saw = true;
+				break;
+			}
+			await new Promise((r) => setTimeout(r, 30));
+			}
+			expect(saw).toBe(true);
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+		}
+	});
 });
 async function waitForReadyCount(inbox: Inbox, count: number, timeoutMs: number): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
@@ -751,6 +907,15 @@ function readPids(marker: string): number[] {
 			.filter((n) => Number.isFinite(n));
 	} catch {
 		return [];
+	}
+}
+
+/** Raw contents of the fake-pi marker/log file (PIDs + "cmd:<type>" lines). */
+function readMarkerLog(marker: string): string {
+	try {
+		return readFileSync(marker, "utf8") as string;
+	} catch {
+		return "";
 	}
 }
 
