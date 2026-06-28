@@ -416,6 +416,14 @@ export function finalizeToolCall(
 		card.append(el("pre", { class: `tool-result ${isError ? "tool-error" : ""}` }, result));
 	}
 	void name; // unused for now — the tool-name row was already set on append
+	// The result <pre> can be tall — it grows the page. If we DON'T scroll
+	// here, the viewport stays put and the user ends up above the bottom,
+	// which makes isAtBottom() false and silently kills pinning for every
+	// subsequent streamed token (scrollToBottomIfPinned no-ops). So a
+	// missing scroll here doesn't just skip this block — it breaks
+	// autoscroll for the rest of the turn. Polite scroll: only follow if
+	// the user was already pinned (don't yank someone scrolled up).
+	scrollToBottomIfPinned();
 }
 
 export function appendError(text: string): void {
