@@ -511,6 +511,17 @@ function onEvent(event: Record<string, unknown>): void {
 // ---------------------------------------------------------------------------
 
 async function boot(): Promise<void> {
+	// Reattach to the last session if there was one — lets a freshly
+	// opened tab (close + reopen) pick up the still-running agent
+	// instead of starting a blank session. Without this, state.sessionId
+	// is null on a new tab and the server spawns a fresh pi, orphaning
+	// any in-flight work and hiding the Stop button. Cleared on "new chat".
+	try {
+		const saved = localStorage.getItem("acb:sessionId");
+		if (saved) state.sessionId = saved;
+	} catch {
+		/* localStorage unavailable — degrade to fresh-session behavior */
+	}
 	// Probe the server's health and model list. If the relevant API keys
 	// aren't set, the lists come back empty and the picker will show a
 	// helpful error.
@@ -591,7 +602,17 @@ async function boot(): Promise<void> {
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
 		setThinking: (level) => chatClient.setThinking(level),
 		abort: () => chatClient.abort(),
-		newSession: () => chatClient.newSession(),
+		newSession: () => {
+			// Explicit "new chat" — drop the persisted id so the next tab
+			// open doesn't reattach to the session the user just left.
+			try {
+				localStorage.removeItem("acb:sessionId");
+			} catch {
+				/* ignore */
+			}
+			state.sessionId = null;
+			chatClient.newSession();
+		},
 		resumeSession: (id) => chatClient.resumeSession(id),
 		listSessions: () => chatClient.listSessions(),
 		renameSession: (name) => chatClient.renameSession(name),
@@ -602,7 +623,19 @@ async function boot(): Promise<void> {
 	});
 	chatClient.onReady((info) => {
 		// Track the session id for export/display.
-		if (info.sessionId) state.sessionId = info.sessionId;
+		if (info.sessionId) {
+			state.sessionId = info.sessionId;
+			// Persist so a freshly-opened tab (close + reopen, or hard
+		// refresh) can reattach to this session — and, if it's still
+		// mid-run on the server, recover isStreaming + the Stop button.
+			// Without this a new tab starts a blank session and the running
+		// agent is orphaned. Cleared by the "new chat" action.
+			try {
+				localStorage.setItem("acb:sessionId", info.sessionId);
+			} catch {
+				/* localStorage may be disabled (private mode) — degrade gracefully */
+			}
+		}
 		// Don't blindly overwrite the displayed model with the server's
 		// default on every fresh connection — the server sends `ready`
 		// with the *initial* model (MiniMax-M3) on each new connection,
