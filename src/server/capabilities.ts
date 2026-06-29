@@ -184,6 +184,7 @@ function extractToolNames(filePath: string): string[] {
 		// Find registerTool blocks and extract the name
 		const registerRegex = /registerTool\s*\(\s*\{[^}]*name\s*:\s*"([^"]+)"/gs;
 		let match: RegExpExecArray | null;
+		// biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-iter idiom — assigning inside the while condition is the standard JS pattern for exhaustive regex.exec() loops.
 		while ((match = registerRegex.exec(content)) !== null) {
 			tools.push(match[1]);
 		}

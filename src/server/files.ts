@@ -1,42 +1,29 @@
 /**
  * File download route: GET /api/file?path=<absolute path>
  *
- * Serves any file that lives inside the agent's project directory
- * (`config.piCwd`). This is what lets the browser download files the
- * agent created or edited — when a tool call carries a `path` arg
- * (write / edit / read), the renderer turns it into a download link
- * pointing here.
+ * Serves any regular file the agent can read — when a tool call carries
+ * a `path` arg (write / edit / read), the renderer turns it into a
+ * download link pointing here.
  *
- * This is transport-layer only: it resolves the path, checks that it
- * is contained within piCwd (so a stray `../../../etc/passwd` is
- * refused), and streams the bytes. No agent logic, no business rules.
+ * This is transport-layer only: it resolves the path, verifies it is a
+ * regular file, and streams the bytes. No agent logic, no business rules.
  *
- * We deliberately allow ANY file under piCwd (not just files the agent
- * touched) because the server is stateless about which paths the agent
- * has written — the renderer only links paths it saw in tool calls, so
- * in practice the user only ever sees links to files pi actually used.
+ * Scope: ANY regular file on the host. This is consistent with the
+ * threat model documented in §XIX of the server2 overview — agentchatbox
+ * is "effectively a remote shell" behind Authelia MFA, and pi's own
+ * `read`/`bash` tools already have full filesystem access and can print
+ * any file's contents into the chat. Restricting this endpoint to
+ * `config.piCwd` was stricter than the agent's actual capabilities, so
+ * it only broke the UX (download links appeared for files the endpoint
+ * then refused to serve) without adding any real security. We still
+ * refuse non-regular files (directories, devices, sockets, FIFOs) so a
+ * `path` pointing at `/dev/` or a mount point can't be streamed.
  */
 
 import { readFile, stat } from "node:fs/promises";
-import { basename, relative, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
-import { config } from "./config.js";
-
-/** Resolve `root` once at router construction. */
-const ROOT = resolve(config.piCwd);
-
-/**
- * True iff `target` is `root` itself or lives somewhere beneath it.
- * Uses `path.relative` rather than a string prefix so trailing slashes
- * and `..` segments can't trick the containment check
- * (e.g. `/home/foo/project-evil` would wrongly match a `/home/foo/project`
- * string prefix).
- */
-function isWithinRoot(target: string): boolean {
-	const rel = relative(ROOT, target);
-	return rel === "" || !rel.startsWith("..");
-}
 
 export function createFilesRouter(): Router {
 	const router = express.Router();
@@ -48,17 +35,10 @@ export function createFilesRouter(): Router {
 			return;
 		}
 
-		// Resolve against the project root so a relative path like
-		// "src/foo.ts" still works, then verify containment. `resolve`
-		// collapses `..` segments before the containment check, which is
-		// what makes the check safe.
-		const target = resolve(ROOT, raw);
-		if (!isWithinRoot(target)) {
-			res.status(403).json({
-				error: "path is outside the agent project directory",
-			});
-			return;
-		}
+		// `resolve` collapses `..` segments so a traversal like
+		// "../../etc/passwd" still lands on a real absolute path; the
+		// only remaining gate is that it must be a regular file.
+		const target = resolve(raw);
 
 		let s: Awaited<ReturnType<typeof stat>>;
 		try {

@@ -1,12 +1,13 @@
 /**
  * files.ts — GET /api/file?path=<absolute path>
  *
- * Verifies the route serves files inside the agent project dir (piCwd),
- * refuses paths that escape it, and sets headers that force a download.
+ * Verifies the route serves any regular file (the agent is a remote
+ * shell behind MFA, so downloads mirror the read/bash tools' full FS
+ * access), refuses non-regular files, and sets attachment headers.
  */
 
-import { createServer, type Server } from "node:http";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
@@ -35,36 +36,30 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	if (server)
-		return new Promise<void>((resolve) => server!.close(() => resolve()));
+	if (server) return new Promise<void>((resolve) => server!.close(() => resolve()));
 });
 
 describe("GET /api/file", () => {
-	it("serves a file inside piCwd with attachment headers", async () => {
+	it("serves a regular file with attachment headers", async () => {
 		await writeFile(join(tmp, "hello.txt"), "hi there");
-		const res = await fetch(
-			`${base}/api/file?path=${encodeURIComponent(join(tmp, "hello.txt"))}`,
-		);
+		const res = await fetch(`${base}/api/file?path=${encodeURIComponent(join(tmp, "hello.txt"))}`);
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-disposition")).toContain("attachment");
 		expect(await res.text()).toBe("hi there");
 	});
 
-	it("resolves a relative path against piCwd", async () => {
-		await writeFile(join(tmp, "rel.txt"), "rel");
-		const res = await fetch(`${base}/api/file?path=rel.txt`);
+	it("serves a file outside piCwd (remote-shell threat model)", async () => {
+		// The agent's read/bash tools can read any file on the host; the
+		// download endpoint mirrors that rather than refusing on path.
+		const res = await fetch(`${base}/api/file?path=/etc/hostname`);
 		expect(res.status).toBe(200);
-		expect(await res.text()).toBe("rel");
+		expect(res.headers.get("content-disposition")).toContain("attachment");
+		expect((await res.text()).length).toBeGreaterThan(0);
 	});
 
-	it("refuses paths outside piCwd (path traversal)", async () => {
-		const res = await fetch(`${base}/api/file?path=/etc/passwd`);
-		expect(res.status).toBe(403);
-	});
-
-	it("refuses ../ escape from piCwd", async () => {
-		const res = await fetch(`${base}/api/file?path=${encodeURIComponent("../evil")}`);
-		expect(res.status).toBe(403);
+	it("refuses a directory (non-regular file)", async () => {
+		const res = await fetch(`${base}/api/file?path=${encodeURIComponent(tmp)}`);
+		expect(res.status).toBe(400);
 	});
 
 	it("returns 400 for a missing path query", async () => {
@@ -73,9 +68,7 @@ describe("GET /api/file", () => {
 	});
 
 	it("returns 404 for a nonexistent file", async () => {
-		const res = await fetch(
-			`${base}/api/file?path=${encodeURIComponent(join(tmp, "nope.txt"))}`,
-		);
+		const res = await fetch(`${base}/api/file?path=${encodeURIComponent(join(tmp, "nope.txt"))}`);
 		expect(res.status).toBe(404);
 	});
 });
