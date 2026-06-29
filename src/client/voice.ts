@@ -16,6 +16,15 @@ import { appendError, refreshStatus } from "./render.js";
 import { state } from "./state.js";
 
 /**
+ * Identity (opaque token) of whatever source is currently driving
+ * playback, so the speak buttons can implement play/stop toggle
+ * semantics. Set by toggleSpeak() and cleared when playback stops.
+ * Direct speakText() calls (e.g. from auto-speak) leave this null,
+ * which is correct: nothing for a button to "stop" in that case.
+ */
+let currentSpeakSrc: unknown = null;
+
+/**
  * Synthesize the given text via /api/tts and play it on the shared <audio>.
  * One call at a time — starting a new one stops the current playback.
  */
@@ -35,17 +44,61 @@ export async function speakText(text: string): Promise<void> {
 		audio.src = url;
 		audio.playbackRate = state.ttsSpeed;
 		await audio.play();
-		// Revoke object URL after playback ends (or on next speak).
+		// Revoke object URL after playback ends (or on next speak), and
+		// clear the active source so a subsequent click re-plays rather
+		// than being mistaken for a "stop the same thing" toggle.
 		audio.onended = () => {
 			URL.revokeObjectURL(url);
 			audio.onended = null;
+			setSpeakBtnLabel(currentSpeakSrc, false);
+			currentSpeakSrc = null;
 		};
 	} catch (err) {
 		appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
+		setSpeakBtnLabel(currentSpeakSrc, false);
+		currentSpeakSrc = null;
 	} finally {
 		state.ttsInFlight--;
 		refreshStatus();
 	}
+}
+
+/**
+ * Play/stop toggle for the per-message speak buttons. `src` is an
+ * opaque identity token (typically the calling button element) so we
+ * can tell "I'm the one currently playing — second press stops me"
+ * from "a different message is playing — switch to this one".
+ * Direct auto-speak doesn't go through here, so it never registers a
+ * src and a button press always starts fresh.
+ */
+export function toggleSpeak(text: string, src: unknown): void {
+	const audio = $<HTMLAudioElement>("#tts-audio");
+	// If this exact source is what's currently playing, the second
+	// press is a "stop" — pause and reset, mirroring the auto-speak
+	// off-path. Otherwise start (or switch to) this message.
+	if (!audio.paused && currentSpeakSrc === src) {
+		audio.pause();
+		audio.currentTime = 0;
+		currentSpeakSrc = null;
+		setSpeakBtnLabel(src, false);
+		return;
+	}
+	// Switching source: clear the previous button's stop indicator.
+	if (currentSpeakSrc !== null) setSpeakBtnLabel(currentSpeakSrc, false);
+	currentSpeakSrc = src;
+	setSpeakBtnLabel(src, true);
+	void speakText(text);
+}
+
+/**
+ * Toggle a source button's label between 🔊 (idle) and ⏹ (playing /
+ * stoppable), if the source is a DOM element exposing `.textContent`.
+ * Silent no-op for non-element sources so toggleSpeak stays generic.
+ */
+function setSpeakBtnLabel(src: unknown, playing: boolean): void {
+	if (!(src instanceof HTMLElement)) return;
+	src.textContent = playing ? "⏹" : "🔊";
+	src.title = playing ? "Stop playback" : "Speak this message (local TTS)";
 }
 
 export function toggleAutoSpeak(): void {
