@@ -516,6 +516,7 @@ async function boot(): Promise<void> {
 	// helpful error.
 	try {
 		const [h, models] = await Promise.all([getHealth(), getModels()]);
+		state.searchEnabled = h.search ?? false;
 		state.availableModels = models.map((m: ModelInfo) => ({
 			id: m.id,
 			provider: m.provider,

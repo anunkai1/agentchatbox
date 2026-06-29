@@ -49,6 +49,12 @@ export interface HealthInfo {
 	tts: boolean;
 	ttsReason?: string;
 	ttsVoice?: string;
+	/**
+	 * Whether semantic session search is enabled on this server. When false,
+	 * the sidebar shows no search box. An optional, pluggable feature — see
+	 * src/server/search/.
+	 */
+	search?: boolean;
 }
 
 export async function getHealth(): Promise<HealthInfo> {
@@ -131,4 +137,30 @@ export async function listVoices(): Promise<VoicesResponse> {
 	const res = await fetch(`${BASE}/api/tts/voices`);
 	if (!res.ok) throw new Error(`voices failed: ${res.status}`);
 	return (await res.json()) as VoicesResponse;
+}
+
+/** One semantic search hit returned by /api/sessions/search. */
+export interface SessionSearchHit {
+	sessionId: string;
+	msgIdx: number;
+	role: string;
+	snippet: string;
+	createdAt: string;
+	similarity: number;
+	title: string;
+	modifiedAt: string;
+	messageCount: number;
+}
+
+/**
+ * Semantic search across saved session transcripts. Returns messages whose
+ * meaning is closest to `query`, regardless of exact wording. Only available
+ * when the server reports `search: true` in /api/health.
+ */
+export async function searchSessions(query: string, limit = 10): Promise<SessionSearchHit[]> {
+	const url = `${BASE}/api/sessions/search?q=${encodeURIComponent(query)}&limit=${limit}`;
+	const res = await fetch(url);
+	if (!res.ok) throw new Error(`search failed: ${res.status}`);
+	const data = (await res.json()) as { results: SessionSearchHit[] };
+	return data.results;
 }

@@ -118,6 +118,10 @@ export interface AppState {
 	 * Populated by boot() on startup.
 	 */
 	capabilities: CapabilitiesInfo | null;
+	/** Whether the server has semantic session search enabled. */
+	searchEnabled: boolean;
+	/** Whether the sidebar is currently showing search results (vs the date list). */
+	searchActive: boolean;
 	/**
 	 * Plain string snapshot of `state.messages` last assistant text, kept
 	 * in sync by main.ts's event dispatcher. The render layer reads this
@@ -191,4 +195,6 @@ export const state: AppState = {
 	retry: null,
 	streamingStartedAt: null,
 	capabilities: null,
+	searchEnabled: false,
+	searchActive: false,
 };

@@ -52,3 +52,6 @@ uploads/*
 AGENTS.md
 scripts/_archive/
 .venv/
+
+# Search index (regeneratable from pi session JSONL)
+data/

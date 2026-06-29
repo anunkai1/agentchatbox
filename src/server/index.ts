@@ -23,8 +23,8 @@ import cors from "cors";
 import express from "express";
 import { getCapabilities } from "./capabilities.js";
 import { mountChatWs } from "./chat.js";
-import { createFilesRouter } from "./files.js";
 import { config } from "./config.js";
+import { createFilesRouter } from "./files.js";
 import { log } from "./logger.js";
 import { projectRoot } from "./paths.js";
 import { EXTRA_MODELS, SDK_PROVIDERS } from "./providers.js";
@@ -91,6 +91,51 @@ app.get("/api/sessions", (req, res) => {
 });
 
 /**
+ * GET /api/sessions/search?q=<free-text memory>&cwd=<path>&limit=<n>
+ *
+ * Semantic search across the indexed session transcripts. The user types a
+ * memory in their own words ("I moved MavalETH from server 3 to server 2")
+ * and this returns the messages whose meaning is closest, regardless of
+ * exact wording.
+ *
+ * This feature is OPTIONAL and pluggable: it only exists when the operator
+ * has installed the optional packages (`better-sqlite3`,
+ * `@huggingface/transformers`) and set `AGENTCHATBOX_SEARCH_ENABLED=1`.
+ * When off, this endpoint returns 404 and `/api/health` advertises
+ * `search: false` so the sidebar hides the search box. See
+ * `src/server/search/`.
+ */
+app.get("/api/sessions/search", async (req, res) => {
+	// Non-literal specifier: keeps the search module fully removable. TypeScript
+	// won't try to resolve this import, so deleting `src/server/search/` leaves
+	// the core server compiling cleanly (the runtime throw is caught below).
+	const searchPath = "./search/index.js";
+	const loaded = (await import(searchPath)) as {
+		isSearchAvailable: () => Promise<boolean>;
+		searchSessions: (q: string, opts?: { cwd?: string; limit?: number }) => Promise<unknown[]>;
+	};
+	try {
+		if (!(await loaded.isSearchAvailable())) {
+			res.status(404).json({ error: "search not enabled on this server" });
+			return;
+		}
+	} catch {
+		res.status(404).json({ error: "search not enabled on this server" });
+		return;
+	}
+	const q = String(req.query.q ?? "").trim();
+	if (!q) {
+		res.json({ results: [] });
+		return;
+	}
+	const cwd = String(req.query.cwd ?? config.piCwd);
+	const limitRaw = Number.parseInt(String(req.query.limit ?? "10"), 10);
+	const limit = Number.isFinite(limitRaw) ? limitRaw : 10;
+	const results = await loaded.searchSessions(q, { cwd, limit });
+	res.json({ results });
+});
+
+/**
  * GET /api/sessions/:id
  *
  * Returns the full message transcript for a session. The browser
@@ -154,6 +199,18 @@ app.get("/api/changelog", (req, res) => {
 app.get("/api/health", async (_req, res) => {
 	const whisper = await checkWhisperAvailable();
 	const tts = await checkTtsAvailable();
+	// Semantic session search is an optional, pluggable feature. Probe it the
+	// same way we probe Whisper/TTS so the UI can show/hide the search box.
+	let search = false;
+	try {
+		// Non-literal specifier: keeps the search module fully removable (see
+		// /api/sessions/search handler for the same rationale).
+		const searchPath = "./search/index.js";
+		const loaded = (await import(searchPath)) as { isSearchAvailable: () => Promise<boolean> };
+		search = await loaded.isSearchAvailable();
+	} catch {
+		search = false;
+	}
 	res.json({
 		status: "ok",
 		commit: COMMIT_HASH,
@@ -163,6 +220,7 @@ app.get("/api/health", async (_req, res) => {
 		tts: tts.available,
 		ttsReason: tts.available ? undefined : tts.reason,
 		ttsVoice: tts.voice,
+		search,
 	});
 });
 

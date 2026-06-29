@@ -16,6 +16,7 @@
  */
 
 import type { SessionSummary } from "../shared/protocol.js";
+import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
 import { type PersistedMessage, state } from "./state.js";
@@ -200,19 +201,23 @@ export function syncSteerBadges(): void {
  * the text passed to the closure.
  */
 function makeSpeakButton(getText: () => string): HTMLElement {
-	return el(
+	const btn = el(
 		"button",
 		{
 			class: "speak-btn",
 			title: "Speak this message (local TTS)",
-			onclick: () => {
-				void import("./voice.js").then(({ speakText }) => {
-					void speakText(getText());
-				});
-			},
 		},
 		"🔊",
 	);
+	// Use the button element itself as the toggle identity token, so a
+	// second press on the same button stops playback while a press on
+	// a different message's button switches over (see toggleSpeak).
+	btn.addEventListener("click", () => {
+		void import("./voice.js").then(({ toggleSpeak }) => {
+			toggleSpeak(getText(), btn);
+		});
+	});
+	return btn;
 }
 
 export function summarizeArgs(args: unknown): string {
@@ -700,6 +705,41 @@ export function renderShell(): void {
 		),
 	);
 
+	// Semantic search box — only rendered when the server advertises the
+	// optional search feature (state.searchEnabled, set from /api/health).
+	// Typing switches the sessions list to ranked-by-meaning results; clearing
+	// it restores the normal date-grouped list. See src/server/search/.
+	if (state.searchEnabled) {
+		const searchRow = el("div", { class: "sidebar-search-row" });
+		searchRow.append(
+			el("input", {
+				class: "sidebar-search",
+				id: "sidebar-search",
+				type: "search",
+				placeholder: "Search chats by meaning…",
+				autocomplete: "off",
+				on: {
+					input: (e: Event) => {
+						const q = (e.target as HTMLInputElement).value;
+						void onSidebarSearchInput(q);
+					},
+				},
+			}),
+			el(
+				"button",
+				{
+					class: "search-info-btn",
+					type: "button",
+					title: "How does this search work?",
+					"aria-label": "How does this search work?",
+					onclick: toggleSearchHelp,
+				},
+				"ⓘ",
+			),
+		);
+		sidebar.append(searchRow);
+	}
+
 	// Session list container — populated by renderSidebarSessions()
 	const sessionsWrap = el("div", { class: "sidebar-sessions", id: "sidebar-sessions" });
 	sessionsWrap.append(el("div", { class: "sidebar-empty" }, "Loading sessions…"));
@@ -1099,6 +1139,115 @@ function toggleSidebar(collapse: boolean): void {
 }
 
 /**
+ * Pop up a short explanation of how semantic search works. Dismissable by
+ * clicking outside or the ✕ — same overlay pattern as the capabilities
+ * popover.
+ */
+function toggleSearchHelp(): void {
+	const existing = document.getElementById("search-help");
+	if (existing) {
+		existing.remove();
+		return;
+	}
+	const overlay = el("div", { class: "modal-overlay", id: "search-help" });
+	overlay.addEventListener("click", (e) => {
+		if (e.target === overlay) overlay.remove();
+	});
+	const box = el("div", { class: "caps-popover-box search-help-box" });
+	box.append(el("h3", { text: "Search chats by meaning" }));
+	box.append(
+		el(
+			"p",
+			{ class: "muted" },
+			"This searches your past conversations by what they mean, not by exact words. Describe what you remember in your own words — even if no words overlap, it finds the match.",
+		),
+	);
+	box.append(
+		el(
+			"p",
+			{ class: "muted" },
+			"For example: \u201cI moved MavalETH from server 3 to server 2\u201d finds a chat that actually said \u201crelocate the service from srv-03 to srv-02.\u201d",
+		),
+	);
+	box.append(
+		el(
+			"p",
+			{ class: "muted" },
+			"How: every message is turned into a number-fingerprint that captures its meaning (using a small local model, no API key). Your query gets the same treatment, and the system matches by similarity. Results show the message that matched as a snippet.",
+		),
+	);
+	box.append(
+		el(
+			"button",
+			{ class: "icon-btn search-help-close", title: "Close", onclick: () => overlay.remove() },
+			"✕",
+		),
+	);
+	overlay.append(box);
+	document.body.append(overlay);
+}
+
+/**
+ * Debounced handler for the sidebar search box. A non-empty query swaps the
+ * sessions list for ranked semantic results; an empty query restores the
+ * normal date-grouped list by re-rendering whatever the last sessions list
+ * was (cached in `lastSessions`).
+ */
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+let lastSessions: SessionSummary[] = [];
+
+function onSidebarSearchInput(q: string): void {
+	if (searchDebounce) clearTimeout(searchDebounce);
+	searchDebounce = setTimeout(async () => {
+		const trimmed = q.trim();
+		if (!trimmed) {
+			state.searchActive = false;
+			renderSidebarSessions(lastSessions);
+			return;
+		}
+		const container = document.getElementById("sidebar-sessions");
+		if (container) {
+			container.innerHTML = "";
+			container.append(el("div", { class: "sidebar-empty" }, "Searching…"));
+		}
+		try {
+			const hits = await searchSessions(trimmed);
+			state.searchActive = true;
+			renderSidebarSearchResults(hits);
+		} catch {
+			if (container) {
+				container.innerHTML = "";
+				container.append(el("div", { class: "sidebar-empty" }, "Search failed."));
+			}
+		}
+	}, 250);
+}
+
+/** Render semantic-search hits as flat result cards (no date grouping). */
+function renderSidebarSearchResults(hits: SessionSearchHit[]): void {
+	const container = document.getElementById("sidebar-sessions");
+	if (!container) return;
+	container.innerHTML = "";
+	if (hits.length === 0) {
+		container.append(el("div", { class: "sidebar-empty" }, "No matches by meaning."));
+		return;
+	}
+	for (const h of hits) {
+		const item = el("div", { class: "session-item search-hit" });
+		if (h.sessionId === state.sessionId) item.classList.add("active");
+		item.append(el("div", { class: "session-item-title" }, h.title || "Untitled"));
+		item.append(el("div", { class: "search-snippet" }, h.snippet));
+		const timeStr = formatRelativeTime(h.modifiedAt);
+		item.append(el("div", { class: "session-item-meta" }, `${h.messageCount} msgs · ${timeStr}`));
+		item.addEventListener("click", () => {
+			shellHandlers?.handleSlash(`resume ${h.sessionId}`);
+			toggleSidebar(true);
+		});
+		container.append(item);
+	}
+}
+
+/**
  * Render the list of sessions into the sidebar. Called by main.ts when
  * the server delivers the session list (via onSessionsUpdated). Sessions
  * are grouped by date: Today / Yesterday / This week / Older.
@@ -1106,6 +1255,10 @@ function toggleSidebar(collapse: boolean): void {
 export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	const container = document.getElementById("sidebar-sessions");
 	if (!container) return;
+	// Cache the full list so the search box can restore it when cleared.
+	lastSessions = sessions;
+	// If the user is mid-search, don't clobber the search results.
+	if (state.searchActive) return;
 	container.innerHTML = "";
 	if (sessions.length === 0) {
 		container.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));

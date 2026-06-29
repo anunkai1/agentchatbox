@@ -76,6 +76,10 @@ src/
     files.ts              # /api/file (download agent-created files, piCwd-contained)
     transcribe.ts         # /api/transcribe (faster-whisper)
     tts.ts                # /api/tts (piper)
+    search/               # OPTIONAL pluggable semantic session search
+                          #   (see "Semantic session search" below; absent by
+                          #   default — delete the folder and the server is
+                          #   unchanged)
   shared/
     protocol.ts           # types shared by client and server
 tests/                    # vitest, server-side
@@ -218,6 +222,65 @@ The original prototype ran the agent in-process (Node-side Agent factory with lo
 2. **Agent crashes took down the server.** An unhandled error in the agent loop killed the whole process, including unrelated connections.
 
 The current model is simpler: the server spawns `pi --mode rpc` per connection, forwards its stdout to the browser, and translates client messages into pi RPC commands on stdin. The server is just a pipe — the actual agent logic (tools, model routing, streaming, system prompt) lives inside `pi`, where it belongs. If a child crashes, only that WS connection sees it; the server and other connections are unaffected.
+
+## Semantic session search (optional)
+
+The sidebar can optionally show a **search-by-meaning** box. Type a memory in
+your own words ("I moved MavalETH from server 3 to server 2") and it returns
+the sessions/messages whose meaning is closest — even if no words overlap.
+
+This is a **pluggable, opt-in feature**. It is invisible and imposes zero cost
+until you explicitly enable it, and it can be removed without touching the rest
+of the app.
+
+### How it works
+
+- Every session's messages are embedded with a small local model
+  (`all-MiniLM-L6-v2`, 30 MB, 384-dim) via `@huggingface/transformers`. No API
+  key, no network at runtime — the model downloads once to
+  `~/.cache/huggingface/`.
+- Vectors persist in a SQLite file (`data/search.db`) and are loaded into RAM
+  as one contiguous `Float32Array`; search is a brute-force cosine match, ~15 MB
+  per 10k messages and sub-100 ms per query. No database server.
+- Indexing is **mtime-driven**: only new or changed session JSONL files are
+  re-embedded. It reads the same files `pi` already writes (like
+  `session-list.ts` does) — no `pi` subprocess involvement, no agent logic.
+
+### Enabling
+
+It needs two optional packages (declared in `optionalDependencies`, so
+a build failure on some platform can't break the core server — and the
+search module degrades to `off` if either is missing). Install/reinstall them
+explicitly to enable:
+
+```bash
+npm install better-sqlite3 @huggingface/transformers
+```
+
+then in `.env`:
+
+```
+AGENTCHATBOX_SEARCH_ENABLED=1
+```
+
+Restart the server. `/api/health` now reports `search: true`, the sidebar
+shows a search box, and `GET /api/sessions/search?q=<your memory>` returns
+ranked hits.
+
+### Disabling / removing
+
+- **Disable:** unset `AGENTCHATBOX_SEARCH_ENABLED`. The box disappears,
+  `/api/sessions/search` returns 404. The index file stays on disk.
+- **Remove entirely:** `rm -rf src/server/search`, uninstall the two packages.
+  Because the core server references the module only via two non-literal
+dynamic
+  imports (in `/api/health` and the endpoint handler), deleting the folder
+  leaves the server compiling and running identically. No other file needs
+  editing.
+
+Design ported from [Resonant](https://github.com/codependentai/resonant), whose
+approach is proven in production for exactly this case. See
+`src/server/search/`.
 
 ## Related
 
