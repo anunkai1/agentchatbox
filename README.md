@@ -11,6 +11,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - File / image / voice attachments (image bytes go straight to multimodal models)
 - **Agent → you file delivery** — every tool call that touches a `path` (write / edit / read) gets a `⬇ download` link on its card, served from the project dir via `GET /api/file`
 - Persistent sessions on disk (`pi` manages JSONL files — survive page reloads and server restarts)
+- **Shareable session links** — every chat lives at `/s/<session-id>`. Bookmark it, copy it (`/link` or the Settings menu), or open it on another device to resume the same conversation
 - Local TTS (Piper, 1.4× playback) and STT (faster-whisper) — no paid cloud APIs
 - Slash commands, model switching mid-conversation, session history / resume / rename
 - Session list / transcript replay via `/api/sessions`

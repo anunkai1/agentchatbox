@@ -15,6 +15,7 @@ import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { $, el } from "./dom.js";
 import { appendError, appendNode, refreshStatus, toggleCapabilitiesPopover } from "./render.js";
 import { type ModelOption, state } from "./state.js";
+import { shareableSessionUrl } from "./url.js";
 
 /**
  * Small helper for the slash command's help/session/copy messages.
@@ -45,6 +46,8 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	session: "show session info (id, model, thinking, tokens, cost)",
 	// Output
 	copy: "copy the last assistant message to the clipboard",
+	link: "copy a shareable link to this chat (alias: /share)",
+	share: "copy a shareable link to this chat (alias: /link)",
 	export: "download the current session as an HTML file",
 	// Reference
 	hotkeys: "show keyboard shortcuts",
@@ -209,9 +212,11 @@ export function handleSlash(arg: string): void {
 		}
 		case "session": {
 			const c = state.costTotal;
+			const link = shareableSessionUrl(state.sessionId);
 			const info =
 				`Session info:\n` +
 				`  title:     ${state.title}\n` +
+				`  id:        ${state.sessionId ?? "(none)"}\n` +
 				`  model:     ${state.currentModelId ?? "(unknown)"}\n` +
 				`  provider:  ${state.currentProvider ?? "(unknown)"}\n` +
 				`  thinking:  ${state.currentThinking}\n` +
@@ -219,7 +224,8 @@ export function handleSlash(arg: string): void {
 				`  in:        ${c.input.toLocaleString()} tok\n` +
 				`  out:       ${c.output.toLocaleString()} tok\n` +
 				`  cache r/w: ${c.cacheRead.toLocaleString()} / ${c.cacheWrite.toLocaleString()} tok\n` +
-				`  cost:      $${c.cost.toFixed(6)}`;
+				`  cost:      $${c.cost.toFixed(6)}` +
+				(link ? `\n  link:      ${link}` : "");
 			appendNode(el_pre(info));
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
@@ -238,6 +244,20 @@ export function handleSlash(arg: string): void {
 					});
 					break;
 				}
+			}
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		}
+		case "link":
+		case "share": {
+			const url = shareableSessionUrl(state.sessionId);
+			if (!url) {
+				appendError("no session yet — send a message first");
+			} else {
+				void copyToClipboard(url).then((ok) => {
+					if (ok) appendNode(el_pre(`Copied chat link to clipboard:\n  ${url}`));
+					else appendError("clipboard access denied");
+				});
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
@@ -599,6 +619,27 @@ export function openOverflowMenu(): void {
 		openModelPicker();
 	});
 	box.append(modelLine);
+
+	// Copy a shareable link to the current chat (`/s/<id>`). Mirrors the
+	// `/link` slash command; surfaced here for discoverability on mobile
+	// where the input box is the only entry point to slash commands.
+	const linkUrl = shareableSessionUrl(state.sessionId);
+	if (linkUrl) {
+		const linkLine = el("div", { class: "overflow-row" });
+		linkLine.append(el("div", { class: "overflow-label" }, "chat link"));
+		linkLine.append(
+			el("div", { class: "overflow-value" }, `${linkUrl.replace(/^https?:\/\//, "")}`),
+		);
+		linkLine.addEventListener("click", async () => {
+			const ok = await copyToClipboard(linkUrl);
+			const value = linkLine.querySelector(".overflow-value")!;
+			value.textContent = ok ? "✓ copied" : "✗ denied";
+			setTimeout(() => {
+				value.textContent = linkUrl.replace(/^https?:\/\//, "");
+			}, 1500);
+		});
+		box.append(linkLine);
+	}
 
 	const thinkLine = el("div", { class: "overflow-row" });
 	thinkLine.append(el("div", { class: "overflow-label" }, "think"));

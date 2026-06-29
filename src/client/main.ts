@@ -19,7 +19,7 @@ import type {
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { getCapabilities, getHealth, getModels, type ModelInfo } from "./api.js";
+import { getCapabilities, getHealth, getModels, sessionExists, type ModelInfo } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
 import { setRichText } from "./linkify.js";
@@ -63,6 +63,7 @@ import {
 	toggleAutoSpeak,
 } from "./voice.js";
 import { createChatClient } from "./ws.js";
+import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
 
 // ---------------------------------------------------------------------------
 // History (↑/↓)
@@ -546,6 +547,22 @@ async function boot(): Promise<void> {
 		appendError(`server health check failed: ${e instanceof Error ? e.message : String(e)}`);
 	}
 
+	// Shareable-session links: if the URL names a session (`/s/<id>`),
+	// resolve it BEFORE opening the WS so the first `init` resumes it.
+	// Validate existence first — a stale link (session deleted, or shared
+	// from another machine/project) starts a fresh chat instead of handing
+	// `pi` a missing session id. This is pure client-side routing: the
+	// server already resumes by id; we're only choosing what to ask for.
+	const urlSessionId = readSessionIdFromUrl();
+	if (urlSessionId) {
+		const exists = await sessionExists(urlSessionId);
+		if (exists) {
+			state.sessionId = urlSessionId;
+		} else {
+			writeSessionIdToUrl(null); // stale link — drop it, start fresh
+		}
+	}
+
 	// Build the WS client FIRST so the shell-handler closures below
 	// capture a real `ChatClient` instead of a module-level `let` that
 	// happens to be `undefined` at registration time. (Old code
@@ -603,7 +620,13 @@ async function boot(): Promise<void> {
 	});
 	chatClient.onReady((info) => {
 		// Track the session id for export/display.
-		if (info.sessionId) state.sessionId = info.sessionId;
+		if (info.sessionId) {
+			state.sessionId = info.sessionId;
+			// Mirror the session into the URL so the chat is a bookmarkable,
+			// shareable link. Covers new sessions, resumes, and reconnects
+			// — every `ready` reflects the currently bound session.
+			writeSessionIdToUrl(info.sessionId);
+		}
 		// Don't blindly overwrite the displayed model with the server's
 		// default on every fresh connection — the server sends `ready`
 		// with the *initial* model (MiniMax-M3) on each new connection,

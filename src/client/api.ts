@@ -127,6 +127,21 @@ export interface CapabilitySkill {
 }
 
 /** Returns the tools, skills, and extensions that pi has loaded. */
+/**
+ * Whether a session id is known to the server for this cwd. Used by the
+ * client to validate a shareable `/s/<id>` link before resuming: a stale
+ * link (session deleted, or shared from another machine/project) should
+ * start a fresh chat rather than hand `pi` a missing session id.
+ */
+export async function sessionExists(sessionId: string): Promise<boolean> {
+	try {
+		const res = await fetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}`);
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
 export async function getCapabilities(): Promise<CapabilitiesInfo> {
 	const res = await fetch(`${BASE}/api/capabilities`);
 	if (!res.ok) throw new Error(`capabilities failed: ${res.status}`);
