@@ -1,75 +1,51 @@
 /**
- * Lightweight markdown-ish linkifier for assistant message text.
+ * Markdown rendering for assistant message text.
  *
- * The chat renders assistant output as preformatted text (white-space:
- * pre-wrap), but URLs and markdown `[label](url)` links should be
- * clickable. This module turns a string into DOM nodes: text segments
- * stay as Text nodes (so whitespace/newlines are preserved by the
- * container's `white-space: pre-wrap`), and links become `<a>` tags.
+ * The chat renders assistant output into a container element; this module
+ * turns the raw markdown the model emits into sanitized DOM via a real
+ * parser (marked) + sanitizer (DOMPurify). Previously this was a tiny
+ * hand-rolled URL/link linkifier operating on raw text in a <pre>; that
+ * left **bold**, ### headings, ``` fences, tables etc. visible as literal
+ * sigils AND fed them to TTS as gibberish. Both the on-screen render and
+ * the speech path now share marked as the single source of truth.
  *
- * Only http(s) links are linkified — anything else (`javascript:`,
- * `data:`, mailto, …) is left as plain text to avoid XSS / navigation
- * surprises. Links open in a new tab with `rel="noopener"`.
+ * Links keep their "rich-link" class + open in a new tab via a DOMPurify
+ * hook, preserving the original linkify.ts link behaviour. Only http(s)
+ * URLs survive sanitization (DOMPurify drops javascript:/data: etc.).
  *
- * This is intentionally tiny: it handles the two forms an LLM actually
- * emits (markdown links and bare URLs). Full markdown rendering lives
- * elsewhere if/when we adopt a real parser; for now this is enough to
- * make "here's the file" → click work.
+ * Display-side only; the server is the transport layer.
  */
 
-const URL_RE = /\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s)<]+)/g;
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 
-/** True iff `url` is an http(s) URL we're willing to turn into a link. */
-function isSafeUrl(url: string): boolean {
-	return /^https?:\/\//i.test(url);
-}
+marked.setOptions({ gfm: true, breaks: true });
 
-/** Build an `<a>` for a link with the given visible label and href. */
-function makeAnchor(href: string, label: string): HTMLAnchorElement {
-	const a = document.createElement("a");
-	a.href = href;
-	a.textContent = label;
-	a.target = "_blank";
-	a.rel = "noopener noreferrer";
-	a.className = "rich-link";
-	return a;
-}
+// Make every link open in a new tab without a referrer, matching the
+// original hand-built <a> elements. DOMPurify already strips unsafe
+// URL schemes (javascript:, data:, ...), so by the time we set target
+// the href is known-safe.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+	if (node.tagName === "A" && node.getAttribute("href")) {
+		node.setAttribute("target", "_blank");
+		node.setAttribute("rel", "noopener noreferrer");
+		node.classList.add("rich-link");
+	}
+});
 
 /**
- * Fill `container` with linkified content for `text`. Clears existing
- * children first. Preserves all whitespace via Text nodes; the caller's
- * container should have `white-space: pre-wrap` so newlines render.
+ * Render `text` (markdown) into `container` as sanitized HTML, replacing
+ * any existing children. Used for both persisted messages (render.ts)
+ * and the live-streaming message (main.ts, re-called each message_update).
+ * Never throws: on parse failure we fall back to the raw text so the user
+ * always sees something.
  */
 export function setRichText(container: HTMLElement, text: string): void {
-	container.replaceChildren(...richTextNodes(text));
-}
-
-/** Return the DOM nodes (Text + <a>) for a chunk of assistant text. */
-export function richTextNodes(text: string): Node[] {
-	if (!text) return [];
-	const nodes: Node[] = [];
-	let last = 0;
-	for (const m of text.matchAll(URL_RE)) {
-		const start = m.index ?? 0;
-		// Text before the match (may be empty).
-		if (start > last) nodes.push(document.createTextNode(text.slice(last, start)));
-
-		if (m[1] !== undefined && m[2] !== undefined) {
-			// Markdown form: [label](url)
-			const label = m[1];
-			const url = m[2];
-			if (isSafeUrl(url)) {
-				nodes.push(makeAnchor(url, label));
-			} else {
-				// Unsafe scheme — render the raw text, no anchor.
-				nodes.push(document.createTextNode(m[0]));
-			}
-		} else if (m[3] !== undefined) {
-			// Bare URL.
-			nodes.push(makeAnchor(m[3], m[3]));
-		}
-		last = start + m[0].length;
+	const src = text || " ";
+	try {
+		const html = marked.parse(src, { async: false }) as string;
+		container.innerHTML = DOMPurify.sanitize(html);
+	} catch {
+		container.textContent = src;
 	}
-	if (last < text.length) nodes.push(document.createTextNode(text.slice(last)));
-	return nodes;
 }

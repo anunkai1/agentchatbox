@@ -495,6 +495,7 @@ body {
 
 .messages-wrap {
 	flex: 1;
+	min-width: 0;
 	overflow-y: auto;
 	/* No scroll-behavior: smooth — it queues animations that fight the
 	   user's manual scroll during streaming (each token would queue a
@@ -691,8 +692,11 @@ body {
 	font-family: inherit;
 	font-size: 15px;
 	line-height: 1.65;
-	white-space: pre-wrap;
 	word-wrap: break-word;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+	min-width: 0;
+	max-width: 100%;
 	color: var(--text);
 }
 .body .text.streaming::after {
@@ -711,6 +715,98 @@ body {
 .body .text .rich-link:hover {
 	text-decoration: none;
 	opacity: 0.85;
+}
+
+/* Markdown rendering (marked + DOMPurify → .markdown container).
+   The parser owns line breaks, so no white-space: pre-wrap here. */
+.body .text.markdown > *:first-child {
+	margin-top: 0;
+}
+.body .text.markdown > *:last-child {
+	margin-bottom: 0;
+}
+.body .text.markdown p {
+	margin: 0 0 0.9em;
+}
+.body .text.markdown h1,
+.body .text.markdown h2,
+.body .text.markdown h3,
+.body .text.markdown h4,
+.body .text.markdown h5,
+.body .text.markdown h6 {
+	margin: 1.1em 0 0.5em;
+	line-height: 1.3;
+	font-weight: 600;
+}
+.body .text.markdown h1 { font-size: 1.5em; }
+.body .text.markdown h2 { font-size: 1.3em; }
+.body .text.markdown h3 { font-size: 1.15em; }
+.body .text.markdown h4,
+.body .text.markdown h5,
+.body .text.markdown h6 { font-size: 1em; }
+.body .text.markdown ul,
+.body .text.markdown ol {
+	margin: 0 0 0.9em;
+	padding-left: 1.6em;
+}
+.body .text.markdown li {
+	margin: 0.2em 0;
+}
+.body .text.markdown li > ul,
+.body .text.markdown li > ol {
+	margin: 0.2em 0;
+}
+.body .text.markdown blockquote {
+	margin: 0 0 0.9em;
+	padding: 0 1em;
+	border-left: 3px solid var(--border-strong);
+	color: var(--text-secondary);
+}
+.body .text.markdown code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.9em;
+	background: var(--code-bg, rgba(127, 127, 127, 0.18));
+	padding: 0.15em 0.4em;
+	border-radius: 4px;
+	word-break: break-word;
+}
+.body .text.markdown pre {
+	margin: 0 0 0.9em;
+	padding: 0.7em 0.9em;
+	background: var(--code-bg, rgba(127, 127, 127, 0.18));
+	border-radius: 6px;
+	max-width: 100%;
+	overflow-x: auto;
+	white-space: pre;
+}
+.body .text.markdown pre code {
+	background: none;
+	padding: 0;
+	font-size: 0.88em;
+	line-height: 1.5;
+	word-break: normal;
+}
+.body .text.markdown hr {
+	border: none;
+	border-top: 1px solid var(--border-strong);
+	margin: 1.2em 0;
+}
+.body .text.markdown table {
+	border-collapse: collapse;
+	margin: 0 0 0.9em;
+	max-width: 100%;
+	display: block;
+	overflow-x: auto;
+}
+.body .text.markdown th,
+.body .text.markdown td {
+	border: 1px solid var(--border-strong);
+	padding: 0.35em 0.6em;
+	text-align: left;
+}
+.body .text.markdown img {
+	max-width: 100%;
+	height: auto;
 }
 @keyframes blink {
 	50% {
@@ -779,6 +875,57 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	font-family: var(--font-mono);
+	min-width: 0;
+}
+/* When the head is expandable, let the icon+name grow and push the
+   toggle/download to the right; make the whole row feel clickable. */
+.tool-head-expandable {
+	cursor: pointer;
+}
+.tool-head-expandable:hover .tool-name {
+	color: color-mix(in srgb, var(--c-tool) 75%, white 25%);
+}
+.tool-head-expandable:hover {
+	background: color-mix(in srgb, var(--surface) 80%, var(--border) 20%);
+}
+.tool-toggle {
+	margin-left: auto;
+	flex: 0 0 auto;
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--text-muted);
+	font-size: 11px;
+	line-height: 1;
+	padding: 2px 7px;
+	border-radius: var(--radius);
+	cursor: pointer;
+	transition:
+		background 0.12s ease,
+		border-color 0.12s ease,
+		color 0.12s ease;
+}
+.tool-toggle:hover {
+	background: var(--border);
+	border-color: var(--c-tool);
+	color: var(--c-tool);
+}
+/* Expanded full command / args body. Lives between head and result. */
+.tool-args {
+	margin: 0;
+	padding: 10px 12px;
+	border-top: 1px solid var(--border);
+	background: rgba(0, 0, 0, 0.28);
+	font-family: var(--font-mono);
+	font-size: 12.5px;
+	line-height: 1.5;
+	max-height: 340px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-wrap: break-word;
+	color: var(--text-secondary);
+}
+.tool-args.hidden {
+	display: none;
 }
 .tool-download {
 	margin-left: auto;

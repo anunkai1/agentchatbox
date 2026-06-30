@@ -12,8 +12,18 @@
 
 import { transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
+import { markdownToSpeechText } from "./markdown.js";
 import { appendError, refreshStatus } from "./render.js";
 import { state } from "./state.js";
+
+/**
+ * Soft cap on what we send to TTS. The server hard-rejects anything over
+ * 4096 chars (MAX_TEXT_CHARS in tts.ts) with a 413, which surfaces to the
+ * user as an error. To avoid that we cap client-side, leaving room for the
+ * markdown→speech transform to expand things slightly and for a small
+ * trailing cue when we truncate.
+ */
+const TTS_MAX_CHARS = 3800;
 
 /**
  * Identity (opaque token) of whatever source is currently driving
@@ -29,8 +39,14 @@ let currentSpeakSrc: unknown = null;
  * One call at a time — starting a new one stops the current playback.
  */
 export async function speakText(text: string): Promise<void> {
-	const trimmed = text.trim();
-	if (!trimmed) return;
+	// Strip markdown before synthesis: the raw text off the wire is full
+	// of **bold**, ### headings, ``` fences, [label](url) links, etc. that
+	// piper would read aloud as literal sigils. See markdown.ts.
+	let spoken = markdownToSpeechText(text);
+	if (!spoken) return;
+	if (spoken.length > TTS_MAX_CHARS) {
+		spoken = `${spoken.slice(0, TTS_MAX_CHARS)} … message truncated.`;
+	}
 	const audio = $<HTMLAudioElement>("#tts-audio");
 	state.ttsInFlight++;
 	refreshStatus();
@@ -39,7 +55,7 @@ export async function speakText(text: string): Promise<void> {
 		audio.pause();
 		audio.currentTime = 0;
 		const { synthesizeSpeech } = await import("./api.js");
-		const blob = await synthesizeSpeech(trimmed, state.ttsVoice ?? undefined);
+		const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined);
 		const url = URL.createObjectURL(blob);
 		audio.src = url;
 		audio.playbackRate = state.ttsSpeed;

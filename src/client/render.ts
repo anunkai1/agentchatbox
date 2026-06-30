@@ -138,7 +138,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 			});
 			body.append(t);
 		}
-		const text = el("pre", { class: "text" }, " ");
+		const text = el("div", { class: "text markdown" }, " ");
 		setRichText(text, m.text || " ");
 		body.append(text);
 		body.append(makeSpeakButton(() => m.text));
@@ -148,15 +148,8 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	if (m.kind === "tool") {
 		const wrap = el("div", { class: "row row-tool" });
 		const card = el("div", { class: "tool-card" });
-		const head = el(
-			"div",
-			{ class: "tool-head" },
-			el("span", { class: "tool-icon" }, "⚙"),
-			el("span", { class: "tool-name" }, `${m.name} ${summarizeArgs(m.args)}`),
-		);
 		const toolPath = toolPathFromArgs(m.args);
-		if (toolPath) head.append(makeFileDownloadLink(toolPath));
-		card.append(head);
+		mountToolHead(card, m.name, m.args, toolPath);
 		if (m.result !== undefined) {
 			card.append(el("pre", { class: `tool-result ${m.isError ? "tool-error" : ""}` }, m.result));
 		} else if (m.interrupted) {
@@ -236,6 +229,77 @@ export function summarizeArgs(args: unknown): string {
  * future tool that follows the same convention. Returns null for
  * tools whose args don't carry a path (bash, web_search, …).
  */
+/**
+ * The full, untruncated text for a tool call's args — shown when the
+ * user expands the card. For bash this is the whole command (the
+ * summary line truncates it); for structured tools we pretty-print
+ * the args as JSON so the expanded view is readable. Returns null
+ * when there's nothing useful to expand.
+ */
+function fullToolText(args: unknown): string | null {
+	if (!args || typeof args !== "object") return null;
+	const a = args as Record<string, unknown>;
+	if (typeof a.command === "string") return a.command;
+	try {
+		return JSON.stringify(a, null, 2);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Build a tool card's header: gear icon, the (truncated) one-line
+ * summary, an optional file download link, and — when the full args
+ * are long enough to be worth expanding — a clickable expand toggle.
+ * The toggle reveals a `<pre class="tool-args">` with the complete
+ * command/args, mirroring how the assistant "thinking" block collapses.
+ *
+ * `card` receives the head (and the hidden args body, if any) in
+ * display order; callers then append the result/pending block after.
+ */
+function mountToolHead(
+	card: HTMLElement,
+	name: string,
+	args: unknown,
+	downloadPath: string | null,
+): void {
+	const summary = summarizeArgs(args);
+	const full = fullToolText(args);
+	// Only offer expansion when there's real content beyond the summary
+	// line (long bash commands, structured args, etc.). Short calls
+	// (e.g. `read` of a short path) get no toggle to avoid noise.
+	const expandable = full !== null && full.length > 48;
+	const head = el(
+		"div",
+		{ class: `tool-head${expandable ? " tool-head-expandable" : ""}` },
+		el("span", { class: "tool-icon" }, "⚙"),
+		el("span", { class: "tool-name" }, `${name} ${summary}`),
+	);
+	if (downloadPath) head.append(makeFileDownloadLink(downloadPath));
+	if (expandable && full !== null) {
+		const toggle = el(
+			"button",
+			{ class: "tool-toggle", type: "button", title: "Show full command" },
+			"▸",
+		);
+		head.append(toggle);
+		const body = el("pre", { class: "tool-args hidden" }, full);
+		// Clicking anywhere on the head (including the chevron button,
+		// whose click bubbles up) flips the expanded body. The download
+		// link stops its own propagation, so it stays a real link.
+		head.addEventListener("click", () => {
+			const open = body.classList.toggle("hidden");
+			toggle.textContent = open ? "▸" : "▾";
+			toggle.title = open ? "Show full command" : "Hide";
+			head.classList.toggle("tool-head-open", !open);
+		});
+		card.append(head);
+		card.append(body);
+		return;
+	}
+	card.append(head);
+}
+
 function toolPathFromArgs(args: unknown): string | null {
 	if (!args || typeof args !== "object") return null;
 	const a = args as Record<string, unknown>;
@@ -363,7 +427,7 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 			: "▾ thinking";
 	});
 	body.append(thinkingWrap);
-	const pre = el("pre", { class: "text streaming" });
+	const pre = el("div", { class: "text markdown streaming" });
 	body.append(pre);
 	body.append(makeSpeakButton(() => state.lastAssistantText));
 	wrap.append(body);
@@ -373,15 +437,8 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 export function appendToolCall(name: string, args: unknown, toolCallId: string): void {
 	const wrap = el("div", { class: "row row-tool" });
 	const card = el("div", { class: "tool-card" });
-	const head = el(
-		"div",
-		{ class: "tool-head" },
-		el("span", { class: "tool-icon" }, "⚙"),
-		el("span", { class: "tool-name" }, `${name} ${summarizeArgs(args)}`),
-	);
 	const toolPath = toolPathFromArgs(args);
-	if (toolPath) head.append(makeFileDownloadLink(toolPath));
-	card.append(head);
+	mountToolHead(card, name, args, toolPath);
 	const pending = el("div", { class: "tool-pending" }, "running…");
 	card.append(pending);
 	wrap.append(card);

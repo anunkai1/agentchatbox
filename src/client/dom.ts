@@ -59,7 +59,7 @@ export function text(s: string): Text {
  * (the event dispatcher) can stream updates in place without re-rendering.
  */
 export interface LiveAssistantDom {
-	textPre: HTMLPreElement;
+	textPre: HTMLElement;
 	thinkingWrap: HTMLDivElement;
 	thinkingPre: HTMLPreElement;
 }
