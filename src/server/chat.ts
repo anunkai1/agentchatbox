@@ -33,7 +33,7 @@
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { ClientMessage, ServerMessage, SessionSummary } from "../shared/protocol.js";
+import type { ClientMessage, PromptImage, ServerMessage, SessionSummary } from "../shared/protocol.js";
 import { config } from "./config.js";
 import { log } from "./logger.js";
 import { setPinned } from "./session-pins.js";
@@ -194,6 +194,21 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 // Client message dispatch
 // ---------------------------------------------------------------------------
 
+/** Shape `PromptImage`s into pi's `ImageContent` wire format.
+ *
+ * pi's RPC `ImageContent` requires a `type: "image"` discriminator on
+ * every block; the browser's `PromptImage` only carries `{data, mimeType}`.
+ * Forwarding the browser shape verbatim means pi persists a block with no
+ * `type` field into the session transcript — the live vision-proxy call
+ * still works (it intercepts before the provider sees the block), but on
+ * resume the replayed history is sent straight to the model and rejected:
+ * `400 messages.content.type is invalid, allowed values: ['text']`, which
+ * silently bricks the whole session (every future turn 400s). Stamping the
+ * discriminator here at the transport boundary is the fix. */
+function toImageContent(images: PromptImage[] | undefined) {
+	return images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
+}
+
 function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession): void {
 	const pi = session.pi;
 
@@ -214,7 +229,9 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			pi.send({
 				type: "prompt",
 				message,
-				...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
+				...(msg.images && msg.images.length > 0
+					? { images: toImageContent(msg.images) }
+					: {}),
 			});
 			break;
 		}
@@ -226,7 +243,9 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			pi.send({
 				type: "steer",
 				message,
-				...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
+				...(msg.images && msg.images.length > 0
+					? { images: toImageContent(msg.images) }
+					: {}),
 			});
 			break;
 		}
