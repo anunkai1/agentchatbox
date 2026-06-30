@@ -62,6 +62,10 @@ export interface ChatClient {
 	setThinking(level: ThinkingLevel): void;
 	/** Rename the current session. */
 	renameSession(name: string): void;
+	/** Rename ANY session by id (sidebar rename). */
+	renameSessionById(sessionId: string, name: string): void;
+	/** Pin or unpin ANY session (not just the current one) to the sidebar top. */
+	setSessionPinned(sessionId: string, pinned: boolean): void;
 	/** Request the list of saved sessions. Replies via onSessionsUpdated. */
 	listSessions(): void;
 	/** Kill the current `pi` and start a fresh session. */
@@ -292,6 +296,8 @@ export function createChatClient(): ChatClient {
 		setModel: (modelId, provider) => send({ type: "setModel", modelId, provider }),
 		setThinking: (level) => send({ type: "setThinking", level }),
 		renameSession: (name) => send({ type: "renameSession", name }),
+		renameSessionById: (sessionId, name) => send({ type: "renameSessionById", sessionId, name }),
+		setSessionPinned: (sessionId, pinned) => send({ type: "setSessionPinned", sessionId, pinned }),
 		listSessions: () => send({ type: "listSessions" }),
 		newSession: () => send({ type: "newSession" }),
 		resumeSession: (sessionId) => send({ type: "resumeSession", sessionId }),

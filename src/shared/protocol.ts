@@ -126,6 +126,14 @@ export interface SessionSummary {
 	modifiedAt: string;
 	title: string;
 	messageCount: number;
+	/**
+	 * True if the user pinned this session to the top of the sidebar.
+	 * Pin state is stored server-side in `data/pins.json` (NOT in pi's
+	 * session JSONL — pi has no pin concept), so it syncs across devices.
+	 * `title`, by contrast, comes from pi's `set_session_name` /
+	 * `session_info` line and is inherently cross-device.
+	 */
+	pinned?: boolean;
 }
 
 /** A replayed prior transcript: the session id plus its `Message` entries,
@@ -178,7 +186,23 @@ export type ClientMessage =
 	| { type: "listSessions" }
 	| { type: "resumeSession"; sessionId: string }
 	| { type: "newSession" }
-	| { type: "renameSession"; name: string };
+	| { type: "renameSession"; name: string }
+	/**
+	 * Rename ANY session (not just the current one) by id. The server
+	 * appends a `session_info` line to that session's JSONL (pi's own
+	 * persistence format), so the rename is visible to every device and
+	 * survives across browsers. `renameSession` (above) still exists for
+	 * renaming the *current* session via the live pi child (`/name`).
+	 */
+	| { type: "renameSessionById"; sessionId: string; name: string }
+	/**
+	 * Pin or unpin ANY session (not just the current one) to the top of
+	 * the sidebar. Server writes it to `data/pins.json` and rebroadcasts
+	 * the session list to every connected client so all devices stay in
+	 * sync. Pin state is agentchatbox UI state, not pi state — there is no
+	 * pi RPC for it.
+	 */
+	| { type: "setSessionPinned"; sessionId: string; pinned: boolean };
 
 // Re-export the AgentEvent union so existing client code that imports
 // `AgentEvent` from this file keeps working. The client doesn't use

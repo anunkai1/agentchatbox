@@ -599,6 +599,8 @@ async function boot(): Promise<void> {
 			else chatClient.abort();
 		},
 		abortRetry: () => chatClient.abortRetry(),
+		setSessionPinned: (sessionId, pinned) => chatClient.setSessionPinned(sessionId, pinned),
+		renameSessionById: (sessionId, name) => chatClient.renameSessionById(sessionId, name),
 	};
 	registerShellHandlers(shellHandlers);
 	setSendAsUser(sendAsUser);

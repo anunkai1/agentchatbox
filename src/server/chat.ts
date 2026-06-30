@@ -36,7 +36,8 @@ import { type WebSocket, WebSocketServer } from "ws";
 import type { ClientMessage, ServerMessage, SessionSummary } from "../shared/protocol.js";
 import { config } from "./config.js";
 import { log } from "./logger.js";
-import { listPiSessions } from "./session-list.js";
+import { setPinned } from "./session-pins.js";
+import { listPiSessions, setPiSessionName } from "./session-list.js";
 import {
 	deliver,
 	deliverError,
@@ -57,6 +58,11 @@ import {
  */
 const HEARTBEAT_INTERVAL_MS = 20_000;
 
+// Module-level reference to the chat WS server, set once in mountChatWs.
+// Used by broadcastSessions to push an updated session list to every
+// connected client (e.g. after a pin toggle, so all devices sync).
+let chatWss: WebSocketServer | null = null;
+
 // On SIGTERM to the server process, kill every live child so they don't
 // orphan. The registry tracks them all.
 process.on("SIGTERM", () => {
@@ -65,6 +71,7 @@ process.on("SIGTERM", () => {
 
 export function mountChatWs(server: HttpServer): void {
 	const wss = new WebSocketServer({ server, path: "/api/chat" });
+	chatWss = wss;
 
 	// Server-wide heartbeat. pings every client on a fixed cadence and
 	// terminates any that haven't ponged back within the timeout. Each
@@ -123,7 +130,10 @@ export function mountChatWs(server: HttpServer): void {
 		});
 	});
 
-	wss.on("close", () => clearInterval(heartbeatTimer));
+	wss.on("close", () => {
+		clearInterval(heartbeatTimer);
+		chatWss = null;
+	});
 
 	log.info("chat ws listening", { path: "/api/chat", piCwd: config.piCwd });
 }
@@ -243,6 +253,26 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			pi.send({ type: "set_session_name", name: msg.name });
 			break;
 		}
+		case "renameSessionById": {
+			// Append a session_info line to the target session's JSONL (pi's
+			// own format) so ANY session can be renamed from the sidebar,
+			// not just the one bound to this connection's live pi child.
+			// Rebroadcast so every device's sidebar updates.
+			setPiSessionName(config.piCwd, msg.sessionId, msg.name);
+			broadcastSessions();
+			break;
+		}
+		case "setSessionPinned": {
+			// Pin state is agentchatbox UI state, not pi state — there is no
+			// pi RPC for it, so we persist it ourselves (data/pins.json) and
+			// rebroadcast the session list to EVERY connected client so the
+			// pin/unpin syncs across all browsers/devices live, not just the
+			// one that made the change. (Session rename, by contrast, rides
+			// pi's set_session_name and shows up everywhere via the JSONL.)
+			setPinned(msg.sessionId, msg.pinned);
+			broadcastSessions();
+			break;
+		}
 		case "listSessions": {
 			const sessions: SessionSummary[] = listPiSessions(config.piCwd);
 			send(ws, { type: "sessions", sessions });
@@ -353,4 +383,22 @@ function waitForMessage<T>(ws: WebSocket, type: ClientMessage["type"]): Promise<
  */
 function send(ws: PiSocket, msg: ServerMessage): void {
 	deliver(ws, msg);
+}
+
+/**
+ * Push a freshly-read session list to every connected client. Used after
+ * a pin/unpin so all open browsers/devices update live — pin state lives
+ * on the server (data/pins.json), so this is how a pin done on the phone
+ * reaches the desktop and vice versa. Also fires on the original client,
+ * so the caller doesn't need a separate reply.
+ */
+function broadcastSessions(): void {
+	if (!chatWss) return;
+	const sessions: SessionSummary[] = listPiSessions(config.piCwd);
+	const msg: ServerMessage = { type: "sessions", sessions };
+	for (const ws of chatWss.clients) {
+		if (ws.readyState === ws.OPEN) {
+			deliver(ws as PiSocket, msg);
+		}
+	}
 }

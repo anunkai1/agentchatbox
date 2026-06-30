@@ -22,10 +22,11 @@
  *     REST endpoints
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
+import { readPinnedSessions } from "./session-pins.js";
 
 /**
  * Default root for `pi`'s session storage. Overridable via the
@@ -60,10 +61,17 @@ export interface SessionSummary {
 	createdAt: string;
 	/** File mtime as ISO — used to sort "most recent" by default. */
 	modifiedAt: string;
-	/** Display title — the first user message text, truncated. */
+	/**
+	 * Display title. Preference order: (1) the name the user set via
+	 * `set_session_name` (pi persists this as a `session_info` line —
+	 * the last one wins, so renames take effect), (2) the first user
+	 * message text, truncated, (3) "(empty session)".
+	 */
 	title: string;
 	/** Number of `message` entries in the JSONL. */
 	messageCount: number;
+	/** True if pinned to the top of the sidebar (from `data/pins.json`). */
+	pinned?: boolean;
 }
 
 /**
@@ -113,8 +121,16 @@ export function listPiSessions(cwd: string): SessionSummary[] {
 		// `thinking_level_change`, etc.). These are the entries the
 		// browser will render.
 		let messageCount = 0;
-		// First user message text becomes the title.
+		// First user message text becomes the fallback title.
 		let firstUserText: string | null = null;
+		// pi persists a user-set session name as a `session_info` line:
+		//   {"type":"session_info","id":"...","name":"my-feature-work"}
+		// The LAST such line wins (a rename overwrites the prior name),
+		// and an empty/whitespace name clears it. This is the same field
+		// `get_state` reports as `sessionName` and the TUI session picker
+		// shows — reading it back here makes a rename done on any device
+		// (CLI, another browser) appear in the sidebar everywhere.
+		let sessionName: string | null = null;
 		for (const l of lines) {
 			const t = l.trim();
 			if (!t) continue;
@@ -128,6 +144,14 @@ export function listPiSessions(cwd: string): SessionSummary[] {
 							firstUserText = extractText(m.content);
 						}
 					}
+				} else if (e.type === "session_info") {
+					const n = e.name;
+					// Empty string or whitespace clears the name (matches
+					// pi's semantics). undefined = line had no name field,
+					// leave whatever we had.
+					if (typeof n === "string") {
+						sessionName = n.trim() ? n : null;
+					}
 				}
 			} catch {
 				/* skip malformed */
@@ -139,16 +163,78 @@ export function listPiSessions(cwd: string): SessionSummary[] {
 			cwd: sessionCwd,
 			createdAt: String(firstLine.timestamp ?? st.mtime.toISOString()),
 			modifiedAt: st.mtime.toISOString(),
-			title: firstUserText ? truncate(firstUserText, 60) : "(empty session)",
+			title: sessionName ?? (firstUserText ? truncate(firstUserText, 60) : "(empty session)"),
 			messageCount,
 		});
 	}
 
 	// Newest first by createdAt.
 	out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+	// Apply the server-side pin set so the sidebar can float pinned
+	// sessions to the top. Pin state is NOT a pi concept — it lives in
+	// `data/pins.json` (see session-pins.ts).
+	const pinned = readPinnedSessions();
+	if (pinned.size > 0) {
+		for (const s of out) {
+			if (pinned.has(s.id)) s.pinned = true;
+		}
+	}
 	return out;
 }
 
+/**
+ * Find the JSONL file for a session id under the cwd's session dir.
+ * Returns the absolute path, or null if no file's first line matches.
+ * (Reuses the same first-line `session` header check as
+ * readPiSessionMessages.) Public so session-rename can target the file.
+ */
+export function findPiSessionFile(cwd: string, sessionId: string): string | null {
+	const dir = sessionsDirFor(resolve(cwd));
+	if (!existsSync(dir)) return null;
+	for (const name of readdirSync(dir)) {
+		if (!name.endsWith(".jsonl")) continue;
+		const file = join(dir, name);
+		const raw = readFileSync(file, "utf8");
+		const firstLine = raw.split("\n").find((l) => l.trim());
+		if (!firstLine) continue;
+		try {
+			const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+			if (parsed?.type === "session" && String(parsed.id) === sessionId) return file;
+		} catch {
+			continue;
+		}
+	}
+	return null;
+}
+
+/**
+ * Rename a session by appending a `session_info` line to its JSONL.
+ *
+ * This is pi's own persistence format — pi itself writes the identical
+ * `{"type":"session_info","id":"...","name":"..."}` line when you call
+ * `set_session_name`, and reads the last such line back as the session
+ * name (the TUI picker and `get_state`'s `sessionName` both come from
+ * it). Appending it here lets the sidebar rename ANY session (not just
+ * the one currently bound to a live pi child), and because the JSONL is
+ * the shared on-disk source of truth the rename is immediately visible
+ * to every device. An empty/whitespace name clears it (matches pi's
+ * `set_session_name` semantics).
+ *
+ * Trade-off vs forwarding `set_session_name` to the live child: a
+ * currently-active session's pi child keeps its old in-memory name until
+ * the next resume re-reads the JSONL — acceptable for a single-user
+ * homelab, and the sidebar (which reads the JSONL directly) is correct
+ * immediately. Symmetric with how the server already reads these files
+ * (session-list.ts, search/).
+ */
+export function setPiSessionName(cwd: string, sessionId: string, name: string): boolean {
+	const file = findPiSessionFile(cwd, sessionId);
+	if (!file) return false;
+	const line = JSON.stringify({ type: "session_info", id: sessionId, name }) + "\n";
+	appendFileSync(file, line);
+	return true;
+}
 /**
  * Read the full message transcript for a session. Used by chat.ts to
  * send a `transcript` server message to the browser on resume, so the

@@ -19,20 +19,7 @@ import type { SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
-import {
-	getCustomTitle,
-	isPinned,
-	subscribe as subscribeSessionMeta,
-	togglePin,
-	setCustomTitle,
-} from "./session-meta.js";
 import { type PersistedMessage, state } from "./state.js";
-
-// Re-render the sidebar whenever a session's pin state or custom title
-// changes, so the UI stays in sync with the localStorage-backed store.
-subscribeSessionMeta(() => {
-	if (!state.searchActive) renderSidebarSessions(lastSessions);
-});
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
@@ -662,6 +649,10 @@ export interface ShellHandlers {
 	handleDrop: (e: DragEvent) => Promise<void>;
 	abort: () => void;
 	abortRetry: () => void;
+	/** Pin/unpin any session by id (sidebar star). Server persists + rebroadcasts. */
+	setSessionPinned: (sessionId: string, pinned: boolean) => void;
+	/** Rename any session by id (sidebar pencil). Server appends to the JSONL. */
+	renameSessionById: (sessionId: string, name: string) => void;
 }
 
 let shellHandlers: ShellHandlers | null = null;
@@ -1285,11 +1276,13 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 
 	// Split pinned vs. the rest. Pinned sessions float to the top in
 	// their own group regardless of age; everything else falls into the
-	// normal Today / Yesterday / This week / Older date buckets.
+	// normal Today / Yesterday / This week / Older date buckets. Pin
+	// state comes from the server (data/pins.json) via s.pinned, so it
+	// is the same on every device.
 	const pinned: SessionSummary[] = [];
 	const rest: SessionSummary[] = [];
 	for (const s of sorted) {
-		if (isPinned(s.id)) pinned.push(s);
+		if (s.pinned) pinned.push(s);
 		else rest.push(s);
 	}
 
@@ -1323,15 +1316,14 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 }
 
 /**
- * Build a single sidebar session row. Handles the click-to-resume,
- * hover-revealed pin/rename actions, and inline rename editing. The
- * displayed title is the user's custom override if set (see
- * session-meta), otherwise the server's derived title.
+ * Build a single sidebar session row. Handles the click-to-resume and
+ * hover-revealed pin/rename actions. The title and pin state both come
+ * from the server (pi's session_info line + data/pins.json), so this is
+ * a pure projection of `s` — no local override store.
  */
 function renderSessionItem(s: SessionSummary): HTMLElement {
-	const custom = getCustomTitle(s.id);
-	const displayTitle = custom ?? s.title ?? "Untitled";
-	const pinned = isPinned(s.id);
+	const displayTitle = s.title || "Untitled";
+	const pinned = !!s.pinned;
 
 	const item = el("div", { class: "session-item" });
 	if (s.id === state.sessionId) item.classList.add("active");
@@ -1339,7 +1331,6 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 
 	const titleRow = el("div", { class: "session-item-title-row" });
 	const titleEl = el("div", { class: "session-item-title" }, displayTitle);
-	if (custom) titleEl.classList.add("renamed");
 	titleRow.append(titleEl);
 
 	// Hover-revealed action buttons. Each stops propagation so they
@@ -1369,7 +1360,9 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 
 	pinBtn.addEventListener("click", (e) => {
 		e.stopPropagation();
-		togglePin(s.id);
+		// Optimistically toggle the star; the server rebroadcasts the
+		// session list which corrects any drift.
+		shellHandlers?.setSessionPinned(s.id, !pinned);
 	});
 	renameBtn.addEventListener("click", (e) => {
 		e.stopPropagation();
@@ -1381,20 +1374,22 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 
 /**
  * Replace the title node with an inline text input, commit on Enter /
- * blur, cancel on Escape. Empty input clears the override (falls back
- * to the server-derived title).
+ * blur, cancel on Escape. Commit sends the new name to the server
+ * (which appends a session_info line to the session JSONL), and the
+ * server's rebroadcast refreshes the sidebar. Empty input clears the
+ * name (falls back to the auto-derived first-message title).
  */
 function startRename(
 	titleEl: HTMLElement,
 	titleRow: HTMLElement,
 	s: SessionSummary,
 ): void {
-	const current = getCustomTitle(s.id) ?? s.title ?? "";
+	const current = s.title || "";
 	const input = document.createElement("input");
 	input.type = "text";
 	input.className = "session-rename-input";
 	input.value = current;
-	input.placeholder = s.title || "Untitled";
+	input.placeholder = "Untitled";
 	input.maxLength = 120;
 
 	titleEl.replaceWith(input);
@@ -1409,8 +1404,18 @@ function startRename(
 	const finish = (commit: boolean) => {
 		if (done) return;
 		done = true;
-		if (commit) setCustomTitle(s.id, input.value);
-		// Re-render restores the title node from the (possibly updated) store.
+		if (commit) {
+			const next = input.value.trim();
+			// Only round-trip if the name actually changed; the server
+			// appends a session_info line either way, so skip when it's
+			// a no-op to avoid cluttering the JSONL.
+			if (next !== current) {
+				shellHandlers?.renameSessionById(s.id, next);
+			}
+		}
+		// The server's rebroadcast will re-render with the new title.
+		// Restore locally immediately so the input doesn't linger if the
+		// round-trip is slow.
 		if (!state.searchActive) renderSidebarSessions(lastSessions);
 	};
 
