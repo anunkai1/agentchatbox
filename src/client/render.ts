@@ -19,7 +19,20 @@ import type { SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
+import {
+	getCustomTitle,
+	isPinned,
+	subscribe as subscribeSessionMeta,
+	togglePin,
+	setCustomTitle,
+} from "./session-meta.js";
 import { type PersistedMessage, state } from "./state.js";
+
+// Re-render the sidebar whenever a session's pin state or custom title
+// changes, so the UI stays in sync with the localStorage-backed store.
+subscribeSessionMeta(() => {
+	if (!state.searchActive) renderSidebarSessions(lastSessions);
+});
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
@@ -1270,42 +1283,147 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 		(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
 	);
 
-	// Group by date bucket
+	// Split pinned vs. the rest. Pinned sessions float to the top in
+	// their own group regardless of age; everything else falls into the
+	// normal Today / Yesterday / This week / Older date buckets.
+	const pinned: SessionSummary[] = [];
+	const rest: SessionSummary[] = [];
+	for (const s of sorted) {
+		if (isPinned(s.id)) pinned.push(s);
+		else rest.push(s);
+	}
+
 	const now = new Date();
 	const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 	const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
 	const startOfWeek = new Date(startOfToday.getTime() - 6 * 86400000);
 
 	const buckets: { label: string; items: SessionSummary[] }[] = [
+		{ label: "Pinned", items: pinned },
 		{ label: "Today", items: [] },
 		{ label: "Yesterday", items: [] },
 		{ label: "This week", items: [] },
 		{ label: "Older", items: [] },
 	];
-	for (const s of sorted) {
+	for (const s of rest) {
 		const d = new Date(s.modifiedAt);
-		if (d >= startOfToday) buckets[0].items.push(s);
-		else if (d >= startOfYesterday) buckets[1].items.push(s);
-		else if (d >= startOfWeek) buckets[2].items.push(s);
-		else buckets[3].items.push(s);
+		if (d >= startOfToday) buckets[1].items.push(s);
+		else if (d >= startOfYesterday) buckets[2].items.push(s);
+		else if (d >= startOfWeek) buckets[3].items.push(s);
+		else buckets[4].items.push(s);
 	}
 
 	for (const bucket of buckets) {
 		if (bucket.items.length === 0) continue;
 		container.append(el("div", { class: "group-label" }, bucket.label));
 		for (const s of bucket.items) {
-			const item = el("div", { class: "session-item" });
-			if (s.id === state.sessionId) item.classList.add("active");
-			item.append(el("div", { class: "session-item-title" }, s.title || "Untitled"));
-			const timeStr = formatRelativeTime(s.modifiedAt);
-			item.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
-			item.addEventListener("click", () => {
-				shellHandlers?.handleSlash(`resume ${s.id}`);
-				toggleSidebar(true); // auto-close on mobile
-			});
-			container.append(item);
+			container.append(renderSessionItem(s));
 		}
 	}
+}
+
+/**
+ * Build a single sidebar session row. Handles the click-to-resume,
+ * hover-revealed pin/rename actions, and inline rename editing. The
+ * displayed title is the user's custom override if set (see
+ * session-meta), otherwise the server's derived title.
+ */
+function renderSessionItem(s: SessionSummary): HTMLElement {
+	const custom = getCustomTitle(s.id);
+	const displayTitle = custom ?? s.title ?? "Untitled";
+	const pinned = isPinned(s.id);
+
+	const item = el("div", { class: "session-item" });
+	if (s.id === state.sessionId) item.classList.add("active");
+	if (pinned) item.classList.add("pinned");
+
+	const titleRow = el("div", { class: "session-item-title-row" });
+	const titleEl = el("div", { class: "session-item-title" }, displayTitle);
+	if (custom) titleEl.classList.add("renamed");
+	titleRow.append(titleEl);
+
+	// Hover-revealed action buttons. Each stops propagation so they
+	// don't trigger the row's resume-on-click.
+	const actions = el("div", { class: "session-item-actions" });
+	const pinBtn = el("button", {
+		class: `session-action pin${pinned ? " active" : ""}`,
+		title: pinned ? "Unpin" : "Pin to top",
+		text: pinned ? "★" : "☆",
+	});
+	const renameBtn = el("button", {
+		class: "session-action rename",
+		title: "Rename",
+		html: "✎",
+	});
+	actions.append(pinBtn, renameBtn);
+	titleRow.append(actions);
+	item.append(titleRow);
+
+	const timeStr = formatRelativeTime(s.modifiedAt);
+	item.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
+
+	item.addEventListener("click", () => {
+		shellHandlers?.handleSlash(`resume ${s.id}`);
+		toggleSidebar(true); // auto-close on mobile
+	});
+
+	pinBtn.addEventListener("click", (e) => {
+		e.stopPropagation();
+		togglePin(s.id);
+	});
+	renameBtn.addEventListener("click", (e) => {
+		e.stopPropagation();
+		startRename(titleEl, titleRow, s);
+	});
+
+	return item;
+}
+
+/**
+ * Replace the title node with an inline text input, commit on Enter /
+ * blur, cancel on Escape. Empty input clears the override (falls back
+ * to the server-derived title).
+ */
+function startRename(
+	titleEl: HTMLElement,
+	titleRow: HTMLElement,
+	s: SessionSummary,
+): void {
+	const current = getCustomTitle(s.id) ?? s.title ?? "";
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "session-rename-input";
+	input.value = current;
+	input.placeholder = s.title || "Untitled";
+	input.maxLength = 120;
+
+	titleEl.replaceWith(input);
+	// Hide the action row while editing so the input gets full width.
+	const actions = titleRow.querySelector(".session-item-actions");
+	if (actions) (actions as HTMLElement).style.display = "none";
+
+	input.focus();
+	input.select();
+
+	let done = false;
+	const finish = (commit: boolean) => {
+		if (done) return;
+		done = true;
+		if (commit) setCustomTitle(s.id, input.value);
+		// Re-render restores the title node from the (possibly updated) store.
+		if (!state.searchActive) renderSidebarSessions(lastSessions);
+	};
+
+	input.addEventListener("keydown", (ev) => {
+		if (ev.key === "Enter") {
+			ev.preventDefault();
+			finish(true);
+		} else if (ev.key === "Escape") {
+			ev.preventDefault();
+			finish(false);
+		}
+	});
+	input.addEventListener("blur", () => finish(true));
 }
 
 /** Format a relative time string for session meta. */
