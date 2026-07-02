@@ -1372,25 +1372,31 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 		buckets.get(key)!.push(s);
 	}
 
-	// If there are no projects defined yet (only Global) AND no sessions,
-	// show the empty state. Global always exists.
-	const totalSessions = sessions.length;
-	if (totalSessions === 0) {
-		container.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
+	// (Global always renders below with its own empty-state hint, so no
+	// separate whole-list empty state is needed.)
+
+	// Global always exists. Split out the user-created projects (everything
+	// non-global) so they can nest inside a top-level "Projects" container,
+	// with Global and Other rendered as siblings below it.
+	const globalProject = projects.find((p) => p.id === "global");
+	const userProjects = projects.filter((p) => p.id !== "global");
+
+	// 1) Top-level "Projects" container — expandable, holds every user
+	//    project. Only rendered when at least one user project exists; with
+	//    none, Global alone is the whole sidebar.
+	if (userProjects.length > 0) {
+		container.append(renderProjectsContainer(userProjects, buckets));
 	}
 
-	// Render each project folder that has sessions OR is the active one.
-	for (const p of projects) {
-		const items = (buckets.get(p.id) ?? []).slice().sort(
+	// 2) Global as its own top-level folder (the default home for new chats).
+	if (globalProject) {
+		const items = (buckets.get("global") ?? []).slice().sort(
 			(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
 		);
-		// Every project in state.projects is an explicitly-created workspace,
-		// so always show it (even when empty) — otherwise creating a fresh
-		// project looks like "nothing happened". Global gets an empty-state
-		// hint; user projects just show their (empty) body.
-		container.append(renderProjectFolder(p, items));
+		container.append(renderProjectFolder(globalProject, items));
 	}
-	// Trailing "Other" bucket for orphaned sessions (deleted projects).
+
+	// 3) Trailing "Other" bucket for orphaned sessions (deleted projects).
 	const other = (buckets.get("other") ?? []).slice().sort(
 		(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
 	);
@@ -1420,6 +1426,55 @@ function writeCollapseState(set: Set<string>): void {
 	} catch {
 		/* ignore quota */
 	}
+}
+
+/**
+ * The top-level "Projects" container — a single expandable row at the top
+ * of the sidebar that nests every user-created project (Global and Other
+ * are siblings, NOT inside this container). Its own collapse state uses a
+ * reserved id so it's independent of any individual project's collapse.
+ */
+const PROJECTS_CONTAINER_ID = "__projects__";
+function renderProjectsContainer(
+	userProjects: ProjectSummary[],
+	buckets: Map<string, SessionSummary[]>,
+): HTMLElement {
+	const collapsed = readCollapseState().has(PROJECTS_CONTAINER_ID);
+	const wrap = el("div", { class: `projects-container${collapsed ? " collapsed" : ""}` });
+	wrap.dataset.projectId = PROJECTS_CONTAINER_ID;
+
+	const header = el("div", { class: "project-folder-header projects-container-header" });
+	const chevron = el("span", { class: "project-chevron", text: collapsed ? "▸" : "▾" });
+	const icon = el("span", { class: "project-icon", text: "📂" });
+	const name = el("span", { class: "project-name", text: "Projects" });
+	const count = el("span", {
+		class: "project-count",
+		text: String(userProjects.length),
+	});
+	const spacer = el("span", { class: "spacer" });
+	header.append(chevron, icon, name, count, spacer);
+	wrap.append(header);
+
+	const body = el("div", { class: "projects-container-body" });
+	for (const p of userProjects) {
+		const items = (buckets.get(p.id) ?? []).slice().sort(
+			(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
+		);
+		body.append(renderProjectFolder(p, items));
+	}
+	if (collapsed) body.style.display = "none";
+	wrap.append(body);
+
+	header.addEventListener("click", () => {
+		const set = readCollapseState();
+		if (set.has(PROJECTS_CONTAINER_ID)) set.delete(PROJECTS_CONTAINER_ID);
+		else set.add(PROJECTS_CONTAINER_ID);
+		writeCollapseState(set);
+		chevron.textContent = set.has(PROJECTS_CONTAINER_ID) ? "▸" : "▾";
+		body.style.display = set.has(PROJECTS_CONTAINER_ID) ? "none" : "";
+		wrap.classList.toggle("collapsed", set.has(PROJECTS_CONTAINER_ID));
+	});
+	return wrap;
 }
 
 /**

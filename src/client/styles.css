@@ -1757,3 +1757,28 @@ body {
 .project-delete-btn:hover {
 	background: rgba(224, 86, 86, 0.12);
 }
+
+/* Top-level "Projects" container that nests the individual project folders. */
+.projects-container {
+	display: flex;
+	flex-direction: column;
+	margin-bottom: 4px;
+	padding-bottom: 4px;
+	border-bottom: 1px solid var(--border);
+}
+.projects-container-header {
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	opacity: 0.85;
+}
+.projects-container-body {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	/* Indent the nested projects so the hierarchy reads at a glance. */
+	padding-left: 8px;
+}
+.projects-container.collapsed .projects-container-body {
+	display: none;
+}
