@@ -11,7 +11,7 @@
  * to it as the conversation continues.
  */
 
-import type { ThinkingLevel } from "../shared/protocol.js";
+import type { ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
 import type { CapabilitiesInfo } from "./api.js";
 
 // ---------------------------------------------------------------------------
@@ -150,14 +150,22 @@ export interface AppState {
 		/** What went wrong (the model/transport error). */
 		errorMessage: string;
 	} | null;
-	/**
-	 * Epoch ms the current streaming run started (agent_start), or null
+	/** Epoch ms the current streaming run started (agent_start), or null
 	 * when idle. Drives the elapsed-time working indicator next to
 	 * "streaming" in the status bar — the CLI equivalent is the spinner
 	 * + elapsed counter shown while a turn runs. Makes "working but
 	 * slow" visually distinct from "frozen".
 	 */
 	streamingStartedAt: number | null;
+	/** All known projects (folders with their own cwd + AGENTS.md). */
+	projects: ProjectSummary[];
+	/**
+	 * The project new chats start in (sidebar-highlighted folder).
+	 * Per your decision, a brand-new chat always starts in Global; this
+	 * tracks which folder the user has expanded/selected for visibility
+	 * and for the "+ New chat" target when they explicitly pick one.
+	 */
+	activeProjectId: string;
 }
 
 export interface ModelOption {
@@ -194,6 +202,8 @@ export const state: AppState = {
 	pendingSteerCount: 0,
 	retry: null,
 	streamingStartedAt: null,
+	projects: [],
+	activeProjectId: "global",
 	capabilities: null,
 	searchEnabled: false,
 	searchActive: false,

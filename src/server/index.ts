@@ -29,6 +29,7 @@ import { log } from "./logger.js";
 import { projectRoot } from "./paths.js";
 import { EXTRA_MODELS, SDK_PROVIDERS } from "./providers.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
+import { listProjects, readProjectInstructions } from "./projects.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
 import { createUploadsRouter } from "./uploads.js";
@@ -88,6 +89,26 @@ app.get("/api/sessions", (req, res) => {
 	const cwd = String(req.query.cwd ?? config.piCwd);
 	const sessions = listPiSessions(cwd);
 	res.json({ sessions });
+});
+
+/**
+ * GET /api/projects
+ * Returns the list of projects (metadata only — instructions live in
+ * each project's AGENTS.md, fetched separately). The sidebar uses the WS
+ * `projects` push instead, but this endpoint is handy for tooling.
+ */
+app.get("/api/projects", (_req, res) => {
+	res.json({ projects: listProjects() });
+});
+
+/**
+ * GET /api/projects/:id/instructions
+ * Returns the project's AGENTS.md text (empty string if absent). Used by
+ * the project editor modal to pre-fill the instructions textarea.
+ */
+app.get("/api/projects/:id/instructions", (req, res) => {
+	const text = readProjectInstructions(req.params.id);
+	res.json({ text });
 });
 
 /**

@@ -14,7 +14,12 @@
  */
 
 import type { Message } from "@earendil-works/pi-ai";
-import type { PromptImage, SessionSummary, ThinkingLevel } from "../shared/protocol.js";
+import type {
+	ProjectSummary,
+	PromptImage,
+	SessionSummary,
+	ThinkingLevel,
+} from "../shared/protocol.js";
 
 export type EventListener = (event: Record<string, unknown>) => void;
 export type ReadyListener = (info: {
@@ -27,6 +32,7 @@ export type ReadyListener = (info: {
 export type ErrorListener = (message: string) => void;
 export type StatusListener = (status: "connecting" | "open" | "closed" | "stalled") => void;
 export type SessionsListener = (sessions: SessionSummary[]) => void;
+export type ProjectsListener = (projects: ProjectSummary[]) => void;
 export type TranscriptListener = (sessionId: string, messages: Message[]) => void;
 
 export interface ChatClient {
@@ -68,10 +74,31 @@ export interface ChatClient {
 	setSessionPinned(sessionId: string, pinned: boolean): void;
 	/** Request the list of saved sessions. Replies via onSessionsUpdated. */
 	listSessions(): void;
-	/** Kill the current `pi` and start a fresh session. */
-	newSession(): void;
+	/** Kill the current `pi` and start a fresh session in a project. */
+	newSession(projectId?: string): void;
 	/** Kill the current `pi` and resume the session with the given id. */
 	resumeSession(sessionId: string): void;
+	/** Request the list of projects. Replies via onProjectsUpdated. */
+	listProjects(): void;
+	createProject(input: {
+		name: string;
+		icon?: string;
+		instructions?: string;
+		defaultModelId?: string | null;
+		defaultProvider?: string | null;
+		defaultThinkingLevel?: ThinkingLevel | null;
+	}): void;
+	updateProject(input: {
+		id: string;
+		name?: string;
+		icon?: string;
+		instructions?: string;
+		defaultModelId?: string | null;
+		defaultProvider?: string | null;
+		defaultThinkingLevel?: ThinkingLevel | null;
+	}): void;
+	deleteProject(id: string): void;
+	reorderProjects(order: string[]): void;
 	/** Subscribe to `pi` events. Returns an unsubscribe fn. */
 	onEvent(listener: EventListener): () => void;
 	/** Called once after the server has spawned `pi` and the first session line arrives. */
@@ -82,6 +109,8 @@ export interface ChatClient {
 	onStatus(listener: StatusListener): () => void;
 	/** Called with the session list in response to listSessions(). */
 	onSessionsUpdated(listener: SessionsListener): () => void;
+	/** Called with the project list in response to listProjects() or after a project change. */
+	onProjectsUpdated(listener: ProjectsListener): () => void;
 	/** Called on resume with the prior transcript, before live events flow. */
 	onTranscript(listener: TranscriptListener): () => void;
 	/** Force a reconnect. */
@@ -114,6 +143,7 @@ export function createChatClient(): ChatClient {
 	const errorListeners = new Set<ErrorListener>();
 	const statusListeners = new Set<StatusListener>();
 	const sessionsListeners = new Set<SessionsListener>();
+	const projectsListeners = new Set<ProjectsListener>();
 	const transcriptListeners = new Set<TranscriptListener>();
 
 	function setStatus(status: "connecting" | "open" | "closed" | "stalled") {
@@ -172,6 +202,9 @@ export function createChatClient(): ChatClient {
 					break;
 				case "sessions":
 					for (const l of sessionsListeners) l(msg.sessions as SessionSummary[]);
+					break;
+				case "projects":
+					for (const l of projectsListeners) l(msg.projects as ProjectSummary[]);
 					break;
 				case "transcript":
 					for (const l of transcriptListeners) {
@@ -299,8 +332,13 @@ export function createChatClient(): ChatClient {
 		renameSessionById: (sessionId, name) => send({ type: "renameSessionById", sessionId, name }),
 		setSessionPinned: (sessionId, pinned) => send({ type: "setSessionPinned", sessionId, pinned }),
 		listSessions: () => send({ type: "listSessions" }),
-		newSession: () => send({ type: "newSession" }),
+		newSession: (projectId) => send({ type: "newSession", ...(projectId ? { projectId } : {}) }),
 		resumeSession: (sessionId) => send({ type: "resumeSession", sessionId }),
+		listProjects: () => send({ type: "listProjects" }),
+		createProject: (input) => send({ type: "createProject", ...input }),
+		updateProject: (input) => send({ type: "updateProject", ...input }),
+		deleteProject: (id) => send({ type: "deleteProject", id }),
+		reorderProjects: (order) => send({ type: "reorderProjects", order }),
 		onEvent: (l) => {
 			eventListeners.add(l);
 			return () => eventListeners.delete(l);
@@ -320,6 +358,10 @@ export function createChatClient(): ChatClient {
 		onSessionsUpdated: (l) => {
 			sessionsListeners.add(l);
 			return () => sessionsListeners.delete(l);
+		},
+		onProjectsUpdated: (l) => {
+			projectsListeners.add(l);
+			return () => projectsListeners.delete(l);
 		},
 		onTranscript: (l) => {
 			transcriptListeners.add(l);

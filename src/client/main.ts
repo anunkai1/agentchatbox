@@ -52,6 +52,7 @@ import {
 	renderSessionsIntoPicker,
 	setChatControls,
 	setSendAsUser,
+	resetChatState,
 	showSlashMenu,
 } from "./slashes.js";
 import { type PersistedMessage, state } from "./state.js";
@@ -601,6 +602,16 @@ async function boot(): Promise<void> {
 		abortRetry: () => chatClient.abortRetry(),
 		setSessionPinned: (sessionId, pinned) => chatClient.setSessionPinned(sessionId, pinned),
 		renameSessionById: (sessionId, name) => chatClient.renameSessionById(sessionId, name),
+		newSessionInProject: (projectId) => {
+			if (confirm("Start a new chat in this project?")) {
+				resetChatState();
+				chatClient.newSession(projectId);
+			}
+		},
+		createProject: (input) => chatClient.createProject(input),
+		updateProject: (input) => chatClient.updateProject(input),
+		deleteProject: (id) => chatClient.deleteProject(id),
+		reorderProjects: (order) => chatClient.reorderProjects(order),
 	};
 	registerShellHandlers(shellHandlers);
 	setSendAsUser(sendAsUser);
@@ -611,7 +622,7 @@ async function boot(): Promise<void> {
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
 		setThinking: (level) => chatClient.setThinking(level),
 		abort: () => chatClient.abort(),
-		newSession: () => chatClient.newSession(),
+		newSession: (projectId) => chatClient.newSession(projectId),
 		resumeSession: (id) => chatClient.resumeSession(id),
 		listSessions: () => chatClient.listSessions(),
 		renameSession: (name) => chatClient.renameSession(name),
@@ -662,6 +673,7 @@ async function boot(): Promise<void> {
 		// Request the session list for the sidebar on the first ready event.
 		// Subsequent ready events (reconnects, new sessions) also refresh.
 		chatClient.listSessions();
+		chatClient.listProjects();
 	});
 	chatClient.onEvent(onEvent);
 	chatClient.onError((msg) => appendError(msg));
@@ -670,7 +682,15 @@ async function boot(): Promise<void> {
 	// Also refresh the sidebar session list.
 	chatClient.onSessionsUpdated((sessions) => {
 		renderSessionsIntoPicker(sessions);
+		// Derive which project the currently-viewed session belongs to, so
+		// the sidebar can highlight its folder.
+		const current = sessions.find((s) => s.id === state.sessionId);
+		if (current?.projectId) state.activeProjectId = current.projectId;
 		void import("./render.js").then(({ renderSidebarSessions }) => renderSidebarSessions(sessions));
+	});
+	chatClient.onProjectsUpdated((projects) => {
+		state.projects = projects;
+		void import("./render.js").then(({ renderSidebarProjects }) => renderSidebarProjects(projects));
 	});
 	// On resume: replace the renderer cache with the server's replay
 	// transcript, then re-render the chat scrollback so the past

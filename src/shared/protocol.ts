@@ -16,6 +16,27 @@
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 
+// ---------------------------------------------------------------------------
+// Projects (selectable workspaces, each with its own AGENTS.md + cwd)
+// ---------------------------------------------------------------------------
+//
+// A Project is a named workspace whose folder is the `cwd` passed to
+// `pi --mode rpc`. Its instructions live in `<cwd>/AGENTS.md`, which pi
+// auto-loads — so a Project is literally "a folder pi already understands".
+// Session→Project membership is derived from cwd, never stored.
+
+/** A project summary sent to the client (mirrors `ProjectRecord` in src/server/projects.ts). */
+export interface ProjectSummary {
+	id: string;
+	name: string;
+	icon: string;
+	cwd: string;
+	builtin?: boolean;
+	defaultModelId?: string | null;
+	defaultProvider?: string | null;
+	defaultThinkingLevel?: ThinkingLevel | null;
+}
+
 /** Multipart upload response. */
 export interface UploadResponse {
 	id: string;
@@ -134,6 +155,13 @@ export interface SessionSummary {
 	 * `session_info` line and is inherently cross-device.
 	 */
 	pinned?: boolean;
+	/**
+	 * The project this session belongs to, derived from its cwd
+	 * (matched against the project list server-side). `"global"` when
+	 * the cwd is config.piCwd; absent/"other" only if the cwd matches
+	 * no known project (a deleted project's orphaned sessions).
+	 */
+	projectId?: string;
 }
 
 /** A replayed prior transcript: the session id plus its `Message` entries,
@@ -165,6 +193,7 @@ export type ServerMessage =
 	| { type: "event"; event: Record<string, unknown> }
 	| { type: "sessions"; sessions: SessionSummary[] }
 	| { type: "transcript"; sessionId: string; messages: Message[] }
+	| { type: "projects"; projects: ProjectSummary[] }
 	| { type: "ping" }
 	| { type: "error"; message: string };
 
@@ -185,7 +214,13 @@ export type ClientMessage =
 	| { type: "setThinking"; level: ThinkingLevel }
 	| { type: "listSessions" }
 	| { type: "resumeSession"; sessionId: string }
-	| { type: "newSession" }
+	/**
+	 * Start a fresh session. `projectId` selects which project's cwd the
+	 * new `pi` child runs in (defaults to Global = config.piCwd).
+	 * Instructions for that project come from its AGENTS.md, which pi
+	 * auto-loads from cwd — no system-prompt wiring needed.
+	 */
+	| { type: "newSession"; projectId?: string }
 	| { type: "renameSession"; name: string }
 	/**
 	 * Rename ANY session (not just the current one) by id. The server
@@ -202,7 +237,30 @@ export type ClientMessage =
 	 * sync. Pin state is agentchatbox UI state, not pi state — there is no
 	 * pi RPC for it.
 	 */
-	| { type: "setSessionPinned"; sessionId: string; pinned: boolean };
+	| { type: "setSessionPinned"; sessionId: string; pinned: boolean }
+	// --- Projects ---------------------------------------------------------
+	| { type: "listProjects" }
+	| {
+			type: "createProject";
+			name: string;
+			icon?: string;
+			instructions?: string;
+			defaultModelId?: string | null;
+			defaultProvider?: string | null;
+			defaultThinkingLevel?: ThinkingLevel | null;
+	  }
+	| {
+			type: "updateProject";
+			id: string;
+			name?: string;
+			icon?: string;
+			instructions?: string;
+			defaultModelId?: string | null;
+			defaultProvider?: string | null;
+			defaultThinkingLevel?: ThinkingLevel | null;
+	  }
+	| { type: "deleteProject"; id: string }
+	| { type: "reorderProjects"; order: string[] };
 
 // Re-export the AgentEvent union so existing client code that imports
 // `AgentEvent` from this file keeps working. The client doesn't use

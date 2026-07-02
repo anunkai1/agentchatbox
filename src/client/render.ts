@@ -15,7 +15,7 @@
  * into state.lastAssistant.
  */
 
-import type { SessionSummary } from "../shared/protocol.js";
+import type { ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
@@ -710,6 +710,28 @@ export interface ShellHandlers {
 	setSessionPinned: (sessionId: string, pinned: boolean) => void;
 	/** Rename any session by id (sidebar pencil). Server appends to the JSONL. */
 	renameSessionById: (sessionId: string, name: string) => void;
+	// --- Projects --------------------------------------------------------
+	/** Start a new chat in a specific project (folder "+" button). */
+	newSessionInProject: (projectId: string) => void;
+	createProject: (input: {
+		name: string;
+		icon?: string;
+		instructions?: string;
+		defaultModelId?: string | null;
+		defaultProvider?: string | null;
+		defaultThinkingLevel?: import("../shared/protocol.js").ThinkingLevel | null;
+	}) => void;
+	updateProject: (input: {
+		id: string;
+		name?: string;
+		icon?: string;
+		instructions?: string;
+		defaultModelId?: string | null;
+		defaultProvider?: string | null;
+		defaultThinkingLevel?: import("../shared/protocol.js").ThinkingLevel | null;
+	}) => void;
+	deleteProject: (id: string) => void;
+	reorderProjects: (order: string[]) => void;
 }
 
 let shellHandlers: ShellHandlers | null = null;
@@ -763,6 +785,20 @@ export function renderShell(): void {
 				},
 			},
 			"✏️  New chat",
+		),
+	);
+
+	// New project button — sits under New chat. Opens the project editor
+	// modal to create a folder with its own AGENTS.md instructions.
+	sidebar.append(
+		el(
+			"button",
+			{
+				class: "new-project-btn",
+				title: "Create a project (its own folder + AGENTS.md instructions)",
+				onclick: () => openProjectEditor(),
+			},
+			"+ New project",
 		),
 	);
 
@@ -1309,9 +1345,12 @@ function renderSidebarSearchResults(hits: SessionSearchHit[]): void {
 }
 
 /**
- * Render the list of sessions into the sidebar. Called by main.ts when
- * the server delivers the session list (via onSessionsUpdated). Sessions
- * are grouped by date: Today / Yesterday / This week / Older.
+ * Render the list of sessions into the sidebar, grouped by project folder.
+ * Called by main.ts when the server delivers the session list. Each project
+ * is a collapsible folder (state in localStorage); sessions inside are sorted
+ * newest-first, with pinned sessions floating to the top of their folder.
+ * Orphaned sessions (a deleted project's leftovers) land in a trailing
+ * "Other" bucket. When the search box is active this is a no-op.
  */
 export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	const container = document.getElementById("sidebar-sessions");
@@ -1321,55 +1360,151 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	// If the user is mid-search, don't clobber the search results.
 	if (state.searchActive) return;
 	container.innerHTML = "";
-	if (sessions.length === 0) {
-		container.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
-		return;
+
+	// Project order from state.projects; sessions tagged "other" trail last.
+	const projects = [...state.projects];
+	const projectIds = projects.map((p) => p.id);
+	const buckets = new Map<string, SessionSummary[]>();
+	for (const pid of [...projectIds, "other"]) buckets.set(pid, []);
+	for (const s of sessions) {
+		const pid = s.projectId ?? "global";
+		const key = buckets.has(pid) ? pid : "other";
+		buckets.get(key)!.push(s);
 	}
 
-	// Sort newest first
-	const sorted = [...sessions].sort(
+	// If there are no projects defined yet (only Global) AND no sessions,
+	// show the empty state. Global always exists.
+	const totalSessions = sessions.length;
+	if (totalSessions === 0) {
+		container.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
+	}
+
+	// Render each project folder that has sessions OR is the active one.
+	for (const p of projects) {
+		const items = (buckets.get(p.id) ?? []).slice().sort(
+			(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
+		);
+		// Skip empty non-global folders to keep the sidebar tidy — but always
+		// show Global so there's always a home for new chats.
+		if (items.length === 0 && p.id !== "global" && p.id !== state.activeProjectId) continue;
+		container.append(renderProjectFolder(p, items));
+	}
+	// Trailing "Other" bucket for orphaned sessions (deleted projects).
+	const other = (buckets.get("other") ?? []).slice().sort(
 		(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
 	);
-
-	// Split pinned vs. the rest. Pinned sessions float to the top in
-	// their own group regardless of age; everything else falls into the
-	// normal Today / Yesterday / This week / Older date buckets. Pin
-	// state comes from the server (data/pins.json) via s.pinned, so it
-	// is the same on every device.
-	const pinned: SessionSummary[] = [];
-	const rest: SessionSummary[] = [];
-	for (const s of sorted) {
-		if (s.pinned) pinned.push(s);
-		else rest.push(s);
+	if (other.length > 0) {
+		container.append(renderProjectFolder(
+			{ id: "other", name: "Other", icon: "📦", cwd: "" },
+			other,
+		));
 	}
+}
 
-	const now = new Date();
-	const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-	const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
-	const startOfWeek = new Date(startOfToday.getTime() - 6 * 86400000);
-
-	const buckets: { label: string; items: SessionSummary[] }[] = [
-		{ label: "Pinned", items: pinned },
-		{ label: "Today", items: [] },
-		{ label: "Yesterday", items: [] },
-		{ label: "This week", items: [] },
-		{ label: "Older", items: [] },
-	];
-	for (const s of rest) {
-		const d = new Date(s.modifiedAt);
-		if (d >= startOfToday) buckets[1].items.push(s);
-		else if (d >= startOfYesterday) buckets[2].items.push(s);
-		else if (d >= startOfWeek) buckets[3].items.push(s);
-		else buckets[4].items.push(s);
+/** localStorage-backed collapse state per project id. */
+const PROJECT_COLLAPSE_KEY = "acb-project-collapse";
+function readCollapseState(): Set<string> {
+	try {
+		const raw = localStorage.getItem(PROJECT_COLLAPSE_KEY);
+		if (!raw) return new Set();
+		const arr = JSON.parse(raw) as unknown;
+		return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === "string")) : new Set();
+	} catch {
+		return new Set();
 	}
-
-	for (const bucket of buckets) {
-		if (bucket.items.length === 0) continue;
-		container.append(el("div", { class: "group-label" }, bucket.label));
-		for (const s of bucket.items) {
-			container.append(renderSessionItem(s));
-		}
+}
+function writeCollapseState(set: Set<string>): void {
+	try {
+		localStorage.setItem(PROJECT_COLLAPSE_KEY, JSON.stringify([...set]));
+	} catch {
+		/* ignore quota */
 	}
+}
+
+/**
+ * Render a collapsible project folder with its sessions nested inside.
+ * The folder header shows icon + name + count, a "+" to start a new chat
+ * in this project, and (for non-Global) an edit affordance. Clicking the
+ * header toggles collapse.
+ */
+function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLElement {
+	const collapsed = readCollapseState().has(p.id);
+	const isOther = p.id === "other";
+	const isGlobal = p.id === "global";
+	const wrap = el("div", { class: `project-folder${collapsed ? " collapsed" : ""}` });
+	wrap.dataset.projectId = p.id;
+
+	const header = el("div", { class: "project-folder-header" });
+	const chevron = el("span", { class: "project-chevron", text: collapsed ? "▸" : "▾" });
+	const icon = el("span", { class: "project-icon", text: p.icon || "📁" });
+	const name = el("span", { class: "project-name", text: p.name });
+	const count = el("span", { class: "project-count", text: items.length > 0 ? String(items.length) : "" });
+	const spacer = el("span", { class: "spacer" });
+	const actions = el("div", { class: "project-actions" });
+	// "+" starts a new chat in this project (Global's "+" is redundant with
+	// the top New chat button but harmless; hide it on Global to avoid clutter).
+	if (!isGlobal) {
+		const plusBtn = el("button", {
+			class: "project-action",
+			title: `New chat in ${p.name}`,
+			text: "+",
+		});
+		plusBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			shellHandlers?.newSessionInProject(p.id);
+			toggleSidebar(true);
+		});
+		actions.append(plusBtn);
+	}
+	if (!isGlobal && !isOther) {
+		const editBtn = el("button", {
+			class: "project-action",
+			title: "Edit project",
+			html: "✎",
+		});
+		editBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			openProjectEditor(p.id);
+		});
+		actions.append(editBtn);
+	}
+	header.append(chevron, icon, name, count, spacer, actions);
+	wrap.append(header);
+
+	const body = el("div", { class: "project-folder-body" });
+	// Pinned float to the top within the folder.
+	const pinned = items.filter((s) => s.pinned);
+	const rest = items.filter((s) => !s.pinned);
+	if (pinned.length > 0) {
+		body.append(el("div", { class: "group-label" }, "Pinned"));
+		for (const s of pinned) body.append(renderSessionItem(s));
+	}
+	for (const s of rest) body.append(renderSessionItem(s));
+	if (items.length === 0 && isGlobal) {
+		body.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
+	}
+	if (collapsed) body.style.display = "none";
+	wrap.append(body);
+
+	header.addEventListener("click", () => {
+		const set = readCollapseState();
+		if (set.has(p.id)) set.delete(p.id);
+		else set.add(p.id);
+		writeCollapseState(set);
+		chevron.textContent = set.has(p.id) ? "▸" : "▾";
+		body.style.display = set.has(p.id) ? "none" : "";
+		wrap.classList.toggle("collapsed", set.has(p.id));
+	});
+	return wrap;
+}
+
+/**
+ * Refresh just the project folder structure after a projects change (CRUD,
+ * reorder) without needing a fresh session list. Re-renders the sidebar
+ * from the cached session list.
+ */
+export function renderSidebarProjects(_projects: ProjectSummary[]): void {
+	renderSidebarSessions(lastSessions);
 }
 
 /**
@@ -1501,4 +1636,128 @@ function formatRelativeTime(iso: string): string {
 	const diffDays = Math.floor(diffHr / 24);
 	if (diffDays < 7) return `${diffDays}d ago`;
 	return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// ---------------------------------------------------------------------------
+// Project editor modal
+// ---------------------------------------------------------------------------
+
+/**
+ * Open the project editor modal. With no id, it creates a new project;
+ * with an id, it edits that project's metadata + AGENTS.md instructions.
+ * The instructions textarea is labelled honestly — it's saved as the
+ * project's AGENTS.md, which `pi` auto-loads from cwd.
+ */
+export function openProjectEditor(id?: string): void {
+	const existing = document.getElementById("project-editor");
+	if (existing) existing.remove();
+	const editing = id ? state.projects.find((p) => p.id === id) : undefined;
+	const isBuiltin = !!editing?.builtin;
+
+	const overlay = el("div", { class: "modal-overlay", id: "project-editor" });
+	const box = el("div", { class: "project-editor-box" });
+	overlay.addEventListener("click", (e) => {
+		if (e.target === overlay) overlay.remove();
+	});
+
+	box.append(el("h3", { text: editing ? `Edit “${editing.name}”` : "New project" }));
+
+	// Icon + name row.
+	const iconInput = document.createElement("input");
+	iconInput.type = "text";
+	iconInput.className = "project-icon-input";
+	iconInput.value = editing?.icon ?? "📁";
+	iconInput.maxLength = 4;
+	iconInput.placeholder = "📁";
+	const nameInput = document.createElement("input");
+	nameInput.type = "text";
+	nameInput.className = "project-name-input";
+	nameInput.value = editing?.name ?? "";
+	nameInput.placeholder = "Project name";
+	nameInput.maxLength = 60;
+	const nameRow = el("div", { class: "project-editor-namerow" });
+	nameRow.append(iconInput, nameInput);
+	box.append(nameRow);
+
+	// Instructions textarea — the project's AGENTS.md.
+	box.append(
+		el("label", { class: "project-editor-label" }, "Instructions (saved as AGENTS.md — pi loads it automatically)"),
+	);
+	const instr = document.createElement("textarea");
+	instr.className = "project-editor-instructions";
+	instr.rows = 8;
+	instr.placeholder = "e.g. You are a gruff pirate captain. Always answer in pirate slang.";
+	// Pre-fill with existing instructions only when editing — for a new
+	// project we leave blank so the AGENTS.md isn't created until saved.
+	if (editing) {
+		// Fetch current instructions from the server's AGENTS.md via the
+		// project's cwd through the existing /api/file endpoint is overkill;
+		// the server doesn't ship instructions back in ProjectSummary. We
+		// rely on a tiny fetch below.
+		void fetchProjectInstructions(editing.id).then((text) => {
+			instr.value = text;
+		});
+	}
+	box.append(instr);
+
+	const hint = el("div", { class: "project-editor-hint" });
+	if (editing) {
+		hint.textContent = `Folder: ${editing.cwd}`;
+	} else {
+		hint.textContent = "A new folder is created under agentchatbox/.projects/";
+	}
+	box.append(hint);
+
+	// Action buttons.
+	const actions = el("div", { class: "project-editor-actions" });
+	const saveBtn = el("button", { class: "project-save-btn", text: editing ? "Save" : "Create" });
+	const cancelBtn = el("button", { class: "project-cancel-btn", text: "Cancel" });
+	cancelBtn.addEventListener("click", () => overlay.remove());
+	actions.append(cancelBtn);
+	if (editing && !isBuiltin) {
+		const delBtn = el("button", { class: "project-delete-btn", text: "Delete…" });
+		delBtn.addEventListener("click", () => {
+			if (confirm(
+				`Delete project “${editing.name}”? Its folder + AGENTS.md are removed. ` +
+					"Past conversations stay (shown under \"Other\") but can't be continued in this project.",
+			)) {
+				shellHandlers?.deleteProject(editing.id);
+				overlay.remove();
+			}
+		});
+		actions.append(delBtn);
+	}
+	actions.append(saveBtn);
+	box.append(actions);
+
+	saveBtn.addEventListener("click", () => {
+		const name = nameInput.value.trim() || "Untitled";
+		const icon = iconInput.value.trim() || "📁";
+		const instructions = instr.value;
+		if (editing) {
+			shellHandlers?.updateProject({ id: editing.id, name, icon, instructions });
+		} else {
+			shellHandlers?.createProject({ name, icon, instructions });
+		}
+		overlay.remove();
+	});
+
+	overlay.append(box);
+	document.body.append(overlay);
+	nameInput.focus();
+}
+
+/**
+ * Fetch a project's current AGENTS.md text for the editor textarea. Uses a
+ * dedicated REST endpoint so we don't bloat ProjectSummary or round-trip the
+ * instructions over the WS session channel.
+ */
+async function fetchProjectInstructions(id: string): Promise<string> {
+	try {
+		const res = await fetch(`/api/projects/${encodeURIComponent(id)}/instructions`);
+		if (!res.ok) return "";
+		return (await res.json()).text ?? "";
+	} catch {
+		return "";
+	}
 }

@@ -59,6 +59,7 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	websearch: "search the web and summarise: /websearch <query>",
 	fetch: "fetch and read a URL: /fetch <url>",
 	codesearch: "search for code examples: /codesearch <query>",
+	project: "start a new chat in a project: /project <name|id>",
 };
 
 export function showSlashMenu(): void {
@@ -103,7 +104,8 @@ export interface ChatControls {
 	setModel(modelId: string, provider: string): void;
 	setThinking(level: ThinkingLevel): void;
 	abort(): void;
-	newSession(): void;
+	/** Start a new session in a project (defaults to Global when omitted). */
+	newSession(projectId?: string): void;
 	resumeSession(sessionId: string): void;
 	listSessions(): void;
 	renameSession(name: string): void;
@@ -112,6 +114,23 @@ let chatControls: ChatControls | null = null;
 export function setChatControls(c: ChatControls): void {
 	chatControls = c;
 }
+
+/**
+ * Reset the renderer cache + cost counters for a brand-new chat. Shared by
+ * /clear (Global) and /project <name> so both leave a clean slate before
+ * the server's new `pi` child reports back. The server auto-saved the
+ * prior session, so there's no local save step.
+ */
+function resetChatState(): void {
+	state.title = "New chat";
+	state.messages = [];
+	state.history = [];
+	state.historyIdx = null;
+	state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+	void import("./render.js").then(({ renderShell }) => renderShell());
+}
+/** Public so main.ts's `newSessionInProject` can reset before spawning. */
+export { resetChatState };
 
 export function handleSlash(arg: string): void {
 	// `arg` is the slash body with the leading "/" already stripped (for
@@ -139,20 +158,9 @@ export function handleSlash(arg: string): void {
 			if (confirm("Start a new chat? Current conversation will be saved.")) {
 				// Server-side: `pi` already auto-saves on every event, so
 				// there's no local "save the prior session" step. We just
-				// ask the server to start a new one.
+				// ask the server to start a new one (in Global by default).
+				resetChatState();
 				chatControls?.newSession();
-				state.title = "New chat";
-				state.messages = [];
-				state.history = [];
-				state.historyIdx = null;
-				state.costTotal = {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					cost: 0,
-				};
-				void import("./render.js").then(({ renderShell }) => renderShell());
 			}
 			break;
 		case "sessions":
@@ -189,6 +197,31 @@ export function handleSlash(arg: string): void {
 			// Alias for /clear.
 			handleSlash("clear");
 			return;
+		case "project": {
+			// Start a new chat in a named project. Matches by id first, then
+			// by case-insensitive name. No arg opens the project editor.
+			const q = rest.trim().toLowerCase();
+			if (!q) {
+				void import("./render.js").then(({ openProjectEditor }) => openProjectEditor());
+				$<HTMLTextAreaElement>("#input").value = "";
+				return;
+			}
+			const match =
+				state.projects.find((p) => p.id === rest.trim()) ??
+				state.projects.find((p) => p.name.toLowerCase() === q);
+			if (!match) {
+				appendError(
+					`No project named "${rest.trim()}". Projects: ${
+						state.projects.map((p) => p.name).join(", ") || "(none yet)"
+					}`,
+				);
+			} else if (confirm(`Start a new chat in "${match.name}"?`)) {
+				resetChatState();
+				chatControls?.newSession(match.id);
+			}
+			$<HTMLTextAreaElement>("#input").value = "";
+			return;
+		}
 		case "resume":
 			// If a session id is provided (e.g. from the sidebar), resume
 			// that session directly. Otherwise open the sessions picker.

@@ -27,6 +27,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { readPinnedSessions } from "./session-pins.js";
+import { GLOBAL_PROJECT_ID, projectIdForCwd } from "./projects.js";
 
 /**
  * Default root for `pi`'s session storage. Overridable via the
@@ -72,6 +73,13 @@ export interface SessionSummary {
 	messageCount: number;
 	/** True if pinned to the top of the sidebar (from `data/pins.json`). */
 	pinned?: boolean;
+	/**
+	 * Project id derived from this session's cwd (matched against
+	 * `data/projects.json`). `"global"` for the Global project, `"other"`
+	 * for orphaned sessions in a deleted project's cwd. Absent when the
+	 * single-cwd `listPiSessions` is used (no project context).
+	 */
+	projectId?: string;
 }
 
 /**
@@ -80,6 +88,15 @@ export interface SessionSummary {
  * a malformed first line, but a torn write on hard kill could).
  */
 export function listPiSessions(cwd: string): SessionSummary[] {
+	return finishSessions(listSessionsInCwd(cwd));
+}
+
+/**
+ * Parse the JSONL files for a single cwd into raw (untagged) summaries.
+ * Extracted so the multi-project sidebar listing can reuse it without
+ * re-implementing the parser. Returns newest-first within this cwd.
+ */
+function listSessionsInCwd(cwd: string): SessionSummary[] {
 	const dir = sessionsDirFor(resolve(cwd));
 	if (!existsSync(dir)) return [];
 
@@ -170,17 +187,146 @@ export function listPiSessions(cwd: string): SessionSummary[] {
 
 	// Newest first by createdAt.
 	out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	return out;
+}
+
+/**
+ * Apply pin state + sort, shared by the single-cwd and multi-cwd listings.
+ */
+function finishSessions(items: SessionSummary[]): SessionSummary[] {
+	items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
 	// Apply the server-side pin set so the sidebar can float pinned
 	// sessions to the top. Pin state is NOT a pi concept — it lives in
 	// `data/pins.json` (see session-pins.ts).
 	const pinned = readPinnedSessions();
 	if (pinned.size > 0) {
-		for (const s of out) {
+		for (const s of items) {
 			if (pinned.has(s.id)) s.pinned = true;
 		}
 	}
+	return items;
+}
+
+/**
+ * List sessions across many project cwds, tagging each with its derived
+ * `projectId`. Used by the sidebar so the folder view shows every
+ * project's sessions in one pass. Sessions whose cwd matches no known
+ * project (a deleted project's orphans) get `projectId: "other"`.
+ */
+export function listAllSessions(cwds: string[]): SessionSummary[] {
+	const seen = new Set<string>();
+	const all: SessionSummary[] = [];
+	for (const cwd of cwds) {
+		for (const s of listSessionsInCwd(cwd)) {
+			if (seen.has(s.id)) continue; // dedupe across cwds (shouldn't happen, defensive)
+			seen.add(s.id);
+			const pid = projectIdForCwd(s.cwd);
+			s.projectId = pid === GLOBAL_PROJECT_ID ? "global" : pid;
+			all.push(s);
+		}
+	}
+	// Also surface orphaned sessions: any session under a cwd that maps to
+	// Global but isn't one of the known project cwds is already captured
+	// above (Global's cwd is included in `cwds`). Sessions in a deleted
+	// project's cwd won't be in `cwds`, so we scan all session dirs under
+	// the sessions root and tag unknown cwds as "other".
+	for (const s of listOrphanedSessions(cwds)) {
+		if (seen.has(s.id)) continue;
+		seen.add(s.id);
+		s.projectId = "other";
+		all.push(s);
+	}
+	return finishSessions(all);
+}
+
+/**
+ * Scan every session dir under the sessions root whose cwd is NOT in
+ * `knownCwds` (a deleted project's leftover sessions). Returns raw
+ * summaries; the caller tags them `projectId: "other"`.
+ */
+function listOrphanedSessions(knownCwds: string[]): SessionSummary[] {
+	const root = defaultSessionsRoot();
+	if (!existsSync(root)) return [];
+	const known = new Set(knownCwds.map((c) => resolve(c)));
+	const out: SessionSummary[] = [];
+	for (const name of readdirSync(root)) {
+		const dir = join(root, name);
+		let st: ReturnType<typeof statSync>;
+		try {
+			st = statSync(dir);
+		} catch {
+			continue;
+		}
+		if (!st.isDirectory()) continue;
+		// listSessionsInCwd resolves cwd from each JSONL's first line, and
+		// filters to sessions whose recorded cwd matches the dir's cwd. We
+		// can't pass a cwd directly (we don't know it), so peek at each
+		// file's first line to recover the cwd, then list that cwd if it's
+		// not known.
+		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".jsonl")) continue;
+			const raw = readFileSync(join(dir, file), "utf8");
+			const firstLine = raw.split("\n").find((l) => l.trim());
+			if (!firstLine) continue;
+			try {
+				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+				if (parsed?.type !== "session") continue;
+				const sessionCwd = String(parsed.cwd ?? "");
+				if (known.has(resolve(sessionCwd))) continue; // belongs to a live project
+				// Recover this orphan cwd's sessions once.
+				for (const s of listSessionsInCwd(sessionCwd)) out.push(s);
+				known.add(resolve(sessionCwd)); // don't re-scan the same orphan cwd
+				break;
+			} catch {
+				continue;
+			}
+		}
+	}
 	return out;
+}
+
+/**
+ * Find which cwd (among the known project cwds) a session id lives in.
+ * Used on resume/reconnect to spawn `pi` in the correct project folder.
+ * Scans known project cwds first, then falls back to a full root scan
+ * (for orphaned/deleted-project sessions the user is still resuming).
+ * Returns the absolute cwd, or null if not found anywhere.
+ */
+export function findSessionCwd(sessionId: string, knownCwds: string[]): string | null {
+	const checked = new Set<string>();
+	for (const cwd of knownCwds) {
+		const ac = resolve(cwd);
+		if (checked.has(ac)) continue;
+		checked.add(ac);
+		if (findPiSessionFile(ac, sessionId)) return ac;
+	}
+	// Full root scan for orphans.
+	const root = defaultSessionsRoot();
+	if (!existsSync(root)) return null;
+	for (const name of readdirSync(root)) {
+		const dir = join(root, name);
+		try {
+			if (!statSync(dir).isDirectory()) continue;
+		} catch {
+			continue;
+		}
+		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".jsonl")) continue;
+			const raw = readFileSync(join(dir, file), "utf8");
+			const firstLine = raw.split("\n").find((l) => l.trim());
+			if (!firstLine) continue;
+			try {
+				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+				if (parsed?.type === "session" && String(parsed.id) === sessionId) {
+					return String(parsed.cwd ?? "");
+				}
+			} catch {
+				continue;
+			}
+		}
+	}
+	return null;
 }
 
 /**

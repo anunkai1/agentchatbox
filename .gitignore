@@ -55,3 +55,7 @@ scripts/_archive/
 
 # Search index (regeneratable from pi session JSONL)
 data/
+
+# Projects (per-project cwd folders with their own AGENTS.md).
+# User-created workspaces, not source — like data/ and uploads/.
+.projects/

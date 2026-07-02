@@ -74,6 +74,12 @@ export interface InitMessage {
 	modelId: string;
 	thinkingLevel: ThinkingLevel;
 	sessionId?: string;
+	/**
+	 * Working directory the `pi` child runs in. Defaults to config.piCwd
+	 * (the Global project). Set to a project's folder so `pi` auto-loads
+	 * that project's AGENTS.md and scopes sessions to that cwd.
+	 */
+	cwd?: string;
 }
 
 /**
@@ -156,7 +162,7 @@ class SessionRegistry {
 			provider: init.provider,
 			modelId: init.modelId,
 			apiKey,
-			cwd: config.piCwd,
+			cwd: init.cwd ?? config.piCwd,
 			sessionId: init.sessionId,
 			thinkingLevel: init.thinkingLevel,
 		});
@@ -381,7 +387,7 @@ class SessionRegistry {
 			sessionId: session.sessionId,
 			isStreaming: session.streaming,
 		});
-		const messages = readPiSessionMessages(config.piCwd, session.sessionId);
+		const messages = readPiSessionMessages(session.init.cwd ?? config.piCwd, session.sessionId);
 		if (messages.length > 0) {
 			const payload: TranscriptPayload = { sessionId: session.sessionId, messages };
 			deliver(ws, { type: "transcript", ...payload });

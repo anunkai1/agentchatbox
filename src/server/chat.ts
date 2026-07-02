@@ -33,11 +33,19 @@
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { ClientMessage, PromptImage, ServerMessage, SessionSummary } from "../shared/protocol.js";
+import type { ClientMessage, PromptImage, ProjectSummary, ServerMessage, SessionSummary } from "../shared/protocol.js";
 import { config } from "./config.js";
 import { log } from "./logger.js";
+import {
+	createProject,
+	deleteProject,
+	getProject,
+	listProjects,
+	reorderProjects,
+	updateProject,
+} from "./projects.js";
 import { setPinned } from "./session-pins.js";
-import { listPiSessions, setPiSessionName } from "./session-list.js";
+import { findSessionCwd, listAllSessions, setPiSessionName } from "./session-list.js";
 import {
 	deliver,
 	deliverError,
@@ -154,7 +162,8 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 	// normal reconnect path), otherwise spawn a fresh child. Binding the
 	// ws sends `ready` + catch-up immediately if the session is already
 	// up (reattach), or once `get_state` reports back (fresh spawn).
-	const session = registry.acquire(init);
+	const resolvedInit = resolveInitCwd(init);
+	const session = registry.acquire(resolvedInit);
 	registry.attach(session, ws);
 
 	// Handle subsequent client messages: forward to `pi` or handle
@@ -292,30 +301,80 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			broadcastSessions();
 			break;
 		}
+		// --- Projects -------------------------------------------------------
+		case "listProjects": {
+			send(ws, { type: "projects", projects: listProjects() as ProjectSummary[] });
+			break;
+		}
+		case "createProject": {
+			createProject({
+				name: msg.name,
+				icon: msg.icon,
+				instructions: msg.instructions,
+				defaultModelId: msg.defaultModelId,
+				defaultProvider: msg.defaultProvider,
+				defaultThinkingLevel: msg.defaultThinkingLevel,
+			});
+			broadcastProjects();
+			broadcastSessions();
+			break;
+		}
+		case "updateProject": {
+			updateProject(msg.id, {
+				name: msg.name,
+				icon: msg.icon,
+				instructions: msg.instructions,
+				defaultModelId: msg.defaultModelId,
+				defaultProvider: msg.defaultProvider,
+				defaultThinkingLevel: msg.defaultThinkingLevel,
+			});
+			broadcastProjects();
+			break;
+		}
+		case "deleteProject": {
+			deleteProject(msg.id);
+			broadcastProjects();
+			broadcastSessions();
+			break;
+		}
+		case "reorderProjects": {
+			reorderProjects(msg.order);
+			broadcastProjects();
+			break;
+		}
 		case "listSessions": {
-			const sessions: SessionSummary[] = listPiSessions(config.piCwd);
+			const sessions: SessionSummary[] = listAllSessions(projectCwds());
 			send(ws, { type: "sessions", sessions });
 			break;
 		}
 		case "newSession": {
 			// Discard the current session and start a fresh one. newSession
 			// is an explicit user action ("new chat"), so killing the old
-			// child is expected — this is NOT the phone-lock case.
+			// child is expected — this is NOT the phone-lock case. `projectId`
+			// selects which project folder the new `pi` runs in (defaults to
+			// Global); pi auto-loads that folder's AGENTS.md as instructions.
+			const project = msg.projectId ? getProject(msg.projectId) : undefined;
+			const cwd = project?.cwd ?? config.piCwd;
 			replaceSession(ws, session, {
-				provider: session.init.provider,
-				modelId: session.init.modelId,
-				thinkingLevel: session.init.thinkingLevel,
+				provider: project?.defaultProvider ?? session.init.provider,
+				modelId: project?.defaultModelId ?? session.init.modelId,
+				thinkingLevel: project?.defaultThinkingLevel ?? session.init.thinkingLevel,
+				cwd,
 			});
 			break;
 		}
 		case "resumeSession": {
 			// Switch to a different session: reattach if it is still live in
-			// the registry, otherwise spawn `pi --session <id>` fresh.
+			// the registry, otherwise spawn `pi --session <id>` fresh. The
+			// session's project is derived from its recorded cwd so pi runs
+			// in the folder whose AGENTS.md shaped that conversation.
+			const cwd = findSessionCwd(msg.sessionId, projectCwds());
 			replaceSession(ws, session, {
 				provider: session.init.provider,
 				modelId: session.init.modelId,
 				thinkingLevel: session.init.thinkingLevel,
 				sessionId: msg.sessionId,
+				cwd: cwd ?? config.piCwd,
 			});
 			break;
 		}
@@ -413,11 +472,45 @@ function send(ws: PiSocket, msg: ServerMessage): void {
  */
 function broadcastSessions(): void {
 	if (!chatWss) return;
-	const sessions: SessionSummary[] = listPiSessions(config.piCwd);
+	const sessions: SessionSummary[] = listAllSessions(projectCwds());
 	const msg: ServerMessage = { type: "sessions", sessions };
 	for (const ws of chatWss.clients) {
 		if (ws.readyState === ws.OPEN) {
 			deliver(ws as PiSocket, msg);
 		}
 	}
+}
+
+/**
+ * Push the current project list to every connected client. Fired after
+ * any project CRUD/reorder so all open sidebars refresh their folder
+ * structure live (mirrors broadcastSessions).
+ */
+function broadcastProjects(): void {
+	if (!chatWss) return;
+	const projects: ProjectSummary[] = listProjects() as ProjectSummary[];
+	const msg: ServerMessage = { type: "projects", projects };
+	for (const ws of chatWss.clients) {
+		if (ws.readyState === ws.OPEN) {
+			deliver(ws as PiSocket, msg);
+		}
+	}
+}
+
+/** The cwds of all known projects (for multi-cwd session listing/lookup). */
+function projectCwds(): string[] {
+	return listProjects().map((p) => p.cwd);
+}
+
+/**
+ * If the client's `init` names a sessionId but no cwd, resolve the cwd
+ * from the session JSONL so a reconnect/resume spawns `pi` in the right
+ * project folder (and loads that project's AGENTS.md). Falls back to
+ * config.piCwd when the session can't be found (e.g. a stale link).
+ */
+function resolveInitCwd(init: InitMessage): InitMessage {
+	if (init.cwd) return init;
+	if (!init.sessionId) return init;
+	const cwd = findSessionCwd(init.sessionId, projectCwds());
+	return cwd ? { ...init, cwd } : init;
 }
