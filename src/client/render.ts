@@ -1384,9 +1384,10 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 		const items = (buckets.get(p.id) ?? []).slice().sort(
 			(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
 		);
-		// Skip empty non-global folders to keep the sidebar tidy — but always
-		// show Global so there's always a home for new chats.
-		if (items.length === 0 && p.id !== "global" && p.id !== state.activeProjectId) continue;
+		// Every project in state.projects is an explicitly-created workspace,
+		// so always show it (even when empty) — otherwise creating a fresh
+		// project looks like "nothing happened". Global gets an empty-state
+		// hint; user projects just show their (empty) body.
 		container.append(renderProjectFolder(p, items));
 	}
 	// Trailing "Other" bucket for orphaned sessions (deleted projects).
@@ -1482,6 +1483,9 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	for (const s of rest) body.append(renderSessionItem(s));
 	if (items.length === 0 && isGlobal) {
 		body.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
+	}
+	if (items.length === 0 && !isGlobal && !isOther) {
+		body.append(el("div", { class: "sidebar-empty" }, "No chats yet — click + to start one"));
 	}
 	if (collapsed) body.style.display = "none";
 	wrap.append(body);
