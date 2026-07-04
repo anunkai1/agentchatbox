@@ -50,8 +50,8 @@ describe("projectTranscript", () => {
 			]),
 		]);
 		expect(out).toEqual([
-			{ kind: "user", text: "hello" },
-			{ kind: "assistant", text: "hi there", thinking: "pondering" },
+			{ kind: "user", text: "hello", seq: 1 },
+			{ kind: "assistant", text: "hi there", thinking: "pondering", seq: 2 },
 		]);
 	});
 
@@ -65,8 +65,8 @@ describe("projectTranscript", () => {
 			toolResult("call_1", "bash", "file_a\nfile_b"),
 		]);
 		expect(out).toEqual([
-			{ kind: "user", text: "list files" },
-			{ kind: "assistant", text: "running ls", thinking: "" },
+			{ kind: "user", text: "list files", seq: 1 },
+			{ kind: "assistant", text: "running ls", thinking: "", seq: 2 },
 			{
 				kind: "tool",
 				name: "bash",
@@ -98,8 +98,8 @@ describe("projectTranscript", () => {
 			// NOTE: no toolResult for "dangling"
 		]);
 		expect(out).toEqual([
-			{ kind: "user", text: "search the web" },
-			{ kind: "assistant", text: "let me search", thinking: "" },
+			{ kind: "user", text: "search the web", seq: 1 },
+			{ kind: "assistant", text: "let me search", thinking: "", seq: 2 },
 			{
 				kind: "tool",
 				name: "web_search",

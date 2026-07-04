@@ -40,15 +40,17 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 	}
 
 	const out: PersistedMessage[] = [];
-	for (const m of messages) {
+	for (let i = 0; i < messages.length; i++) {
+		const m = messages[i];
 		if (m.role === "user") {
-			out.push({ kind: "user", text: extractText(m.content) });
+			out.push({ kind: "user", text: extractText(m.content), seq: i + 1 });
 		} else if (m.role === "assistant") {
 			const content = Array.isArray(m.content) ? m.content : [];
 			out.push({
 				kind: "assistant",
 				text: extractText(content),
 				thinking: extractThinking(content),
+				seq: i + 1,
 			});
 			// Emit a tool row for each toolCall block on this assistant
 			// message, correlated with its toolResult if one exists.

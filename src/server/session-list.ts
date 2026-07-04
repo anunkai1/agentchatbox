@@ -22,7 +22,15 @@
  *     REST endpoints
  */
 
-import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
@@ -390,6 +398,87 @@ export function setPiSessionName(cwd: string, sessionId: string, name: string): 
  * ToolResultMessage`). The renderer can hand these straight to its
  * existing message-node projection.
  */
+/**
+ * Fork (branch) a session: copy the source session's JSONL into a
+ * brand-new session file (fresh id + timestamp, same cwd), keeping
+ * only the first `messageCount` `type:"message"` entries plus the
+ * metadata lines (session_info, model_change, thinking_level_change)
+ * that fall within that prefix. The source file is never modified.
+ *
+ * This is pi's own persistence format — pi writes the identical lines
+ * itself, and on `pi --session <newId>` it scans the session dir for a
+ * file whose first-line `session.id` matches and replays the copied
+ * transcript as prior context. So a fork is just a truncated copy of
+ * the JSONL; the forked chat opens with the conversation up to the
+ * fork point and continues from there.
+ *
+ * Returns the new session id, or null if the source session file
+ * couldn't be found. `messageCount` is clamped to [0, total]; a 0 or
+ * negative count forks an empty session (just the header).
+ */
+export function forkPiSession(cwd: string, sourceSessionId: string, messageCount: number): string | null {
+	const file = findPiSessionFile(cwd, sourceSessionId);
+	if (!file) return null;
+
+	const raw = readFileSync(file, "utf8");
+	const lines = raw.split("\n");
+
+	// Recover the source `session` header so we can preserve its cwd +
+	// version, then rewrite id + timestamp for the fork.
+	let header: Record<string, unknown> | null = null;
+	for (const l of lines) {
+		const t = l.trim();
+		if (!t) continue;
+		try {
+			const parsed = JSON.parse(t) as Record<string, unknown>;
+			if (parsed.type === "session") {
+				header = parsed;
+				break;
+			}
+		} catch {
+			/* skip */
+		}
+	}
+	if (!header) return null;
+
+	const newId = randomUUID();
+	const now = new Date();
+	const newHeader = {
+		type: "session",
+		version: header.version,
+		id: newId,
+		timestamp: now.toISOString(),
+		cwd: header.cwd,
+	};
+
+	const count = Math.max(0, Math.floor(messageCount));
+	const outLines: string[] = [JSON.stringify(newHeader)];
+	let copied = 0;
+	for (const l of lines) {
+		if (copied >= count) break;
+		const t = l.trim();
+		if (!t) continue;
+		try {
+			const parsed = JSON.parse(t) as Record<string, unknown>;
+			if (parsed.type === "session") continue; // drop the original header
+			outLines.push(t);
+			if (parsed.type === "message") copied++;
+		} catch {
+			/* skip malformed */
+		}
+	}
+
+	const dir = sessionsDirFor(String(header.cwd ?? resolve(cwd)));
+	// Match pi's filename convention
+	// `<isoTimestamp-with-colons-as-dashes>_<sessionId>.jsonl` so the
+	// session dir stays uniform (cosmetic — pi finds files by the
+	// first-line id, not the name).
+	const stamp = now.toISOString().replace(/:/g, "-");
+	const newFile = join(dir, `${stamp}_${newId}.jsonl`);
+	writeFileSync(newFile, `${outLines.join("\n")}\n`);
+	return newId;
+}
+
 export function readPiSessionMessages(cwd: string, sessionId: string): Message[] {
 	const dir = sessionsDirFor(resolve(cwd));
 	// Find the JSONL whose first line has matching id.

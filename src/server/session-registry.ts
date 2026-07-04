@@ -134,6 +134,21 @@ class SessionRegistry {
 	private readonly entries = new Map<string, LiveSession>();
 
 	/**
+	 * Snapshot of every live, ready session — id + cwd. Used by chat.ts
+	 * to inject brand-new sessions into the sidebar list BEFORE pi has
+	 * flushed their JSONL to disk (pi only writes the file once the
+	 * first message lands, so without this a just-created empty chat is
+	 * invisible in the sidebar until the next page refresh).
+	 */
+	liveSessions(): Array<{ sessionId: string; cwd?: string }> {
+		const out: Array<{ sessionId: string; cwd?: string }> = [];
+		for (const [id, s] of this.entries) {
+			if (id && s.ready) out.push({ sessionId: id, cwd: s.init.cwd });
+		}
+		return out;
+	}
+
+	/**
 	 * Get an existing live session by id, or spawn a fresh one. This is
 	 * the single entry point for both initial connect and reconnect — a
 	 * reconnect whose `init.sessionId` is still live returns the running

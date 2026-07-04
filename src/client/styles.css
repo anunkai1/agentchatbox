@@ -300,6 +300,23 @@ body {
 .session-action.pin.active {
 	color: var(--text);
 }
+/* Always-visible ⭐ shown next to the title of pinned sessions.
+ * Click to unpin. Not hover-gated like the action buttons. */
+.session-pin-indicator {
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	font-size: 13px;
+	line-height: 1;
+	padding: 0 2px;
+	flex-shrink: 0;
+	filter: grayscale(0.3);
+	transition: filter 0.12s, transform 0.12s;
+}
+.session-pin-indicator:hover {
+	filter: grayscale(0);
+	transform: scale(1.15);
+}
 /* Inline rename input — replaces the title node while editing. */
 .session-rename-input {
 	flex: 1;
@@ -1020,6 +1037,43 @@ body {
 .speak-btn:hover {
 	background: var(--surface-hover);
 	color: var(--accent);
+}
+
+/* fork-into-new-chat button. Shares the speak-btn base look. */
+.fork-btn {
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--text-muted);
+	padding: 4px 8px;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	font-size: 13px;
+	margin-top: 6px;
+	margin-left: 2px;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	transition:
+		background 0.12s,
+		color 0.12s;
+}
+.fork-btn:hover {
+	background: var(--surface-hover);
+	color: var(--accent);
+}
+/* On right-aligned user bubbles, sit the fork button just below the
+   bubble, aligned to the right edge to match the bubble's alignment. */
+.fork-btn-right {
+	align-self: flex-end;
+	margin: 4px 4px 0 0;
+}
+/* User rows become flex column so the fork button stacks under the
+   bubble, right-aligned. Overrides the default row layout's
+   justify-content (flex-end for horizontal right-alignment in row mode). */
+.row-user {
+	flex-direction: column;
+	align-items: flex-end;
+	justify-content: flex-start;
 }
 
 /* error row */

@@ -192,6 +192,44 @@ let sendPromptHook: SendPromptHook = () => {
 let steerHook: SendPromptHook = () => {
 	/* will be replaced by boot() */
 };
+/** Closure over `chatClient.forkSession`, wired in boot(). */
+let forkHook: ((sessionId: string, messageCount: number) => void) | null = null;
+
+/**
+ * Fork the current chat at the given message ordinal. Called from the
+ * renderer's per-message fork button. Resolves the current session id
+ * lazily (it may change between render time and click time), and is a
+ * no-op if no session is bound yet or fork wasn't wired by boot().
+ */
+export function forkFromMessage(messageCount: number): void {
+	if (!forkHook || !state.sessionId) return;
+	forkHook(state.sessionId, messageCount);
+}
+
+/**
+ * Monotonic count of JSONL `type:"message"` entries seen so far in the
+ * live event stream. Seeded to the transcript length on resume (so live
+ * appends continue with correct ordinals) and reset to 0 on each ready
+ * (new session). Drives the `seq` stamp each fork button reads.
+ */
+let liveMessageSeq = 0;
+
+/**
+ * Stamp the most recent user block that has no `seq` yet with the given
+ * JSONL ordinal. The optimistic user block is pushed at send time before
+ * the server echoes it; this lands the ordinal once pi's message_start
+ * echo arrives. Finds the LAST unstamped user block so a rapid sequence
+ * of sends (rare, but possible) still lines up with their echoes in order.
+ */
+function stampLastUserBlock(seq: number): void {
+	for (let i = state.messages.length - 1; i >= 0; i--) {
+		const m = state.messages[i];
+		if (m.kind === "user") {
+			if (m.seq === undefined) m.seq = seq;
+			return;
+		}
+	}
+}
 
 /**
  * Recover a steering message that pi can no longer drain on its own.
@@ -325,6 +363,7 @@ function onEvent(event: Record<string, unknown>): void {
 			// gets created on the first message_start.
 			lastAssistant = null;
 			lastAssistantDom = null;
+			state.lastAssistantSeq = null;
 			// Don't reset spoken here — spoken is per-message, not per-turn.
 			break;
 
@@ -335,13 +374,31 @@ function onEvent(event: Record<string, unknown>): void {
 			break;
 
 		case "message_start":
+			// Every message_start corresponds to one JSONL `type:"message"`
+			// line (user/assistant/toolResult). Bump the live ordinal so the
+			// fork button on each block reports how many messages a fork
+			// from here would copy.
+			if (
+				e.message.role === "user" ||
+				e.message.role === "assistant" ||
+				e.message.role === "toolResult"
+			) {
+				liveMessageSeq++;
+			}
 			if (e.message.role === "assistant") {
 				// New assistant message — create a fresh block.
-				lastAssistant = { kind: "assistant", text: "", thinking: "" };
+				lastAssistant = { kind: "assistant", text: "", thinking: "", seq: liveMessageSeq };
 				state.messages.push(lastAssistant);
+				// Mirror the ordinal into state so the live fork button (rendered
+				// via appendAssistantPlaceholder) can read it without a
+				// back-reference into the messages array.
+				state.lastAssistantSeq = liveMessageSeq;
 				lastAssistantDom = appendAssistantPlaceholder();
 			} else if (e.message.role === "user") {
-				// User message echoed by the server (we already showed it).
+				// User message echoed by the server (we already showed it
+				// optimistically at send time). Stamp the matching block now
+				// that we know its JSONL ordinal.
+				stampLastUserBlock(liveMessageSeq);
 			} else if (e.message.role === "toolResult") {
 				// Tool result from a tool the model called. Render as a tool
 				// block in our transcript.
@@ -632,6 +689,10 @@ async function boot(): Promise<void> {
 		refreshStatus();
 	});
 	chatClient.onReady((info) => {
+		// A fresh `pi` child is up (new session, resume, or reconnect).
+		// Reset the live message ordinal — it gets re-seeded to the
+		// transcript length below if this is a resume with history.
+		liveMessageSeq = 0;
 		// Track the session id for export/display.
 		if (info.sessionId) {
 			state.sessionId = info.sessionId;
@@ -709,6 +770,13 @@ async function boot(): Promise<void> {
 					JSON.stringify(projected[projected.length - 1]));
 		state.sessionId = sessionId;
 		state.messages = projected;
+		// Seed the live message ordinal from the replayed transcript so
+		// subsequently streamed messages continue with correct JSONL
+		// ordinals (used by the per-message fork button).
+		liveMessageSeq = projected.reduce((n, m) => {
+			const seq = "seq" in m ? (m.seq as number | undefined) : undefined;
+			return seq !== undefined ? Math.max(n, seq) : n;
+		}, 0);
 		// Only nuke + rebuild the DOM if something actually changed.
 		// On a background reconnect for the same session this is a no-op,
 		// preserving scroll position and avoiding a flicker.
@@ -774,6 +842,16 @@ async function boot(): Promise<void> {
 	steerHook = (text, images) => {
 		chatClient.steer(text, images);
 	};
+	forkHook = (sessionId, messageCount) => {
+		chatClient.forkSession(sessionId, messageCount);
+	};
+	// When a fork completes server-side, switch this view to the new
+	// session. resumeSession kills the current `pi` child and spawns a
+	// fresh one bound to the forked JSONL, which replays as the prior
+	// transcript — so the chat seamlessly continues from the fork point.
+	chatClient.onForked((newSessionId) => {
+		chatClient.resumeSession(newSessionId);
+	});
 }
 
 boot();

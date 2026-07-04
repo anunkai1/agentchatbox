@@ -195,7 +195,9 @@ export type ServerMessage =
 	| { type: "transcript"; sessionId: string; messages: Message[] }
 	| { type: "projects"; projects: ProjectSummary[] }
 	| { type: "ping" }
-	| { type: "error"; message: string };
+	| { type: "error"; message: string }
+	/** Reply to forkSession: the new session's id, ready to resume. */
+	| { type: "forked"; sessionId: string };
 
 /** Client → server. */
 export type ClientMessage =
@@ -238,6 +240,18 @@ export type ClientMessage =
 	 * pi RPC for it.
 	 */
 	| { type: "setSessionPinned"; sessionId: string; pinned: boolean }
+	/**
+	 * Fork (branch) a session into a new one. The server copies the
+	 * source session's JSONL — its `session` header rewritten with a
+	 * fresh id/timestamp, plus the first `messageCount` `type:"message"`
+	 * entries (and any interleaved metadata lines within that range) —
+	 * into a brand-new session file in the same cwd. Replies with
+	 * `{type:"forked", sessionId}` so the client can resumeSession the
+	 * fork. The source session is left untouched. Pure filesystem
+	 * copying of pi's own persistence format; no agent logic crosses
+	 * the transport boundary.
+	 */
+	| { type: "forkSession"; sessionId: string; messageCount: number }
 	// --- Projects ---------------------------------------------------------
 	| { type: "listProjects" }
 	| {
