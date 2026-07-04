@@ -39,13 +39,15 @@ import { log } from "./logger.js";
 import {
 	createProject,
 	deleteProject,
+	GLOBAL_PROJECT_ID,
 	getProject,
 	listProjects,
+	projectIdForCwd,
 	reorderProjects,
 	updateProject,
 } from "./projects.js";
 import { setPinned } from "./session-pins.js";
-import { findSessionCwd, listAllSessions, setPiSessionName } from "./session-list.js";
+import { findSessionCwd, forkPiSession, listAllSessions, setPiSessionName } from "./session-list.js";
 import {
 	deliver,
 	deliverError,
@@ -301,6 +303,23 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			broadcastSessions();
 			break;
 		}
+		case "forkSession": {
+			// Fork the source session's JSONL into a new session file (a
+			// truncated copy of pi's own persistence format — see
+			// forkPiSession). Tell the requesting client the new id so it
+			// can resumeSession the fork; broadcast the session list so
+			// every sidebar picks up the new chat. No agent logic here —
+			// just filesystem copying + routing, the transport layer's job.
+			const cwd = findSessionCwd(msg.sessionId, projectCwds()) ?? config.piCwd;
+			const newId = forkPiSession(cwd, msg.sessionId, msg.messageCount);
+			if (!newId) {
+				deliverError(ws, "could not fork session (source session not found)");
+				break;
+			}
+			send(ws, { type: "forked", sessionId: newId });
+			broadcastSessions();
+			break;
+		}
 		// --- Projects -------------------------------------------------------
 		case "listProjects": {
 			send(ws, { type: "projects", projects: listProjects() as ProjectSummary[] });
@@ -343,7 +362,7 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			break;
 		}
 		case "listSessions": {
-			const sessions: SessionSummary[] = listAllSessions(projectCwds());
+			const sessions = gatherSessions();
 			send(ws, { type: "sessions", sessions });
 			break;
 		}
@@ -472,13 +491,47 @@ function send(ws: PiSocket, msg: ServerMessage): void {
  */
 function broadcastSessions(): void {
 	if (!chatWss) return;
-	const sessions: SessionSummary[] = listAllSessions(projectCwds());
+	const sessions = gatherSessions();
 	const msg: ServerMessage = { type: "sessions", sessions };
 	for (const ws of chatWss.clients) {
 		if (ws.readyState === ws.OPEN) {
 			deliver(ws as PiSocket, msg);
 		}
 	}
+}
+
+/**
+ * Build the sidebar session list, merging in any live `pi` child whose
+ * JSONL isn't on disk yet. pi only persists a session file once the
+ * first message lands — so a brand-new empty chat (just spawned, no
+ * messages) is invisible to `listAllSessions`, which scans the disk.
+ * Without this merge the new chat doesn't appear in the sidebar until
+ * the next page refresh (by which point pi has finally written the
+ * file). The synthetic entry is replaced by the real on-disk one as
+ * soon as pi flushes and the list is next gathered.
+ */
+function gatherSessions(): SessionSummary[] {
+	const sessions = listAllSessions(projectCwds());
+	const onDisk = new Set(sessions.map((s) => s.id));
+	const now = new Date().toISOString();
+	for (const live of registry.liveSessions()) {
+		if (onDisk.has(live.sessionId)) continue;
+		const cwd = live.cwd ?? config.piCwd;
+		const pid = projectIdForCwd(cwd);
+		sessions.push({
+			id: live.sessionId,
+			cwd,
+			createdAt: now,
+			modifiedAt: now,
+			title: "New chat",
+			messageCount: 0,
+			projectId: pid === GLOBAL_PROJECT_ID ? "global" : pid,
+		});
+	}
+	// Newest first so a freshly-created chat floats to the top of its
+	// folder even though `now` ties its createdAt/modifiedAt.
+	sessions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	return sessions;
 }
 
 /**

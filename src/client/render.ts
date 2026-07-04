@@ -101,7 +101,11 @@ export function updateWelcomeVisibility(): void {
 
 export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	if (m.kind === "user") {
-		return el("div", { class: "row row-user" }, el("div", { class: "bubble" }, m.text));
+		const row = el("div", { class: "row row-user" });
+		const bubble = el("div", { class: "bubble" }, m.text);
+		row.append(bubble);
+		if (m.seq !== undefined) row.append(makeForkButton(() => m.seq, { align: "right" }));
+		return row;
 	}
 	if (m.kind === "steer") {
 		// Steering message queued while the agent was running. Same
@@ -142,6 +146,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		setRichText(text, m.text || " ");
 		body.append(text);
 		body.append(makeSpeakButton(() => m.text));
+		if (m.seq !== undefined) body.append(makeForkButton(() => m.seq));
 		wrap.append(body);
 		return wrap;
 	}
@@ -209,6 +214,34 @@ function makeSpeakButton(getText: () => string): HTMLElement {
 		void import("./voice.js").then(({ toggleSpeak }) => {
 			toggleSpeak(getText(), btn);
 		});
+	});
+	return btn;
+}
+
+/**
+ * The fork button copies the conversation up to and including this
+ * message into a brand-new chat and switches to it. `getSeq` returns
+ * the message's JSONL ordinal (how many messages a fork copies); it is
+ * undefined only in the brief window before the ordinal is stamped, in
+ * which case the button is a no-op. `{ align: "right" }` renders the
+ * button for right-aligned user bubbles (mirrored layout).
+ */
+function makeForkButton(
+	getSeq: () => number | undefined,
+	opts?: { align?: "left" | "right" },
+): HTMLElement {
+	const btn = el(
+		"button",
+		{
+			class: `fork-btn${opts?.align === "right" ? " fork-btn-right" : ""}`,
+			title: "Fork into new chat",
+		},
+		"⑂",
+	);
+	btn.addEventListener("click", () => {
+		const seq = getSeq();
+		if (seq === undefined) return;
+		void import("./main.js").then(({ forkFromMessage }) => forkFromMessage(seq));
 	});
 	return btn;
 }
@@ -430,6 +463,7 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	const pre = el("div", { class: "text markdown streaming" });
 	body.append(pre);
 	body.append(makeSpeakButton(() => state.lastAssistantText));
+	body.append(makeForkButton(() => state.lastAssistantSeq ?? undefined));
 	wrap.append(body);
 	appendNode(wrap, { pin: true });
 	return { textPre: pre, thinkingWrap, thinkingPre };
@@ -1584,20 +1618,43 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	const titleEl = el("div", { class: "session-item-title" }, displayTitle);
 	titleRow.append(titleEl);
 
+	// Pinned sessions show an always-visible ⭐ indicator next to the
+	// title. Clicking it unpins — no need to hover first.
+	if (pinned) {
+		const starBtn = el("button", {
+			class: "session-pin-indicator",
+			title: "Unpin",
+			text: "⭐",
+		});
+		starBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			shellHandlers?.setSessionPinned(s.id, false);
+		});
+		titleRow.append(starBtn);
+	}
+
 	// Hover-revealed action buttons. Each stops propagation so they
-	// don't trigger the row's resume-on-click.
+	// don't trigger the row's resume-on-click. The pin toggle is only
+	// shown when not pinned — pinned rows use the always-visible star.
 	const actions = el("div", { class: "session-item-actions" });
-	const pinBtn = el("button", {
-		class: `session-action pin${pinned ? " active" : ""}`,
-		title: pinned ? "Unpin" : "Pin to top",
-		text: pinned ? "★" : "☆",
-	});
 	const renameBtn = el("button", {
 		class: "session-action rename",
 		title: "Rename",
 		html: "✎",
 	});
-	actions.append(pinBtn, renameBtn);
+	actions.append(renameBtn);
+	if (!pinned) {
+		const pinBtn = el("button", {
+			class: "session-action pin",
+			title: "Pin to top",
+			text: "☆",
+		});
+		pinBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			shellHandlers?.setSessionPinned(s.id, true);
+		});
+		actions.insertBefore(pinBtn, renameBtn);
+	}
 	titleRow.append(actions);
 	item.append(titleRow);
 
@@ -1609,12 +1666,6 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		toggleSidebar(true); // auto-close on mobile
 	});
 
-	pinBtn.addEventListener("click", (e) => {
-		e.stopPropagation();
-		// Optimistically toggle the star; the server rebroadcasts the
-		// session list which corrects any drift.
-		shellHandlers?.setSessionPinned(s.id, !pinned);
-	});
 	renameBtn.addEventListener("click", (e) => {
 		e.stopPropagation();
 		startRename(titleEl, titleRow, s);

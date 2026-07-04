@@ -25,8 +25,17 @@ import type { CapabilitiesInfo } from "./api.js";
  * shape on the client so the renderer can stay simple.
  */
 export type PersistedMessage =
-	| { kind: "user"; text: string }
-	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean }
+	| { kind: "user"; text: string; /**
+		 * 1-based ordinal of this message within the session's JSONL
+		 * `type:"message"` entries — i.e. how many messages (including
+		 * this one) a "fork from here" should copy. Stamped by
+		 * projectTranscript (from the transcript array index) and by
+		 * the live event dispatcher (from a monotonic counter seeded
+		 * to the transcript length). Undefined only briefly, before
+		 * the echo/stamp lands. Absent on kinds that can't be forked
+		 * (tool/steer/error).
+		 */ seq?: number }
+	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean; seq?: number }
 	| {
 			kind: "tool";
 			name: string;
@@ -131,6 +140,13 @@ export interface AppState {
 	 */
 	lastAssistantText: string;
 	/**
+	 * JSONL ordinal of the currently-streaming (or just-finished) live
+	 * assistant message, mirrored from the in-place `lastAssistant` block
+	 * so the live fork button can read it without a back-reference into
+	 * the messages array. Reset to null on turn boundaries.
+	 */
+	lastAssistantSeq: number | null;
+	/**
 	 * Number of steering messages queued but not yet consumed by the
 	 * agent. Driven by `queue_update` events; shown in the status bar.
 	 */
@@ -199,6 +215,7 @@ export const state: AppState = {
 	ttsInFlight: 0,
 	audioPlaying: false,
 	lastAssistantText: "",
+	lastAssistantSeq: null,
 	pendingSteerCount: 0,
 	retry: null,
 	streamingStartedAt: null,

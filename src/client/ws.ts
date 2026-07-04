@@ -34,6 +34,8 @@ export type StatusListener = (status: "connecting" | "open" | "closed" | "stalle
 export type SessionsListener = (sessions: SessionSummary[]) => void;
 export type ProjectsListener = (projects: ProjectSummary[]) => void;
 export type TranscriptListener = (sessionId: string, messages: Message[]) => void;
+/** Fired with the new session id once a forkSession completes. */
+export type ForkedListener = (sessionId: string) => void;
 
 export interface ChatClient {
 	/**
@@ -72,6 +74,12 @@ export interface ChatClient {
 	renameSessionById(sessionId: string, name: string): void;
 	/** Pin or unpin ANY session (not just the current one) to the sidebar top. */
 	setSessionPinned(sessionId: string, pinned: boolean): void;
+	/**
+	 * Fork (branch) a session into a new one, copying the first
+	 * `messageCount` messages. The server replies via onForked with the
+	 * new session id, which the caller then resumeSession()s.
+	 */
+	forkSession(sessionId: string, messageCount: number): void;
 	/** Request the list of saved sessions. Replies via onSessionsUpdated. */
 	listSessions(): void;
 	/** Kill the current `pi` and start a fresh session in a project. */
@@ -113,6 +121,8 @@ export interface ChatClient {
 	onProjectsUpdated(listener: ProjectsListener): () => void;
 	/** Called on resume with the prior transcript, before live events flow. */
 	onTranscript(listener: TranscriptListener): () => void;
+	/** Called with the new session id once a forkSession completes. */
+	onForked(listener: ForkedListener): () => void;
 	/** Force a reconnect. */
 	reconnect(): void;
 	/** Permanently close. */
@@ -145,6 +155,7 @@ export function createChatClient(): ChatClient {
 	const sessionsListeners = new Set<SessionsListener>();
 	const projectsListeners = new Set<ProjectsListener>();
 	const transcriptListeners = new Set<TranscriptListener>();
+	const forkedListeners = new Set<ForkedListener>();
 
 	function setStatus(status: "connecting" | "open" | "closed" | "stalled") {
 		currentStatus = status;
@@ -210,6 +221,9 @@ export function createChatClient(): ChatClient {
 					for (const l of transcriptListeners) {
 						l(String(msg.sessionId ?? ""), (msg.messages as Message[]) ?? []);
 					}
+					break;
+				case "forked":
+					for (const l of forkedListeners) l(String(msg.sessionId ?? ""));
 					break;
 				case "error":
 					for (const l of errorListeners) l(String(msg.message ?? "unknown error"));
@@ -331,6 +345,8 @@ export function createChatClient(): ChatClient {
 		renameSession: (name) => send({ type: "renameSession", name }),
 		renameSessionById: (sessionId, name) => send({ type: "renameSessionById", sessionId, name }),
 		setSessionPinned: (sessionId, pinned) => send({ type: "setSessionPinned", sessionId, pinned }),
+		forkSession: (sessionId, messageCount) =>
+			send({ type: "forkSession", sessionId, messageCount }),
 		listSessions: () => send({ type: "listSessions" }),
 		newSession: (projectId) => send({ type: "newSession", ...(projectId ? { projectId } : {}) }),
 		resumeSession: (sessionId) => send({ type: "resumeSession", sessionId }),
@@ -366,6 +382,10 @@ export function createChatClient(): ChatClient {
 		onTranscript: (l) => {
 			transcriptListeners.add(l);
 			return () => transcriptListeners.delete(l);
+		},
+		onForked: (l) => {
+			forkedListeners.add(l);
+			return () => forkedListeners.delete(l);
 		},
 		reconnect: () => {
 			if (ws) ws.close();
