@@ -88,6 +88,20 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 		// toolResult messages are consumed by the toolCall correlation
 		// above; don't emit separate rows (avoids the old "(replayed)"
 		// args duplication and keeps each tool to a single row).
+		if (m.role === "custom" && (m as { customType?: string }).customType === "voice-reply") {
+			// Attach the spoken variants to the most recent assistant
+			// entry so they render as inline Long/Short buttons on that
+			// message's button row — not as a separate block.
+			const details = (m as { details?: { long?: string; short?: string } }).details ?? {};
+			for (let j = out.length - 1; j >= 0; j--) {
+				const prev = out[j];
+				if (prev.kind === "assistant") {
+					prev.voiceLong = details.long ?? "";
+					prev.voiceShort = details.short ?? "";
+					break;
+				}
+			}
+		}
 	}
 	return out;
 }

@@ -409,16 +409,45 @@ function onEvent(event: Record<string, unknown>): void {
 			} else if (e.message.role === "custom") {
 				// Custom message from an extension. The pi-voice-reply
 				// extension emits customType:"voice-reply" with long/short
-				// spoken variants. Render as a voice-reply block.
+				// spoken variants. Attach them to the most recent assistant
+				// message and append the Long/Short buttons to its existing
+				// button row inline (same line as 🔊/🎙️/fork), rather than
+				// rendering a separate block below it.
 				if (e.message.customType === "voice-reply") {
-					const details = (e.message as { details?: { long?: string; short?: string } }).details ?? {};
-					const vrm = {
-						kind: "voice-reply" as const,
-						long: details.long ?? "",
-						short: details.short ?? "",
-					};
-					state.messages.push(vrm);
-					appendNode(renderMessageNode(vrm));
+					const details =
+						(e.message as { details?: { long?: string; short?: string } }).details ?? {};
+					const long = details.long ?? "";
+					const short = details.short ?? "";
+					// Update the last assistant message's state and DOM.
+					for (let j = state.messages.length - 1; j >= 0; j--) {
+						const prev = state.messages[j];
+						if (prev.kind === "assistant") {
+							prev.voiceLong = long;
+							prev.voiceShort = short;
+							break;
+						}
+					}
+					// Find the last rendered assistant row's body and append the
+					// variant buttons just before its fork button (if any), so
+					// they sit inline with 🔊 and 🎙️.
+					const rows = document.querySelectorAll("#messages .row-assistant .body");
+					const lastBody = rows[rows.length - 1] as HTMLElement | undefined;
+					if (lastBody) {
+						void import("./render.js").then(({ makeVoiceVariantButton }) => {
+							const forkBtn = lastBody.querySelector(".fork-btn");
+							const insertBefore = forkBtn as HTMLElement | null;
+							if (long.trim()) {
+								const b = makeVoiceVariantButton("🗣️ Long", long, "Speak the detailed spoken version");
+								if (insertBefore) lastBody.insertBefore(b, insertBefore);
+								else lastBody.append(b);
+							}
+							if (short.trim()) {
+								const b = makeVoiceVariantButton("💬 Short", short, "Speak the concise summary");
+								if (insertBefore) lastBody.insertBefore(b, insertBefore);
+								else lastBody.append(b);
+							}
+						});
+					}
 				}
 			} else if (e.message.role === "user") {
 				// User message echoed by the server (we already showed it
