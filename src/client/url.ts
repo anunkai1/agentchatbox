@@ -32,6 +32,15 @@ export function readSessionIdFromUrl(): string | null {
 }
 
 /**
+ * The path-only URL for a session: `/s/<id>`. Used by the sidebar row's
+ * `<a href>` so middle-click / ⌘-click open the same shareable link in a
+ * new tab — identical to how Firefox treats a regular link.
+ */
+export function sessionPath(id: string): string {
+	return `${SESSION_PREFIX}${id}`;
+}
+
+/**
  * Mirror a session id into the URL via `replaceState`. Pass null to
  * reset to `/` (e.g. when a link turns out to be stale). No-op if the
  * URL already points at the requested target — avoids needless history

@@ -11,29 +11,19 @@
  * Why a single file: the previous design had two parallel arrays
  * (`KNOWN_PROVIDERS` in agent.ts, `builtinProviders` in index.ts) that
  * drifted in membership and order. Combining the set with the SDK's
- * provider key model is fiddly because:
- *
- *   1. The SDK's `KnownProvider` union doesn't include "minimax" — it's
- *      a custom provider the server constructs in agent.ts:resolveModel.
- *      So we widen the set with `as KnownProvider` casts and add a
- *      separate entry for minimax.
- *   2. Some provider keys in `config.apiKeys` (e.g. "kimi-coding") use
- *      hyphens. We use the raw string as the set member.
- *
- * The "minimax" entry is the custom provider — not in the SDK's MODELS
- * map, but constructed in agent.ts:resolveModel. It's listed here so
- * setModel({ provider: "minimax", ... }) and /api/models can both find
- * it.
+ * provider key model is fiddly because some provider keys in
+ * `config.apiKeys` (e.g. "kimi-coding") use hyphens — we use the raw
+ * string as the set member.
  */
 
 import type { KnownProvider } from "@earendil-works/pi-ai";
 
 /**
  * All providers the server can build an Agent for. This is the union of
- * providers shipped by @earendil-works/pi-ai plus the custom "minimax"
- * provider defined in agent.ts. The cast on each member is required
- * because "minimax" (and the other custom keys like "kimi-coding")
- * don't appear in the SDK's narrower `KnownProvider` union.
+ * providers shipped by @earendil-works/pi-ai. The cast on each member is
+ * required for the keys (like "kimi-coding") that the SDK's narrower
+ * `KnownProvider` union did historically exclude; harmless now that it
+ * includes them.
  */
 export const PROVIDER_KEYS = [
 	"anthropic",
@@ -130,8 +120,10 @@ export function providerApiKeyEnvVar(provider: string): string {
 /**
  * Subset of PROVIDER_KEYS that map to SDK-registered providers (i.e.
  * providers that have a real entry in @earendil-works/pi-ai's MODELS
- * map and can be looked up via `getModel`). Excludes the custom
- * "minimax" provider which agent.ts constructs by hand.
+ * map and can be looked up via `getModels`). `minimax` was once a
+ * hand-built provider; it has since been promoted into the SDK
+ * registry (MiniMax-M2.7, MiniMax-M2.7-highspeed), so it lives here
+ * now and the old `EXTRA_MODELS` shim is gone.
  */
 const SDK_PROVIDER_KEYS = [
 	"anthropic",
@@ -150,14 +142,12 @@ const SDK_PROVIDER_KEYS = [
 	"zai",
 	"kimi-coding",
 	"opencode",
+	"minimax",
 ] as const;
 
 /**
  * Array form (preserves order) for the /api/models endpoint, which
- * iterates the providers and calls `getModels(provider)` for each. Only
- * the SDK-registered providers are listed here — `minimax` is added
- * separately as a hand-built entry in index.ts because it has no
- * getModels lookup.
+ * iterates the providers and calls `getModels(provider)` for each.
  */
 export const SDK_PROVIDERS: ReadonlyArray<KnownProvider> = SDK_PROVIDER_KEYS;
 
@@ -185,14 +175,26 @@ export interface ExtraModel {
 }
 
 export const EXTRA_MODELS: readonly ExtraModel[] = [
-	// Custom provider — constructed by hand, not in the SDK registry.
-	// input: ["text","image"] marks M3 as multimodal.
-	{
-		id: "MiniMax-M3",
-		provider: "minimax",
-		name: "MiniMax M3",
-		reasoning: true,
-	},
+	// --- MiniMax ---
+	// The pi-ai SDK registry is stale for the native `minimax` provider:
+	// it only carries MiniMax-M2.7 and -M2.7-highspeed. MiniMax's actual
+	// API (https://platform.minimax.io/docs/api-reference/api-overview,
+	// Anthropic-SDK compatible) serves a full M-series lineup. `pi`
+	// resolves these IDs against the provider config even though they
+	// aren't in the registry, so we surface them here.
+	//
+	// MiniMax-M3 (launched 2026-06-01) is the current flagship: 1M
+	// context, native multimodal (image+video), MSA architecture, the
+	// strongest coding/agentic benchmarks in the M-series. Marked
+	// reasoning; the rest are listed without the badge since their
+	// thinking support isn't confirmed here.
+	{ id: "MiniMax-M3", provider: "minimax", name: "MiniMax M3", reasoning: true },
+	{ id: "MiniMax-M2.5", provider: "minimax", name: "MiniMax M2.5", reasoning: false },
+	{ id: "MiniMax-M2.5-highspeed", provider: "minimax", name: "MiniMax M2.5 Highspeed", reasoning: false },
+	{ id: "MiniMax-M2.1", provider: "minimax", name: "MiniMax M2.1", reasoning: false },
+	{ id: "MiniMax-M2.1-highspeed", provider: "minimax", name: "MiniMax M2.1 Highspeed", reasoning: false },
+	{ id: "MiniMax-M2", provider: "minimax", name: "MiniMax M2", reasoning: false },
+	// --- zai ---
 	// Newer than this SDK build's registry (which tops out at glm-5.1);
 	// `pi` resolves it fine as a zai model.
 	{ id: "glm-5.2", provider: "zai", name: "GLM-5.2", reasoning: true },

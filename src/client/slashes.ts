@@ -436,8 +436,61 @@ export function openModelPicker(): void {
 
 	const { overlay, box } = openModal("Choose model", "model-picker-box");
 
+	// Optional filter box: typing here narrows models across ALL
+	// providers. When non-empty, every group whose rows survive the
+	// filter is force-expanded; otherwise each group respects its
+	// collapsed/expanded state (defaulting to collapsed, except the
+	// group containing the current model).
+	const filterInput = el("input", {
+		type: "search",
+		class: "model-filter-input",
+		placeholder: "Filter models…",
+		autocomplete: "off",
+	}) as HTMLInputElement;
+	box.append(filterInput);
+
+	// Build one <div class="model-group"> per provider: a clickable
+	// header (toggles the rows below it) followed by a rows container.
+	// We keep references so the filter handler can show/hide rows and
+	// expand/collapse groups.
+	type GroupRefs = {
+		header: HTMLElement;
+		rows: HTMLElement;
+		all: ModelOption[];
+		raw: HTMLElement[];
+	};
+	const groupRefs: GroupRefs[] = [];
+
+	const setExpanded = (g: GroupRefs, expanded: boolean) => {
+		g.header.classList.toggle("collapsed", !expanded);
+		g.rows.classList.toggle("hidden", !expanded);
+	};
+
 	for (const [provider, models] of groups) {
-		box.append(el("div", { class: "model-group-header" }, provider));
+		const activeInGroup = models.some((m) => m.id === state.currentModelId);
+
+		const headerLabel = el(
+			"span",
+			{ class: "model-group-title" },
+			`${provider} · ${models.length}`,
+		);
+		const activeTag = activeInGroup
+			? el(
+					"span",
+					{ class: "model-group-active" },
+					models.find((m) => m.id === state.currentModelId)?.name ??
+						state.currentModelId ??
+						"",
+				)
+			: null;
+
+		const header = el("div", { class: "model-group-header" });
+		header.append(el("span", { class: "model-group-twisty" }, "▾"));
+		header.append(headerLabel);
+		if (activeTag) header.append(activeTag);
+
+		const rows = el("div", { class: "model-group-rows" });
+		const raw: HTMLElement[] = [];
 		for (const m of models) {
 			const row = el("div", { class: "model-row" });
 			const main = el("div", { class: "model-name" }, m.name ?? m.id);
@@ -463,9 +516,62 @@ export function openModelPicker(): void {
 				refreshStatus();
 				overlay.remove();
 			});
-			box.append(row);
+			rows.append(row);
+			raw.push(row);
 		}
+
+		const group = el("div", { class: "model-group" });
+		group.append(header, rows);
+		box.append(group);
+
+		const refs: GroupRefs = { header, rows, all: models, raw };
+		groupRefs.push(refs);
+
+		// Default state: collapsed, EXCEPT the group holding the
+		// currently selected model so you can see what's active.
+		setExpanded(refs, activeInGroup);
+
+		header.addEventListener("click", () => {
+			// When a filter is active, the filter handler drives
+			// expansion, so header clicks are a no-op to avoid
+			// fighting it.
+			if (filterInput.value.trim()) return;
+			const expanded = !header.classList.contains("collapsed");
+			setExpanded(refs, !expanded);
+		});
 	}
+
+	// Filter handler: hide rows that don't match, hide groups with no
+	// survivors, and force-expand groups that do survive. Clearing the
+	// filter restores each group to its default collapsed/expanded
+	// state (active group expanded).
+	const applyFilter = () => {
+		const q = filterInput.value.trim().toLowerCase();
+		for (const g of groupRefs) {
+			let visible = 0;
+			for (let i = 0; i < g.all.length; i++) {
+				const m = g.all[i];
+				const row = g.raw[i];
+				const name = (m.name ?? m.id).toLowerCase();
+				const id = m.id.toLowerCase();
+				const match = !q || name.includes(q) || id.includes(q);
+				row.classList.toggle("hidden", !match);
+				if (match) visible++;
+			}
+			const groupEl = g.header.parentElement as HTMLElement | null;
+			if (groupEl) groupEl.classList.toggle("hidden", q !== "" && visible === 0);
+			if (q) {
+				// While filtering, expand any group with survivors so
+				// matches are visible without an extra click.
+				setExpanded(g, visible > 0);
+			} else {
+				setExpanded(g, g.all.some((m) => m.id === state.currentModelId));
+			}
+		}
+	};
+	filterInput.addEventListener("input", applyFilter);
+	// Autofocus so you can just start typing.
+	setTimeout(() => filterInput.focus(), 0);
 
 	box.append(
 		el("button", {
