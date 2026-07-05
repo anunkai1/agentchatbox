@@ -15,6 +15,7 @@ import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
 import { appendError, refreshStatus } from "./render.js";
 import { state } from "./state.js";
+import { saveSessionPrefs } from "./prefs.js";
 
 /**
  * Soft cap on what we send to TTS. The server hard-rejects anything over
@@ -119,6 +120,7 @@ function setSpeakBtnLabel(src: unknown, playing: boolean): void {
 
 export function toggleAutoSpeak(): void {
 	state.autoSpeak = !state.autoSpeak;
+	saveSessionPrefs();
 	const btn = $<HTMLButtonElement>("#tts-toggle");
 	btn.classList.toggle("active", state.autoSpeak);
 	btn.textContent = state.autoSpeak ? "🔊 on" : "🔇 off";

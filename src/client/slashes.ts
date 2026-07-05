@@ -15,6 +15,7 @@ import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { $, el } from "./dom.js";
 import { appendError, appendNode, refreshStatus, toggleCapabilitiesPopover } from "./render.js";
 import { type ModelOption, state } from "./state.js";
+import { saveSessionPrefs } from "./prefs.js";
 import { shareableSessionUrl } from "./url.js";
 
 /**
@@ -616,6 +617,7 @@ export function openSpeedPicker(): void {
 		if (rate === state.ttsSpeed) row.classList.add("active");
 		row.addEventListener("click", () => {
 			state.ttsSpeed = rate;
+			saveSessionPrefs();
 			overlay.remove();
 			refreshStatus();
 		});
@@ -725,6 +727,7 @@ export async function openVoicePicker(): Promise<void> {
 		if (v === state.ttsVoice) row.classList.add("active");
 		row.addEventListener("click", () => {
 			state.ttsVoice = v;
+			saveSessionPrefs();
 			overlay.remove();
 			refreshStatus();
 		});
