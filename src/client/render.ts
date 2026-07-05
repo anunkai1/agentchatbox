@@ -147,6 +147,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		setRichText(text, m.text || " ");
 		body.append(text);
 		body.append(makeSpeakButton(() => m.text));
+		body.append(makeVoiceReplyButton());
 		if (m.seq !== undefined) body.append(makeForkButton(() => m.seq));
 		wrap.append(body);
 		return wrap;
@@ -252,6 +253,37 @@ function makeSpeakButton(getText: () => string): HTMLElement {
 	btn.addEventListener("click", () => {
 		void import("./voice.js").then(({ toggleSpeak }) => {
 			toggleSpeak(getText(), btn);
+		});
+	});
+	return btn;
+}
+
+/**
+ * The retroactive "request voice reply" button (🎙️). Sends /voice-last
+ * to pi, which the pi-voice-reply extension handles by rewriting the
+ * most recent assistant message into long + short spoken variants and
+ * emitting a voice-reply custom message — the same buttons the proactive
+ * trigger phrase produces. This is the "I already got the reply, now I
+ * want it spoken" affordance: press it any time after an answer to get
+ * the listenable version, no trigger phrase needed.
+ *
+ * Sent as a quiet slash command (no local user bubble) — see
+ * sendSlashCommand in main.ts. Note: it always voices the LATEST
+ * assistant reply regardless of which message's button you press, so
+ * by convention it's only meaningfully used on the most recent one.
+ */
+function makeVoiceReplyButton(): HTMLElement {
+	const btn = el(
+		"button",
+		{
+			class: "speak-btn voice-reply-request-btn",
+			title: "Request a spoken voice reply (long + short) for the latest answer",
+		},
+		"🎙️",
+	);
+	btn.addEventListener("click", () => {
+		void import("./main.js").then(({ sendSlashCommand }) => {
+			sendSlashCommand("/voice-last");
 		});
 	});
 	return btn;
