@@ -207,6 +207,18 @@ export function forkFromMessage(messageCount: number): void {
 }
 
 /**
+ * Send a slash command to pi WITHOUT the local user-bubble / history
+ * bookkeeping of sendAsUser. Used by quiet UI affordances like the
+ * per-message "request voice reply" button, where pressing the button
+ * shouldn't litter the visible transcript with `/voice-last` bubbles.
+ * The command is still sent over the wire as a normal prompt (pi routes
+ * extension commands itself); we just skip the local echo.
+ */
+export function sendSlashCommand(text: string): void {
+	sendPromptHook(text);
+}
+
+/**
  * Monotonic count of JSONL `type:"message"` entries seen so far in the
  * live event stream. Seeded to the transcript length on resume (so live
  * appends continue with correct ordinals) and reset to 0 on each ready
