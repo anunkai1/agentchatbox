@@ -239,6 +239,7 @@ app.get("/api/health", async (_req, res) => {
 		whisper: whisper.available,
 		whisperReason: whisper.available ? undefined : whisper.reason,
 		tts: tts.available,
+		ttsEngine: tts.engine,
 		ttsReason: tts.available ? undefined : tts.reason,
 		ttsVoice: tts.voice,
 		search,
@@ -258,10 +259,6 @@ app.get("/api/health", async (_req, res) => {
  *   - provider:  the provider key (e.g. "deepseek", "minimax")
  *   - name:      human-readable label
  *   - reasoning: true if the model supports thinking
- *
- * The custom "minimax" provider isn't in the SDK's built-in registry,
- * so we hand-build its entry here to keep the picker self-consistent.
- * (See providers.ts for the source of truth on which providers exist.)
  */
 app.get("/api/models", (_req, res) => {
 	const out: Array<{

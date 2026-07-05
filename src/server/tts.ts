@@ -1,18 +1,21 @@
 /**
- * Local TTS via piper-tts.
+ * TTS endpoint.
  *
- * Mirrors the transcribe.ts pattern: we shell out to a Python helper
- * (scripts/tts.py) that loads a piper voice, synthesizes the text, and
- * writes a WAV to a temp file. We return the WAV bytes to the client
- * with audio/wav content type.
+ * Two engines, selected by the `TTS_ENGINE` env var:
  *
- * Why local piper:
- *   - No paid APIs / no API keys (per user preference)
- *   - CPU-only, ~15-60MB voice model, real-time synthesis on modern CPU
- *   - Audio is on-device, never leaves the box
+ *   - `kokoro` (recommended): proxies to the pi-voice-server systemd service
+ *     at http://127.0.0.1:8181 (Kokoro-82M ONNX, warm in memory, ~1.5s for a
+ *     sentence on CPU). The server is operated separately — see
+ *     /home/lepton/pi-voice-server and the `pi-voice-server.service` unit.
  *
- * Default voice: en_US-amy-medium (matches the user's hermes TTS
- * config). Override via PIPER_VOICE env var.
+ *   - `piper` (legacy default): shells out to scripts/tts.py (piper-tts).
+ *     Kept as a fallback; lower quality but no separate service required.
+ *
+ * Both expose the same contract to the browser:
+ *   POST /api/tts        { text, voice? } → audio/wav
+ *   GET  /api/tts/voices { default, available: string[] }
+ *
+ * The browser never knows which engine is running — it just plays the WAV.
  */
 
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -23,8 +26,18 @@ import { projectRoot } from "./paths.js";
 import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 
 const HELPER_PATH = resolve(projectRoot, "scripts/tts.py");
+const MAX_TEXT_CHARS = 4096; // hard cap — prevents runaway synthesis
 
-const MAX_TEXT_CHARS = 4096; // hard cap on input — prevents runaway synthesis
+type Engine = "kokoro" | "piper";
+
+function engine(): Engine {
+	const e = (process.env.TTS_ENGINE || "piper").toLowerCase();
+	return e === "kokoro" ? "kokoro" : "piper";
+}
+
+const KOKORO_BASE =
+	process.env.KOKORO_TTS_URL || `http://${process.env.KOKORO_HOST || "127.0.0.1"}:${process.env.KOKORO_PORT || "8181"}`;
+const KOKORO_DEFAULT_VOICE = process.env.KOKORO_VOICE || "af_heart";
 
 export function createTtsRouter(): Router {
 	const router = express.Router();
@@ -45,68 +58,32 @@ export function createTtsRouter(): Router {
 			res.status(413).json({ error: `text too long (max ${MAX_TEXT_CHARS} chars)` });
 			return;
 		}
+		const voice =
+			typeof body?.voice === "string" && body.voice.length > 0 ? body.voice : undefined;
 
-		let dir: string | undefined;
-		try {
-			dir = await mkdtemp(join(tmpdir(), "agentchatbox-tts-"));
-			const txtPath = join(dir, "input.txt");
-			const wavPath = join(dir, "output.wav");
-			await writeFile(txtPath, text, "utf8");
-
-			const env = { ...process.env };
-			if (typeof body?.voice === "string" && body.voice.length > 0) {
-				env.PIPER_VOICE = body.voice;
-			}
-
-			const { stdout, stderr, code, timedOut } = await runPython({
-				bin: process.env.PYTHON_BIN || "python3",
-				helperPath: HELPER_PATH,
-				helperArgs: [txtPath, wavPath],
-				env,
-				timeoutMs: DEFAULT_PYTHON_TIMEOUT_MS,
-			});
-
-			if (timedOut) {
-				res.status(504).json({
-					error: `tts.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms`,
-				});
-				return;
-			}
-			if (code !== 0) {
-				const tail = (stderr || stdout).slice(-500);
-				res.status(500).json({ error: `tts.py exited ${code}: ${tail}` });
-				return;
-			}
-
-			const wav = await readFile(wavPath);
-			res.setHeader("Content-Type", "audio/wav");
-			res.setHeader("Content-Length", String(wav.length));
-			res.setHeader("Cache-Control", "no-store");
-			res.send(wav);
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			res.status(500).json({ error: `tts failed: ${message}` });
-		} finally {
-			if (dir) {
-				rm(dir, { recursive: true, force: true }).catch(() => {
-					/* best-effort */
-				});
-			}
+		if (engine() === "kokoro") {
+			await synthKokoro(text, voice, res);
+		} else {
+			await synthPiper(text, voice, res);
 		}
 	});
 
 	/**
-	 * GET /api/voices
+	 * GET /api/tts/voices
 	 * Returns: { default: string, available: string[] }
-	 * Lists piper voice models present on disk.
 	 */
 	router.get("/voices", async (_req, res) => {
 		try {
-			const voices = await listVoices();
-			res.json({
-				default: process.env.PIPER_VOICE || "en_US-amy-medium",
-				available: voices,
-			});
+			if (engine() === "kokoro") {
+				const list = await kokoroVoices();
+				res.json({ default: KOKORO_DEFAULT_VOICE, available: list });
+			} else {
+				const voices = await listPiperVoices();
+				res.json({
+					default: process.env.PIPER_VOICE || "en_US-amy-medium",
+					available: voices,
+				});
+			}
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
 			res.status(500).json({ error: `voice list failed: ${message}` });
@@ -116,7 +93,101 @@ export function createTtsRouter(): Router {
 	return router;
 }
 
-async function listVoices(): Promise<string[]> {
+// ── Kokoro: HTTP proxy to pi-voice-server ──────────────────────────
+
+async function synthKokoro(
+	text: string,
+	voice: string | undefined,
+	res: Response,
+): Promise<void> {
+	try {
+		const upstream = await fetch(`${KOKORO_BASE}/tts`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed: 1 }),
+		});
+		if (!upstream.ok) {
+			const errText = (await upstream.text()).slice(0, 300);
+			res.status(502).json({
+				error: `kokoro tts upstream ${upstream.status}: ${errText}`,
+			});
+			return;
+		}
+		const wav = Buffer.from(await upstream.arrayBuffer());
+		res.setHeader("Content-Type", "audio/wav");
+		res.setHeader("Content-Length", String(wav.length));
+		res.setHeader("Cache-Control", "no-store");
+		res.send(wav);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		res.status(502).json({
+			error: `kokoro tts unreachable at ${KOKORO_BASE}: ${message}`,
+		});
+	}
+}
+
+async function kokoroVoices(): Promise<string[]> {
+	const res = await fetch(`${KOKORO_BASE}/voices`, { signal: AbortSignal.timeout(3000) });
+	if (!res.ok) throw new Error(`upstream ${res.status}`);
+	const data = (await res.json()) as { voices?: string[] };
+	return data.voices ?? [];
+}
+
+// ── Piper: shell out to scripts/tts.py (legacy) ────────────────────
+
+async function synthPiper(
+	text: string,
+	voice: string | undefined,
+	res: Response,
+): Promise<void> {
+	let dir: string | undefined;
+	try {
+		dir = await mkdtemp(join(tmpdir(), "agentchatbox-tts-"));
+		const txtPath = join(dir, "input.txt");
+		const wavPath = join(dir, "output.wav");
+		await writeFile(txtPath, text, "utf8");
+
+		const env = { ...process.env };
+		if (voice) env.PIPER_VOICE = voice;
+
+		const { stdout, stderr, code, timedOut } = await runPython({
+			bin: process.env.PYTHON_BIN || "python3",
+			helperPath: HELPER_PATH,
+			helperArgs: [txtPath, wavPath],
+			env,
+			timeoutMs: DEFAULT_PYTHON_TIMEOUT_MS,
+		});
+
+		if (timedOut) {
+			res.status(504).json({
+				error: `tts.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms`,
+			});
+			return;
+		}
+		if (code !== 0) {
+			const tail = (stderr || stdout).slice(-500);
+			res.status(500).json({ error: `tts.py exited ${code}: ${tail}` });
+			return;
+		}
+
+		const wav = await readFile(wavPath);
+		res.setHeader("Content-Type", "audio/wav");
+		res.setHeader("Content-Length", String(wav.length));
+		res.setHeader("Cache-Control", "no-store");
+		res.send(wav);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		res.status(500).json({ error: `tts failed: ${message}` });
+	} finally {
+		if (dir) {
+			rm(dir, { recursive: true, force: true }).catch(() => {
+				/* best-effort */
+			});
+		}
+	}
+}
+
+async function listPiperVoices(): Promise<string[]> {
 	const { readdir, stat } = await import("node:fs/promises");
 	const base = resolve(process.env.HOME || "/root", ".local/share/piper/voices");
 	try {
@@ -132,23 +203,74 @@ async function listVoices(): Promise<string[]> {
 // Health probe (used by /api/health)
 // ---------------------------------------------------------------------------
 
-const TTS_HEALTH_CACHE_MS = 60 * 1000;
-interface TtsHealthCache {
+const HEALTH_CACHE_MS = 60 * 1000;
+interface HealthCache {
 	at: number;
-	result: { available: boolean; reason?: string; voice?: string };
+	result: { available: boolean; reason?: string; voice?: string; engine: Engine };
 }
-let ttsHealthCache: TtsHealthCache | null = null;
+let healthCache: HealthCache | null = null;
 
 export async function checkTtsAvailable(): Promise<{
 	available: boolean;
 	reason?: string;
 	voice?: string;
+	engine?: Engine;
 }> {
 	const now = Date.now();
-	if (ttsHealthCache && now - ttsHealthCache.at < TTS_HEALTH_CACHE_MS) {
-		return ttsHealthCache.result;
+	if (healthCache && now - healthCache.at < HEALTH_CACHE_MS) {
+		return healthCache.result;
 	}
 
+	let result: { available: boolean; reason?: string; voice?: string; engine: Engine };
+	if (engine() === "kokoro") {
+		result = await checkKokoroHealth();
+	} else {
+		result = { engine: "piper", ...(await checkPiperHealth()) };
+	}
+	healthCache = { at: now, result };
+	return result;
+}
+
+async function checkKokoroHealth(): Promise<{
+	available: boolean;
+	reason?: string;
+	voice?: string;
+	engine: Engine;
+}> {
+	try {
+		const res = await fetch(`${KOKORO_BASE}/health`, {
+			signal: AbortSignal.timeout(3000),
+		});
+		if (!res.ok) {
+			return { engine: "kokoro", available: false, reason: `upstream ${res.status}` };
+		}
+		const data = (await res.json()) as {
+			modelLoaded?: boolean;
+			voice?: string;
+			voiceCount?: number;
+		};
+		if (!data.modelLoaded) {
+			return { engine: "kokoro", available: false, reason: "model not loaded" };
+		}
+		return {
+			engine: "kokoro",
+			available: true,
+			voice: data.voice || KOKORO_DEFAULT_VOICE,
+		};
+	} catch (e) {
+		return {
+			engine: "kokoro",
+			available: false,
+			reason: `unreachable: ${e instanceof Error ? e.message : String(e)}`,
+		};
+	}
+}
+
+async function checkPiperHealth(): Promise<{
+	available: boolean;
+	reason?: string;
+	voice?: string;
+}> {
 	const { stdout, stderr, code, timedOut } = await runPython({
 		bin: process.env.PYTHON_BIN || "python3",
 		helperPath: HELPER_PATH,
@@ -157,19 +279,12 @@ export async function checkTtsAvailable(): Promise<{
 		timeoutMs: 30_000,
 	});
 
-	let result: { available: boolean; reason?: string; voice?: string };
-	if (timedOut) {
-		result = { available: false, reason: "self-test timed out" };
-	} else if (code !== 0) {
-		result = { available: false, reason: stderr || stdout || "unknown" };
-	} else {
-		try {
-			const info = JSON.parse(stdout) as { voice: string };
-			result = { available: true, voice: info.voice };
-		} catch {
-			result = { available: true };
-		}
+	if (timedOut) return { available: false, reason: "self-test timed out" };
+	if (code !== 0) return { available: false, reason: stderr || stdout || "unknown" };
+	try {
+		const info = JSON.parse(stdout) as { voice: string };
+		return { available: true, voice: info.voice };
+	} catch {
+		return { available: true };
 	}
-	ttsHealthCache = { at: now, result };
-	return result;
 }
