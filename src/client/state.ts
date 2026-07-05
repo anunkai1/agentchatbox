@@ -230,7 +230,7 @@ export const state: AppState = {
 	connectionStatus: "connecting",
 	autoSpeak: false,
 	ttsVoice: null,
-	ttsSpeed: 1.4,
+	ttsSpeed: 1.25,
 	ttsInFlight: 0,
 	audioPlaying: false,
 	lastAssistantText: "",
