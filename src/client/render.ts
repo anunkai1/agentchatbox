@@ -148,6 +148,8 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		body.append(text);
 		body.append(makeSpeakButton(() => m.text));
 		body.append(makeVoiceReplyButton());
+		if (m.voiceLong?.trim()) body.append(makeVoiceVariantButton("🗣️ Long", m.voiceLong, "Speak the detailed spoken version"));
+		if (m.voiceShort?.trim()) body.append(makeVoiceVariantButton("💬 Short", m.voiceShort, "Speak the concise summary"));
 		if (m.seq !== undefined) body.append(makeForkButton(() => m.seq));
 		wrap.append(body);
 		return wrap;
@@ -169,44 +171,6 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		}
 		wrap.append(card);
 		return wrap;
-	}
-	if (m.kind === "voice-reply") {
-		// Voice-reply block: two speak buttons (long + short) for the
-		// listenable rewrites produced by the pi-voice-reply extension.
-		// Each button uses the same toggleSpeak path as the normal 🔊
-		// button, so play/stop semantics are identical. If a variant is
-		// empty (the model produced nothing), its button is hidden.
-		const card = el("div", { class: "voice-reply-card" });
-		card.append(el("span", { class: "voice-reply-label" }, "🎙️ voice reply"));
-		const btns = el("div", { class: "voice-reply-btns" });
-		if (m.long.trim()) {
-			const longBtn = el(
-				"button",
-				{ class: "speak-btn voice-reply-btn", title: "Speak the detailed spoken version" },
-				"🗣️ Long",
-			);
-			longBtn.addEventListener("click", () => {
-				void import("./voice.js").then(({ toggleSpeak }) => {
-					toggleSpeak(m.long, longBtn);
-				});
-			});
-			btns.append(longBtn);
-		}
-		if (m.short.trim()) {
-			const shortBtn = el(
-				"button",
-				{ class: "speak-btn voice-reply-btn", title: "Speak the concise summary" },
-				"💬 Short",
-			);
-			shortBtn.addEventListener("click", () => {
-				void import("./voice.js").then(({ toggleSpeak }) => {
-					toggleSpeak(m.short, shortBtn);
-				});
-			});
-			btns.append(shortBtn);
-		}
-		card.append(btns);
-		return el("div", { class: "row row-voice-reply" }, card);
 	}
 	// error
 	return el("div", { class: "row row-error" }, el("div", { class: "body" }, m.text));
@@ -284,6 +248,26 @@ function makeVoiceReplyButton(): HTMLElement {
 	btn.addEventListener("click", () => {
 		void import("./main.js").then(({ sendSlashCommand }) => {
 			sendSlashCommand("/voice-last");
+		});
+	});
+	return btn;
+}
+
+/**
+ * A spoken-variant speak button (🗣️ Long / 💬 Short). Used inline on an
+ * assistant message's button row when the pi-voice-reply extension has
+ * produced listenable rewrites. Same toggleSpeak semantics as the normal
+ * 🔊 button, just over the rewritten text.
+ */
+export function makeVoiceVariantButton(label: string, text: string, title: string): HTMLElement {
+	const btn = el(
+		"button",
+		{ class: "speak-btn voice-variant-btn", title },
+		label,
+	);
+	btn.addEventListener("click", () => {
+		void import("./voice.js").then(({ toggleSpeak }) => {
+			toggleSpeak(text, btn);
 		});
 	});
 	return btn;

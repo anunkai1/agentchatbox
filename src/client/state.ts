@@ -35,7 +35,16 @@ export type PersistedMessage =
 		 * the echo/stamp lands. Absent on kinds that can't be forked
 		 * (tool/steer/error).
 		 */ seq?: number }
-	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean; seq?: number }
+	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean; seq?: number;
+		 /**
+		 * Listenable spoken-rewrite variants produced by the
+		 * pi-voice-reply extension, attached to this assistant message
+		 * when a voice reply was requested (proactively via trigger
+		 * phrase or retroactively via the 🎙️ button). Rendered as inline
+		 * Long/Short speak buttons on this message's button row — never
+		 * as a separate block — so they share the line with 🔊/🎙️/fork.
+		 */
+		voiceLong?: string; voiceShort?: string }
 	| {
 			kind: "tool";
 			name: string;
