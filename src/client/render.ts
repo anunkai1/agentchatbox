@@ -766,6 +766,15 @@ export function refreshStatus(): void {
 	vp.textContent = `voice: ${state.ttsVoice ?? "default"}`;
 	const sp = $<HTMLButtonElement>("#speed-picker");
 	sp.textContent = `speed: ${state.ttsSpeed}×`;
+	// Sync the auto-speak toggle button with state. Its label/class are
+	// hardcoded at render time ("🔇 off"), so without this a refreshed
+	// page would show "off" even when a persisted pref restored
+	// autoSpeak=true (see prefs.ts).
+	const tb = $<HTMLButtonElement>("#tts-toggle");
+	if (tb) {
+		tb.classList.toggle("active", state.autoSpeak);
+		tb.textContent = state.autoSpeak ? "🔊 on" : "🔇 off";
+	}
 }
 
 // ---------------------------------------------------------------------------

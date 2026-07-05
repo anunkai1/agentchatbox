@@ -65,6 +65,7 @@ import {
 } from "./voice.js";
 import { createChatClient } from "./ws.js";
 import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
+import { applySessionPrefs, saveSessionPrefs } from "./prefs.js";
 
 // ---------------------------------------------------------------------------
 // History (↑/↓)
@@ -690,6 +691,7 @@ async function boot(): Promise<void> {
 		const exists = await sessionExists(urlSessionId);
 		if (exists) {
 			state.sessionId = urlSessionId;
+			applySessionPrefs();
 		} else {
 			writeSessionIdToUrl(null); // stale link — drop it, start fresh
 		}
@@ -770,6 +772,7 @@ async function boot(): Promise<void> {
 		// Track the session id for export/display.
 		if (info.sessionId) {
 			state.sessionId = info.sessionId;
+			applySessionPrefs();
 			// Mirror the session into the URL so the chat is a bookmarkable,
 			// shareable link. Covers new sessions, resumes, and reconnects
 			// — every `ready` reflects the currently bound session.
@@ -843,6 +846,7 @@ async function boot(): Promise<void> {
 				JSON.stringify(state.messages[state.messages.length - 1]) ===
 					JSON.stringify(projected[projected.length - 1]));
 		state.sessionId = sessionId;
+		applySessionPrefs();
 		state.messages = projected;
 		// Seed the live message ordinal from the replayed transcript so
 		// subsequently streamed messages continue with correct JSONL
