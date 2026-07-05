@@ -20,6 +20,7 @@ import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
 import { type PersistedMessage, state } from "./state.js";
+import { sessionPath } from "./url.js";
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
@@ -167,6 +168,44 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		}
 		wrap.append(card);
 		return wrap;
+	}
+	if (m.kind === "voice-reply") {
+		// Voice-reply block: two speak buttons (long + short) for the
+		// listenable rewrites produced by the pi-voice-reply extension.
+		// Each button uses the same toggleSpeak path as the normal 🔊
+		// button, so play/stop semantics are identical. If a variant is
+		// empty (the model produced nothing), its button is hidden.
+		const card = el("div", { class: "voice-reply-card" });
+		card.append(el("span", { class: "voice-reply-label" }, "🎙️ voice reply"));
+		const btns = el("div", { class: "voice-reply-btns" });
+		if (m.long.trim()) {
+			const longBtn = el(
+				"button",
+				{ class: "speak-btn voice-reply-btn", title: "Speak the detailed spoken version" },
+				"🗣️ Long",
+			);
+			longBtn.addEventListener("click", () => {
+				void import("./voice.js").then(({ toggleSpeak }) => {
+					toggleSpeak(m.long, longBtn);
+				});
+			});
+			btns.append(longBtn);
+		}
+		if (m.short.trim()) {
+			const shortBtn = el(
+				"button",
+				{ class: "speak-btn voice-reply-btn", title: "Speak the concise summary" },
+				"💬 Short",
+			);
+			shortBtn.addEventListener("click", () => {
+				void import("./voice.js").then(({ toggleSpeak }) => {
+					toggleSpeak(m.short, shortBtn);
+				});
+			});
+			btns.append(shortBtn);
+		}
+		card.append(btns);
+		return el("div", { class: "row row-voice-reply" }, card);
 	}
 	// error
 	return el("div", { class: "row row-error" }, el("div", { class: "body" }, m.text));
@@ -1364,13 +1403,23 @@ function renderSidebarSearchResults(hits: SessionSearchHit[]): void {
 		return;
 	}
 	for (const h of hits) {
-		const item = el("div", { class: "session-item search-hit" });
+		// Same <a href> trick as the regular sidebar rows: middle-click
+		// opens the matched session in a new tab, left-click resumes
+		// in-app. See renderSessionItem for the rationale.
+		const item = el("a", {
+			class: "session-item search-hit",
+			href: sessionPath(h.sessionId),
+			rel: "noopener",
+		});
 		if (h.sessionId === state.sessionId) item.classList.add("active");
 		item.append(el("div", { class: "session-item-title" }, h.title || "Untitled"));
 		item.append(el("div", { class: "search-snippet" }, h.snippet));
 		const timeStr = formatRelativeTime(h.modifiedAt);
 		item.append(el("div", { class: "session-item-meta" }, `${h.messageCount} msgs · ${timeStr}`));
-		item.addEventListener("click", () => {
+		item.addEventListener("click", (e) => {
+			if (e.button !== 0) return;
+			if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+			e.preventDefault();
 			shellHandlers?.handleSlash(`resume ${h.sessionId}`);
 			toggleSidebar(true);
 		});
@@ -1610,7 +1659,18 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	const displayTitle = s.title || "Untitled";
 	const pinned = !!s.pinned;
 
-	const item = el("div", { class: "session-item" });
+	// Render the row as an actual <a href> so middle-click (and
+	// ⌘/Ctrl/Shift + left-click) open the session in a new tab/window
+	// the way Firefox handles any regular link — no JS window.open dance,
+	// no pop-up blocker caveats, keyboard-activatable for free. Left
+	// click is intercepted below so the SPA keeps the live WS up
+	// instead of doing a full page nav to `/s/<id>`.
+	const item = el("a", {
+		class: "session-item",
+		href: sessionPath(s.id),
+		rel: "noopener",
+		title: `${displayTitle} — middle-click to open in a new tab`,
+	});
 	if (s.id === state.sessionId) item.classList.add("active");
 	if (pinned) item.classList.add("pinned");
 
@@ -1629,6 +1689,13 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		starBtn.addEventListener("click", (e) => {
 			e.stopPropagation();
 			shellHandlers?.setSessionPinned(s.id, false);
+		});
+		// Browsers decide on mousedown (button===1) whether to follow
+		// the parent link, before auxclick fires — so block it at
+		// mousedown, otherwise middle-click on the star would
+		// accidentally open the session in a new tab.
+		starBtn.addEventListener("mousedown", (e) => {
+			if (e.button !== 0) e.stopPropagation();
 		});
 		titleRow.append(starBtn);
 	}
@@ -1653,6 +1720,9 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 			e.stopPropagation();
 			shellHandlers?.setSessionPinned(s.id, true);
 		});
+		pinBtn.addEventListener("mousedown", (e) => {
+			if (e.button !== 0) e.stopPropagation();
+		});
 		actions.insertBefore(pinBtn, renameBtn);
 	}
 	titleRow.append(actions);
@@ -1661,7 +1731,14 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	const timeStr = formatRelativeTime(s.modifiedAt);
 	item.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
 
-	item.addEventListener("click", () => {
+	// Only intercept the primary left click (no modifiers). Middle-click
+	// and ⌘/Ctrl/Shift+click intentionally fall through to the browser's
+	// default `<a href>` handling so the user opens the session in a
+	// new tab/window — identical to Firefox link behaviour.
+	item.addEventListener("click", (e) => {
+		if (e.button !== 0) return;
+		if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+		e.preventDefault();
 		shellHandlers?.handleSlash(`resume ${s.id}`);
 		toggleSidebar(true); // auto-close on mobile
 	});
@@ -1669,6 +1746,11 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	renameBtn.addEventListener("click", (e) => {
 		e.stopPropagation();
 		startRename(titleEl, titleRow, s);
+	});
+	// Same mousedown guard as the star/pin buttons — middle-clicking the
+	// pencil shouldn't open the link.
+	renameBtn.addEventListener("mousedown", (e) => {
+		if (e.button !== 0) e.stopPropagation();
 	});
 
 	return item;

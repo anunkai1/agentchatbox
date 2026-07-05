@@ -60,7 +60,17 @@ export type PersistedMessage =
 	 * re-inserts it as a normal user message once delivered, which is
 	 * why resume transcripts never contain `kind: "steer"` rows.
 	 */
-	| { kind: "steer"; text: string; delivered: boolean };
+	| { kind: "steer"; text: string; delivered: boolean }
+	/**
+	 * A spoken-summary voice reply from the pi-voice-reply extension.
+	 * Emitted as a custom message (customType:"voice-reply") after a
+	 * turn where the user asked for voice. Contains two listenable
+	 * rewrites of the assistant's reply — a detailed long version and a
+	 * concise short version — which the browser renders as two speak
+	 * buttons. The actual TTS synthesis happens via the existing
+	 * /api/tts endpoint (Kokoro); this message only carries the words.
+	 */
+	| { kind: "voice-reply"; long: string; short: string };
 
 // ---------------------------------------------------------------------------
 // In-memory app state

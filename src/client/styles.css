@@ -241,9 +241,26 @@ body {
 	cursor: pointer;
 	color: var(--text-secondary);
 	position: relative;
+	text-decoration: none;
 	transition:
 		background 0.12s,
 		color 0.12s;
+}
+/* `<a>` flavour of .session-item: keep it visually identical to the
+ * previous <div> — no underline, no visited/active link colour shifts,
+ * no focus ring on click. The link semantics are just there so
+ * middle-click (and ⌘/Ctrl/Shift+click) open the session in a new
+ * tab/window like a regular Firefox link. */
+.session-item:link,
+.session-item:visited,
+.session-item:hover,
+.session-item:active {
+	text-decoration: none;
+	color: inherit;
+}
+.session-item:focus,
+.session-item:focus-visible {
+	outline: none;
 }
 .session-item:hover {
 	background: var(--surface-hover);
@@ -1039,6 +1056,32 @@ body {
 	color: var(--accent);
 }
 
+/* voice-reply card: the 🎙️ long/short speak buttons from the
+   pi-voice-reply extension. */
+.voice-reply-card {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: 8px 12px;
+	max-width: fit-content;
+}
+.voice-reply-label {
+	font-size: 12px;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+.voice-reply-btns {
+	display: inline-flex;
+	gap: 6px;
+}
+.voice-reply-btn {
+	margin-top: 0;
+	border: 1px solid var(--border);
+}
+
 /* fork-into-new-chat button. Shares the speak-btn base look. */
 .fork-btn {
 	background: transparent;
@@ -1338,13 +1381,85 @@ body {
 	color: var(--text-muted);
 }
 
-/* Group header inside the model picker */
+/* Filter box at the top of the model picker */
+.model-filter-input {
+	width: 100%;
+	box-sizing: border-box;
+	padding: 8px 10px;
+	margin-bottom: 8px;
+	font-size: 13px;
+	font-family: inherit;
+	color: var(--text);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	outline: none;
+}
+.model-filter-input:focus {
+	border-color: var(--accent-border);
+}
+.model-filter-input::-webkit-search-cancel-button {
+	cursor: pointer;
+}
+
+/* Collapsible provider group inside the model picker. */
+.model-group {
+	margin-bottom: 2px;
+}
+.model-group.hidden {
+	display: none;
+}
 .model-group-header {
-	font-size: 11px;
-	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--text);
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
-	margin: 14px 0 6px 2px;
+	margin: 10px 0 4px 2px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	cursor: pointer;
+	user-select: none;
+	transition:
+		background 0.12s,
+		border-color 0.12s;
+}
+.model-group-header:hover {
+	background: var(--surface-hover);
+	border-color: var(--accent-border);
+}
+.model-group-twisty {
+	display: inline-block;
+	font-size: 10px;
+	color: var(--text-muted);
+	transition: transform 0.12s;
+}
+.model-group-header.collapsed .model-group-twisty {
+	transform: rotate(-90deg);
+}
+.model-group-title {
+	font-weight: 600;
+}
+.model-group-active {
+	margin-left: auto;
+	font-size: 11px;
+	font-weight: 500;
+	text-transform: none;
+	letter-spacing: 0;
+	color: var(--text-muted);
+	max-width: 50%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.model-group-rows.hidden {
+	display: none;
+}
+.model-row.hidden {
+	display: none;
 }
 .model-group-header:first-of-type {
 	margin-top: 2px;

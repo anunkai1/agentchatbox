@@ -394,6 +394,20 @@ function onEvent(event: Record<string, unknown>): void {
 				// back-reference into the messages array.
 				state.lastAssistantSeq = liveMessageSeq;
 				lastAssistantDom = appendAssistantPlaceholder();
+			} else if (e.message.role === "custom") {
+				// Custom message from an extension. The pi-voice-reply
+				// extension emits customType:"voice-reply" with long/short
+				// spoken variants. Render as a voice-reply block.
+				if (e.message.customType === "voice-reply") {
+					const details = (e.message as { details?: { long?: string; short?: string } }).details ?? {};
+					const vrm = {
+						kind: "voice-reply" as const,
+						long: details.long ?? "",
+						short: details.short ?? "",
+					};
+					state.messages.push(vrm);
+					appendNode(renderMessageNode(vrm));
+				}
 			} else if (e.message.role === "user") {
 				// User message echoed by the server (we already showed it
 				// optimistically at send time). Stamp the matching block now
@@ -477,6 +491,25 @@ function onEvent(event: Record<string, unknown>): void {
 
 		case "message_end": {
 			const m = e.message as AssistantMessage;
+			// Suppress the blank spurious assistant message that the
+			// pi-voice-reply extension's sendMessage triggers (see the
+			// extension's spurious-turn handling). The extension blanks
+			// the content; we drop the empty block so the user never
+			// sees a stray empty bubble after the voice-reply buttons.
+			if (
+				m.role === "assistant" &&
+				lastAssistant &&
+				lastAssistant.kind === "assistant" &&
+				!lastAssistant.text.trim() &&
+				lastAssistantDom
+			) {
+				lastAssistantDom.wrap.remove();
+				state.messages.pop();
+				lastAssistant = null;
+				lastAssistantDom = null;
+				refreshStatus();
+				break;
+			}
 			if (m.usage) {
 				state.costTotal.input += m.usage.input;
 				state.costTotal.output += m.usage.output;
