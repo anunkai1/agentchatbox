@@ -4,11 +4,10 @@
  * Some UI settings are purely client-side — the server knows nothing
  * about them, so on a page refresh they would reset to their defaults.
  * This module persists them to localStorage, keyed per pi session id,
- * so each chat remembers its own TTS speed / voice / auto-speak choice
- * across refreshes and reconnects.
+ * so each chat remembers its own TTS voice / speed choice across
+ * refreshes and reconnects.
  *
  * What's persisted here (client-owned only):
- *   - autoSpeak  (the 🔊 toggle)
  *   - ttsVoice   (selected Kokoro/Piper voice)
  *   - ttsSpeed   (playback rate)
  *
@@ -29,7 +28,6 @@
 const PREFIX = "acb:prefs:";
 
 export interface SessionPrefs {
-	autoSpeak?: boolean;
 	ttsVoice?: string | null;
 	ttsSpeed?: number;
 }
@@ -79,7 +77,6 @@ export function applySessionPrefs(): void {
 	const id = state.sessionId;
 	if (!id) return;
 	const prefs = loadPrefs(id);
-	if (prefs.autoSpeak === true) state.autoSpeak = true;
 	if (typeof prefs.ttsVoice === "string") state.ttsVoice = prefs.ttsVoice;
 	if (typeof prefs.ttsSpeed === "number" && Number.isFinite(prefs.ttsSpeed)) {
 		state.ttsSpeed = prefs.ttsSpeed;
@@ -91,7 +88,6 @@ export function saveSessionPrefs(): void {
 	const id = state.sessionId;
 	if (!id) return;
 	savePrefs(id, {
-		autoSpeak: state.autoSpeak,
 		ttsVoice: state.ttsVoice,
 		ttsSpeed: state.ttsSpeed,
 	});

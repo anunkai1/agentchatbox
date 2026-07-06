@@ -810,15 +810,6 @@ export function openOverflowMenu(): void {
 	});
 	box.append(speedLine);
 
-	const ttsLine = el("div", { class: "overflow-row" });
-	ttsLine.append(el("div", { class: "overflow-label" }, "auto-speak"));
-	ttsLine.append(el("div", { class: "overflow-value" }, state.autoSpeak ? "on" : "off"));
-	ttsLine.addEventListener("click", async () => {
-		const { toggleAutoSpeak } = await import("./voice.js");
-		toggleAutoSpeak();
-		ttsLine.querySelector(".overflow-value")!.textContent = state.autoSpeak ? "on" : "off";
-	});
-
 	// --- loaded capabilities (mobile: badge hidden, show in overflow) ---
 	if (state.capabilities) {
 		const caps = state.capabilities;
@@ -838,7 +829,6 @@ export function openOverflowMenu(): void {
 			box.append(capsLine);
 		}
 	}
-	box.append(ttsLine);
 
 	box.append(
 		el("button", {

@@ -11,8 +11,8 @@
  *
  * Cross-module callbacks (speakText) are imported lazily to keep the
  * dep graph acyclic — voice.ts imports from render.ts for `appendError`,
- * not the other way around. main.ts wires the speak button by reaching
- * into state.lastAssistant.
+ * not the other way around. main.ts wires the voice-variant buttons by
+ * reaching into state.lastAssistant.
  */
 
 import type { ProjectSummary, SessionSummary } from "../shared/protocol.js";
@@ -146,10 +146,8 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const text = el("div", { class: "text markdown" }, " ");
 		setRichText(text, m.text || " ");
 		body.append(text);
-		body.append(makeSpeakButton(() => m.text));
-		body.append(makeVoiceReplyButton());
-		if (m.voiceLong?.trim()) body.append(makeVoiceVariantButton("🗣️ Long", m.voiceLong, "Speak the detailed spoken version"));
-		if (m.voiceShort?.trim()) body.append(makeVoiceVariantButton("💬 Short", m.voiceShort, "Speak the concise summary"));
+		body.append(makeVoiceVariantButton("long", () => m.voiceLong ?? "", "Speak the detailed spoken version"));
+		body.append(makeVoiceVariantButton("short", () => m.voiceShort ?? "", "Speak the concise summary"));
 		if (m.seq !== undefined) body.append(makeForkButton(() => m.seq));
 		wrap.append(body);
 		return wrap;
@@ -172,7 +170,10 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		wrap.append(card);
 		return wrap;
 	}
-	// error
+	// error (voice-reply is attached inline to the assistant row, never
+	// rendered as its own node, so it never reaches here — narrow so the
+	// remaining union is just the error case with `.text`.)
+	if (m.kind !== "error") return el("div", { class: "row" });
 	return el("div", { class: "row row-error" }, el("div", { class: "body" }, m.text));
 }
 
@@ -197,77 +198,72 @@ export function syncSteerBadges(): void {
 }
 
 /**
- * The speak button always defers to the in-place `state.lastAssistant`
- * for the live-streaming case, so re-clicking after streaming ends
- * replays the final text. For rendered (non-live) messages it speaks
- * the text passed to the closure.
+ * Resolve the spoken variant of the LAST assistant message in state.
+ * Used by the live-streaming placeholder's Long/Short buttons, which
+ * are created before the message object exists; they read the variant
+ * lazily at click time so they pick up values the voice-reply handler
+ * mutates onto the message after generation. /voice-last always voices
+ * the last assistant message, so this matches that semantics.
  */
-function makeSpeakButton(getText: () => string): HTMLElement {
-	const btn = el(
-		"button",
-		{
-			class: "speak-btn",
-			title: "Speak this message (local TTS)",
-		},
-		"🔊",
-	);
-	// Use the button element itself as the toggle identity token, so a
-	// second press on the same button stops playback while a press on
-	// a different message's button switches over (see toggleSpeak).
-	btn.addEventListener("click", () => {
-		void import("./voice.js").then(({ toggleSpeak }) => {
-			toggleSpeak(getText(), btn);
-		});
-	});
-	return btn;
+function lastAssistantVoice(variant: "long" | "short"): string {
+	for (let i = state.messages.length - 1; i >= 0; i--) {
+		const m = state.messages[i];
+		if (m.kind === "assistant") {
+			return (variant === "long" ? m.voiceLong : m.voiceShort) ?? "";
+		}
+	}
+	return "";
 }
 
 /**
- * The retroactive "request voice reply" button (🎙️). Sends /voice-last
- * to pi, which the pi-voice-reply extension handles by rewriting the
- * most recent assistant message into long + short spoken variants and
- * emitting a voice-reply custom message — the same buttons the proactive
- * trigger phrase produces. This is the "I already got the reply, now I
- * want it spoken" affordance: press it any time after an answer to get
- * the listenable version, no trigger phrase needed.
- *
- * Sent as a quiet slash command (no local user bubble) — see
- * sendSlashCommand in main.ts. Note: it always voices the LATEST
- * assistant reply regardless of which message's button you press, so
- * by convention it's only meaningfully used on the most recent one.
+ * Show the spinning indicator on a speak button (generate/synthesize
+ * phase). Captures the idle label the first time so it can be restored.
  */
-function makeVoiceReplyButton(): HTMLElement {
-	const btn = el(
-		"button",
-		{
-			class: "speak-btn voice-reply-request-btn",
-			title: "Request a spoken voice reply (long + short) for the latest answer",
-		},
-		"🎙️",
-	);
+function setBtnLoading(btn: HTMLElement): void {
+	if (!btn.dataset.idleLabel) btn.dataset.idleLabel = btn.textContent ?? "";
+	btn.textContent = "";
+	btn.append(Object.assign(document.createElement("span"), { className: "speak-spinner" }));
+	btn.classList.add("is-loading");
+}
+
+/**
+ * A spoken-variant speak button (🗣️ Long / 💬 Short), shown on every
+ * assistant row. Two behaviors depending on whether the variant has
+ * been generated yet:
+ *
+ *   - Already generated (getText() non-empty): a normal speak toggle —
+ *     press once to play, press again to stop.
+ *   - Not yet generated: the press requests generation (/voice-last),
+ *     shows a spinner, and records this variant + button in state so
+ *     the voice-reply handler auto-plays THIS variant on THIS button
+ *     when it arrives. One press, one play — no two-step.
+ *
+ * This replaces the old two-step 🎙️ button (request, then press Long).
+ */
+export function makeVoiceVariantButton(
+	variant: "long" | "short",
+	getText: () => string,
+	title: string,
+): HTMLElement {
+	const label = variant === "long" ? "🗣️ Long" : "💬 Short";
+	const btn = el("button", { class: "speak-btn voice-variant-btn", title }, label);
 	btn.addEventListener("click", () => {
+		const existing = getText().trim();
+		if (existing) {
+			// Variant already generated — play it directly.
+			void import("./voice.js").then(({ toggleSpeak }) => {
+				toggleSpeak(existing, btn);
+			});
+			return;
+		}
+		// Not generated yet — request generation and queue this variant
+		// for autoplay. Show a spinner immediately so the press has
+		// visible feedback during the (multi-second) LLM round-trip.
+		setBtnLoading(btn);
+		state.pendingVoiceVariant = variant;
+		state.pendingVoiceBtn = btn;
 		void import("./main.js").then(({ sendSlashCommand }) => {
 			sendSlashCommand("/voice-last");
-		});
-	});
-	return btn;
-}
-
-/**
- * A spoken-variant speak button (🗣️ Long / 💬 Short). Used inline on an
- * assistant message's button row when the pi-voice-reply extension has
- * produced listenable rewrites. Same toggleSpeak semantics as the normal
- * 🔊 button, just over the rewritten text.
- */
-export function makeVoiceVariantButton(label: string, text: string, title: string): HTMLElement {
-	const btn = el(
-		"button",
-		{ class: "speak-btn voice-variant-btn", title },
-		label,
-	);
-	btn.addEventListener("click", () => {
-		void import("./voice.js").then(({ toggleSpeak }) => {
-			toggleSpeak(text, btn);
 		});
 	});
 	return btn;
@@ -517,7 +513,14 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	body.append(thinkingWrap);
 	const pre = el("div", { class: "text markdown streaming" });
 	body.append(pre);
-	body.append(makeSpeakButton(() => state.lastAssistantText));
+	// Long/Short spoken-variant buttons on EVERY assistant row, including
+	// the live-streaming placeholder — the variants are generated on
+	// demand on first press (see makeVoiceVariantButton), so they can be
+	// shown unconditionally without waiting for a voice-reply to arrive.
+	// The getter resolves to the last assistant message's variant, which
+	// is what /voice-last voices anyway.
+	body.append(makeVoiceVariantButton("long", () => lastAssistantVoice("long"), "Speak the detailed spoken version"));
+	body.append(makeVoiceVariantButton("short", () => lastAssistantVoice("short"), "Speak the concise summary"));
 	body.append(makeForkButton(() => state.lastAssistantSeq ?? undefined));
 	wrap.append(body);
 	appendNode(wrap, { pin: true });
@@ -766,15 +769,6 @@ export function refreshStatus(): void {
 	vp.textContent = `voice: ${state.ttsVoice ?? "default"}`;
 	const sp = $<HTMLButtonElement>("#speed-picker");
 	sp.textContent = `speed: ${state.ttsSpeed}×`;
-	// Sync the auto-speak toggle button with state. Its label/class are
-	// hardcoded at render time ("🔇 off"), so without this a refreshed
-	// page would show "off" even when a persisted pref restored
-	// autoSpeak=true (see prefs.ts).
-	const tb = $<HTMLButtonElement>("#tts-toggle");
-	if (tb) {
-		tb.classList.toggle("active", state.autoSpeak);
-		tb.textContent = state.autoSpeak ? "🔊 on" : "🔇 off";
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -797,7 +791,6 @@ export interface ShellHandlers {
 	openVoicePicker: () => void;
 	openSpeedPicker: () => void;
 	openOverflowMenu: () => void;
-	toggleAutoSpeak: () => void;
 	handleVoiceRecord: () => Promise<void>;
 	handleFileAttach: (e: Event) => Promise<void>;
 	handlePaste: (e: ClipboardEvent) => Promise<void>;
@@ -1033,15 +1026,6 @@ export function renderShell(): void {
 			},
 			"speed: …",
 		),
-		el(
-			"button",
-			{
-				class: "picker-btn picker-hidden",
-				id: "tts-toggle",
-				title: "Auto-speak assistant messages",
-			},
-			"🔇 off",
-		),
 		// Right-side single icon-button that opens the overflow menu
 		// where every option lives. Wrench glyph signals "settings" and
 		// replaces the old sparkle "API ↗" treatment.
@@ -1262,7 +1246,6 @@ export function renderShell(): void {
 	$("#think-picker").addEventListener("click", () => shellHandlers?.openThinkPicker());
 	$("#voice-picker").addEventListener("click", () => shellHandlers?.openVoicePicker());
 	$("#speed-picker").addEventListener("click", () => shellHandlers?.openSpeedPicker());
-	$("#tts-toggle").addEventListener("click", () => shellHandlers?.toggleAutoSpeak());
 
 	// Desktop: sidebar open by default. Mobile: collapsed.
 	if (window.innerWidth <= 720) {

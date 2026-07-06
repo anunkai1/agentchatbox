@@ -61,11 +61,10 @@ import {
 	handleFileAttach,
 	handlePaste,
 	handleVoiceRecord,
-	toggleAutoSpeak,
 } from "./voice.js";
 import { createChatClient } from "./ws.js";
 import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
-import { applySessionPrefs, saveSessionPrefs } from "./prefs.js";
+import { applySessionPrefs } from "./prefs.js";
 
 // ---------------------------------------------------------------------------
 // History (↑/↓)
@@ -347,6 +346,19 @@ function reconcileSteerQueue(serverSteering: unknown[]): void {
 let lastAssistant: PersistedMessage | null = null;
 let lastAssistantDom: LiveAssistantDom | null = null;
 
+/**
+ * Remove the whole live assistant row whose handles we captured in
+ * `appendAssistantPlaceholder`. `LiveAssistantDom` deliberately exposes
+ * only the in-place-updatable nodes (text/thinking), not the container —
+ * so to discard a row we climb from `textPre` to its `.row` ancestor.
+ * Used when a streamed assistant message ends empty (spurious turn from
+ * the pi-voice-reply extension, or a model error) so the user doesn't see
+ * a frozen empty bubble with a spinner.
+ */
+function removeLiveAssistantRow(dom: LiveAssistantDom): void {
+	dom.textPre.closest(".row")?.remove();
+}
+
 function onEvent(event: Record<string, unknown>): void {
 	// The server forwards raw `pi --mode rpc` events, which is a
 	// superset of the bare `AgentEvent` union. Cast to a permissive
@@ -363,6 +375,18 @@ function onEvent(event: Record<string, unknown>): void {
 			setStreaming(false);
 			state.streamingStartedAt = null;
 			state.retry = null;
+			// Safety net: if a Long/Short button was pressed to generate a
+			// voice reply but pi finished without emitting one (error or
+			// unsupported turn), reset the pending button so its spinner
+			// doesn't spin forever. toggleSpeak clears pendingVoiceBtn when
+			// it fires, so a non-null value here means generation failed.
+			if (state.pendingVoiceBtn) {
+				const b = state.pendingVoiceBtn;
+				b.classList.remove("is-loading");
+				b.textContent = b.dataset.idleLabel ?? "🗣️ Long";
+				state.pendingVoiceVariant = null;
+				state.pendingVoiceBtn = null;
+			}
 			// No local save — the server's `pi` child auto-persists
 			// every event to its JSONL session file as it happens.
 			// A steer stranded in pi's queue when the agent went idle
@@ -410,16 +434,19 @@ function onEvent(event: Record<string, unknown>): void {
 			} else if (e.message.role === "custom") {
 				// Custom message from an extension. The pi-voice-reply
 				// extension emits customType:"voice-reply" with long/short
-				// spoken variants. Attach them to the most recent assistant
-				// message and append the Long/Short buttons to its existing
-				// button row inline (same line as 🔊/🎙️/fork), rather than
-				// rendering a separate block below it.
+				// spoken variants. The Long/Short buttons are always present
+				// on every assistant row (they generate on demand), so here
+				// we only need to: (1) store the variants on the last
+				// assistant message so the buttons' getters pick them up,
+				// and (2) auto-play the requested variant.
 				if (e.message.customType === "voice-reply") {
 					const details =
 						(e.message as { details?: { long?: string; short?: string } }).details ?? {};
 					const long = details.long ?? "";
 					const short = details.short ?? "";
-					// Update the last assistant message's state and DOM.
+					// Store the variants on the last assistant message. The
+					// already-rendered Long/Short buttons read these lazily,
+					// so subsequent presses just play (no regeneration).
 					for (let j = state.messages.length - 1; j >= 0; j--) {
 						const prev = state.messages[j];
 						if (prev.kind === "assistant") {
@@ -428,25 +455,22 @@ function onEvent(event: Record<string, unknown>): void {
 							break;
 						}
 					}
-					// Find the last rendered assistant row's body and append the
-					// variant buttons just before its fork button (if any), so
-					// they sit inline with 🔊 and 🎙️.
-					const rows = document.querySelectorAll("#messages .row-assistant .body");
-					const lastBody = rows[rows.length - 1] as HTMLElement | undefined;
-					if (lastBody) {
-						void import("./render.js").then(({ makeVoiceVariantButton }) => {
-							const forkBtn = lastBody.querySelector(".fork-btn");
-							const insertBefore = forkBtn as HTMLElement | null;
-							if (long.trim()) {
-								const b = makeVoiceVariantButton("🗣️ Long", long, "Speak the detailed spoken version");
-								if (insertBefore) lastBody.insertBefore(b, insertBefore);
-								else lastBody.append(b);
-							}
-							if (short.trim()) {
-								const b = makeVoiceVariantButton("💬 Short", short, "Speak the concise summary");
-								if (insertBefore) lastBody.insertBefore(b, insertBefore);
-								else lastBody.append(b);
-							}
+					// Auto-play. If a Long/Short button initiated this
+					// (variants weren't generated yet at press time), honor
+					// the variant they picked and drive THAT button's label
+					// (spin → ⏹) via toggleSpeak so it's stoppable. Otherwise
+					// (keyword trigger like "reply in voice") default to the
+					// long variant with no owning button. Falls back to short
+					// if long is empty.
+					const want = state.pendingVoiceVariant ?? "long";
+					const btn = state.pendingVoiceBtn;
+					state.pendingVoiceVariant = null;
+					state.pendingVoiceBtn = null;
+					const text = (want === "short" ? short : long).trim() || long.trim() || short.trim();
+					if (text) {
+						void import("./voice.js").then(({ toggleSpeak, speakText }) => {
+							if (btn) toggleSpeak(text, btn);
+							else speakText(text);
 						});
 					}
 				}
@@ -558,13 +582,13 @@ function onEvent(event: Record<string, unknown>): void {
 			) {
 				if (isEmptyError) {
 					// Replace the frozen empty row with a visible error notice.
-					lastAssistantDom.wrap.remove();
+					removeLiveAssistantRow(lastAssistantDom);
 					state.messages.pop();
 					const errMsg = { kind: "error" as const, text: "Model returned an error (possibly context too long or provider overloaded). Retrying…" };
 					state.messages.push(errMsg);
 					appendNode(renderMessageNode(errMsg));
 				} else {
-					lastAssistantDom.wrap.remove();
+					removeLiveAssistantRow(lastAssistantDom);
 					state.messages.pop();
 				}
 				lastAssistant = null;
@@ -586,26 +610,6 @@ function onEvent(event: Record<string, unknown>): void {
 				// "▸ thinking" header.
 				if (!lastAssistantDom.thinkingPre.textContent?.trim()) {
 					lastAssistantDom.thinkingWrap.remove();
-				}
-			}
-			// Auto-speak: if the toggle is on, fire TTS for the final
-			// assistant text. We only speak if there's a "lastAssistant"
-			// with non-empty text, and only on the first message_end for
-			// that turn (we use the in-place edit of the .text node as a
-			// proxy: if text is non-empty and we haven't spoken it yet,
-			// speak).
-			if (
-				m.role === "assistant" &&
-				state.autoSpeak &&
-				lastAssistant &&
-				lastAssistant.kind === "assistant"
-			) {
-				const t = lastAssistant.text;
-				if (t?.trim() && !lastAssistant.spoken) {
-					lastAssistant.spoken = true;
-					void import("./voice.js").then(({ speakText }) => {
-						void speakText(t);
-					});
 				}
 			}
 			refreshStatus();
@@ -739,7 +743,6 @@ async function boot(): Promise<void> {
 		openVoicePicker,
 		openSpeedPicker,
 		openOverflowMenu,
-		toggleAutoSpeak,
 		handleVoiceRecord,
 		handleFileAttach,
 		handlePaste,

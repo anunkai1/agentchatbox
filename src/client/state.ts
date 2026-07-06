@@ -35,7 +35,7 @@ export type PersistedMessage =
 		 * the echo/stamp lands. Absent on kinds that can't be forked
 		 * (tool/steer/error).
 		 */ seq?: number }
-	| { kind: "assistant"; text: string; thinking: string; spoken?: boolean; seq?: number;
+	| { kind: "assistant"; text: string; thinking: string; seq?: number;
 		 /**
 		 * Listenable spoken-rewrite variants produced by the
 		 * pi-voice-reply extension, attached to this assistant message
@@ -131,8 +131,6 @@ export interface AppState {
 	 * The client will be actively reconnecting when this is set.
 	 */
 	connectionStatus: "connecting" | "open" | "closed" | "stalled";
-	/** When true, every final assistant message is spoken automatically. */
-	autoSpeak: boolean;
 	/** Currently selected TTS voice id. */
 	ttsVoice: string | null;
 	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). */
@@ -141,6 +139,16 @@ export interface AppState {
 	ttsInFlight: number;
 	/** Set true while audio is playing (for the play/pause indicator). */
 	audioPlaying: boolean;
+	/**
+	 * When a 🗣️ Long / 💬 Short button is pressed BEFORE its spoken variant
+	 * has been generated, these record which variant to auto-play and the
+	 * button element that initiated it, so the voice-reply handler can
+	 * finish the press (spin → play that variant on that button) instead
+	 * of leaving the user to press again. Cleared once the voice-reply
+	 * arrives (or on agent_end if generation produced nothing).
+	 */
+	pendingVoiceVariant: "long" | "short" | null;
+	pendingVoiceBtn: HTMLElement | null;
 	/**
 	 * Capabilities reported by the server (tools, skills, packages).
 	 * Populated by boot() on startup.
@@ -228,11 +236,12 @@ export const state: AppState = {
 	pendingModelSet: null,
 	uploadedImages: new Map(),
 	connectionStatus: "connecting",
-	autoSpeak: false,
 	ttsVoice: null,
 	ttsSpeed: 1.25,
 	ttsInFlight: 0,
 	audioPlaying: false,
+	pendingVoiceVariant: null,
+	pendingVoiceBtn: null,
 	lastAssistantText: "",
 	lastAssistantSeq: null,
 	pendingSteerCount: 0,
