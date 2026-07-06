@@ -36,6 +36,13 @@ const TTS_MAX_CHARS = 3800;
 let currentSpeakSrc: unknown = null;
 
 /**
+ * The currently-active object URL feeding the <audio> element, tracked
+ * so we can revoke it safely on swap or end without racing a newer URL.
+ * null when nothing is loaded.
+ */
+let activeObjectUrl: string | null = null;
+
+/**
  * Synthesize the given text via /api/tts and play it on the shared <audio>.
  * One call at a time — starting a new one stops the current playback.
  */
@@ -52,20 +59,30 @@ export async function speakText(text: string): Promise<void> {
 	state.ttsInFlight++;
 	refreshStatus();
 	try {
-		// Stop any current playback.
-		audio.pause();
-		audio.currentTime = 0;
 		const { synthesizeSpeech } = await import("./api.js");
 		const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined);
+		// Swap the source AFTER the new blob is ready, so the previous
+		// playback isn't interrupted during the (slow) synth round-trip —
+		// pausing the element early lets Android's media session drop it
+		// and can stall playback mid-way through.
+		// Keep the previous URL alive until the new src is set, then revoke.
+		const previousUrl = activeObjectUrl;
 		const url = URL.createObjectURL(blob);
+		activeObjectUrl = url;
+		audio.pause();
+		audio.currentTime = 0;
 		audio.src = url;
 		audio.playbackRate = state.ttsSpeed;
+		if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
 		await audio.play();
 		// Revoke object URL after playback ends (or on next speak), and
 		// clear the active source so a subsequent click re-plays rather
 		// than being mistaken for a "stop the same thing" toggle.
 		audio.onended = () => {
-			URL.revokeObjectURL(url);
+			if (activeObjectUrl === url) {
+				URL.revokeObjectURL(url);
+				activeObjectUrl = null;
+			}
 			audio.onended = null;
 			setSpeakBtnLabel(currentSpeakSrc, false);
 			currentSpeakSrc = null;

@@ -533,11 +533,22 @@ function onEvent(event: Record<string, unknown>): void {
 
 		case "message_end": {
 			const m = e.message as AssistantMessage;
-			// Suppress the blank spurious assistant message that the
+		// Suppress the blank spurious assistant message that the
 			// pi-voice-reply extension's sendMessage triggers (see the
 			// extension's spurious-turn handling). The extension blanks
 			// the content; we drop the empty block so the user never
 			// sees a stray empty bubble after the voice-reply buttons.
+			//
+			// ALSO suppress empty assistant messages whose stopReason is
+			// "error" — these happen when the provider returns an error
+			// (overloaded, context too long, rate limit) and the agent
+			// loop retries. Without this, each failed attempt renders as
+			// a frozen "streaming" row with a spinner and no text, which
+			// looks like the agent is stuck. Surface a visible error
+			// instead so it's clear what happened.
+			const isEmptyError =
+				m.role === "assistant" &&
+				(m as { stopReason?: string }).stopReason === "error";
 			if (
 				m.role === "assistant" &&
 				lastAssistant &&
@@ -545,8 +556,17 @@ function onEvent(event: Record<string, unknown>): void {
 				!lastAssistant.text.trim() &&
 				lastAssistantDom
 			) {
-				lastAssistantDom.wrap.remove();
-				state.messages.pop();
+				if (isEmptyError) {
+					// Replace the frozen empty row with a visible error notice.
+					lastAssistantDom.wrap.remove();
+					state.messages.pop();
+					const errMsg = { kind: "error" as const, text: "Model returned an error (possibly context too long or provider overloaded). Retrying…" };
+					state.messages.push(errMsg);
+					appendNode(renderMessageNode(errMsg));
+				} else {
+					lastAssistantDom.wrap.remove();
+					state.messages.pop();
+				}
 				lastAssistant = null;
 				lastAssistantDom = null;
 				refreshStatus();
