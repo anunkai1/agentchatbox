@@ -142,6 +142,10 @@ export function createChatClient(): ChatClient {
 	let attempt = 0;
 	let manualClose = false;
 	let inited = false;
+	/** Set by reconnect() so the async close event from the old socket
+	 *  doesn't ALSO schedule a reconnect (which would race with the
+	 *  synchronous connect() below and leak a second WebSocket). */
+	let suppressReconnect = false;
 	let currentStatus: "connecting" | "open" | "closed" | "stalled" = "connecting";
 	/** Timestamp of the last message received from the server (any type). */
 	let lastMessageAt = Date.now();
@@ -165,6 +169,7 @@ export function createChatClient(): ChatClient {
 	function connect() {
 		manualClose = false;
 		inited = false; // need to re-send init after a reconnect
+		suppressReconnect = false; // reconnect() sets this; a brand-new socket has nothing to suppress
 		setStatus("connecting");
 		const proto = location.protocol === "https:" ? "wss:" : "ws:";
 		const url = `${proto}//${location.host}/api/chat`;
@@ -234,6 +239,13 @@ export function createChatClient(): ChatClient {
 		ws.addEventListener("close", (ev) => {
 			setStatus("closed");
 			ws = null;
+			// reconnect() closed the old socket synchronously and already
+			// opened a fresh one; its close event must NOT trigger a second
+			// reconnect. Clear the flag and stop.
+			if (suppressReconnect) {
+				suppressReconnect = false;
+				return;
+			}
 			// 4001 = "session taken over by another connection" (see
 			// session-registry.ts ejectView). This is terminal for THIS tab:
 			// the session is now owned elsewhere, and auto-reconnecting would
@@ -388,6 +400,10 @@ export function createChatClient(): ChatClient {
 			return () => forkedListeners.delete(l);
 		},
 		reconnect: () => {
+			// Suppress the old socket's async close-reconnect so we don't
+			// end up with two racing WebSockets (the one we close here and
+			// the one connect() opens next). connect() clears the flag.
+			suppressReconnect = true;
 			if (ws) ws.close();
 			attempt = 0;
 			connect();
