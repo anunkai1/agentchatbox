@@ -24,7 +24,10 @@
 
 import {
 	appendFileSync,
+	closeSync,
 	existsSync,
+	openSync,
+	readSync,
 	readdirSync,
 	readFileSync,
 	statSync,
@@ -38,10 +41,45 @@ import { readPinnedSessions } from "./session-pins.js";
 import { GLOBAL_PROJECT_ID, projectIdForCwd } from "./projects.js";
 
 /**
+ * Read just the first non-empty line of a file without loading the whole
+ * thing into memory. Used everywhere we only need the JSONL's `session`
+ * header (id / cwd lookup) — session transcripts can be hundreds of KB to
+ * megabytes, and the prior code did `readFileSync(file, 'utf8')` on every
+ * file in the dir just to peek line one. Returns `null` if the file has no
+ * non-empty line within the first `maxBytes` (8 KB is plenty for a
+ * `session` header line). On any I/O error returns `null` (callers treat a
+ * missing header as "not this session").
+ */
+function readFirstLine(path: string, maxBytes = 8192): string | null {
+	let fd: number | undefined;
+	try {
+		fd = openSync(path, "r");
+		const buf = Buffer.alloc(maxBytes);
+		const n = readSync(fd, buf, 0, maxBytes, 0);
+		const slice = buf.subarray(0, n).toString("utf8");
+		const nl = slice.indexOf("\n");
+		const line = (nl < 0 ? slice : slice.slice(0, nl)).trim();
+		return line.length > 0 ? line : null;
+	} catch {
+		return null;
+	} finally {
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				/* ignore */
+			}
+		}
+	}
+}
+
+/**
  * Default root for `pi`'s session storage. Overridable via the
  * PI_CODING_AGENT_SESSION_DIR env var (the env var `pi` itself reads).
+ * Exported so the search indexer (and other readers of pi's on-disk
+ * format) share one definition of where sessions live.
  */
-function defaultSessionsRoot(): string {
+export function defaultSessionsRoot(): string {
 	return process.env.PI_CODING_AGENT_SESSION_DIR ?? `${homedir()}/.pi/agent/sessions`;
 }
 
@@ -56,7 +94,12 @@ function defaultSessionsRoot(): string {
  * installed binary uses this form. Verified empirically on the host's
  * `~/.pi/agent/sessions/`.)
  */
-function sessionsDirFor(cwd: string, root: string = defaultSessionsRoot()): string {
+/**
+ * The per-cwd subdirectory `pi` writes sessions into. Exported so the
+ * search indexer reuses the exact same path derivation (no second copy
+ * to drift).
+ */
+export function sessionsDirFor(cwd: string, root: string = defaultSessionsRoot()): string {
 	const stripped = cwd.startsWith("/") ? cwd.slice(1) : cwd;
 	return `${root}/--${stripped.replace(/\//g, "-")}--`;
 }
@@ -192,9 +235,9 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 			messageCount,
 		});
 	}
-
-	// Newest first by createdAt.
-	out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	// NOTE: no sort here — every caller goes through finishSessions(),
+	// which sorts the merged set. Sorting inside this helper would just
+	// be thrown away by the per-cwd merge in listAllSessions / orphan scan.
 	return out;
 }
 
@@ -274,8 +317,7 @@ function listOrphanedSessions(knownCwds: string[]): SessionSummary[] {
 		// not known.
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".jsonl")) continue;
-			const raw = readFileSync(join(dir, file), "utf8");
-			const firstLine = raw.split("\n").find((l) => l.trim());
+			const firstLine = readFirstLine(join(dir, file));
 			if (!firstLine) continue;
 			try {
 				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
@@ -321,8 +363,7 @@ export function findSessionCwd(sessionId: string, knownCwds: string[]): string |
 		}
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".jsonl")) continue;
-			const raw = readFileSync(join(dir, file), "utf8");
-			const firstLine = raw.split("\n").find((l) => l.trim());
+			const firstLine = readFirstLine(join(dir, file));
 			if (!firstLine) continue;
 			try {
 				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
@@ -349,8 +390,7 @@ export function findPiSessionFile(cwd: string, sessionId: string): string | null
 	for (const name of readdirSync(dir)) {
 		if (!name.endsWith(".jsonl")) continue;
 		const file = join(dir, name);
-		const raw = readFileSync(file, "utf8");
-		const firstLine = raw.split("\n").find((l) => l.trim());
+		const firstLine = readFirstLine(file);
 		if (!firstLine) continue;
 		try {
 			const parsed = JSON.parse(firstLine) as Record<string, unknown>;
@@ -486,8 +526,9 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 	for (const name of readdirSync(dir)) {
 		if (!name.endsWith(".jsonl")) continue;
 		const file = join(dir, name);
-		const raw = readFileSync(file, "utf8");
-		const firstLine = raw.split("\n").find((l) => l.trim());
+		// Cheap header check first: avoid reading megabytes of transcript
+		// for every non-matching file in the dir.
+		const firstLine = readFirstLine(file);
 		if (!firstLine) continue;
 		let parsed: Record<string, unknown> | null = null;
 		try {
@@ -497,6 +538,8 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 		}
 		if (parsed?.type !== "session" || String(parsed.id) !== sessionId) continue;
 
+		// This is the file — now read the full transcript.
+		const raw = readFileSync(file, "utf8");
 		// Walk every line, collect `type: "message"` entries' `.message` field.
 		// pi writes SDK-shape `Message` objects here; cast through unknown
 		// since JSON.parse returns unknown and we trust the writer.
@@ -518,8 +561,9 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 	return [];
 }
 
-/** Public for tests. */
-export const _internal = { sessionsDirFor, defaultSessionsRoot };
+// (sessionsDirFor / defaultSessionsRoot are now named exports above; no
+// private _internal escape hatch is needed — nothing outside this module
+// referenced it.)
 
 function extractText(content: unknown): string {
 	if (typeof content === "string") return content;
