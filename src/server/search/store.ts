@@ -296,32 +296,72 @@ async function refreshCacheForSession(sessionId: string): Promise<void> {
 	cacheVectors = newVecs;
 }
 
-/** Brute-force cosine search over the in-memory cache, top-N by similarity. */
+/** Brute-force cosine search over the in-memory cache, top-N by similarity.
+ *
+ *  Uses a real min-heap (by dot product) of size `limit`, sifted down on
+ *  every replacement — O(n log k) instead of the prior re-sort-the-whole-
+ *  buffer-on-every-hit loop. We also defer the `SearchHit` construction
+ *  (a sessionMeta Map lookup + object alloc per element) to ONLY the
+ *  surviving top-N, so a 50k-vector scan allocates `limit` objects, not
+ *  one per candidate. Vectors are L2-normalized at embed time, so the
+ *  dot product IS the cosine similarity. */
 export function searchVectors(query: Float32Array, limit: number): SearchHit[] {
-	if (!cacheLoaded || cacheMeta.length === 0) return [];
+	if (!cacheLoaded || cacheMeta.length === 0 || limit <= 0) return [];
 	const dim = EMBEDDING_DIM;
 	const n = cacheMeta.length;
-	const heap: SearchHit[] = [];
-	let minScore = Number.NEGATIVE_INFINITY;
+	// Min-heap of {score, idx}, parallel arrays for cache-friendly sift.
+	const heapScore = new Float64Array(limit);
+	const heapIdx = new Int32Array(limit);
+	heapIdx.fill(-1);
+	let size = 0;
+
 	for (let i = 0; i < n; i++) {
-		const m = cacheMeta[i];
 		const off = i * dim;
 		let dot = 0;
 		for (let d = 0; d < dim; d++) dot += query[d] * cacheVectors[off + d];
-		if (heap.length < limit) {
-			heap.push(toHit(m, dot));
-			if (heap.length === limit) {
-				heap.sort((a, b) => a.similarity - b.similarity);
-				minScore = heap[0].similarity;
+
+		if (size < limit) {
+			// Heap not full yet — push up.
+			heapScore[size] = dot;
+			heapIdx[size] = i;
+			let c = size;
+			while (c > 0) {
+				const p = (c - 1) >> 1;
+				if (heapScore[p] <= heapScore[c]) break;
+				heapScore[c] = heapScore[p];
+				heapIdx[c] = heapIdx[p];
+				heapScore[p] = dot;
+				heapIdx[p] = i;
+				c = p;
 			}
-		} else if (dot > minScore) {
-			heap[0] = toHit(m, dot);
-			heap.sort((a, b) => a.similarity - b.similarity);
-			minScore = heap[0].similarity;
+			size++;
+		} else if (dot > heapScore[0]) {
+			// Beats the current min — replace root and sift down.
+			heapScore[0] = dot;
+			heapIdx[0] = i;
+			let p = 0;
+			const half = limit >> 1;
+			while (p < half) {
+				let best = 2 * p + 1;
+				const r = best + 1;
+				if (r < limit && heapScore[r] < heapScore[best]) best = r;
+				if (heapScore[p] <= heapScore[best]) break;
+				const s = heapScore[p];
+				const x = heapIdx[p];
+				heapScore[p] = heapScore[best];
+				heapIdx[p] = heapIdx[best];
+				heapScore[best] = s;
+				heapIdx[best] = x;
+				p = best;
+			}
 		}
 	}
-	heap.sort((a, b) => b.similarity - a.similarity);
-	return heap;
+
+	// Build the result best-first, only for survivors.
+	const out: SearchHit[] = [];
+	for (let j = 0; j < size; j++) out.push(toHit(cacheMeta[heapIdx[j]], heapScore[j]));
+	out.sort((a, b) => b.similarity - a.similarity);
+	return out;
 }
 
 function toHit(m: CacheMeta, similarity: number): SearchHit {
