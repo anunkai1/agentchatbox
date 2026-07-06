@@ -8,7 +8,7 @@ prints {"text": "...", "language": "...", "duration": ...} on stdout.
 When called with --self-test, just exits 0 if faster-whisper is importable
 and prints "ok" — used by /api/health to probe availability.
 
-Model: "small" by default. Override with WHISPER_MODEL env var.
+Model: "medium" by default. Override with WHISPER_MODEL env var.
 Device: CPU (compute_type=int8). Local-first / no paid APIs.
 """
 
@@ -35,7 +35,7 @@ def transcribe(audio_path: str) -> int:
         print(f"faster-whisper not installed: {e}", file=sys.stderr)
         return 2
 
-    model_name = os.environ.get("WHISPER_MODEL", "small")
+    model_name = os.environ.get("WHISPER_MODEL", "medium")
     # First call downloads the model; subsequent calls are fast.
     # Use int8 for CPU; float16 would need a GPU.
     t0 = time.time()
