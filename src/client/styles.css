@@ -1034,7 +1034,8 @@ body {
 	opacity: 0.85;
 }
 
-/* speak button on each assistant message */
+/* shared base class for the Long/Short voice-variant buttons on
+   each assistant message (no standalone per-message speak button). */
 .speak-btn {
 	background: transparent;
 	border: 1px solid transparent;
@@ -1054,6 +1055,27 @@ body {
 .speak-btn:hover {
 	background: var(--surface-hover);
 	color: var(--accent);
+}
+/* Spinning indicator shown on the speak / voice buttons while TTS is
+   synthesizing or while pi is generating a spoken reply. A small CSS
+   ring that spins; sized to sit inline with the emoji labels. */
+.speak-btn .speak-spinner {
+	display: inline-block;
+	width: 13px;
+	height: 13px;
+	border: 2px solid var(--border);
+	border-top-color: var(--accent);
+	border-radius: 50%;
+	animation: speak-spin 0.7s linear infinite;
+}
+@keyframes speak-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.speak-btn.is-loading {
+	pointer-events: none;
+	opacity: 0.85;
 }
 
 /* voice-reply card: the 🎙️ long/short speak buttons from the
