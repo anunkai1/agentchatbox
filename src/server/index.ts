@@ -22,7 +22,7 @@ import { getModels } from "@earendil-works/pi-ai";
 import cors from "cors";
 import express from "express";
 import { getCapabilities } from "./capabilities.js";
-import { mountChatWs } from "./chat.js";
+import { mountChatWs, shutdownChatWs } from "./chat.js";
 import { config } from "./config.js";
 import { createFilesRouter } from "./files.js";
 import { log } from "./logger.js";
@@ -396,9 +396,13 @@ mountChatWs(server);
 // fast SIGKILL would lose the last few events of an active session.
 process.on("SIGTERM", () => {
 	log.info("SIGTERM received, shutting down");
+	// SIGTERM every live `pi --mode rpc` child FIRST so each gets the
+	// full shutdown window to flush its session JSONL before we exit.
+	// (PiProcess.kill escalates to SIGKILL after 2s.) The chat WS layer
+	// owns the child lifecycle; this is the single place it's wired into
+	// the process signal — chat.ts no longer registers its own listener.
+	shutdownChatWs();
 	server.close(() => {
-		// mountChatWs owns the child lifecycle; it has its own
-		// SIGTERM listener that iterates the live set.
 		process.exit(0);
 	});
 	// Failsafe: if the server.close() callback never fires (e.g. a

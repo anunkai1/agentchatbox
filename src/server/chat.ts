@@ -33,7 +33,13 @@
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { ClientMessage, PromptImage, ProjectSummary, ServerMessage, SessionSummary } from "../shared/protocol.js";
+import type {
+	ClientMessage,
+	ProjectSummary,
+	PromptImage,
+	ServerMessage,
+	SessionSummary,
+} from "../shared/protocol.js";
 import { config } from "./config.js";
 import { log } from "./logger.js";
 import {
@@ -46,8 +52,13 @@ import {
 	reorderProjects,
 	updateProject,
 } from "./projects.js";
+import {
+	findSessionCwd,
+	forkPiSession,
+	listAllSessions,
+	setPiSessionName,
+} from "./session-list.js";
 import { setPinned } from "./session-pins.js";
-import { findSessionCwd, forkPiSession, listAllSessions, setPiSessionName } from "./session-list.js";
 import {
 	deliver,
 	deliverError,
@@ -73,11 +84,16 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 // connected client (e.g. after a pin toggle, so all devices sync).
 let chatWss: WebSocketServer | null = null;
 
-// On SIGTERM to the server process, kill every live child so they don't
-// orphan. The registry tracks them all.
-process.on("SIGTERM", () => {
+// Server shutdown is driven from the entry point (index.ts), which owns
+// the single SIGTERM listener for the process. We expose shutdownChatWs()
+// so index.ts can SIGTERM every live child there, alongside server.close().
+// Registering `process.on("SIGTERM")` here was an import-time side effect
+// that accumulated one listener per module evaluation (tripping
+// MaxListenersExceededWarning under the test suite, which re-imports this
+// module once per test file) and duplicated index.ts's handler.
+export function shutdownChatWs(): void {
 	registry.killAll();
-});
+}
 
 export function mountChatWs(server: HttpServer): void {
 	const wss = new WebSocketServer({ server, path: "/api/chat" });
@@ -240,9 +256,7 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			pi.send({
 				type: "prompt",
 				message,
-				...(msg.images && msg.images.length > 0
-					? { images: toImageContent(msg.images) }
-					: {}),
+				...(msg.images && msg.images.length > 0 ? { images: toImageContent(msg.images) } : {}),
 			});
 			break;
 		}
@@ -254,9 +268,7 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			pi.send({
 				type: "steer",
 				message,
-				...(msg.images && msg.images.length > 0
-					? { images: toImageContent(msg.images) }
-					: {}),
+				...(msg.images && msg.images.length > 0 ? { images: toImageContent(msg.images) } : {}),
 			});
 			break;
 		}
@@ -296,8 +308,16 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			// Append a session_info line to the target session's JSONL (pi's
 			// own format) so ANY session can be renamed from the sidebar,
 			// not just the one bound to this connection's live pi child.
-			// Rebroadcast so every device's sidebar updates.
-			setPiSessionName(config.piCwd, msg.sessionId, msg.name);
+			// Resolve the session's actual cwd — a session in a project
+			// folder is NOT under config.piCwd, so hardcoding the global cwd
+			// (as forkSession used to) silently failed the rename for every
+			// non-global chat. Rebroadcast so every device's sidebar updates.
+			const renameCwd = findSessionCwd(msg.sessionId, projectCwds()) ?? config.piCwd;
+			const renamed = setPiSessionName(renameCwd, msg.sessionId, msg.name);
+			if (!renamed) {
+				deliverError(ws, "could not rename session (not found on disk)");
+				break;
+			}
 			broadcastSessions();
 			break;
 		}

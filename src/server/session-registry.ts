@@ -454,11 +454,13 @@ class SessionRegistry {
 			if (session.ready || attempts >= maxAttempts) return;
 			attempts++;
 			session.pi.send({ type: "get_state" });
-			setTimeout(retry, intervalMs);
+			const t = setTimeout(retry, intervalMs);
+			if (typeof t.unref === "function") t.unref();
 		};
 		session.pi.send({ type: "get_state" });
 		attempts++;
-		setTimeout(retry, intervalMs);
+		const t = setTimeout(retry, intervalMs);
+		if (typeof t.unref === "function") t.unref();
 	}
 }
 
