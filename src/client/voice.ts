@@ -35,6 +35,24 @@ const TTS_MAX_CHARS = 29_000;
 let currentSpeakSrc: unknown = null;
 
 /**
+ * Monotonic generation token. Bumped by stopAllVoice() so any
+ * speakText() call that is still mid-synthesis (waiting on /api/tts)
+ * can detect that it has been superseded and discard its blob instead
+ * of starting playback. Without this, "stop" would race the in-flight
+ * synthesis: the blob lands a moment later and auto-plays over the
+ * silence the user just asked for.
+ */
+let speakGeneration = 0;
+
+/**
+ * AbortController for the currently in-flight /api/tts request, if any.
+ * Held at module scope so stopAllVoice() can abort the fetch early
+ * (freeing the network connection) rather than just ignoring the blob
+ * when it eventually arrives.
+ */
+let activeController: AbortController | null = null;
+
+/**
  * The currently-active object URL feeding the <audio> element, tracked
  * so we can revoke it safely on swap or end without racing a newer URL.
  * null when nothing is loaded.
@@ -62,9 +80,18 @@ export async function speakText(text: string): Promise<void> {
 	setSpeakBtnState(currentSpeakSrc, "loading");
 	state.ttsInFlight++;
 	refreshStatus();
+	// Capture this request's generation token and AbortController. If
+	// stopAllVoice() fires while we await synthesis (a slow Kokoro round
+	// trip can take a second or two), the generation check below drops
+	// the blob silently and the abort frees the connection early.
+	const gen = speakGeneration;
+	const controller = new AbortController();
+	activeController = controller;
 	try {
 		const { synthesizeSpeech } = await import("./api.js");
-		const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined);
+		const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined, controller.signal);
+		// Stop was pressed during synthesis — discard the blob, don't play.
+		if (gen !== speakGeneration) return;
 		// Swap the source AFTER the new blob is ready, so the previous
 		// playback isn't interrupted during the (slow) synth round-trip —
 		// pausing the element early lets Android's media session drop it
@@ -79,6 +106,8 @@ export async function speakText(text: string): Promise<void> {
 		audio.playbackRate = state.ttsSpeed;
 		if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
 		await audio.play();
+		// Stop was pressed during the play() await — don't flip to playing.
+		if (gen !== speakGeneration) return;
 		// Playback has started — switch the button from spinner to ⏹.
 		setSpeakBtnState(currentSpeakSrc, "playing");
 		// Revoke object URL after playback ends (or on next speak), and
@@ -94,12 +123,52 @@ export async function speakText(text: string): Promise<void> {
 			currentSpeakSrc = null;
 		};
 	} catch (err) {
+		// An AbortError means stopAllVoice() cancelled this fetch on
+		// purpose — reset the button quietly, don't surface it as an error.
+		if (err instanceof DOMException && err.name === "AbortError") {
+			setSpeakBtnState(currentSpeakSrc, "idle");
+			currentSpeakSrc = null;
+			return;
+		}
 		appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
 	} finally {
+		if (activeController === controller) activeController = null;
 		state.ttsInFlight--;
 		refreshStatus();
+	}
+}
+
+/**
+ * Stop all voice playback and cancel any in-flight TTS synthesis — the
+ * global "stop everything" the status-bar button calls. No matter which
+ * message's speak button kicked off playback, this halts it: bumps the
+ * generation token (so a blob arriving from a still-pending /api/tts
+ * request is discarded), aborts that request, pauses the shared
+ * <audio>, revokes its object URL, and resets the owning message's
+ * speak button back to idle. Safe to call when nothing is playing.
+ */
+export function stopAllVoice(): void {
+	// First, invalidate any in-flight synthesis so its late-arriving blob
+	// is dropped by the generation check in speakText(), and abort the
+	// fetch so the connection doesn't linger.
+	speakGeneration++;
+	activeController?.abort();
+	activeController = null;
+
+	const audio = $<HTMLAudioElement>("#tts-audio");
+	if (!audio.paused) {
+		audio.pause();
+		audio.currentTime = 0;
+	}
+	if (activeObjectUrl) {
+		URL.revokeObjectURL(activeObjectUrl);
+		activeObjectUrl = null;
+	}
+	if (currentSpeakSrc !== null) {
+		setSpeakBtnState(currentSpeakSrc, "idle");
+		currentSpeakSrc = null;
 	}
 }
 

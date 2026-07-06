@@ -743,8 +743,18 @@ export function refreshStatus(): void {
 		);
 	}
 	if (state.pendingSteerCount > 0) parts.push(`⟳ ${state.pendingSteerCount} queued`);
-	if (state.ttsInFlight > 0) parts.push("● tts");
-	if (state.audioPlaying) parts.push("♪ playing");
+	// Voice activity — render as a single clickable stop button (not
+	// inert text) so it's always reachable in a long session without
+	// scrolling back to the message that started playback. The click is
+	// handled by a delegated listener on #status-bar (set up once in
+	// renderShell) so it survives this innerHTML rebuild, which fires on
+	// every status tick during streaming.
+	if (state.audioPlaying || state.ttsInFlight > 0) {
+		const label = state.audioPlaying ? "♪ playing" : "● synthesizing…";
+		parts.push(
+			`<button class="status-stop-voice" data-stop-voice title="Stop all voice">⏹ ${esc(label)}</button>`,
+		);
+	}
 	if (state.connectionStatus !== "open") {
 		const tag =
 			state.connectionStatus === "stalled"
@@ -792,6 +802,8 @@ export interface ShellHandlers {
 	openSpeedPicker: () => void;
 	openOverflowMenu: () => void;
 	handleVoiceRecord: () => Promise<void>;
+	/** Stop all voice playback + cancel in-flight TTS (status-bar stop button). */
+	stopAllVoice: () => void;
 	handleFileAttach: (e: Event) => Promise<void>;
 	handlePaste: (e: ClipboardEvent) => Promise<void>;
 	handleDrop: (e: DragEvent) => Promise<void>;
@@ -1179,6 +1191,15 @@ export function renderShell(): void {
 
 	// Status bar
 	const statusBar = el("div", { class: "status-bar", id: "status-bar" }, "connecting…");
+	// Delegated click handler for the stop-voice button that refreshStatus()
+	// injects into the status bar as innerHTML. Delegation (one listener on
+	// the container, surviving innerHTML rebuilds) beats re-binding on every
+	// status tick. Matches any click bubbling from the [data-stop-voice] btn.
+	statusBar.addEventListener("click", (e) => {
+		if ((e.target as HTMLElement).closest("[data-stop-voice]")) {
+			shellHandlers?.stopAllVoice();
+		}
+	});
 	main.append(statusBar);
 
 	// Hidden audio element for TTS playback. One shared element so a new

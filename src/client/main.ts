@@ -61,6 +61,7 @@ import {
 	handleFileAttach,
 	handlePaste,
 	handleVoiceRecord,
+	stopAllVoice,
 } from "./voice.js";
 import { createChatClient } from "./ws.js";
 import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
@@ -570,6 +571,18 @@ function onEvent(event: Record<string, unknown>): void {
 			// a frozen "streaming" row with a spinner and no text, which
 			// looks like the agent is stuck. Surface a visible error
 			// instead so it's clear what happened.
+			// Authoritative final text from the message_end payload. An
+			// extension suppressing a spurious turn (pi-voice-reply) can blank
+			// the final content to "" AFTER tokens have streamed to the client,
+			// so a row may be "empty" even when lastAssistant.text (accumulated
+			// from message_update) is non-empty. Treat either as removable so
+			// no frozen bubble lingers.
+			let finalText = "";
+			if (m.role === "assistant") {
+				for (const block of m.content) {
+					if (block.type === "text") finalText += (block as TextContent).text;
+				}
+			}
 			const isEmptyError =
 				m.role === "assistant" &&
 				(m as { stopReason?: string }).stopReason === "error";
@@ -577,7 +590,7 @@ function onEvent(event: Record<string, unknown>): void {
 				m.role === "assistant" &&
 				lastAssistant &&
 				lastAssistant.kind === "assistant" &&
-				!lastAssistant.text.trim() &&
+				(!lastAssistant.text.trim() || !finalText.trim()) &&
 				lastAssistantDom
 			) {
 				if (isEmptyError) {
@@ -744,6 +757,7 @@ async function boot(): Promise<void> {
 		openSpeedPicker,
 		openOverflowMenu,
 		handleVoiceRecord,
+		stopAllVoice,
 		handleFileAttach,
 		handlePaste,
 		handleDrop,
