@@ -87,11 +87,16 @@ export async function getModels(): Promise<ModelInfo[]> {
  * for turning them into playable audio (we use a single shared <audio>
  * element in the renderer to avoid multiple voices overlapping).
  */
-export async function synthesizeSpeech(text: string, voice?: string): Promise<Blob> {
+export async function synthesizeSpeech(
+	text: string,
+	voice?: string,
+	signal?: AbortSignal,
+): Promise<Blob> {
 	const res = await fetch(`${BASE}/api/tts`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ text, voice }),
+		signal,
 	});
 	if (!res.ok) {
 		const body = await res.text();

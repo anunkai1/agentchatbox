@@ -1304,6 +1304,28 @@ body {
 	color: #f59e0b;
 	font-weight: 600;
 }
+/* Global stop-voice button injected into the status bar whenever audio is
+   playing or TTS is synthesizing. Always visible (status bar never
+   scrolls away), so you can kill voice without hunting for the
+   per-message ⏹ in a long session. Styled as a small pill that reads as
+   clickable, distinct from the inert text around it. */
+.status-bar .status-stop-voice {
+	font: inherit;
+	color: #fca5a5;
+	background: rgba(239, 68, 68, 0.12);
+	border: 1px solid rgba(239, 68, 68, 0.4);
+	border-radius: 9px;
+	padding: 1px 8px;
+	cursor: pointer;
+	vertical-align: middle;
+}
+.status-bar .status-stop-voice:hover {
+	color: #fff;
+	background: rgba(239, 68, 68, 0.28);
+}
+.status-bar .status-stop-voice:active {
+	transform: translateY(1px);
+}
 @keyframes streaming-pulse {
 	0%,
 	100% {
