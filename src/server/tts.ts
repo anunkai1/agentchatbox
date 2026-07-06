@@ -26,7 +26,14 @@ import { projectRoot } from "./paths.js";
 import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 
 const HELPER_PATH = resolve(projectRoot, "scripts/tts.py");
-const MAX_TEXT_CHARS = 4096; // hard cap — prevents runaway synthesis
+/**
+ * Hard cap on input length. Kokoro itself has no text limit — this exists
+ * only to reject absurd/misuse-sized payloads before we spend minutes of CPU
+ * synthesizing. 30k chars is ~45-60 min of audio, well past anything a real
+ * voice reply produces. The client truncates just under this (TTS_MAX_CHARS
+ * in voice.ts) so a normal long message never hits the 413.
+ */
+const MAX_TEXT_CHARS = 30_000;
 
 type Engine = "kokoro" | "piper";
 
@@ -36,7 +43,8 @@ function engine(): Engine {
 }
 
 const KOKORO_BASE =
-	process.env.KOKORO_TTS_URL || `http://${process.env.KOKORO_HOST || "127.0.0.1"}:${process.env.KOKORO_PORT || "8181"}`;
+	process.env.KOKORO_TTS_URL ||
+	`http://${process.env.KOKORO_HOST || "127.0.0.1"}:${process.env.KOKORO_PORT || "8181"}`;
 const KOKORO_DEFAULT_VOICE = process.env.KOKORO_VOICE || "af_heart";
 
 export function createTtsRouter(): Router {
@@ -58,8 +66,7 @@ export function createTtsRouter(): Router {
 			res.status(413).json({ error: `text too long (max ${MAX_TEXT_CHARS} chars)` });
 			return;
 		}
-		const voice =
-			typeof body?.voice === "string" && body.voice.length > 0 ? body.voice : undefined;
+		const voice = typeof body?.voice === "string" && body.voice.length > 0 ? body.voice : undefined;
 
 		if (engine() === "kokoro") {
 			await synthKokoro(text, voice, res);
@@ -95,11 +102,7 @@ export function createTtsRouter(): Router {
 
 // ── Kokoro: HTTP proxy to pi-voice-server ──────────────────────────
 
-async function synthKokoro(
-	text: string,
-	voice: string | undefined,
-	res: Response,
-): Promise<void> {
+async function synthKokoro(text: string, voice: string | undefined, res: Response): Promise<void> {
 	try {
 		const upstream = await fetch(`${KOKORO_BASE}/tts`, {
 			method: "POST",
@@ -135,11 +138,7 @@ async function kokoroVoices(): Promise<string[]> {
 
 // ── Piper: shell out to scripts/tts.py (legacy) ────────────────────
 
-async function synthPiper(
-	text: string,
-	voice: string | undefined,
-	res: Response,
-): Promise<void> {
+async function synthPiper(text: string, voice: string | undefined, res: Response): Promise<void> {
 	let dir: string | undefined;
 	try {
 		dir = await mkdtemp(join(tmpdir(), "agentchatbox-tts-"));
@@ -209,6 +208,13 @@ interface HealthCache {
 	result: { available: boolean; reason?: string; voice?: string; engine: Engine };
 }
 let healthCache: HealthCache | null = null;
+/** In-flight probe — concurrent callers share one Kokoro/Piper probe. */
+let healthProbeInFlight: Promise<{
+	available: boolean;
+	reason?: string;
+	voice?: string;
+	engine: Engine;
+}> | null = null;
 
 export async function checkTtsAvailable(): Promise<{
 	available: boolean;
@@ -220,14 +226,26 @@ export async function checkTtsAvailable(): Promise<{
 	if (healthCache && now - healthCache.at < HEALTH_CACHE_MS) {
 		return healthCache.result;
 	}
+	if (healthProbeInFlight) return healthProbeInFlight;
+	healthProbeInFlight = computeTtsAvailable().finally(() => {
+		healthProbeInFlight = null;
+	});
+	return healthProbeInFlight;
+}
 
+async function computeTtsAvailable(): Promise<{
+	available: boolean;
+	reason?: string;
+	voice?: string;
+	engine: Engine;
+}> {
 	let result: { available: boolean; reason?: string; voice?: string; engine: Engine };
 	if (engine() === "kokoro") {
 		result = await checkKokoroHealth();
 	} else {
 		result = { engine: "piper", ...(await checkPiperHealth()) };
 	}
-	healthCache = { at: now, result };
+	healthCache = { at: Date.now(), result };
 	return result;
 }
 
