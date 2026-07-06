@@ -8,12 +8,13 @@
  * Why local: the user does not want to use the OpenAI API (no key, local-first
  * stance, CPU-only box). faster-whisper runs in Python; we shell out to a
  * small Python helper script that reads the audio from a temp file and prints
- * the transcript on stdout. Model auto-downloads on first call (the `small`
- * model is ~460MB and runs at real-time on a modern CPU).
+ * the transcript on stdout. Model auto-downloads on first call (the `medium`
+ * model is ~1.5GB; runs slower than real-time on CPU but with much better
+ * accuracy than `small`). Override via the `WHISPER_MODEL` env var.
  *
  * The Python helper is at `scripts/transcribe.py` and is invoked via
  * `python3 scripts/transcribe.py <path>`. We capture stdout and JSON-parse
- * { text, language, duration }.
+ * { text, language, duration, modelLoadMs }.
  */
 
 import { existsSync } from "node:fs";
@@ -121,6 +122,9 @@ interface HealthCache {
 	result: { available: boolean; reason?: string };
 }
 let whisperHealthCache: HealthCache | null = null;
+/** In-flight probe. Concurrent callers share the same spawn so the
+ *  first /api/health poll doesn't N-launches faster-whisper model loads. */
+let whisperProbeInFlight: Promise<{ available: boolean; reason?: string }> | null = null;
 
 export async function checkWhisperAvailable(): Promise<{
 	available: boolean;
@@ -130,7 +134,15 @@ export async function checkWhisperAvailable(): Promise<{
 	if (whisperHealthCache && now - whisperHealthCache.at < HEALTH_CACHE_MS) {
 		return whisperHealthCache.result;
 	}
+	if (whisperProbeInFlight) return whisperProbeInFlight;
+	whisperProbeInFlight = computeWhisperAvailable().finally(() => {
+		whisperProbeInFlight = null;
+	});
+	return whisperProbeInFlight;
+}
 
+async function computeWhisperAvailable(): Promise<{ available: boolean; reason?: string }> {
+	const now = Date.now();
 	let result: { available: boolean; reason?: string };
 	try {
 		// Fast path: if the helper script isn't even on disk, fail
