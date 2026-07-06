@@ -189,13 +189,16 @@ export class PiProcess extends EventEmitter {
 		} catch {
 			/* ignore — already dead */
 		}
-		setTimeout(() => {
+		const escalate = setTimeout(() => {
 			try {
 				this.child.kill("SIGKILL");
 			} catch {
 				/* ignore */
 			}
 		}, 2000);
+		// Don't keep the event loop alive just for the escalation — if the
+		// process is exiting, the SIGTERM (and the exit handler) suffice.
+		if (typeof escalate.unref === "function") escalate.unref();
 	}
 
 	/**
