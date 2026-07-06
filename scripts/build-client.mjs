@@ -57,6 +57,29 @@ async function copyStatic() {
 	console.log(`client: copied app.css (${(cssStat.size / 1024).toFixed(1)} KB) + styles.css + index.html`);
 }
 
+/**
+ * Stamp the bundled app.js with a content-hash query string in
+ * public/index.html so browsers fetch a fresh copy on every deploy
+ * instead of serving a stale cached bundle. Without this, <script
+ * src="/app.js"> gets cached indefinitely and a normal reload after a
+ * deploy keeps running the old code (the "why don't my changes show
+ * up" bug). The hash changes whenever app.js's bytes change, so any
+ * real code change forces a re-fetch; no-op rebuilds reuse the same
+ * hash and stay cached, which is correct.
+ */
+async function stampCacheBust() {
+	const { createHash } = await import("node:crypto");
+	const { readFile, writeFile } = await import("node:fs/promises");
+	const appJsPath = resolve(root, "public/app.js");
+	const htmlPath = resolve(root, "public/index.html");
+	const buf = await readFile(appJsPath);
+	const hash = createHash("sha256").update(buf).digest("hex").slice(0, 12);
+	let html = await readFile(htmlPath, "utf8");
+	html = html.replace(/src="\/app\.js(\?v=[a-f0-9]+)?"/, `src="/app.js?v=${hash}"`);
+	await writeFile(htmlPath, html);
+	console.log(`client: stamped index.html with app.js?v=${hash}`);
+}
+
 const options = {
 	entryPoints: [resolve(root, "src/client/main.ts")],
 	bundle: true,
@@ -95,10 +118,12 @@ const options = {
 
 if (watch) {
 	await copyStatic();
+	await stampCacheBust();
 	const ctx = await context(options);
 	await ctx.watch();
 	console.log("client: watching for changes…");
 } else {
 	await build(options);
 	await copyStatic();
+	await stampCacheBust();
 }
