@@ -14,22 +14,15 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import { listPiSessions, type SessionSummary } from "../session-list.js";
+import {
+	listPiSessions,
+	sessionsDirFor,
+	type SessionSummary,
+} from "../session-list.js";
 import { embed } from "./embeddings.js";
 import { indexSession, isIndexed } from "./store.js";
-
-/** Default root for `pi`'s session storage, mirroring session-list.ts. */
-function sessionsRoot(): string {
-	return process.env.PI_CODING_AGENT_SESSION_DIR ?? `${homedir()}/.pi/agent/sessions`;
-}
-
-function sessionsDirFor(cwd: string): string {
-	const stripped = cwd.startsWith("/") ? cwd.slice(1) : cwd;
-	return `${sessionsRoot()}/--${stripped.replace(/\//g, "-")}--`;
-}
 
 /** Pull the plain text out of a SDK `Message` content (string or block array). */
 function extractText(content: unknown): string {

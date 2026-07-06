@@ -250,6 +250,33 @@ describe("readPiSessionMessages", () => {
 		expect((msgs[0] as { content: Array<{ text: string }> }).content[0].text).toBe("hi");
 		expect((msgs[2] as { content: Array<{ text: string }> }).content[0].text).toBe("follow up");
 	});
+
+	it("finds the matching session among several files in the dir (cheap header check)", async () => {
+		// Guards the readFirstLine optimization: the lookup must still find
+		// the right file when sibling JSONLs are present, and must not be
+		// fooled by a large body after a small header (the 8 KB first-line
+		// cap can't truncate the `session` header line).
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["hi"],
+		);
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T11-00-00_bbb.jsonl",
+			"bbb",
+			"2026-06-15T11:00:00.000Z",
+			["bye"],
+		);
+		const { readPiSessionMessages } = await import("../src/server/session-list.js");
+		const bbb = readPiSessionMessages(cwd, "bbb");
+		expect(bbb).toHaveLength(2);
+		expect((bbb[0] as { content: Array<{ text: string }> }).content[0].text).toBe("bye");
+		// aaa is still readable too.
+		expect(readPiSessionMessages(cwd, "aaa")).toHaveLength(2);
+	});
 });
 
 describe("setPiSessionName", () => {
@@ -261,9 +288,7 @@ describe("setPiSessionName", () => {
 			"2026-06-15T10:00:00.000Z",
 			["first prompt"],
 		);
-		const { listPiSessions, setPiSessionName } = await import(
-			"../src/server/session-list.js"
-		);
+		const { listPiSessions, setPiSessionName } = await import("../src/server/session-list.js");
 		// Before: title is the first user message.
 		expect(listPiSessions(cwd)[0].title).toBe("first prompt");
 
@@ -276,5 +301,50 @@ describe("setPiSessionName", () => {
 	it("returns false for an unknown session id (no file to append to)", async () => {
 		const { setPiSessionName } = await import("../src/server/session-list.js");
 		expect(setPiSessionName(cwd, "does-not-exist", "x")).toBe(false);
+	});
+});
+
+describe("findSessionCwd", () => {
+	it("resolves a session's cwd from the known-cwd fast path", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["first prompt"],
+		);
+		const { findSessionCwd } = await import("../src/server/session-list.js");
+		// Renaming/resuming a non-global session must resolve its real cwd —
+		// hardcoding config.piCwd (the old renameSessionById bug) silently
+		// failed for every session in a project folder.
+		expect(findSessionCwd("aaa", [cwd])).toBe(cwd);
+		expect(findSessionCwd("missing", [cwd])).toBeNull();
+	});
+
+	it("falls back to a full-root scan for an orphaned (unknown) cwd", async () => {
+		// A session living under a cwd NOT in knownCwds (a deleted project's
+		// leftover) must still be findable so it can be resumed/renamed.
+		// Written manually (not via writeSession) so its header records its
+		// OWN cwd, distinct from the test's global cwd.
+		const orphanCwd = "/home/other/project";
+		const lines = [
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: "orphan1",
+				timestamp: "2026-06-15T10:00:00.000Z",
+				cwd: orphanCwd,
+			}),
+			JSON.stringify({
+				type: "message",
+				message: { role: "user", content: [{ type: "text", text: "orphan prompt" }], timestamp: 1 },
+			}),
+		];
+		writeFileSync(
+			join(root!, "--home-other-project--", "2026-06-15T10-00-00_orphan.jsonl"),
+			`${lines.join("\n")}\n`,
+		);
+		const { findSessionCwd } = await import("../src/server/session-list.js");
+		expect(findSessionCwd("orphan1", [cwd])).toBe(orphanCwd);
 	});
 });
