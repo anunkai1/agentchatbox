@@ -273,10 +273,19 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 		}
 		case "setModel": {
 			pi.send({ type: "set_model", provider: msg.provider, modelId: msg.modelId });
+			// Record the change on the session so a later reattach (page
+			// refresh, reconnect) reports the CURRENT model in `ready`, not
+			// the one the session was spawned with. Without this, refreshing
+			// after switching models reverts the displayed model to the
+			// original spawn default, even though pi itself kept the new one.
+			session.init = { ...session.init, provider: msg.provider, modelId: msg.modelId };
 			break;
 		}
 		case "setThinking": {
 			pi.send({ type: "set_thinking_level", level: msg.level });
+			// Same rationale as setModel: keep init in sync so reattach
+			// reports the current thinking level, not the spawn default.
+			session.init = { ...session.init, thinkingLevel: msg.level };
 			break;
 		}
 		case "renameSession": {
