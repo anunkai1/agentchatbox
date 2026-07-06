@@ -778,17 +778,18 @@ async function boot(): Promise<void> {
 			// — every `ready` reflects the currently bound session.
 			writeSessionIdToUrl(info.sessionId);
 		}
-		// Don't blindly overwrite the displayed model with the server's
-		// default on every fresh connection — the server sends `ready`
-		// with the *initial* model (MiniMax-M3) on each new connection,
-		// which would clobber the user's pick on every reconnect.
-		//
-		// Instead: only adopt the server-reported model if
-		//   1. we don't currently have one displayed, OR
+		// Adopt the server-reported model. The server reports the
+		// session's CURRENT model (chat.ts setModel/setThinking handlers
+		// update session.init on every change, so a reattach reports the
+		// truth, not the spawn-time default). We adopt it when:
+		//   1. we don't currently have one displayed (hard refresh —
+		//      state.currentModelId is null after a fresh page load), OR
 		//   2. the server is confirming the model the user just picked
 		//      (i.e. a setModel round-trip — server rebuilt the agent
 		//      and is reporting back the model we asked for).
-		//
+		// On a soft WS reconnect (no page reload) currentModelId is already
+		// set, so neither condition fires and we keep what's displayed —
+		// which matches the server anyway, so no fight.
 		// We detect (2) by tracking `pendingModelSet` — set when the user
 		// clicks a model in the picker, cleared on the matching `ready`.
 		const isConfirmingPending = state.pendingModelSet === info.modelId;
