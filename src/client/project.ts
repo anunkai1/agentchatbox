@@ -85,10 +85,13 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 				}
 			}
 		}
-		// toolResult messages are consumed by the toolCall correlation
-		// above; don't emit separate rows (avoids the old "(replayed)"
-		// args duplication and keeps each tool to a single row).
-		if (m.role === "custom" && (m as { customType?: string }).customType === "voice-reply") {
+		// Custom messages (e.g. the pi-voice-reply extension's
+		// customType:"voice-reply") carry role "custom", but the SDK's
+		// `Message.role` union doesn't list it, so narrow via a cast rather
+		// than comparing `m.role === "custom"` (which TS correctly flags as
+		// unreachable and would silently drop voice replies on resume).
+		const cm = m as { customType?: string };
+		if (cm.customType === "voice-reply") {
 			// Attach the spoken variants to the most recent assistant
 			// entry so they render as inline Long/Short buttons on that
 			// message's button row — not as a separate block.
