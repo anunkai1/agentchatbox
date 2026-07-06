@@ -2,8 +2,8 @@
  * Voice (TTS) and file/voice recording. The browser still owns these:
  *
  *   - speakText(): POST to /api/tts, play the WAV in the shared <audio>
- *   - toggleAutoSpeak(): header toggle that asks the live event
- *     dispatcher to fire speakText() for every final assistant message
+ *   - toggleSpeak(): per-message Long/Short button: play/stop the chosen
+ *     message's audio
  *   - handleFileAttach(): POST to /api/upload, remember base64 bytes for
  *     multimodal models, insert a markdown link into the input
  *   - handleVoiceRecord(): MediaRecorder → POST to /api/transcribe →
@@ -15,23 +15,22 @@ import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
 import { appendError, refreshStatus } from "./render.js";
 import { state } from "./state.js";
-import { saveSessionPrefs } from "./prefs.js";
 
 /**
- * Soft cap on what we send to TTS. The server hard-rejects anything over
- * 4096 chars (MAX_TEXT_CHARS in tts.ts) with a 413, which surfaces to the
- * user as an error. To avoid that we cap client-side, leaving room for the
- * markdown→speech transform to expand things slightly and for a small
- * trailing cue when we truncate.
+ * Soft cap on what we send to TTS. Kept just under the server's hard cap
+ * (MAX_TEXT_CHARS in tts.ts, 30 000) so a normal long message never trips
+ * the 413 — instead we truncate with a spoken "…message truncated" cue.
+ * Kokoro itself has no text limit; this exists only to avoid synthesizing
+ * absurd lengths and to keep the spoken cue inside the server's cap.
  */
-const TTS_MAX_CHARS = 3800;
+const TTS_MAX_CHARS = 29_000;
 
 /**
  * Identity (opaque token) of whatever source is currently driving
  * playback, so the speak buttons can implement play/stop toggle
  * semantics. Set by toggleSpeak() and cleared when playback stops.
- * Direct speakText() calls (e.g. from auto-speak) leave this null,
- * which is correct: nothing for a button to "stop" in that case.
+ * Direct speakText() calls leave this null, which is correct: nothing
+ * for a button to "stop" in that case.
  */
 let currentSpeakSrc: unknown = null;
 
@@ -56,6 +55,11 @@ export async function speakText(text: string): Promise<void> {
 		spoken = `${spoken.slice(0, TTS_MAX_CHARS)} … message truncated.`;
 	}
 	const audio = $<HTMLAudioElement>("#tts-audio");
+	// Mark the initiating button as "synthesizing…" so the user sees a
+	// spinner during the (potentially long) TTS round-trip, then flip to
+	// the playing (⏹) state once audio actually starts. Auto-speak calls
+	// leave currentSpeakSrc null, so this is a no-op there.
+	setSpeakBtnState(currentSpeakSrc, "loading");
 	state.ttsInFlight++;
 	refreshStatus();
 	try {
@@ -75,6 +79,8 @@ export async function speakText(text: string): Promise<void> {
 		audio.playbackRate = state.ttsSpeed;
 		if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
 		await audio.play();
+		// Playback has started — switch the button from spinner to ⏹.
+		setSpeakBtnState(currentSpeakSrc, "playing");
 		// Revoke object URL after playback ends (or on next speak), and
 		// clear the active source so a subsequent click re-plays rather
 		// than being mistaken for a "stop the same thing" toggle.
@@ -84,12 +90,12 @@ export async function speakText(text: string): Promise<void> {
 				activeObjectUrl = null;
 			}
 			audio.onended = null;
-			setSpeakBtnLabel(currentSpeakSrc, false);
+			setSpeakBtnState(currentSpeakSrc, "idle");
 			currentSpeakSrc = null;
 		};
 	} catch (err) {
 		appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
-		setSpeakBtnLabel(currentSpeakSrc, false);
+		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
 	} finally {
 		state.ttsInFlight--;
@@ -102,8 +108,8 @@ export async function speakText(text: string): Promise<void> {
  * opaque identity token (typically the calling button element) so we
  * can tell "I'm the one currently playing — second press stops me"
  * from "a different message is playing — switch to this one".
- * Direct auto-speak doesn't go through here, so it never registers a
- * src and a button press always starts fresh.
+ * Direct speakText() callers pass null for `src` so a later button
+ * press always starts fresh.
  */
 export function toggleSpeak(text: string, src: unknown): void {
 	const audio = $<HTMLAudioElement>("#tts-audio");
@@ -114,41 +120,46 @@ export function toggleSpeak(text: string, src: unknown): void {
 		audio.pause();
 		audio.currentTime = 0;
 		currentSpeakSrc = null;
-		setSpeakBtnLabel(src, false);
+		setSpeakBtnState(src, "idle");
 		return;
 	}
 	// Switching source: clear the previous button's stop indicator.
-	if (currentSpeakSrc !== null) setSpeakBtnLabel(currentSpeakSrc, false);
+	if (currentSpeakSrc !== null) setSpeakBtnState(currentSpeakSrc, "idle");
 	currentSpeakSrc = src;
-	setSpeakBtnLabel(src, true);
+	// Don't flip to playing yet — speakText() will show a spinner while
+	// synthesizing, then flip to ⏹ once playback actually starts.
 	void speakText(text);
 }
 
 /**
- * Toggle a source button's label between 🔊 (idle) and ⏹ (playing /
- * stoppable), if the source is a DOM element exposing `.textContent`.
- * Silent no-op for non-element sources so toggleSpeak stays generic.
+ * Three-state label for a speak button: idle (restore its original
+ * emoji/label), loading (spinning indicator while TTS synthesizes or
+ * pi generates a spoken reply), or playing (⏹ stop). The original
+ * label is captured from the button's initial textContent on first
+ * use via a data attribute, so we can always restore it. Silent no-op
+ * for non-element sources so toggleSpeak stays generic.
  */
-function setSpeakBtnLabel(src: unknown, playing: boolean): void {
+type SpeakBtnState = "idle" | "loading" | "playing";
+function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 	if (!(src instanceof HTMLElement)) return;
-	src.textContent = playing ? "⏹" : "🔊";
-	src.title = playing ? "Stop playback" : "Speak this message (local TTS)";
-}
-
-export function toggleAutoSpeak(): void {
-	state.autoSpeak = !state.autoSpeak;
-	saveSessionPrefs();
-	const btn = $<HTMLButtonElement>("#tts-toggle");
-	btn.classList.toggle("active", state.autoSpeak);
-	btn.textContent = state.autoSpeak ? "🔊 on" : "🔇 off";
-	// Turning it off should also stop any speech that's playing,
-	// so a 2nd press actually silences the audio.
-	if (!state.autoSpeak) {
-		const audio = $<HTMLAudioElement>("#tts-audio");
-		audio.pause();
-		audio.currentTime = 0;
+	if (state === "loading") {
+		// Remember the idle label the first time we swap away from it,
+		// so a later "idle" restores the original emoji/text.
+		if (!src.dataset.idleLabel) src.dataset.idleLabel = src.textContent ?? "";
+		src.textContent = "";
+		src.append(Object.assign(document.createElement("span"), { className: "speak-spinner" }));
+		src.classList.add("is-loading");
+		src.title = "Processing…";
+		return;
 	}
-	refreshStatus();
+	src.classList.remove("is-loading");
+	if (state === "playing") {
+		src.textContent = "⏹";
+		src.title = "Stop playback";
+	} else {
+		src.textContent = src.dataset.idleLabel ?? "🔊";
+		src.title = "Speak this message (local TTS)";
+	}
 }
 
 // ---------------------------------------------------------------------------

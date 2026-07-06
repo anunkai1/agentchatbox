@@ -1,7 +1,6 @@
 // Headless browser smoke test for the agentchatbox UI — TTS edition.
-// Verifies auto-speak triggers on assistant message_end and that the
-// shared <audio> element receives a playable source.
-import { chromium } from "/home/hermes/.npm/_npx/e41f203b7505f1fb/node_modules/playwright/index.mjs";
+// Verifies a manual press of the Long voice-variant button triggers
+// TTS and the shared <audio> element receives a playable source.
 
 const browser = await chromium.launch({
 	headless: true,
@@ -24,11 +23,7 @@ await page.waitForFunction(
 	{ timeout: 10000 },
 );
 
-// Toggle auto-speak on.
-await page.click("#tts-toggle");
-console.log("auto-speak on. button text:", await page.locator("#tts-toggle").textContent());
-
-// Send a short prompt and wait for assistant response + TTS fetch.
+// Send a short prompt and wait for the assistant response to settle.
 await page.locator("#input").fill("Reply with exactly: SHOUT IT BACK");
 await page.keyboard.press("Enter");
 
@@ -39,23 +34,24 @@ await page.waitForFunction(
 );
 console.log("assistant message done");
 
+// Click the Long variant button on the assistant message to trigger
+// /voice-last generation, then TTS. Variants are generated on demand;
+// the button shows the spinning state until the LLM round-trip completes.
+await page.locator(".voice-variant-btn").first().click();
+console.log("clicked Long. status-bar:", await page.locator("#status-bar").textContent());
+
 // Wait for the TTS fetch (look for the ● tts or ♪ playing indicator, or
 // the <audio> src changing).
-const ttsHappened = await page.waitForFunction(
+await page.waitForFunction(
 	() => {
 		const sb = document.querySelector("#status-bar")?.textContent || "";
 		const audio = document.querySelector("#tts-audio");
 		return /tts|playing/.test(sb) || (audio && audio.src && audio.src.startsWith("blob:"));
 	},
-	{ timeout: 20000 },
+	{ timeout: 30000 },
 );
 console.log("TTS triggered. status-bar:", await page.locator("#status-bar").textContent());
 console.log("audio src starts with blob:", (await page.locator("#tts-audio").getAttribute("src") || "").startsWith("blob:"));
-
-// Click the per-message speak button on the same assistant message to verify
-// manual replay also works.
-await page.locator(".speak-btn").first().click();
-console.log("clicked per-message speak. status-bar:", await page.locator("#status-bar").textContent());
 
 // Final state.
 console.log("\n--- final DOM ---");
