@@ -26,19 +26,20 @@ export interface PythonResult {
 	spawnError: boolean;
 }
 
-function push(chunks: Buffer[], chunk: Buffer): void {
+function push(chunks: Buffer[], chunk: Buffer, meta: { total: number }): void {
 	chunks.push(chunk);
-	let total = 0;
-	for (const c of chunks) total += c.length;
-	if (total > MAX_PYTHON_OUTPUT) {
-		let excess = total - MAX_PYTHON_OUTPUT;
+	meta.total += chunk.length;
+	if (meta.total > MAX_PYTHON_OUTPUT) {
+		let excess = meta.total - MAX_PYTHON_OUTPUT;
 		while (excess > 0 && chunks.length > 0) {
 			const head = chunks[0];
 			if (head.length <= excess) {
 				excess -= head.length;
+				meta.total -= head.length;
 				chunks.shift();
 			} else {
 				chunks[0] = head.subarray(excess);
+				meta.total -= excess;
 				excess = 0;
 			}
 		}
@@ -70,8 +71,10 @@ export function runPython(args: {
 
 		const outChunks: Buffer[] = [];
 		const errChunks: Buffer[] = [];
-		child.stdout.on("data", (chunk: Buffer) => push(outChunks, chunk));
-		child.stderr.on("data", (chunk: Buffer) => push(errChunks, chunk));
+		const outMeta = { total: 0 };
+		const errMeta = { total: 0 };
+		child.stdout.on("data", (chunk: Buffer) => push(outChunks, chunk, outMeta));
+		child.stderr.on("data", (chunk: Buffer) => push(errChunks, chunk, errMeta));
 
 		let timedOut = false;
 		const timer = setTimeout(() => {
@@ -94,8 +97,8 @@ export function runPython(args: {
 			clearTimeout(timer);
 			const outRaw = Buffer.concat(outChunks).toString("utf8");
 			const errRaw = Buffer.concat(errChunks).toString("utf8");
-			const outTruncated = outChunks.reduce((n, c) => n + c.length, 0) >= MAX_PYTHON_OUTPUT;
-			const errTruncated = errChunks.reduce((n, c) => n + c.length, 0) >= MAX_PYTHON_OUTPUT;
+			const outTruncated = outMeta.total >= MAX_PYTHON_OUTPUT;
+			const errTruncated = errMeta.total >= MAX_PYTHON_OUTPUT;
 			resolveP({
 				stdout: outTruncated ? outRaw + TRUNCATION_MARKER : outRaw,
 				stderr: errTruncated ? errRaw + TRUNCATION_MARKER : errRaw,
