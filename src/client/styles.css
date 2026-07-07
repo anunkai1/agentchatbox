@@ -1326,6 +1326,26 @@ body {
 .status-bar .status-stop-voice:active {
 	transform: translateY(1px);
 }
+/* Pause / resume toggle for TTS playback (sits next to the red stop pill).
+   Neutral blue so it reads as a transport control, distinct from the
+   destructive red stop. Same pill geometry as .status-stop-voice. */
+.status-bar .status-voice-ctrl {
+	font: inherit;
+	color: #93c5fd;
+	background: rgba(59, 130, 246, 0.12);
+	border: 1px solid rgba(59, 130, 246, 0.4);
+	border-radius: 9px;
+	padding: 1px 8px;
+	cursor: pointer;
+	vertical-align: middle;
+}
+.status-bar .status-voice-ctrl:hover {
+	color: #fff;
+	background: rgba(59, 130, 246, 0.28);
+}
+.status-bar .status-voice-ctrl:active {
+	transform: translateY(1px);
+}
 @keyframes streaming-pulse {
 	0%,
 	100% {

@@ -749,11 +749,25 @@ export function refreshStatus(): void {
 	// handled by a delegated listener on #status-bar (set up once in
 	// renderShell) so it survives this innerHTML rebuild, which fires on
 	// every status tick during streaming.
-	if (state.audioPlaying || state.ttsInFlight > 0) {
-		const label = state.audioPlaying ? "♪ playing" : "● synthesizing…";
-		parts.push(
-			`<button class="status-stop-voice" data-stop-voice title="Stop all voice">⏹ ${esc(label)}</button>`,
-		);
+	if (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0) {
+		if (state.audioPlaying || state.audioPaused) {
+			// Playback active or paused — show pause/resume + stop controls.
+			// The toggle button swaps between ⏸ (playing) and ▶ (paused); the
+			// stop button (red ⏹) is always present to fully halt + clear.
+			const toggle = state.audioPaused
+				? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback">▶</button>`
+				: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback">⏸</button>`;
+			const label = state.audioPaused ? "‖ paused" : "♪ playing";
+			parts.push(
+				`${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice">⏹</button> ${esc(label)}`,
+			);
+		} else {
+			// Synthesizing — nothing to pause yet (no audio loaded). Keep the
+			// single stop button with a spinner so the user can cancel.
+			parts.push(
+				`<button class="status-stop-voice" data-stop-voice title="Stop all voice"><span class="speak-spinner"></span> synthesizing…</button>`,
+			);
+		}
 	}
 	if (state.connectionStatus !== "open") {
 		const tag =
@@ -804,6 +818,10 @@ export interface ShellHandlers {
 	handleVoiceRecord: () => Promise<void>;
 	/** Stop all voice playback + cancel in-flight TTS (status-bar stop button). */
 	stopAllVoice: () => void;
+	/** Pause TTS playback, holding position (status-bar pause button). */
+	pauseVoice: () => void;
+	/** Resume paused TTS playback (status-bar resume button). */
+	resumeVoice: () => void;
 	handleFileAttach: (e: Event) => Promise<void>;
 	handlePaste: (e: ClipboardEvent) => Promise<void>;
 	handleDrop: (e: DragEvent) => Promise<void>;
@@ -854,6 +872,7 @@ export function renderShell(): void {
 	// status bar keeps showing "♪ playing" after the audio element is
 	// gone (until the next renderShell or page load).
 	state.audioPlaying = false;
+	state.audioPaused = false;
 	state.ttsInFlight = 0;
 	document.body.innerHTML = "";
 	const root = el("div", { id: "app" });
@@ -1196,8 +1215,13 @@ export function renderShell(): void {
 	// the container, surviving innerHTML rebuilds) beats re-binding on every
 	// status tick. Matches any click bubbling from the [data-stop-voice] btn.
 	statusBar.addEventListener("click", (e) => {
-		if ((e.target as HTMLElement).closest("[data-stop-voice]")) {
+		const target = e.target as HTMLElement;
+		if (target.closest("[data-stop-voice]")) {
 			shellHandlers?.stopAllVoice();
+		} else if (target.closest("[data-voice-pause]")) {
+			shellHandlers?.pauseVoice();
+		} else if (target.closest("[data-voice-resume]")) {
+			shellHandlers?.resumeVoice();
 		}
 	});
 	main.append(statusBar);
@@ -1207,6 +1231,7 @@ export function renderShell(): void {
 	const audio = el("audio", { id: "tts-audio", hidden: true, preload: "auto" });
 	audio.addEventListener("play", () => {
 		state.audioPlaying = true;
+		state.audioPaused = false; // playing ⇒ not paused
 		refreshStatus();
 	});
 	audio.addEventListener("ended", () => {

@@ -139,6 +139,10 @@ export interface AppState {
 	ttsInFlight: number;
 	/** Set true while audio is playing (for the play/pause indicator). */
 	audioPlaying: boolean;
+	/** True while playback is paused mid-chunk (audio loaded, position held).
+	 * Set only by the explicit pause button — NOT by the <audio> 'pause'
+	 * event, which also fires between chunks and on stop. */
+	audioPaused: boolean;
 	/**
 	 * When a 🗣️ Long / 💬 Short button is pressed BEFORE its spoken variant
 	 * has been generated, these record which variant to auto-play and the
@@ -240,6 +244,7 @@ export const state: AppState = {
 	ttsSpeed: 1.25,
 	ttsInFlight: 0,
 	audioPlaying: false,
+	audioPaused: false,
 	pendingVoiceVariant: null,
 	pendingVoiceBtn: null,
 	lastAssistantText: "",

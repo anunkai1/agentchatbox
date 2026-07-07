@@ -60,6 +60,16 @@ let activeController: AbortController | null = null;
 let activeObjectUrl: string | null = null;
 
 /**
+ * True when the USER has paused playback via the status-bar pause button
+ * — an explicit intent flag, distinct from the <audio> element's `paused`
+ * property. That property is also momentarily true between chunks, during
+ * the src-swap window, and after stop, none of which should show a "paused"
+ * state or block the chunk pump. Only pauseVoice() sets this; speakText()
+ * (on start) and stopAllVoice() clear it. resumeVoice() clears it to pump.
+ */
+let userPaused = false;
+
+/**
  * Synthesize the given text via /api/tts and play it on the shared <audio>.
  * One call at a time — starting a new one stops the current playback.
  */
@@ -97,6 +107,10 @@ export async function speakText(text: string): Promise<void> {
 	const queue: Blob[] = [];
 	let streamDone = false;
 	let started = false;
+	// Clear any leftover user-pause intent from a previous utterance so this
+	// one starts playing immediately. (pauseVoice() sets this; it must not
+	// carry over — otherwise the first chunk would queue but never play.)
+	userPaused = false;
 
 	// Play the next queued blob if the <audio> element is free. Called both
 	// when a chunk arrives (from the stream loop) and when the previous
@@ -104,6 +118,10 @@ export async function speakText(text: string): Promise<void> {
 	// if this utterance has been superseded by stop / a newer speak.
 	const playFromQueue = (): void => {
 		if (gen !== speakGeneration) return;
+		// Don't advance to the next chunk while the user has paused — let
+		// arriving chunks pile up in the queue and resumeVoice() will pump
+		// them once the current (paused) chunk finishes after a resume.
+		if (userPaused) return;
 		if (!audio.paused) return; // current chunk still playing — wait for ended
 		const blob = queue.shift();
 		if (!blob) return; // underflow (waiting for next chunk) or done
@@ -255,6 +273,12 @@ export function stopAllVoice(): void {
 	activeController?.abort();
 	activeController = null;
 
+	// Clear any user-pause intent — a stop is a full reset, so a subsequent
+	// speak shouldn't start in a paused state, and the status-bar control
+	// must not keep showing "paused" once audio is gone.
+	userPaused = false;
+	state.audioPaused = false;
+
 	const audio = $<HTMLAudioElement>("#tts-audio");
 	if (!audio.paused) {
 		audio.pause();
@@ -268,6 +292,54 @@ export function stopAllVoice(): void {
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
 	}
+}
+
+/**
+ * Pause the currently-playing TTS playback, freezing position within the
+ * current chunk. Chunks still arriving from an open /api/tts/stream queue
+ * up but the chunk pump won't advance them until resumeVoice(). Safe to
+ * call when nothing is playing or when already paused (no-op).
+ *
+ * Sets an explicit `userPaused` flag rather than just calling audio.pause()
+ * because the chunk pump needs to know NOT to advance while paused, and the
+ * <audio> 'paused' property alone can't distinguish a user pause from the
+ * natural between-chunks gap. The status-bar control flips to a ▶ resume
+ * button via state.audioPaused.
+ */
+export function pauseVoice(): void {
+	const audio = $<HTMLAudioElement>("#tts-audio");
+	// Nothing to pause: already paused, no src loaded, or playback ended.
+	if (userPaused || audio.paused || !audio.src) return;
+	userPaused = true;
+	audio.pause();
+	// Flip state optimistically so the status bar shows the resume button
+	// immediately; the 'pause' event listener also clears audioPlaying.
+	state.audioPaused = true;
+	state.audioPlaying = false;
+	refreshStatus();
+}
+
+/**
+ * Resume playback from where pauseVoice() froze it — continues the current
+ * chunk, and once it ends the chunk pump drains any chunks that queued up
+ * while paused. No-op if not currently paused.
+ */
+export function resumeVoice(): void {
+	const audio = $<HTMLAudioElement>("#tts-audio");
+	// Nothing to resume: not paused, no src, or the loaded chunk already
+	// played to its end (a resume here would do nothing useful).
+	if (!userPaused || !audio.src || audio.ended) return;
+	userPaused = false;
+	void audio
+		.play()
+		.catch((err) => {
+			if (err instanceof DOMException && err.name === "AbortError") return;
+			appendError(`tts resume failed: ${err instanceof Error ? err.message : String(err)}`);
+		});
+	// Flip state optimistically; the 'play' event confirms audioPlaying=true.
+	state.audioPaused = false;
+	state.audioPlaying = true;
+	refreshStatus();
 }
 
 /**
