@@ -285,6 +285,16 @@ approach is proven in production for exactly this case. See
 
 ## Related
 
+### Runtime dependencies
+
+agentchatbox's voice stack is split across two sibling services — together
+they decide *what* to say (pi-voice-reply) and *how* to say it (pi-voice-server):
+
+- [pi-voice-server](https://github.com/anunkai1/pi-voice-server) — minimal **Kokoro-82M** TTS HTTP server. `/api/tts` and `/api/tts/stream` proxy here for actual speech synthesis (loads one model, keeps it warm, serializes calls, streams chunks so playback starts before synthesis finishes).
+- [pi-voice-reply](https://github.com/anunkai1/pi-voice-reply) — `pi` extension producing spoken-summary voice replies (long listenable + short concise rewrites via the same model that produced the reply). Triggered by "reply in voice" phrases or the `/voice` command.
+
+### Upstream
+
 - [pi](https://pi.dev) — the coding agent
 - [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) — unified LLM API
 - [`@earendil-works/pi-agent-core`](https://github.com/earendil-works/pi) — agent loop
