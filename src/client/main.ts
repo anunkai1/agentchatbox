@@ -62,6 +62,8 @@ import {
 	handlePaste,
 	handleVoiceRecord,
 	stopAllVoice,
+	pauseVoice,
+	resumeVoice,
 } from "./voice.js";
 import { createChatClient } from "./ws.js";
 import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
@@ -758,6 +760,8 @@ async function boot(): Promise<void> {
 		openOverflowMenu,
 		handleVoiceRecord,
 		stopAllVoice,
+		pauseVoice,
+		resumeVoice,
 		handleFileAttach,
 		handlePaste,
 		handleDrop,
