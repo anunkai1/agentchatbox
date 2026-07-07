@@ -1012,6 +1012,26 @@ export function registerShellHandlers(h: ShellHandlers): void {
 	shellHandlers = h;
 }
 
+// ── Toast (extension notifications) ─────────────────────────────
+// A transient banner for extension_ui_request notify events (e.g. the
+// pi-voice-reply extension's "voice model failed" warning). Auto-dismisses
+// after 8s; click dismisses immediately. Created once in renderShell.
+let toastEl: HTMLElement | null = null;
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Show a transient toast. The most recent call replaces any visible toast. */
+export function showToast(message: string, type: "info" | "warning" | "error" = "info"): void {
+	if (!toastEl) return;
+	toastEl.textContent = message;
+	toastEl.className = `toast toast-${type}`;
+	toastEl.classList.remove("hidden");
+	if (toastTimer) clearTimeout(toastTimer);
+	toastTimer = setTimeout(() => {
+		toastEl?.classList.add("hidden");
+		toastTimer = null;
+	}, 8000);
+}
+
 export function renderShell(): void {
 	if (!shellHandlers) {
 		throw new Error(
@@ -1415,6 +1435,15 @@ export function renderShell(): void {
 		refreshStatus();
 	});
 	main.append(audio);
+
+	// Toast — fixed overlay for transient extension notifications
+	// (e.g. voice-model fallback warnings). Click dismisses.
+	toastEl = el("div", { class: "toast hidden" });
+	toastEl.addEventListener("click", () => {
+		toastEl?.classList.add("hidden");
+		if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+	});
+	document.body.append(toastEl);
 
 	// File-input handler
 	$("#file-input").addEventListener("change", (e) => {
