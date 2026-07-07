@@ -104,8 +104,20 @@ export class PiProcess extends EventEmitter {
 	constructor(opts: PiProcessOptions) {
 		super();
 		const args = ["--mode", "rpc", "--provider", opts.provider, "--model", opts.modelId];
-		if (opts.thinkingLevel) {
-			args.push("--thinking", opts.thinkingLevel);
+		// Thinking-level handling. Two cases:
+		//   - Explicit opts.thinkingLevel wins (the picker or a setThinking
+		//     RPC told us what the user picked).
+		//   - For provider="ollama" with no explicit level, force "off".
+		//     Ollama's OpenAI-compat endpoint doesn't expose qwen3's
+		//     native `think:false` parameter, so without this override the
+		//     model burns every response on internal reasoning tokens —
+		//     ~26-60s for "pong" on the i5-1135G7. The matching
+		//     thinkingLevelMap in ~/.pi/agent/models.json is also set
+		//     all-null for qwen3:8b so an explicit user opt-in is
+		//     rejected at the pi side too.
+		const effectiveThinking = opts.thinkingLevel ?? (opts.provider === "ollama" ? "off" : undefined);
+		if (effectiveThinking) {
+			args.push("--thinking", effectiveThinking);
 		}
 		if (opts.sessionId) {
 			args.push("--session", opts.sessionId);

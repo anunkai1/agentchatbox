@@ -55,11 +55,25 @@ function readKey(name: string): string | undefined {
  * providers.ts. Each provider's key is read from the same env-var name
  * that pi itself reads (see providerApiKeyEnvVar), so adding a provider
  * is a one-line change in providers.ts — no second map to keep in sync.
+ *
+ * Ollama special-case: it doesn't need a real key, but session-registry
+ * throws if the key is empty (see providers.ts::PROVIDER_KEYS for why).
+ * Default to the literal string "ollama" so the key-presence check
+ * passes. The string is sent in the Authorization header, which Ollama
+ * ignores. Override with OLLAMA_API_KEY=... if a different dummy is
+ * preferred.
  */
 function readApiKeys(): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const provider of PROVIDER_KEYS) {
-		out[provider] = readKey(providerApiKeyEnvVar(provider)) ?? "";
+		const k = readKey(providerApiKeyEnvVar(provider));
+		if (k) {
+			out[provider] = k;
+		} else if (provider === "ollama") {
+			out[provider] = "ollama";
+		} else {
+			out[provider] = "";
+		}
 	}
 	return out;
 }

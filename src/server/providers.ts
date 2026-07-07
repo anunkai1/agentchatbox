@@ -43,6 +43,7 @@ export const PROVIDER_KEYS = [
 	"kimi-coding",
 	"opencode",
 	"minimax",
+	"ollama",
 ] as const;
 
 export type SupportedProvider = (typeof PROVIDER_KEYS)[number];
@@ -103,6 +104,14 @@ const PROVIDER_API_KEY_ENV: Record<string, string> = {
 	"kimi-coding": "KIMI_API_KEY",
 	"cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
 	"cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
+	// Ollama doesn't need a real API key, but pi treats unknown providers
+	// as requiring auth before showing them in the picker. `pi`'s
+	// model-registry uses the literal apiKey from `~/.pi/agent/models.json`
+	// (default "ollama" there). We mirror that here as the env-var value
+	// when OLLAMA_API_KEY is not set, so agentchatbox's own key-presence
+	// check in session-registry.ts passes. The key is sent in the
+	// Authorization header, which Ollama ignores.
+	ollama: "OLLAMA_API_KEY",
 	xiaomi: "XIAOMI_API_KEY",
 	"xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
 	"xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
@@ -198,4 +207,21 @@ export const EXTRA_MODELS: readonly ExtraModel[] = [
 	// Newer than this SDK build's registry (which tops out at glm-5.1);
 	// `pi` resolves it fine as a zai model.
 	{ id: "glm-5.2", provider: "zai", name: "GLM-5.2", reasoning: true },
+	// --- ollama (local, served by systemd ollama.service on 127.0.0.1:11434) ---
+	// Defined in ~/.pi/agent/models.json; pi's model-registry reads it at
+	// startup and registers the provider under api="openai-completions"
+	// pointing at http://127.0.0.1:11434/v1.
+	//
+	// Model history on this box (CPU-only i5-1135G7, no GPU):
+	//   - qwen3-coder:30b: 500s after 2-5 min, too heavy. Deleted.
+	//   - qwen3:8b: Ollama's OpenAI-compat endpoint ignores `/no_think`,
+	//     `enable_thinking:false`, and `chat_template_kwargs` — the model
+	//     burns its whole budget on <think> tokens and never responds.
+	//     Unusable via pi until Ollama ships `PARAMETER think false`
+	//     (PR ollama/ollama#14108, not in 0.13.2). Deleted.
+	//   - llama3.1:latest (current): no thinking mode, works cleanly via
+	//     OpenAI-compat, ~5-10 tok/s on the icelake CPU backend. The
+	//     pragmatic choice — weaker tool calling than qwen3 but actually
+	//     functional.
+	{ id: "llama3.1:latest", provider: "ollama", name: "Llama 3.1 8B (Ollama, local)", reasoning: false },
 ];
