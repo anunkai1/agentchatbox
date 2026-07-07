@@ -41,6 +41,7 @@ import {
 	scrollToBottom,
 	scrollToBottomIfPinned,
 	setStreaming,
+	showToast,
 	syncSteerBadges,
 	updateJumpFabState,
 } from "./render.js";
@@ -689,6 +690,20 @@ function onEvent(event: Record<string, unknown>): void {
 			state.retry = null;
 			refreshStatus();
 			break;
+
+		case "extension_ui_request": {
+			// Extension notifications (e.g. pi-voice-reply's "voice model
+			// failed, fell back to session model" warning). Only the `notify`
+			// method is rendered; others (select/confirm/input/editor/setStatus/…)
+			// are silently ignored (no ACB UI for them yet).
+			if (e.method === "notify" && typeof e.message === "string") {
+				const notifyType =
+					e.notifyType === "error" ? "error" :
+					e.notifyType === "warning" ? "warning" : "info";
+				showToast(e.message, notifyType);
+			}
+			break;
+		}
 	}
 }
 
