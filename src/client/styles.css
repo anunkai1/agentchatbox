@@ -536,6 +536,82 @@ body {
 	   new glide, dragging the user back down even after they pull up). */
 }
 
+/* Wraps the scroll area + the floating jump button so the button can
+   anchor to the bottom-right of the messages viewport (not the whole
+   main column, whose bottom is shared with the composer + status bar
+   at heights this CSS would otherwise have to guess). */
+.messages-region {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+/* ---------- "jump to previous user message" floating button ---------- */
+.jump-prev-user {
+	position: absolute;
+	right: 18px;
+	/* A little above the bottom of the messages viewport, clear of the
+	   composer that lives below this region. */
+	bottom: 14px;
+	width: 38px;
+	height: 38px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+	background: var(--surface);
+	color: var(--text-secondary);
+	border: 1px solid var(--border-strong);
+	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+	cursor: pointer;
+	z-index: 20;
+	opacity: 0.82;
+	padding: 0;
+	transition:
+		opacity 0.12s,
+		transform 0.12s,
+		color 0.12s;
+}
+.jump-prev-user:hover {
+	opacity: 1;
+	color: var(--text);
+	transform: translateY(-1px);
+}
+.jump-prev-user:active {
+	transform: translateY(0);
+}
+.jump-prev-user.hidden {
+	display: none;
+}
+.jump-prev-user[disabled] {
+	opacity: 0.3;
+	cursor: default;
+	pointer-events: none;
+}
+
+/* Brief highlight flashed on a user bubble when jumped to via the button
+   or Alt+↑, so the landing spot is obvious in a long transcript. Uses an
+   expanding box-shadow ring only — animating background-color would
+   briefly override the bubble's own --user-bubble tint at the keyframe
+   boundary and flicker. The ring fades from nothing, out to 6px, back. */
+@keyframes jumpHighlight {
+	0% {
+		box-shadow: 0 0 0 0 rgba(235, 91, 60, 0);
+	}
+	20% {
+		box-shadow: 0 0 0 6px rgba(235, 91, 60, 0.45);
+	}
+	100% {
+		box-shadow: 0 0 0 0 rgba(235, 91, 60, 0);
+	}
+}
+.row-user .bubble.jump-highlight {
+	animation: jumpHighlight 1.2s ease-out;
+}
+
 .messages {
 	max-width: var(--chat-max);
 	margin: 0 auto;
@@ -1721,6 +1797,14 @@ body {
 	}
 	.row-user .bubble {
 		max-width: 86%;
+	}
+
+	/* Nudge the jump button a touch smaller / closer on narrow screens. */
+	.jump-prev-user {
+		right: 12px;
+		width: 34px;
+		height: 34px;
+		opacity: 0.9;
 	}
 
 	.welcome {
