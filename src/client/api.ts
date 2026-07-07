@@ -105,6 +105,85 @@ export async function synthesizeSpeech(
 	return await res.blob();
 }
 
+/**
+ * Streaming TTS via /api/tts/stream. Yields one WAV Blob per synthesized
+ * text chunk, in playback order, the instant each is ready — so the caller
+ * can start playing the first chunk while later chunks are still being
+ * synthesized. This is what makes long voice replies feel responsive
+ * instead of stalling for seconds on end before the first sound.
+ *
+ * The body is a binary frame stream (one frame per chunk):
+ *   [1 byte type][uint32 LE length N][N bytes payload]
+ *     0x01 DATA → payload = a complete WAV file for one chunk
+ *     0x00 END  → clean end of stream
+ *     0x80 ERR  → payload = UTF-8 error message
+ *
+ * Throws on a non-OK HTTP status (caller falls back to synthesizeSpeech)
+ * or on an ERR frame arriving mid-stream.
+ */
+export async function* streamSynthesizeSpeech(
+	text: string,
+	voice?: string,
+	signal?: AbortSignal,
+): AsyncGenerator<Blob> {
+	const res = await fetch(`${BASE}/api/tts/stream`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ text, voice }),
+		signal,
+	});
+	if (!res.ok) {
+		const body = await res.text().catch(() => "");
+		throw new Error(`tts stream failed: ${res.status} ${body.slice(0, 200)}`);
+	}
+	if (!res.body) throw new Error("tts stream: empty response body");
+
+	const reader = res.body.getReader();
+	// Sliding byte buffer: we may receive partial frames or several frames
+	// coalesced in one network chunk, so we accumulate and parse on demand.
+	let buf = new Uint8Array(0);
+	const append = (chunk: Uint8Array): void => {
+		const next = new Uint8Array(buf.length + chunk.length);
+		next.set(buf, 0);
+		next.set(chunk, buf.length);
+		buf = next;
+	};
+	const ensure = async (n: number): Promise<boolean> => {
+		while (buf.length < n) {
+			const { done, value } = await reader.read();
+			if (done) return false;
+			if (value) append(value);
+		}
+		return true;
+	};
+	try {
+		while (true) {
+			if (!(await ensure(5))) return; // need the 5-byte frame header
+			const type = buf[0]!;
+			const len = (buf[1]! | (buf[2]! << 8) | (buf[3]! << 16) | (buf[4]! << 24)) >>> 0;
+			if (!(await ensure(5 + len))) return; // need the full payload
+			const payload = buf.subarray(5, 5 + len);
+			buf = buf.subarray(5 + len);
+			if (type === 0x01) {
+				// Detach into its own buffer so the Blob owns it independently of
+				// our read buffer (which keeps growing as more frames arrive).
+				yield new Blob([payload.slice()], { type: "audio/wav" });
+			} else if (type === 0x80) {
+				throw new Error(new TextDecoder().decode(payload) || "tts stream error");
+			} else if (type === 0x00) {
+				return; // END
+			}
+			// Unknown frame types are skipped (forward-compatible).
+		}
+	} finally {
+		try {
+			reader.releaseLock();
+		} catch {
+			/* already released */
+		}
+	}
+}
+
 /** Capabilities of the pi Agent — what tools, skills, extensions are loaded. */
 export interface CapabilitiesInfo {
 	packages: CapabilityPackage[];

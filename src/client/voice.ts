@@ -87,48 +87,107 @@ export async function speakText(text: string): Promise<void> {
 	const gen = speakGeneration;
 	const controller = new AbortController();
 	activeController = controller;
-	try {
-		const { synthesizeSpeech } = await import("./api.js");
-		const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined, controller.signal);
-		// Stop was pressed during synthesis — discard the blob, don't play.
+
+	// Chunked streaming playback state for this utterance. pi-voice-server
+	// /tts/stream synthesizes text in ~500-char chunks and writes each
+	// chunk's WAV the moment it's ready; we push arriving blobs into `queue`
+	// and pump them through the shared <audio> one at a time — so the first
+	// chunk starts playing long before the rest is synthesized, instead of
+	// stalling for many seconds on a long reply.
+	const queue: Blob[] = [];
+	let streamDone = false;
+	let started = false;
+
+	// Play the next queued blob if the <audio> element is free. Called both
+	// when a chunk arrives (from the stream loop) and when the previous
+	// chunk finishes (from onended). No-op if something is still playing or
+	// if this utterance has been superseded by stop / a newer speak.
+	const playFromQueue = (): void => {
 		if (gen !== speakGeneration) return;
-		// Swap the source AFTER the new blob is ready, so the previous
-		// playback isn't interrupted during the (slow) synth round-trip —
-		// pausing the element early lets Android's media session drop it
-		// and can stall playback mid-way through.
-		// Keep the previous URL alive until the new src is set, then revoke.
-		const previousUrl = activeObjectUrl;
+		if (!audio.paused) return; // current chunk still playing — wait for ended
+		const blob = queue.shift();
+		if (!blob) return; // underflow (waiting for next chunk) or done
 		const url = URL.createObjectURL(blob);
+		// Keep the previous object URL alive until the new src is set, then
+		// revoke it — pausing/revoking early can make Android's media session
+		// drop the element mid-playback.
+		if (activeObjectUrl && activeObjectUrl !== url) URL.revokeObjectURL(activeObjectUrl);
 		activeObjectUrl = url;
-		audio.pause();
-		audio.currentTime = 0;
 		audio.src = url;
 		audio.playbackRate = state.ttsSpeed;
-		if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
-		await audio.play();
-		// Stop was pressed during the play() await — don't flip to playing.
+		void audio.play().catch((err) => {
+			if (err instanceof DOMException && err.name === "AbortError") return;
+			appendError(`tts play failed: ${err instanceof Error ? err.message : String(err)}`);
+		});
+		if (!started) {
+			started = true;
+			// Playback has begun — flip the button from spinner to ⏹.
+			if (gen === speakGeneration) setSpeakBtnState(currentSpeakSrc, "playing");
+		}
+	};
+	// Tear down after the last chunk finishes (or on a clean end with nothing
+	// produced). Revokes the final object URL and resets button + source.
+	const finish = (): void => {
 		if (gen !== speakGeneration) return;
-		// Playback has started — switch the button from spinner to ⏹.
-		setSpeakBtnState(currentSpeakSrc, "playing");
-		// Revoke object URL after playback ends (or on next speak), and
-		// clear the active source so a subsequent click re-plays rather
-		// than being mistaken for a "stop the same thing" toggle.
-		audio.onended = () => {
-			if (activeObjectUrl === url) {
-				URL.revokeObjectURL(url);
-				activeObjectUrl = null;
-			}
-			audio.onended = null;
-			setSpeakBtnState(currentSpeakSrc, "idle");
-			currentSpeakSrc = null;
-		};
+		if (activeObjectUrl) {
+			URL.revokeObjectURL(activeObjectUrl);
+			activeObjectUrl = null;
+		}
+		audio.onended = null;
+		setSpeakBtnState(currentSpeakSrc, "idle");
+		currentSpeakSrc = null;
+	};
+	// Chain chunks: when one finishes, play the next; if none are queued and
+	// the stream is still open we simply wait (underflow) — the next chunk to
+	// arrive will call playFromQueue() itself. Only when the stream is done
+	// AND the queue is empty do we finalize.
+	audio.onended = () => {
+		if (gen !== speakGeneration) return;
+		if (queue.length > 0) playFromQueue();
+		else if (streamDone) finish();
+	};
+
+	try {
+		// Prefer the streaming endpoint: it lets us start playing the first
+		// chunk immediately. If it's unavailable (old server, piper engine, or
+		// a transient failure) and nothing has played yet, fall back to the
+		// whole-blob /api/tts path below.
+		const { streamSynthesizeSpeech } = await import("./api.js");
+		for await (
+			const blob of streamSynthesizeSpeech(spoken, state.ttsVoice ?? undefined, controller.signal)
+		) {
+			// Stop was pressed mid-stream — drop the rest, don't play.
+			if (gen !== speakGeneration) return;
+			queue.push(blob);
+			playFromQueue();
+		}
+		streamDone = true;
+		// Stream finished. If playback already drained (or never started, e.g.
+		// zero chunks), finalize now; otherwise the running chunk's onended
+		// will finish when it ends.
+		if (!started || (audio.paused && queue.length === 0)) finish();
 	} catch (err) {
-		// An AbortError means stopAllVoice() cancelled this fetch on
-		// purpose — reset the button quietly, don't surface it as an error.
+		// stopAllVoice() aborted the stream fetch on purpose — reset quietly.
 		if (err instanceof DOMException && err.name === "AbortError") {
 			setSpeakBtnState(currentSpeakSrc, "idle");
 			currentSpeakSrc = null;
 			return;
+		}
+		// If the stream failed before any audio played, fall back to the
+		// classic whole-blob synthesis once (covers an old pi-voice-server
+		// without /tts/stream, or the piper engine).
+		if (!started) {
+			try {
+				await playWholeBlob(audio, spoken, gen, controller);
+				return;
+			} catch (err2) {
+				if (!(err2 instanceof DOMException && err2.name === "AbortError")) {
+					appendError(`tts failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+				}
+				setSpeakBtnState(currentSpeakSrc, "idle");
+				currentSpeakSrc = null;
+				return;
+			}
 		}
 		appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
 		setSpeakBtnState(currentSpeakSrc, "idle");
@@ -138,6 +197,45 @@ export async function speakText(text: string): Promise<void> {
 		state.ttsInFlight--;
 		refreshStatus();
 	}
+}
+
+/**
+ * Whole-utterance fallback: synthesize the entire text in one /api/tts
+ * request and play the resulting single WAV on the shared <audio>. Used
+ * when the streaming endpoint is unavailable (old pi-voice-server, or the
+ * piper engine which can't stream). Mirrors the original non-streaming
+ * speakText() lifecycle so the fallback path behaves exactly as before.
+ */
+async function playWholeBlob(
+	audio: HTMLAudioElement,
+	spoken: string,
+	gen: number,
+	controller: AbortController,
+): Promise<void> {
+	const { synthesizeSpeech } = await import("./api.js");
+	const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined, controller.signal);
+	if (gen !== speakGeneration) return;
+	const previousUrl = activeObjectUrl;
+	const url = URL.createObjectURL(blob);
+	activeObjectUrl = url;
+	audio.pause();
+	audio.currentTime = 0;
+	audio.src = url;
+	audio.playbackRate = state.ttsSpeed;
+	if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
+	await audio.play();
+	if (gen !== speakGeneration) return;
+	setSpeakBtnState(currentSpeakSrc, "playing");
+	audio.onended = () => {
+		if (gen !== speakGeneration) return;
+		if (activeObjectUrl === url) {
+			URL.revokeObjectURL(url);
+			activeObjectUrl = null;
+		}
+		audio.onended = null;
+		setSpeakBtnState(currentSpeakSrc, "idle");
+		currentSpeakSrc = null;
+	};
 }
 
 /**
