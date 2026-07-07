@@ -277,6 +277,47 @@ describe("readPiSessionMessages", () => {
 		// aaa is still readable too.
 		expect(readPiSessionMessages(cwd, "aaa")).toHaveLength(2);
 	});
+
+	it("includes custom_message entries (e.g. voice-reply variants) for replay", async () => {
+		// pi persists voice-reply spoken variants as top-level
+		// `type:"custom_message"` JSONL lines (NOT nested under .message).
+		// readPiSessionMessages must surface them as role:"custom" messages so
+		// the transcript projection re-attaches the variants to their
+		// assistant message on reconnect — otherwise a page refresh drops
+		// the variants and the Long/Short buttons regenerate on every press.
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T12-00-00_ccc.jsonl",
+			"ccc",
+			"2026-06-15T12:00:00.000Z",
+			["hey"],
+			[
+				JSON.stringify({
+					type: "custom_message",
+					customType: "voice-reply",
+					content: "voice reply ready",
+					display: true,
+					details: { long: "the long variant", short: "the short variant" },
+					id: "deadbeef",
+					parentId: "cafebabe",
+					timestamp: "2026-06-15T12:00:01.000Z",
+				}),
+			],
+		);
+		const { readPiSessionMessages } = await import("../src/server/session-list.js");
+		const msgs = readPiSessionMessages(cwd, "ccc");
+		// 1 user + 1 assistant + 1 custom = 3.
+		expect(msgs).toHaveLength(3);
+		const custom = msgs[2] as {
+			role: string;
+			customType?: string;
+			details?: { long?: string; short?: string };
+		};
+		expect(custom.role).toBe("custom");
+		expect(custom.customType).toBe("voice-reply");
+		expect(custom.details?.long).toBe("the long variant");
+		expect(custom.details?.short).toBe("the short variant");
+	});
 });
 
 describe("setPiSessionName", () => {
