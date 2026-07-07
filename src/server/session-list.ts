@@ -551,6 +551,24 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 				const e = JSON.parse(t) as Record<string, unknown>;
 				if (e.type === "message" && e.message) {
 					messages.push(e.message as Message);
+				} else if (e.type === "custom_message") {
+					// Persisted custom message (e.g. pi-voice-reply's voice-reply
+					// entry, which carries the long/short spoken variants).
+					// pi writes these as top-level `custom_message` JSONL lines,
+					// NOT nested under `.message`, so the `type==="message"`
+					// branch above skips them. Reconstruct the live event's
+					// message shape (role:"custom" + customType + details) so the
+					// transcript projection re-attaches the variants to their
+					// assistant message on reconnect. Without this, a page refresh
+					// / WS reconnect drops the in-memory variants and the
+					// Long/Short buttons regenerate (a full LLM round-trip) on
+					// every press.
+					messages.push({
+						role: "custom",
+						customType: e.customType,
+						content: e.content,
+						details: e.details,
+					} as unknown as Message);
 				}
 			} catch {
 				/* skip malformed */
