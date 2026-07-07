@@ -88,6 +88,11 @@ export function renderHistory(): void {
 	}
 	updateWelcomeVisibility();
 	scrollToBottom();
+	// Full re-render (new session / resume): the cached nav index no
+	// longer maps to the right row, and the user-message count may have
+	// changed — reset the walk and refresh the FAB state.
+	currentUserMsgIndex = null;
+	updateJumpFabState();
 }
 
 /**
@@ -456,6 +461,153 @@ export function scrollToBottom(): void {
  */
 export function scrollToBottomIfPinned(): void {
 	if (isAtBottom()) scrollToBottom();
+}
+
+// ---------------------------------------------------------------------------
+// "Jump to previous user message" navigation
+// ---------------------------------------------------------------------------
+//
+// A floating button (bottom-right of the messages area) + Alt+↑ shortcut
+// that walks UP through the user's own messages one at a time, so a long
+// transcript's "where did I say X?" is a few clicks away instead of a
+// scroll-hunt. Stateful: the first click lands on the newest user message
+// strictly above the current view (or the newest overall when pinned at
+// the bottom); each subsequent click moves one older. Manual scrolling
+// resets the walk so the next click restarts from wherever the user
+// landed. Steer bubbles (queued, not-yet-sent) are excluded — only real
+// delivered user messages count as waypoints.
+
+let currentUserMsgIndex: number | null = null;
+// Guard so the scroll listener can tell a programmatic scroll (from
+// scrollRowToTop) apart from the user dragging the scrollbar / wheel.
+// Programmatic scrolls must NOT reset currentUserMsgIndex.
+let programmaticScroll = false;
+let programmaticScrollTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** All rendered user-message rows, excluding queued "steer" bubbles. */
+function userMessageRows(): HTMLElement[] {
+	return Array.from(
+		document.querySelectorAll<HTMLElement>("#messages .row-user:not(.row-steer)"),
+	);
+}
+
+/**
+ * Scroll a row to the top of the messages area with a small gap, using
+ * scrollTop math (not Element.scrollIntoView) so it matches the
+ * instant-scroll behavior used everywhere else here — no smooth-scroll
+ * that would queue glides and fight the user. Sets the programmatic-scroll
+ * guard so the scroll listener doesn't treat this as a manual scroll.
+ */
+function scrollRowToTop(row: HTMLElement, gap = 12): void {
+	const scroller = getScrollContainer();
+	const dy = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - gap;
+	programmaticScroll = true;
+	if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+	scroller.scrollTop += dy;
+	// The (single, non-smooth) scroll event fires within a few ms; give
+	// the guard a short tail so any async scroll dispatch is covered.
+	programmaticScrollTimer = setTimeout(() => {
+		programmaticScroll = false;
+	}, 80);
+}
+
+/** Flash a brief highlight on a user bubble so the jump target is visible. */
+function highlightUserRow(row: HTMLElement): void {
+	const bubble = row.querySelector<HTMLElement>(".bubble");
+	if (!bubble) return;
+	bubble.classList.remove("jump-highlight");
+	// Force a reflow so the animation restarts when the same bubble is
+	// jumped to twice in a row (otherwise the class re-add is a no-op).
+	void bubble.offsetWidth;
+	bubble.classList.add("jump-highlight");
+}
+
+/**
+ * Jump to the previous user message. Repeated calls walk up the
+ * transcript one user message at a time. See the block comment above
+ * for the full state model.
+ */
+export function jumpToPrevUserMessage(): void {
+	const rows = userMessageRows();
+	if (rows.length === 0) return;
+	let idx: number;
+	if (currentUserMsgIndex === null) {
+		// Start: land on the newest user message strictly above the
+		// current top of view; if none (we're at the very top, or pinned
+		// at the bottom with nothing above the top edge), fall back to the
+		// newest user message overall.
+		const viewTop = getScrollContainer().getBoundingClientRect().top + 1;
+		idx = -1;
+		for (let i = rows.length - 1; i >= 0; i--) {
+			if (rows[i].getBoundingClientRect().bottom <= viewTop) {
+				idx = i;
+				break;
+			}
+		}
+		if (idx === -1) idx = rows.length - 1;
+	} else {
+		idx = Math.max(0, currentUserMsgIndex - 1);
+	}
+	currentUserMsgIndex = idx;
+	scrollRowToTop(rows[idx]);
+	highlightUserRow(rows[idx]);
+	updateJumpFabState();
+}
+
+/**
+ * Reflect the current nav state onto the FAB: hide it entirely when there
+ * are no user messages (welcome screen / fresh chat), disable it at the
+ * oldest message (nothing further up), and show a position hint in the
+ * tooltip once navigating.
+ */
+export function updateJumpFabState(): void {
+	const fab = document.getElementById("jump-prev-user");
+	if (!fab) return;
+	const rows = userMessageRows();
+	if (rows.length === 0) {
+		fab.classList.add("hidden");
+		return;
+	}
+	fab.classList.remove("hidden");
+	const atOldest = currentUserMsgIndex !== null && currentUserMsgIndex <= 0;
+	fab.toggleAttribute("disabled", atOldest);
+	fab.setAttribute(
+		"title",
+		currentUserMsgIndex !== null
+			? `Your message ${currentUserMsgIndex + 1} of ${rows.length} — click for the one above (Alt+↑)`
+			: "Jump to your previous message (Alt+↑)",
+	);
+}
+
+/**
+ * Clear the nav position. Called on manual scroll (the user moved
+ * themselves, so the next click should restart from the new position)
+ * and on send (a new message was added). No-op when not navigating, so
+ * it's cheap to call from a scroll listener.
+ */
+export function resetJumpNav(): void {
+	if (currentUserMsgIndex === null) return;
+	currentUserMsgIndex = null;
+	updateJumpFabState();
+}
+
+/**
+ * Build the floating "jump to previous user message" button. Lives in
+ * the bottom-right corner of the main column, above the composer. Its
+ * visibility / disabled state is driven by updateJumpFabState().
+ */
+function makeJumpPrevUserFab(): HTMLElement {
+	return el("button", {
+		class: "jump-prev-user hidden",
+		id: "jump-prev-user",
+		type: "button",
+		"aria-label": "Jump to your previous message",
+		title: "Jump to your previous message (Alt+↑)",
+		onclick: () => jumpToPrevUserMessage(),
+		html:
+			'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+			"<path d=\"M12 19V6\"/><path d=\"M6 12l6-6 6 6\"/></svg>",
+	});
 }
 
 export function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
@@ -1129,7 +1281,23 @@ export function renderShell(): void {
 
 	// Messages list
 	messagesWrap.append(el("div", { class: "messages", id: "messages" }));
-	main.append(messagesWrap);
+
+	// Messages region wraps the scroll area + the floating "jump to
+	// previous user message" button, so the button anchors to the
+	// bottom-right of the messages viewport — independent of how tall
+	// the composer / status bar happen to be. Clicking (or Alt+↑) walks
+	// up through the user's own messages one at a time.
+	const messagesRegion = el("div", { class: "messages-region" });
+	messagesRegion.append(messagesWrap);
+	messagesRegion.append(makeJumpPrevUserFab());
+	main.append(messagesRegion);
+
+	// A manual scroll (wheel / drag / touch) means the user repositioned
+	// themselves, so the next jump should restart from the new spot.
+	// Programmatic scrolls from scrollRowToTop set a guard to skip this.
+	messagesWrap.addEventListener("scroll", () => {
+		if (!programmaticScroll) resetJumpNav();
+	});
 
 	// Composer — pill with attach + voice buttons on the left, textarea
 	// in the middle, and a dark up-arrow send button on the right.
@@ -1264,7 +1432,7 @@ export function renderShell(): void {
 		if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
 			e.preventDefault();
 			shellHandlers?.handleSend();
-		} else if (e.key === "ArrowUp" && (input.value === "" || input.selectionStart === 0)) {
+		} else if (e.key === "ArrowUp" && !e.altKey && (input.value === "" || input.selectionStart === 0)) {
 			e.preventDefault();
 			shellHandlers?.historyBack();
 		} else if (e.key === "ArrowDown") {

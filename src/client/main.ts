@@ -31,15 +31,18 @@ import {
 	autoSize,
 	finalizeToolCall,
 	isAtBottom,
+	jumpToPrevUserMessage,
 	refreshStatus,
 	registerShellHandlers,
 	renderMessageNode,
 	renderShell,
+	resetJumpNav,
 	type ShellHandlers,
 	scrollToBottom,
 	scrollToBottomIfPinned,
 	setStreaming,
 	syncSteerBadges,
+	updateJumpFabState,
 } from "./render.js";
 import {
 	handleSlash,
@@ -142,6 +145,10 @@ function sendAsUser(trimmed: string): void {
 
 	// Add user message to in-memory transcript.
 	state.messages.push({ kind: "user", text: trimmed });
+	// New message resets the jump walk: the next Alt+↑ / button press
+	// should start fresh from this newest position, not resume a stale
+	// index from before the send.
+	resetJumpNav();
 	appendNode(renderMessageNode({ kind: "user", text: trimmed }));
 
 	// Auto-title from the first user message.
@@ -274,16 +281,22 @@ function recoverStrandedSteer(): void {
 	setStreaming(true);
 }
 
-// Local appendNode — main.ts uses it for sendAsUser (force-scroll:
-// the user just typed, so they want to see their message land) and
-// sendSteer (pin: a steer arrives mid-stream while the agent is
-// running, and the reader may have scrolled up to re-read; don't yank).
-// Capture pinning BEFORE appending so a tall new block doesn't itself
-// flip isAtBottom() false (see render.ts appendNode for the rationale).
+// Capture pinning BEFORE appending. The new node may be tall (a ⚙
+// tool card, a thinking block, a result <pre>), and once it's in the
+// DOM it grows scrollHeight while scrollTop stays put — so an
+// after-append isAtBottom() check would falsely report "not at
+// bottom" (the 80px slack is consumed by the new block itself) and
+// silently skip the scroll. Worse, that poisons pinning for the
+// rest of the turn: every later streamed token's
+// scrollToBottomIfPinned() would then no-op because isAtBottom()
+// stays false. Capturing pre-append fixes both.
 function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
 	const wasPinned = isAtBottom();
 	$("#messages").append(node);
 	if (!opts.pin || wasPinned) scrollToBottom();
+	// A new row may change the user-message count (e.g. the user just
+	// sent one), so refresh the jump button's show/disabled state.
+	updateJumpFabState();
 }
 
 /**
@@ -791,6 +804,17 @@ async function boot(): Promise<void> {
 	setSendAsUser(sendAsUser);
 
 	renderShell();
+
+	// Global shortcut: Alt+↑ jumps to the previous user message (same as
+	// the floating button). Attached once at boot; the handler queries the
+	// DOM at call time, so it survives renderShell rebuilds. The input's
+	// own ↑ (history recall) is gated on !e.altKey, so the two never clash.
+	document.addEventListener("keydown", (e) => {
+		if (e.altKey && (e.key === "ArrowUp" || e.key === "Up")) {
+			e.preventDefault();
+			jumpToPrevUserMessage();
+		}
+	});
 
 	setChatControls({
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
