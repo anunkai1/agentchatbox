@@ -76,6 +76,98 @@ export function createTtsRouter(): Router {
 	});
 
 	/**
+	 * POST /api/tts/stream
+	 * Body: { text: string, voice?: string }
+	 * Returns: application/octet-stream — a binary frame stream (one frame
+	 * per synthesized text chunk) forwarded verbatim from pi-voice-server's
+	 * /tts/stream, so the browser can start playing the first chunk while
+	 * later chunks are still being synthesized.
+	 *
+	 * Frame layout: [1 byte type][uint32 LE length N][N bytes payload]
+	 *   0x01 DATA (payload = WAV) · 0x00 END · 0x80 ERR (payload = message)
+	 *
+	 * This route is a pure byte pipe — no parsing, no business logic. The
+	 * server stays the transport layer; the browser owns chunked playback.
+	 * Only the kokoro engine streams; piper callers get a 501 and fall back
+	 * to the whole-blob POST / above.
+	 */
+	router.post("/stream", async (req: Request, res: Response) => {
+		const body = req.body as { text?: unknown; voice?: unknown } | undefined;
+		const text = typeof body?.text === "string" ? body.text : "";
+		if (!text.trim()) {
+			res.status(400).json({ error: "no text (field name: 'text')" });
+			return;
+		}
+		if (text.length > MAX_TEXT_CHARS) {
+			res.status(413).json({ error: `text too long (max ${MAX_TEXT_CHARS} chars)` });
+			return;
+		}
+		const voice = typeof body?.voice === "string" && body.voice.length > 0 ? body.voice : undefined;
+		if (engine() !== "kokoro") {
+			res.status(501).json({ error: "streaming tts requires the kokoro engine" });
+			return;
+		}
+
+		// Abort upstream the moment the browser goes away (stop button,
+		// navigation) so pi-voice-server stops spending CPU on chunks no one
+		// will hear. res 'close' also fires on normal completion, where
+		// aborting an already-finished fetch is a harmless no-op.
+		const clientGone = new AbortController();
+		res.on("close", () => clientGone.abort());
+
+		let upstream: globalThis.Response;
+		try {
+			upstream = await fetch(`${KOKORO_BASE}/tts/stream`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed: 1 }),
+				signal: clientGone.signal,
+			});
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			res.status(502).json({ error: `kokoro tts unreachable at ${KOKORO_BASE}: ${message}` });
+			return;
+		}
+		// Pre-stream upstream failure (e.g. 503 model not loaded): relay as JSON
+		// so the client can fall back to the whole-blob endpoint.
+		if (!upstream.ok || !upstream.body) {
+			const errText = await upstream.text().catch(() => "");
+			res.status(502).json({
+				error: `kokoro tts/stream upstream ${upstream.status}: ${errText.slice(0, 300)}`,
+			});
+			return;
+		}
+
+		res.setHeader("Content-Type", "application/octet-stream");
+		res.setHeader("Cache-Control", "no-store");
+		res.setHeader("X-Accel-Buffering", "no"); // defeat any reverse-proxy buffering
+
+		const reader = upstream.body.getReader();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value) {
+					// Zero-copy wrap the Uint8Array into a Buffer for res.write.
+					res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+				}
+			}
+			res.end();
+		} catch (e) {
+			if (!res.headersSent) {
+				const message = e instanceof Error ? e.message : String(e);
+				res.status(502).json({ error: `tts stream pipe failed: ${message}` });
+			} else {
+				try {
+					res.end();
+				} catch {
+					/* client already gone */
+				}
+			}
+		}
+	});
+
+	/**
 	 * GET /api/tts/voices
 	 * Returns: { default: string, available: string[] }
 	 */
