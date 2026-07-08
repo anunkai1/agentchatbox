@@ -27,7 +27,7 @@ import { config } from "./config.js";
 import { createFilesRouter } from "./files.js";
 import { log } from "./logger.js";
 import { projectRoot } from "./paths.js";
-import { EXTRA_MODELS, SDK_PROVIDERS } from "./providers.js";
+import { EXTRA_MODELS, EXTRA_IMAGE_MODELS, SDK_PROVIDERS } from "./providers.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
@@ -303,6 +303,35 @@ app.get("/api/models", (_req, res) => {
 		});
 	}
 
+	res.json({ models: out });
+});
+
+/**
+ * GET /api/image-models
+ *
+ * Returns the list of image-generation models the client can pick from.
+ * Separate from `/api/models` because image models aren't callable via
+ * pi's chat-completions endpoint — they belong to the `venice_generate_image`
+ * tool registered by the pi-venice-image extension, and live in the
+ * picker's "Venice images" group (or similar) rather than the chat-model
+ * section.
+ *
+ * Shape: { models: Array<{ id, provider, name, tags }> }
+ *
+ * Gating: each entry is only emitted if the entry's `provider` has a
+ * configured API key on this server — same policy as `/api/models`.
+ */
+app.get("/api/image-models", (_req, res) => {
+	const out: Array<{
+		id: string;
+		provider: string;
+		name: string;
+		tags: readonly string[];
+	}> = [];
+	for (const m of EXTRA_IMAGE_MODELS) {
+		if (!config.apiKeys[m.provider]) continue;
+		out.push({ id: m.id, provider: m.provider, name: m.name, tags: m.tags });
+	}
 	res.json({ models: out });
 });
 
