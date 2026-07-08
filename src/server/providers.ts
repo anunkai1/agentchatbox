@@ -232,21 +232,58 @@ export const EXTRA_MODELS: readonly ExtraModel[] = [
 	// api openai-completions); auth comes from ~/.secrets/llm/pi-auth.json (the
 	// `venice` entry — same dual representation as minimax/zai: flat-env in
 	// providers.env for ACB systemd + JSON in pi-auth.json for standalone pi).
-	// Curated set (all vision-capable, the use case that prompted adding Venice);
-	// 48 of Venice's 93 text models support image input — add more on request.
+	//
+	// Curated chat/text set — one flagship+ per major family so the picker
+	// shows the breadth of what Venice routes without overwhelming it (94 text
+	// models total; this is 25). Grouped by family below; vision-capable
+	// models are preferred where it doesn't compromise on capability (vision
+	// was the original use case that prompted adding Venice).
+	//
 	// compat.supportsReasoningEffort is false at the provider level (set in
 	// models.json) because only some Venice models honour reasoning_effort, so
-	// the thinking slider in ACB does not transmit to Venice models.
-	{ id: "qwen3-vl-235b-a22b", provider: "venice", name: "Qwen3 VL 235B (Venice)", reasoning: false },
-	{ id: "qwen3-5-9b", provider: "venice", name: "Qwen 3.5 9B (Venice)", reasoning: true },
-	{ id: "minimax-m3-preview", provider: "venice", name: "MiniMax M3 Preview (Venice)", reasoning: true },
+	// the thinking slider in ACB does not transmit to Venice models. The
+	// `reasoning: true` flag below is purely a UI badge (shows the 🧠 icon in
+	// the picker), not an indicator that reasoning_effort is honoured.
+	//
+	// Anthropic
+	{ id: "claude-opus-4-7", provider: "venice", name: "Claude Opus 4.7 (Venice)", reasoning: true },
+	{ id: "claude-opus-4-8", provider: "venice", name: "Claude Opus 4.8 (Venice)", reasoning: true },
+	{ id: "claude-sonnet-5", provider: "venice", name: "Claude Sonnet 5 (Venice)", reasoning: true },
+	// OpenAI
+	{ id: "openai-gpt-55", provider: "venice", name: "GPT-5.5 (Venice)", reasoning: true },
+	{ id: "openai-gpt-55-pro", provider: "venice", name: "GPT-5.5 Pro (Venice)", reasoning: true },
+	{ id: "openai-gpt-54", provider: "venice", name: "GPT-5.4 (Venice)", reasoning: true },
+	{ id: "openai-gpt-53-codex", provider: "venice", name: "GPT-5.3 Codex (Venice)", reasoning: true },
+	// Google
 	{ id: "gemini-3-flash-preview", provider: "venice", name: "Gemini 3 Flash (Venice)", reasoning: true },
 	{ id: "gemini-3-5-flash", provider: "venice", name: "Gemini 3.5 Flash (Venice)", reasoning: true },
+	{ id: "gemini-3-1-pro-preview", provider: "venice", name: "Gemini 3.1 Pro (Venice)", reasoning: true },
+	// xAI Grok
 	{ id: "grok-4-3", provider: "venice", name: "Grok 4.3 (Venice)", reasoning: true },
 	{ id: "grok-4-20", provider: "venice", name: "Grok 4.20 (Venice)", reasoning: true },
+	{ id: "grok-4-5", provider: "venice", name: "Grok 4.5 (Venice)", reasoning: true },
+	// Moonshot Kimi
 	{ id: "kimi-k2-6", provider: "venice", name: "Kimi K2.6 (Venice)", reasoning: true },
-	{ id: "claude-opus-4-7", provider: "venice", name: "Claude Opus 4.7 (Venice)", reasoning: true },
+	{ id: "kimi-k2-7-code", provider: "venice", name: "Kimi K2.7 Code (Venice)", reasoning: true },
+	// DeepSeek
+	{ id: "deepseek-v4-pro", provider: "venice", name: "DeepSeek V4 Pro (Venice)", reasoning: true },
+	{ id: "deepseek-v4-flash", provider: "venice", name: "DeepSeek V4 Flash (Venice)", reasoning: true },
+	// Alibaba Qwen
+	{ id: "qwen-3-7-plus", provider: "venice", name: "Qwen 3.7 Plus (Venice)", reasoning: true },
 	{ id: "qwen3-5-397b-a17b", provider: "venice", name: "Qwen 3.5 397B (Venice)", reasoning: true },
+	{ id: "qwen3-vl-235b-a22b", provider: "venice", name: "Qwen3 VL 235B (Venice)", reasoning: false },
+	// Xiaomi MiMo (omnimodal — text + image + audio + video, 1M ctx)
+	{ id: "xiaomi-mimo-v2-5", provider: "venice", name: "Xiaomi MiMo V2.5 (Venice)", reasoning: true },
+	// Mistral
+	{ id: "mistral-small-2603", provider: "venice", name: "Mistral Small 3.1 (Venice)", reasoning: true },
+	// Z.AI GLM
+	{ id: "zai-org-glm-5-2", provider: "venice", name: "GLM 5.2 (Venice)", reasoning: true },
+	// MiniMax (via Venice routing — different price/cache behaviour vs the
+	// direct minimax provider entry above; useful when the direct quota
+	// is exhausted)
+	{ id: "minimax-m3-preview", provider: "venice", name: "MiniMax M3 Preview (Venice)", reasoning: true },
+	// Uncensored (no reasoning, no tool calling; kept for cases where
+	// safety filtering is the blocker, not the capability)
 	{ id: "venice-uncensored-1-2", provider: "venice", name: "Venice Uncensored 1.2", reasoning: false },
 	// --- openrouter ---
 	// Provider declared in ~/.pi/agent/models.json (baseUrl
@@ -268,4 +305,72 @@ export const EXTRA_MODELS: readonly ExtraModel[] = [
 	// hard-coded to $0 to match OpenRouter's `pricing: {prompt:"0",
 	// completion:"0"}`. See server2-overview §XX entry for 2026-07-08.
 	{ id: "tencent/hy3:free", provider: "openrouter", name: "Tencent Hy3 (free)", reasoning: true },
+];
+
+/**
+ * Image generation models — separate from EXTRA_MODELS because the ACB
+ * chat picker only accepts text/chat models (image models aren't callable
+ * via pi's chat-completions endpoint). This list is the source of truth
+ * for which image model IDs are valid for the image-gen tool registered
+ * by the pi-venice-image extension (loaded by `pi --mode rpc` alongside
+ * the agentchatbox chat flow). Surfaced to the browser via
+ * `GET /api/image-models` so the model picker can show a separate
+ * "Venice images" group independent of the chat models; the picker
+ * selection is persisted via `setImageModel` RPC → file write
+ * (`/home/lepton/.config/acb/image-model`), and the extension reads
+ * that file on each tool call, so model switches take effect on the
+ * next agent invocation without needing to respawn pi.
+ *
+ * kidstories (separate service) also uses two of these IDs
+ * (`z-image-turbo`, `qwen-image`) directly via its own Venice client —
+ * kidstories does NOT consume this list.
+ *
+ * Currently Venice-only (Venice is the only provider we have image-gen
+ * creds for; if OpenRouter image routes get wired in later, add a
+ * `provider: "openrouter"` field and gate on the key the same way
+ * EXTRA_MODELS does).
+ *
+ * IDs come from `GET https://api.venice.ai/api/v1/models?type=image`.
+ * 35 image models exist; this is a curated 17 — one per notable family
+ * / flagship, prioritising current generation. Pricing varies wildly
+ * (SDXL-tier ~$0.001/img, Flux-2 Max several cents/img); see Venice's
+ * model catalog for current rates.
+ */
+export interface ExtraImageModel {
+	id: string;
+	provider: string;
+	name: string;
+	/** Free-form tags for the UI / docs; no enforced schema. */
+	tags: readonly string[];
+}
+
+export const EXTRA_IMAGE_MODELS: readonly ExtraImageModel[] = [
+	// Black Forest Labs — current flagship
+	{ id: "flux-2-max", provider: "venice", name: "Flux 2 Max (Venice)", tags: ["flagship", "flux", "photoreal"] },
+	{ id: "flux-2-pro", provider: "venice", name: "Flux 2 Pro (Venice)", tags: ["pro", "flux"] },
+	// OpenAI image gen (Venice-routed, not direct OpenAI API)
+	{ id: "gpt-image-2", provider: "venice", name: "GPT Image 2 (Venice)", tags: ["openai", "latest"] },
+	{ id: "gpt-image-1-5", provider: "venice", name: "GPT Image 1.5 (Venice)", tags: ["openai"] },
+	// xAI Grok
+	{ id: "grok-imagine-image-quality", provider: "venice", name: "Grok Imagine Quality (Venice)", tags: ["grok", "quality"] },
+	{ id: "grok-imagine-image", provider: "venice", name: "Grok Imagine (Venice)", tags: ["grok"] },
+	// Google — "nano-banana" is the public codename
+	{ id: "nano-banana-pro", provider: "venice", name: "Nano Banana Pro (Venice)", tags: ["google", "pro"] },
+	{ id: "nano-banana-2", provider: "venice", name: "Nano Banana 2 (Venice)", tags: ["google"] },
+	{ id: "nano-banana-2-lite", provider: "venice", name: "Nano Banana 2 Lite (Venice)", tags: ["google", "lite", "cheap"] },
+	// Ideogram — strong at typography-in-images
+	{ id: "ideogram-v4", provider: "venice", name: "Ideogram V4 (Venice)", tags: ["ideogram", "typography"] },
+	// Alibaba Qwen
+	{ id: "qwen-image-2-pro", provider: "venice", name: "Qwen Image 2 Pro (Venice)", tags: ["qwen", "pro"] },
+	{ id: "qwen-image-2", provider: "venice", name: "Qwen Image 2 (Venice)", tags: ["qwen"] },
+	{ id: "qwen-image", provider: "venice", name: "Qwen Image (Venice)", tags: ["qwen", "kidstories"] },
+	// Recraft — vector/illustration strength
+	{ id: "recraft-v4-pro", provider: "venice", name: "Recraft V4 Pro (Venice)", tags: ["recraft", "pro", "vector"] },
+	// ByteDance Seedream
+	{ id: "seedream-v5-pro", provider: "venice", name: "Seedream V5 Pro (Venice)", tags: ["seedream", "pro"] },
+	// Alibaba Wan
+	{ id: "wan-2-7-pro-text-to-image", provider: "venice", name: "Wan 2.7 Pro T2I (Venice)", tags: ["wan", "pro"] },
+	// z-image-turbo — currently used by kidstories (VENICE_IMAGE_MODEL in
+	// services/kidstories/.env; see server2-overview §XIII, 2026-07-06 entry)
+	{ id: "z-image-turbo", provider: "venice", name: "Z-Image Turbo (Venice)", tags: ["turbo", "fast", "kidstories"] },
 ];
