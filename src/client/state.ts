@@ -108,6 +108,25 @@ export interface AppState {
 	currentProvider: string | null;
 	currentThinking: ThinkingLevel;
 	/**
+	 * Image-generation models (separate from chat models — used by the
+	 * `venice_generate_image` tool registered by the pi-venice-image
+	 * extension, not by the chat agent itself). Populated once at boot
+	 * via `getImageModels()`; the picker is a separate dialog from the
+	 * chat model picker (`openImageModelPicker` vs `openModelPicker`),
+	 * because the two are conceptually independent: changing the image
+	 * model does not change which model the agent chats with.
+	 */
+	availableImageModels: ImageModelOption[];
+	/**
+	 * The image model the user selected via `/imagemodel`. Persisted
+	 * server-side (chat.ts::setImageModel handler writes it to
+	 * `/home/lepton/.config/acb/image-model`, which the extension reads
+	 * on each tool call), so the agent's next call to
+	 * `venice_generate_image` uses this model. `null` means "no override"
+	 * — the extension's built-in default applies.
+	 */
+	currentImageModelId: string | null;
+	/**
 	 * The model id the user just clicked in the picker. The server will
 	 * confirm it on the next `ready` event. Set to the model id at click
 	 * time, cleared when the matching `ready` arrives. Used to distinguish
@@ -224,6 +243,19 @@ export interface ModelOption {
 	reasoning?: boolean;
 }
 
+/**
+ * One image-generation model returned by `/api/image-models`. Same shape
+ * as the chat `ModelOption` minus `reasoning` (image models don't have a
+ * thinking concept) plus `tags` for UI hints (e.g. "kidstories" badge,
+ * "fast" / "pro" / "cheap" labels).
+ */
+export interface ImageModelOption {
+	id: string;
+	provider: string;
+	name?: string;
+	tags?: readonly string[];
+}
+
 export const state: AppState = {
 	title: "New chat",
 	sessionId: null,
@@ -236,6 +268,8 @@ export const state: AppState = {
 	availableModels: [],
 	currentModelId: null,
 	currentProvider: null,
+	availableImageModels: [],
+	currentImageModelId: null,
 	currentThinking: "high",
 	pendingModelSet: null,
 	uploadedImages: new Map(),

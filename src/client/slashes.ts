@@ -34,6 +34,8 @@ function el_pre(text: string): HTMLPreElement {
 export const SLASH_COMMANDS: Record<string, string> = {
 	// Core
 	model: "open the model picker",
+	imagemodel: "open the image-generation model picker (alias: /image)",
+	image: "open the image-generation model picker (alias: /imagemodel)",
 	think: "set thinking level: /think off|minimal|low|medium|high",
 	clear: "start a new chat (alias: /new)",
 	new: "start a new chat (alias: /clear)",
@@ -103,6 +105,7 @@ export function setSendAsUser(fn: SendAsUserFn): void {
  */
 export interface ChatControls {
 	setModel(modelId: string, provider: string): void;
+	setImageModel(modelId: string | null): void;
 	setThinking(level: ThinkingLevel): void;
 	abort(): void;
 	/** Start a new session in a project (defaults to Global when omitted). */
@@ -144,6 +147,10 @@ export function handleSlash(arg: string): void {
 	switch (cmd) {
 		case "model":
 			openModelPicker();
+			break;
+		case "imagemodel":
+		case "image":
+			openImageModelPicker();
 			break;
 		case "think":
 			if (rest && ["off", "minimal", "low", "medium", "high"].includes(rest) && chatControls) {
@@ -254,6 +261,7 @@ export function handleSlash(arg: string): void {
 				`  model:     ${state.currentModelId ?? "(unknown)"}\n` +
 				`  provider:  ${state.currentProvider ?? "(unknown)"}\n` +
 				`  thinking:  ${state.currentThinking}\n` +
+				`  image:     ${state.currentImageModelId ?? "(default)"}\n` +
 				`  messages:  ${state.messages.length}\n` +
 				`  in:        ${c.input.toLocaleString()} tok\n` +
 				`  out:       ${c.output.toLocaleString()} tok\n` +
@@ -311,6 +319,7 @@ export function handleSlash(arg: string): void {
 				`  /clear          start a new chat\n` +
 				`  /sessions       browse previous chats\n` +
 				`  /model          switch model\n` +
+				`  /imagemodel    switch image-generation model (Venice)\n` +
 				`  /think <level>  set thinking level`;
 			appendNode(el_pre(text));
 			$<HTMLTextAreaElement>("#input").value = "";
@@ -415,6 +424,127 @@ function openModal(title: string, extraClass?: string): ModalRefs {
 // ---------------------------------------------------------------------------
 // Picker dialogs
 // ---------------------------------------------------------------------------
+
+/**
+ * Image-model picker — separate dialog from openModelPicker() because
+ * chat models and image models are conceptually independent: switching
+ * the image model does not change which model the agent chats with.
+ *
+ * Image models come from `/api/image-models` (separate endpoint; the
+ * chat `/api/models` endpoint only returns chat models). They're all
+ * Venice today, grouped under "Venice images". Picking one sends a
+ * `setImageModel` RPC; the server writes the chosen model id to
+ * `/home/lepton/.config/acb/image-model`, which the pi-venice-image
+ * extension reads on each `venice_generate_image` tool call — so the
+ * change takes effect on the next agent invocation without respawning
+ * the pi child (which matters: image generation is invoked from inside
+ * a long agent loop, and a respawn would lose its progress).
+ *
+ * The "Use default" row clears the override (modelId = null), letting
+ * the extension fall back to its built-in default (z-image-turbo).
+ */
+export function openImageModelPicker(): void {
+	if (state.availableImageModels.length === 0) {
+		appendError(
+			"No image models available (server has no image-gen provider keys configured).",
+		);
+		return;
+	}
+	const { overlay, box } = openModal("Image generation model", "image-picker-box");
+	box.append(
+		el(
+			"div",
+			{ class: "picker-help" },
+			"Used by the venice_generate_image tool. Selecting here sets the default for the next image-generation call.",
+		),
+	);
+
+	// "Use default" row — clears the override so the extension uses its
+	// built-in default (z-image-turbo). Highlighted when no override is
+	// set.
+	const useDefault = el("div", { class: "model-row" });
+	useDefault.append(
+		el("div", { class: "model-name" }, "Use extension default (z-image-turbo)"),
+	);
+	useDefault.append(el("div", { class: "model-provider" }, "no override"));
+	if (state.currentImageModelId === null) useDefault.classList.add("active");
+	useDefault.addEventListener("click", () => {
+		state.currentImageModelId = null;
+		chatControls?.setImageModel(null);
+		refreshStatus();
+		overlay.remove();
+	});
+	box.append(useDefault);
+
+	// Group by provider. All Venice today, but the structure supports
+	// adding e.g. OpenRouter images later without UI changes.
+	const groups = new Map<string, typeof state.availableImageModels>();
+	for (const m of state.availableImageModels) {
+		const list = groups.get(m.provider) ?? [];
+		list.push(m);
+		groups.set(m.provider, list);
+	}
+	for (const [, list] of groups) {
+		list.sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
+	}
+
+	for (const [provider, models] of groups) {
+		const headerLabel = `${provider} images · ${models.length}`;
+		const header = el("div", { class: "model-group-header" });
+		header.append(el("span", { class: "model-group-twisty" }, "▾"));
+		header.append(el("span", { class: "model-group-title" }, headerLabel));
+
+		const rows = el("div", { class: "model-group-rows" });
+		for (const m of models) {
+			const row = el("div", { class: "model-row" });
+			const main = el("div", { class: "model-name" }, m.name ?? m.id);
+			for (const tag of m.tags ?? []) {
+				main.append(
+					el(
+						"span",
+						{
+							class: `model-badge tag-${tag}`,
+							title: tag,
+						},
+						tag,
+					),
+				);
+			}
+			row.append(main);
+			row.append(el("div", { class: "model-provider" }, m.id === m.name ? "" : m.id));
+			if (m.id === state.currentImageModelId) row.classList.add("active");
+			row.addEventListener("click", () => {
+				state.currentImageModelId = m.id;
+				chatControls?.setImageModel(m.id);
+				refreshStatus();
+				overlay.remove();
+			});
+			rows.append(row);
+		}
+
+		const group = el("div", { class: "model-group" });
+		group.append(header, rows);
+		box.append(group);
+
+		// Expand any group containing the current selection so it's visible.
+		const expanded = models.some((m) => m.id === state.currentImageModelId);
+		if (!expanded) header.classList.add("collapsed");
+		if (!expanded) rows.classList.add("hidden");
+		header.addEventListener("click", () => {
+			const isCollapsed = header.classList.contains("collapsed");
+			header.classList.toggle("collapsed", !isCollapsed);
+			rows.classList.toggle("hidden", !isCollapsed);
+		});
+	}
+
+	box.append(
+		el("button", {
+			class: "btn",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
+}
 
 export function openModelPicker(): void {
 	if (state.availableModels.length === 0) {
@@ -761,6 +891,32 @@ export function openOverflowMenu(): void {
 		openModelPicker();
 	});
 	box.append(modelLine);
+
+	// Image-generation model — a separate setting from the chat model.
+	// Defaults to "extension default" (the pi-venice-image extension's
+	// built-in z-image-turbo) when the user hasn't picked one. Same
+	// overflow-row style as the chat model row above so the two look
+	// like a pair.
+	const imageLine = el("div", { class: "overflow-row" });
+	imageLine.append(el("div", { class: "overflow-label" }, "image"));
+	const imageValue = state.currentImageModelId ?? "default";
+	const imageLabel =
+		state.availableImageModels.find((m) => m.id === state.currentImageModelId)?.name ??
+		imageValue;
+	imageLine.append(el("div", { class: "overflow-value" }, imageLabel));
+	if (state.availableImageModels.length === 0) {
+		// No image models configured (VENICE_API_KEY missing or no
+		// image-capable provider). Show the row as disabled rather
+		// than hiding it, so the user can see the feature exists.
+		imageLine.classList.add("overflow-row-disabled");
+		imageLine.title = "No image-generation provider configured";
+	} else {
+		imageLine.addEventListener("click", () => {
+			overlay.remove();
+			openImageModelPicker();
+		});
+	}
+	box.append(imageLine);
 
 	// Copy a shareable link to the current chat (`/s/<id>`). Mirrors the
 	// `/link` slash command; surfaced here for discoverability on mobile
