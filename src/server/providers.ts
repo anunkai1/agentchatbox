@@ -248,4 +248,24 @@ export const EXTRA_MODELS: readonly ExtraModel[] = [
 	{ id: "claude-opus-4-7", provider: "venice", name: "Claude Opus 4.7 (Venice)", reasoning: true },
 	{ id: "qwen3-5-397b-a17b", provider: "venice", name: "Qwen 3.5 397B (Venice)", reasoning: true },
 	{ id: "venice-uncensored-1-2", provider: "venice", name: "Venice Uncensored 1.2", reasoning: false },
+	// --- openrouter ---
+	// Provider declared in ~/.pi/agent/models.json (baseUrl
+	// https://openrouter.ai/api/v1, api openai-completions, compat
+	// supportsDeveloperRole=false + thinkingFormat=openrouter). Auth comes
+	// from .secrets/llm/providers.env (OPENROUTER_API_KEY) for the ACB systemd
+	// child and .secrets/llm/pi-auth.json `openrouter` entry for standalone pi.
+	//
+	// Built-in SDK models (e.g. tencent/hy3-preview) flow through `getModels`
+	// automatically once OPENROUTER_API_KEY is set. Custom models not in the
+	// SDK registry (like the `:free` tier below) get surfaced via this list
+	// — appended after the SDK-listed models, gated on the provider key.
+	//
+	// tencent/hy3:free — Tencent Hy3, a 295B-param MoE (21B active, 192
+	// experts top-8). OpenRouter's free tier of the production model, served
+	// by Novita. 262K context, reasoning configurable (default high, supported
+	// efforts: high/low/none). Free promo expires 2026-07-21 per OpenRouter —
+	// when the promo ends, either re-evaluate or delete this entry. Cost
+	// hard-coded to $0 to match OpenRouter's `pricing: {prompt:"0",
+	// completion:"0"}`. See server2-overview §XX entry for 2026-07-08.
+	{ id: "tencent/hy3:free", provider: "openrouter", name: "Tencent Hy3 (free)", reasoning: true },
 ];
