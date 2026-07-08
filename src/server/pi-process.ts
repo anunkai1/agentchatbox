@@ -98,7 +98,17 @@ export class PiProcess extends EventEmitter {
 	private readonly child: ChildProcessWithoutNullStreams;
 	private stdoutBuf = "";
 	private stderrBuf = "";
-	private killed = false;
+	/**
+	 * True once the child has either been killed (`kill()` called) OR
+	 * exited on its own (exit handler flips this). Read by callers
+	 * (e.g. session-registry's `requestSessionId` retry loop) to avoid
+	 * hammering a dead pipe after the OS surfaces the exit.
+	 */
+	private _killed = false;
+	/** True once `kill()` has run OR the child has exited. */
+	get killed(): boolean {
+		return this._killed;
+	}
 	readonly pid: number;
 
 	constructor(opts: PiProcessOptions) {
@@ -153,12 +163,52 @@ export class PiProcess extends EventEmitter {
 			}
 		});
 
+		// CRITICAL — noop error listeners on stdin/stdout/stderr.
+		//
+		// When the child dies asynchronously (e.g. `pi` exits because of
+		// a model-switch crash inside the RPC protocol, or because the
+		// user closed their browser tab on Android and the heartbeat
+		// tore the WS down), Node's underlying Socket emits an "error"
+		// event (EPIPE on a closed write end, ECONNRESET on a closed
+		// read end, etc.). These Stream-level errors do NOT bubble
+		// through `child.on("error")` — that listener only catches
+		// errors raised via the ChildProcess itself (spawn ENOENT,
+		// EACCES, etc.).
+		//
+		// Without a listener, Node's EventEmitter sees an unhandled
+		// "error" event and `process.exit(1)`s the server. That kills
+		// the whole agentchatbox — every active session, every WS,
+		// every idle child — even though the actual failure was just
+		// one `pi` subprocess going away. systemd restarts the service,
+		// but the orphaned `pi` processes from prior failed sessions
+		// are still alive holding file locks; the freshly-spawned
+		// server immediately crashes again on the same code path,
+		// producing the crash-loop observed 2026-07-08.
+		//
+		// The synchronous EPIPE inside `send()`'s try/catch is already
+		// caught and re-emitted as our own "error" event — that's the
+		// happy path. The ASYNC EPIPE this listener swallows is the
+		// one that previously escaped and crashed Node. The exit
+		// handler below is the source of truth for "the child is dead";
+		// these listeners exist only to keep the parent alive until
+		// that handler runs.
+		child.stdin.on("error", () => {});
+		child.stdout.on("error", () => {});
+		child.stderr.on("error", () => {});
+
 		child.on("error", (err) => {
 			// Spawn failed (ENOENT, EACCES) or stream errored.
 			this.emit("error", err);
 		});
 
 		child.on("exit", (code, signal) => {
+			// Mark dead so callers checking `pi.killed` (e.g.
+			// session-registry's requestSessionId retry loop) stop
+			// writing to the closed pipe. Without this, natural
+			// exit left `killed=false` and the retry timer kept
+			// firing send() against a pipe whose EPIPEs were
+			// unhandled (the same root cause this fix targets).
+			this._killed = true;
 			this.emit("exit", { code, signal });
 		});
 	}
@@ -190,7 +240,7 @@ export class PiProcess extends EventEmitter {
 	 */
 	kill(): void {
 		if (this.killed) return;
-		this.killed = true;
+		this._killed = true;
 		try {
 			this.child.stdin.end();
 		} catch {

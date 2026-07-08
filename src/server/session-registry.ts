@@ -445,6 +445,16 @@ class SessionRegistry {
 	 * constructed, so a single send isn't enough. Bounded attempts
 	 * prevent an unbounded loop on a wedged child; the exit handler
 	 * sends the error frame in that case.
+	 *
+	 * Also short-circuits when the child has died (`session.pi.killed`,
+	 * which the exit handler in pi-process.ts flips to true the moment
+	 * the child goes away). Without this check, the retry timer kept
+	 * firing send() against a closed pipe for the full ~10s budget
+	 * even after the exit handler had already sent the error frame.
+	 * Today that wasted work is silent (the noop stdin error listener
+	 * + send()'s killed-guard mean nothing observable happens), but it
+	 * also means a dead-session detection took the full retry budget;
+	 * this check makes the failure mode prompt and explicit.
 	 */
 	private requestSessionId(session: LiveSession): void {
 		const intervalMs = 200;
@@ -452,6 +462,7 @@ class SessionRegistry {
 		let attempts = 0;
 		const retry = () => {
 			if (session.ready || attempts >= maxAttempts) return;
+			if (session.pi.killed) return; // child is gone — stop hammering
 			attempts++;
 			session.pi.send({ type: "get_state" });
 			const t = setTimeout(retry, intervalMs);

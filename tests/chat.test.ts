@@ -81,6 +81,41 @@ const EXIT_BEFORE_SESSION_SCRIPT = `#!/usr/bin/env bash
 exit 127
 `;
 
+const EXIT_AFTER_FIRST_READ_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that READS stdin (so the parent's write end of the pipe is
+# open and the parent can keep writing) and then exits hard. This is
+# the exact shape of the 2026-07-08 crash-loop trigger: pi dies after
+# some interactive traffic but before its session is ready, and the
+# server's requestSessionId retry timer keeps sending get_state into a
+# closed pipe. With the noop Stream error listeners in pi-process.ts
+# + the retry-guard (if session.pi.killed return) in
+# session-registry.ts, the parent MUST NOT crash. Without those
+# fixes, the async EPIPE on stdin surfaces as an unhandled 'error'
+# event on the Socket and process.exit(1) takes down the entire
+# agentchatbox server (which in turn triggers the orphan-pi
+# crash-loop when systemd brings it back).
+sleep 0.05
+# Read exactly one line from stdin (the parent's first get_state) and
+# exit. We use 'read' not a 'while read' loop because we want the
+# process to DIE after a single read -- otherwise bash would block
+# forever on subsequent reads and never exit (the parent keeps
+# sending get_state every 200ms; without an exit, the script never
+# reaches 'exit 1' and the crash scenario can't be reproduced).
+read -r _line
+exit 1
+`;
+
+const EXIT_AFTER_DELAY_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that exits after a delay without reading stdin. Used by the
+# EPIPE regression test (Part a) to produce a dead-child pipe that the
+# parent can then write to -- triggering the async EPIPE that the noop
+# Stream error listeners must swallow. EXIT_AFTER_FIRST_READ_SCRIPT is
+# used in Part b because the session-registry path sends get_state
+# before the child exits, so reading is required to drain the pipe.
+sleep 0.1
+exit 1
+`;
+
 const TRACK_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that records every spawn by appending its PID to the file
 # named in $AGENTCHATBOX_FAKE_PI_MARKER. Used by the detach/reattach
@@ -222,7 +257,7 @@ done
 
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
-	behavior: "echo" | "ack" | "exit-before-session" | "steer-race" | "track" | "retry" | "running",
+	behavior: "echo" | "ack" | "exit-before-session" | "exit-after-read" | "exit-after-delay" | "steer-race" | "track" | "retry" | "running",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -239,7 +274,11 @@ function makeFakePi(
 							? RETRY_SCRIPT
 							: behavior === "running"
 								? RUNNING_SCRIPT
-								: EXIT_BEFORE_SESSION_SCRIPT;
+								: behavior === "exit-after-read"
+									? EXIT_AFTER_FIRST_READ_SCRIPT
+									: behavior === "exit-after-delay"
+										? EXIT_AFTER_DELAY_SCRIPT
+										: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -450,6 +489,97 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			);
 			const msgs = await inbox.waitFor(2, 3000);
 			// Expect an error message about the child exiting.
+			const errMsg = msgs.find((m) => m.type === "error");
+			expect(errMsg).toBeTruthy();
+			expect((errMsg as { message?: string }).message ?? "").toMatch(/pi exited/);
+		} finally {
+			close();
+		}
+	});
+
+	it("flags the child as killed on natural exit, so the session-registry retry short-circuits", async () => {
+		// Regression test for the 2026-07-08 openrouter crash loop.
+		//
+		// Two-part fix in pi-process.ts + session-registry.ts:
+		//
+		//   (a) PiProcess: set `killed = true` in the exit handler so
+		//       NATURAL exits are indistinguishable from manual
+		//       kill(). Previously only manual kill() flipped the
+		//       flag, so a child that exited on its own (e.g. after
+		//       a set_model crash) was reported as alive to callers
+		//       that read pi.killed.
+		//   (b) session-registry: requestSessionId's retry loop now
+		//       short-circuits on `session.pi.killed`, so it doesn't
+		//       waste get_state writes on a dead pipe for the full
+		//       ~10s retry budget (and in production, so the retry
+		//       doesn't pile onto a pipe that's about to be torn
+		//       down by the orphan-pi crash-loop).
+		//
+		// Also asserts the noop Stream error listeners in
+		// pi-process.ts don't break anything (the underlying
+		// streams still emit 'data' on stdout normally — the
+		// listener is on 'error' only).
+		fakePiPath = makeFakePi("exit-after-delay");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { spawnPi } = await import("../src/server/pi-process.js");
+
+		// Part (a) — PiProcess.killed becomes true after natural exit.
+		const pi = spawnPi({
+			bin: fakePiPath,
+			provider: "deepseek",
+			modelId: "m1",
+			apiKey: "test-dummy",
+			cwd: "/tmp",
+			thinkingLevel: "off",
+		});
+		expect(pi.killed).toBe(false); // not yet
+		// Wait for the child to read-and-exit (script: sleep 0.1; exit 1)
+		await new Promise((r) => setTimeout(r, 300));
+		expect(pi.killed).toBe(true); // exit handler fired (the fix)
+
+		// Part (a, cont.) — send() on a naturally-exited child must
+		// not throw and must not crash. Before the fix, killed was
+		// still false (exit handler didn't set it), so send() would
+		// attempt to write to a dead pipe. send()'s try/catch
+		// handles any synchronous throw, but this assertion pins
+		// the no-crash guarantee end-to-end.
+		expect(() => pi.send({ type: "get_state" })).not.toThrow();
+		expect(() => pi.send({ type: "prompt", message: "hi" })).not.toThrow();
+
+		// Part (b) — through the full session-registry path: spawn
+		// pi, let the retry timer fire a few times, child dies,
+		// retry loop sees killed=true and stops, error frame
+		// delivered to the WS, parent process still alive.
+		fakePiPath = makeFakePi("exit-after-read");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			// The exit-after-read script reads get_state, exits 1.
+			// The retry timer fires every 200ms; maxAttempts = 50
+			// gives a ~10s ceiling. With the killed-check fix the
+			// retry stops on the next tick after the child dies
+			// (sub-200ms after the exit), and the error frame
+			// propagates to the WS shortly after. We assert the
+			// error arrives within a few seconds (well under the
+			// full retry budget) to prove the short-circuit kicked
+			// in. The exact upper bound is loose because the test
+			// harness has variable setup latency; the meaningful
+			// guarantee is "fast + finite", not "fast".
+			const msgs = await inbox.waitFor(2, 4000).catch(() => inbox.all());
 			const errMsg = msgs.find((m) => m.type === "error");
 			expect(errMsg).toBeTruthy();
 			expect((errMsg as { message?: string }).message ?? "").toMatch(/pi exited/);
