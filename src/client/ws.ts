@@ -66,6 +66,13 @@ export interface ChatClient {
 	abortRetry(): void;
 	/** Switch to a different model mid-session. */
 	setModel(modelId: string, provider: string): void;
+	/**
+	 * Persist the user's chosen image-generation model. Server writes it
+	 * to a file the pi-venice-image extension reads on each tool call,
+	 * so the next agent invocation uses this model. `null` clears the
+	 * override (extension falls back to its built-in default).
+	 */
+	setImageModel(modelId: string | null): void;
 	/** Set the thinking level. */
 	setThinking(level: ThinkingLevel): void;
 	/** Rename the current session. */
@@ -353,6 +360,7 @@ export function createChatClient(): ChatClient {
 			send({ type: "abortRetry" });
 		},
 		setModel: (modelId, provider) => send({ type: "setModel", modelId, provider }),
+		setImageModel: (modelId) => send({ type: "setImageModel", modelId }),
 		setThinking: (level) => send({ type: "setThinking", level }),
 		renameSession: (name) => send({ type: "renameSession", name }),
 		renameSessionById: (sessionId, name) => send({ type: "renameSessionById", sessionId, name }),

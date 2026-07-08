@@ -1649,6 +1649,14 @@ body {
 .overflow-row:last-of-type {
 	border-bottom: none;
 }
+/* Disabled state — the row is shown for discoverability but isn't clickable. */
+.overflow-row.overflow-row-disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+.overflow-row.overflow-row-disabled:hover {
+	background: transparent;
+}
 .overflow-label {
 	color: var(--text-secondary);
 	font-size: 13px;

@@ -19,7 +19,7 @@ import type {
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { getCapabilities, getHealth, getModels, sessionExists, type ModelInfo } from "./api.js";
+import { getCapabilities, getHealth, getImageModels, getModels, sessionExists, type ImageModelInfo, type ModelInfo } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
 import { setRichText } from "./linkify.js";
@@ -716,13 +716,26 @@ async function boot(): Promise<void> {
 	// aren't set, the lists come back empty and the picker will show a
 	// helpful error.
 	try {
-		const [h, models] = await Promise.all([getHealth(), getModels()]);
+		const [h, models, imageModels] = await Promise.all([
+			getHealth(),
+			getModels(),
+			// Image-model list is best-effort — if it fails (e.g. the
+			// image-models endpoint isn't deployed yet) we just leave
+			// the image picker empty; the chat picker still works.
+			getImageModels().catch(() => [] as ImageModelInfo[]),
+		]);
 		state.searchEnabled = h.search ?? false;
 		state.availableModels = models.map((m: ModelInfo) => ({
 			id: m.id,
 			provider: m.provider,
 			name: m.name,
 			reasoning: m.reasoning,
+		}));
+		state.availableImageModels = imageModels.map((m: ImageModelInfo) => ({
+			id: m.id,
+			provider: m.provider,
+			name: m.name,
+			tags: m.tags,
 		}));
 		// Fetch capabilities (tools, skills, packages) for the header badge.
 		getCapabilities()
@@ -833,6 +846,7 @@ async function boot(): Promise<void> {
 
 	setChatControls({
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
+		setImageModel: (modelId) => chatClient.setImageModel(modelId),
 		setThinking: (level) => chatClient.setThinking(level),
 		abort: () => chatClient.abort(),
 		newSession: (projectId) => chatClient.newSession(projectId),
