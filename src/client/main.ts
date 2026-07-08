@@ -593,10 +593,21 @@ function onEvent(event: Record<string, unknown>): void {
 			// so a row may be "empty" even when lastAssistant.text (accumulated
 			// from message_update) is non-empty. Treat either as removable so
 			// no frozen bubble lingers.
+			//
+			// IMPORTANT: the emptiness check must consider THINKING too. A
+			// turn that streams reasoning and then makes a tool call (no
+			// visible text) is not empty — it has a reasoning transcript the
+			// user wants to see. Without this, the thinking block gets
+			// yanked together with the row at message_end, and the user
+			// watches it appear, get pushed up by the tool card, and
+			// vanish.
 			let finalText = "";
+			let finalThinking = "";
 			if (m.role === "assistant") {
 				for (const block of m.content) {
 					if (block.type === "text") finalText += (block as TextContent).text;
+					else if (block.type === "thinking")
+						finalThinking += (block as ThinkingContent).thinking;
 				}
 			}
 			const isEmptyError =
@@ -606,7 +617,10 @@ function onEvent(event: Record<string, unknown>): void {
 				m.role === "assistant" &&
 				lastAssistant &&
 				lastAssistant.kind === "assistant" &&
-				(!lastAssistant.text.trim() || !finalText.trim()) &&
+				(!lastAssistant.text.trim() ||
+					!lastAssistant.thinking.trim() ||
+					!finalText.trim() ||
+					!finalThinking.trim()) &&
 				lastAssistantDom
 			) {
 				if (isEmptyError) {
