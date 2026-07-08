@@ -44,6 +44,7 @@ export const PROVIDER_KEYS = [
 	"opencode",
 	"minimax",
 	"ollama",
+	"venice",
 ] as const;
 
 export type SupportedProvider = (typeof PROVIDER_KEYS)[number];
@@ -112,6 +113,7 @@ const PROVIDER_API_KEY_ENV: Record<string, string> = {
 	// check in session-registry.ts passes. The key is sent in the
 	// Authorization header, which Ollama ignores.
 	ollama: "OLLAMA_API_KEY",
+	venice: "VENICE_API_KEY",
 	xiaomi: "XIAOMI_API_KEY",
 	"xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
 	"xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
@@ -224,4 +226,26 @@ export const EXTRA_MODELS: readonly ExtraModel[] = [
 	//     pragmatic choice — weaker tool calling than qwen3 but actually
 	//     functional.
 	{ id: "llama3.1:latest", provider: "ollama", name: "Llama 3.1 8B (Ollama, local)", reasoning: false },
+	// --- venice ---
+	// Venice (venice.ai) is an OpenAI-compatible aggregator. The provider is
+	// declared in ~/.pi/agent/models.json (baseUrl https://api.venice.ai/api/v1,
+	// api openai-completions); auth comes from ~/.secrets/llm/pi-auth.json (the
+	// `venice` entry — same dual representation as minimax/zai: flat-env in
+	// providers.env for ACB systemd + JSON in pi-auth.json for standalone pi).
+	// Curated set (all vision-capable, the use case that prompted adding Venice);
+	// 48 of Venice's 93 text models support image input — add more on request.
+	// compat.supportsReasoningEffort is false at the provider level (set in
+	// models.json) because only some Venice models honour reasoning_effort, so
+	// the thinking slider in ACB does not transmit to Venice models.
+	{ id: "qwen3-vl-235b-a22b", provider: "venice", name: "Qwen3 VL 235B (Venice)", reasoning: false },
+	{ id: "qwen3-5-9b", provider: "venice", name: "Qwen 3.5 9B (Venice)", reasoning: true },
+	{ id: "minimax-m3-preview", provider: "venice", name: "MiniMax M3 Preview (Venice)", reasoning: true },
+	{ id: "gemini-3-flash-preview", provider: "venice", name: "Gemini 3 Flash (Venice)", reasoning: true },
+	{ id: "gemini-3-5-flash", provider: "venice", name: "Gemini 3.5 Flash (Venice)", reasoning: true },
+	{ id: "grok-4-3", provider: "venice", name: "Grok 4.3 (Venice)", reasoning: true },
+	{ id: "grok-4-20", provider: "venice", name: "Grok 4.20 (Venice)", reasoning: true },
+	{ id: "kimi-k2-6", provider: "venice", name: "Kimi K2.6 (Venice)", reasoning: true },
+	{ id: "claude-opus-4-7", provider: "venice", name: "Claude Opus 4.7 (Venice)", reasoning: true },
+	{ id: "qwen3-5-397b-a17b", provider: "venice", name: "Qwen 3.5 397B (Venice)", reasoning: true },
+	{ id: "venice-uncensored-1-2", provider: "venice", name: "Venice Uncensored 1.2", reasoning: false },
 ];
