@@ -31,7 +31,8 @@
  */
 
 import type { Server as HttpServer, IncomingMessage } from "node:http";
-import { join } from "node:path";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
 import type {
 	ClientMessage,
@@ -236,6 +237,27 @@ function toImageContent(images: PromptImage[] | undefined) {
 	return images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
 }
 
+/**
+ * Atomically write `modelId` (or remove the file when null) to the
+ * image-model override file. Used by the `setImageModel` RPC handler so
+ * the pi-venice-image extension can read the user's chosen default on
+ * each `venice_generate_image` tool call. Separate from this file's
+ * main switch so the fire-and-forget call site stays readable.
+ */
+async function persistImageModel(
+	modelId: string | null,
+	file: string,
+): Promise<void> {
+	await mkdir(dirname(file), { recursive: true });
+	if (modelId === null) {
+		await rm(file, { force: true });
+		return;
+	}
+	const tmp = file + ".tmp";
+	await writeFile(tmp, modelId + "\n", "utf8");
+	await rename(tmp, file);
+}
+
 function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession): void {
 	const pi = session.pi;
 
@@ -291,6 +313,30 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			// after switching models reverts the displayed model to the
 			// original spawn default, even though pi itself kept the new one.
 			session.init = { ...session.init, provider: msg.provider, modelId: msg.modelId };
+			break;
+		}
+		case "setImageModel": {
+			// Persist the user's chosen image model to a file the
+			// pi-venice-image extension reads on each `venice_generate_image`
+			// tool call. Writing here keeps selection live across the
+			// existing pi child (no respawn), which matters because image
+			// generation is invoked from inside a long agent loop — a
+			// respawn would lose the loop's progress.
+			//
+			// Fire-and-forget: onClientMessage is sync; the write is
+			// atomic (write-then-rename) so a partially-written file
+			// can't be read mid-update. `null` modelId removes the
+			// override file entirely so the extension falls back to its
+			// own built-in default.
+			const file = config.imageModelFile;
+			void persistImageModel(msg.modelId, file).catch((err) => {
+				log.error("setImageModel write failed", {
+					modelId: msg.modelId,
+					file,
+					error: err instanceof Error ? err.message : String(err),
+				});
+				deliverError(ws, "could not persist image model selection");
+			});
 			break;
 		}
 		case "setThinking": {

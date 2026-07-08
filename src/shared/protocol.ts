@@ -213,6 +213,15 @@ export type ClientMessage =
 	| { type: "abort" }
 	| { type: "abortRetry" }
 	| { type: "setModel"; modelId: string; provider: string }
+	/**
+	 * User picked a new default image model in the picker (e.g. for the
+	 * `venice_generate_image` tool). Server persists it to a file
+	 * (`/home/lepton/.config/acb/image-model`) that the pi-venice-image
+	 * extension reads on each tool call — live update, no respawn.
+	 * `modelId` may be `null` to clear the override (tool falls back to
+	 * the extension's own default).
+	 */
+	| { type: "setImageModel"; modelId: string | null }
 	| { type: "setThinking"; level: ThinkingLevel }
 	| { type: "listSessions" }
 	| { type: "resumeSession"; sessionId: string }

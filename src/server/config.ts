@@ -43,6 +43,15 @@ export interface ServerConfig {
 	 * Overridable via PI_CWD.
 	 */
 	piCwd: string;
+	/**
+	 * Path to the file that stores the user's chosen default image model
+	 * for the `venice_generate_image` tool. The pi-venice-image extension
+	 * reads this on each call; the server writes it on every
+	 * `setImageModel` RPC. Path defaults to
+	 * `$HOME/.config/acb/image-model` so it survives ACB reinstalls (the
+	 * path is independent of the agentchatbox install dir).
+	 */
+	imageModelFile: string;
 }
 
 function readKey(name: string): string | undefined {
@@ -94,6 +103,9 @@ export const config: ServerConfig = {
 	// is what the rest of the file uses; resolve them here.
 	piBin: process.env.PI_BIN ?? "pi",
 	piCwd: process.env.PI_CWD ?? process.cwd(),
+	imageModelFile:
+		process.env.IMAGE_MODEL_FILE ??
+		resolve(process.env.HOME ?? "/home/lepton", ".config", "acb", "image-model"),
 };
 
 /**
