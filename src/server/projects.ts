@@ -28,7 +28,7 @@
  * there is zero drift between the sidecar and pi's session JSONLs.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { config } from "./config.js";
 import { projectRoot } from "./paths.js";
@@ -159,7 +159,13 @@ function writeStore(store: ProjectsFile): void {
 	} catch {
 		/* dir may already exist */
 	}
-	writeFileSync(file, JSON.stringify(store, null, 2));
+	// Write to a sibling temp file then rename, so a crash mid-write (or a
+	// reader racing the write) can't leave a truncated JSON that readStore()
+	// would silently drop, losing every project definition. renameSync is
+	// atomic on POSIX when src+dst share a filesystem (they do here — same dir).
+	const tmp = `${file}.tmp`;
+	writeFileSync(tmp, JSON.stringify(store, null, 2));
+	renameSync(tmp, file);
 	// Invalidate the read cache so the next read picks up the new bytes
 	// (and its new mtime).
 	cachedStore = null;

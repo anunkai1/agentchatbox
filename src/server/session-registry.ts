@@ -531,17 +531,6 @@ class SessionRegistry {
 		const intervalMs = 200;
 		const maxAttempts = 50; // ~10s ceiling — pi startup is normally <1s
 		let attempts = 0;
-		// Send get_state on a bounded retry schedule until the session is
-		// ready. pi doesn't ack get_state until its AgentSession is
-		// constructed, so a single send isn't enough. Bounded attempts
-		// prevent an unbounded loop on a wedged child; the exit handler
-		// sends the error frame in that case.
-		//
-		// Also short-circuits when the child has died (`session.pi.killed`,
-		// which the exit handler in pi-process.ts flips to true the moment
-		// the child goes away). Without this check, the retry timer kept
-		// firing send() against a closed pipe for the full ~10s budget
-		// even after the exit handler had already sent the error frame.
 		const send = (): void => {
 			if (session.ready || attempts >= maxAttempts || session.pi.killed) return;
 			attempts++;
