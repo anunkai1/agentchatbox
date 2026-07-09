@@ -306,13 +306,19 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			break;
 		}
 		case "setModel": {
+			// Stash the request in session.pendingModel and send the RPC.
+			// Do NOT update session.init here — that is the job of
+			// session-registry.ts's onEvent, which only mutates init when
+			// pi's `set_model` response comes back with `success: true`.
+			// The old optimistic update was the bug behind silent-fail
+			// model switches: when pi rejected an id (e.g. a model
+			// advertised in EXTRA_MODELS but not registered with pi's
+			// model-registry, or a typo), session.init was already
+			// pointing at the rejected model, so a refresh/reconnect
+			// made the picker lie about the current model and the next
+			// prompt still went to the old one.
+			session.pendingModel = { provider: msg.provider, modelId: msg.modelId };
 			pi.send({ type: "set_model", provider: msg.provider, modelId: msg.modelId });
-			// Record the change on the session so a later reattach (page
-			// refresh, reconnect) reports the CURRENT model in `ready`, not
-			// the one the session was spawned with. Without this, refreshing
-			// after switching models reverts the displayed model to the
-			// original spawn default, even though pi itself kept the new one.
-			session.init = { ...session.init, provider: msg.provider, modelId: msg.modelId };
 			break;
 		}
 		case "setImageModel": {
@@ -340,10 +346,12 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			break;
 		}
 		case "setThinking": {
+			// Same pessimistic pattern as setModel — see the comment
+			// there. The actual init update happens in
+			// session-registry.ts when pi's set_thinking_level response
+			// arrives with success:true.
+			session.pendingThinking = msg.level;
 			pi.send({ type: "set_thinking_level", level: msg.level });
-			// Same rationale as setModel: keep init in sync so reattach
-			// reports the current thinking level, not the spawn default.
-			session.init = { ...session.init, thinkingLevel: msg.level };
 			break;
 		}
 		case "renameSession": {

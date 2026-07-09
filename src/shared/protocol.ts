@@ -197,7 +197,22 @@ export type ServerMessage =
 	| { type: "ping" }
 	| { type: "error"; message: string }
 	/** Reply to forkSession: the new session's id, ready to resume. */
-	| { type: "forked"; sessionId: string };
+	| { type: "forked"; sessionId: string }
+	/**
+	 * Confirms a model or thinking-level change. Sent by the server
+	 * after `set_model` / `set_thinking_level` returns from pi (success
+	 * or failure). Carries the session's CURRENT model+thinking — i.e.
+	 * the same model pi is actually using, NOT the user's last click if
+	 * that click was rejected (e.g. a model id that isn't in pi's
+	 * registry). The client adopts this to keep the picker truthful
+	 * without waiting for a page refresh.
+	 */
+	| {
+			type: "modelState";
+			provider: string;
+			modelId: string;
+			thinkingLevel: ThinkingLevel;
+	  };
 
 /** Client → server. */
 export type ClientMessage =
