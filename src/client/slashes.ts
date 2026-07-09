@@ -12,8 +12,17 @@
  */
 
 import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
-import { $, el } from "./dom.js";
-import { appendError, appendNode, refreshStatus, toggleCapabilitiesPopover } from "./render.js";
+import { listVoices } from "./api.js";
+import { $, el, escapeHtml } from "./dom.js";
+import {
+	appendError,
+	appendNode,
+	autoSize,
+	openProjectEditor,
+	refreshStatus,
+	renderShell,
+	toggleCapabilitiesPopover,
+} from "./render.js";
 import { type ModelOption, state } from "./state.js";
 import { saveSessionPrefs } from "./prefs.js";
 import { shareableSessionUrl } from "./url.js";
@@ -131,7 +140,7 @@ function resetChatState(): void {
 	state.history = [];
 	state.historyIdx = null;
 	state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-	void import("./render.js").then(({ renderShell }) => renderShell());
+	renderShell();
 }
 /** Public so main.ts's `newSessionInProject` can reset before spawning. */
 export { resetChatState };
@@ -210,7 +219,7 @@ export function handleSlash(arg: string): void {
 			// by case-insensitive name. No arg opens the project editor.
 			const q = rest.trim().toLowerCase();
 			if (!q) {
-				void import("./render.js").then(({ openProjectEditor }) => openProjectEditor());
+				openProjectEditor();
 				$<HTMLTextAreaElement>("#input").value = "";
 				return;
 			}
@@ -369,7 +378,7 @@ export function handleSlash(arg: string): void {
 				);
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
-			import("./render.js").then(({ autoSize }) => autoSize());
+			autoSize();
 			break;
 		}
 		case "fetch": {
@@ -382,7 +391,7 @@ export function handleSlash(arg: string): void {
 				);
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
-			import("./render.js").then(({ autoSize }) => autoSize());
+			autoSize();
 			break;
 		}
 		case "codesearch": {
@@ -395,7 +404,7 @@ export function handleSlash(arg: string): void {
 				);
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
-			import("./render.js").then(({ autoSize }) => autoSize());
+			autoSize();
 			break;
 		}
 		default:
@@ -445,9 +454,7 @@ function openModal(title: string, extraClass?: string): ModalRefs {
  */
 export function openImageModelPicker(): void {
 	if (state.availableImageModels.length === 0) {
-		appendError(
-			"No image models available (server has no image-gen provider keys configured).",
-		);
+		appendError("No image models available (server has no image-gen provider keys configured).");
 		return;
 	}
 	const { overlay, box } = openModal("Image generation model", "image-picker-box");
@@ -463,9 +470,7 @@ export function openImageModelPicker(): void {
 	// built-in default (z-image-turbo). Highlighted when no override is
 	// set.
 	const useDefault = el("div", { class: "model-row" });
-	useDefault.append(
-		el("div", { class: "model-name" }, "Use extension default (z-image-turbo)"),
-	);
+	useDefault.append(el("div", { class: "model-name" }, "Use extension default (z-image-turbo)"));
 	useDefault.append(el("div", { class: "model-provider" }, "no override"));
 	if (state.currentImageModelId === null) useDefault.classList.add("active");
 	useDefault.addEventListener("click", () => {
@@ -609,9 +614,7 @@ export function openModelPicker(): void {
 			? el(
 					"span",
 					{ class: "model-group-active" },
-					models.find((m) => m.id === state.currentModelId)?.name ??
-						state.currentModelId ??
-						"",
+					models.find((m) => m.id === state.currentModelId)?.name ?? state.currentModelId ?? "",
 				)
 			: null;
 
@@ -642,6 +645,7 @@ export function openModelPicker(): void {
 				// logic.
 				state.currentModelId = m.id;
 				state.currentProvider = m.provider;
+				state.currentModelLabel = m.name ?? m.id;
 				state.pendingModelSet = m.id;
 				chatControls?.setModel(m.id, m.provider);
 				refreshStatus();
@@ -696,7 +700,10 @@ export function openModelPicker(): void {
 				// matches are visible without an extra click.
 				setExpanded(g, visible > 0);
 			} else {
-				setExpanded(g, g.all.some((m) => m.id === state.currentModelId));
+				setExpanded(
+					g,
+					g.all.some((m) => m.id === state.currentModelId),
+				);
 			}
 		}
 	};
@@ -831,9 +838,6 @@ export function renderSessionsIntoPicker(sessions: SessionSummary[]): void {
 }
 
 export async function openVoicePicker(): Promise<void> {
-	const { listVoices } = await import("./api.js");
-	const { appendError } = await import("./render.js");
-
 	let voices: string[];
 	let defaultVoice: string;
 	try {
@@ -901,8 +905,7 @@ export function openOverflowMenu(): void {
 	imageLine.append(el("div", { class: "overflow-label" }, "image"));
 	const imageValue = state.currentImageModelId ?? "default";
 	const imageLabel =
-		state.availableImageModels.find((m) => m.id === state.currentImageModelId)?.name ??
-		imageValue;
+		state.availableImageModels.find((m) => m.id === state.currentImageModelId)?.name ?? imageValue;
 	imageLine.append(el("div", { class: "overflow-value" }, imageLabel));
 	if (state.availableImageModels.length === 0) {
 		// No image models configured (VENICE_API_KEY missing or no
@@ -1041,13 +1044,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
  * /export. Produces a styled dark-mode page that mirrors the chat view.
  */
 export function exportSessionAsHtml(): void {
-	const esc = (s: string) =>
-		s
-			.replace(/&/g, "&amp;")
-			.replace(/</g, "&lt;")
-			.replace(/>/g, "&gt;")
-			.replace(/"/g, "&quot;")
-			.replace(/'/g, "&#39;");
+	const esc = escapeHtml;
 	const css = `
 		* { box-sizing: border-box; }
 		body { background: #0b0b0b; color: #d4d4d4; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 24px; line-height: 1.5; }

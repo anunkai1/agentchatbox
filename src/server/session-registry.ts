@@ -40,6 +40,7 @@ import { config, getServerApiKey } from "./config.js";
 import { log } from "./logger.js";
 import { type PiProcess, spawnPi } from "./pi-process.js";
 import { readPiSessionMessages } from "./session-list.js";
+import { safeUnref } from "./util.js";
 
 /**
  * Grace period before an idle, detached session is reaped. An idle
@@ -506,7 +507,7 @@ class SessionRegistry {
 			}
 		}, IDLE_GRACE_MS);
 		// Don't keep the event loop alive just for reaping.
-		if (typeof session.idleTimer.unref === "function") session.idleTimer.unref();
+		safeUnref(session.idleTimer);
 	}
 
 	/**
@@ -530,18 +531,25 @@ class SessionRegistry {
 		const intervalMs = 200;
 		const maxAttempts = 50; // ~10s ceiling — pi startup is normally <1s
 		let attempts = 0;
-		const retry = () => {
-			if (session.ready || attempts >= maxAttempts) return;
-			if (session.pi.killed) return; // child is gone — stop hammering
+		// Send get_state on a bounded retry schedule until the session is
+		// ready. pi doesn't ack get_state until its AgentSession is
+		// constructed, so a single send isn't enough. Bounded attempts
+		// prevent an unbounded loop on a wedged child; the exit handler
+		// sends the error frame in that case.
+		//
+		// Also short-circuits when the child has died (`session.pi.killed`,
+		// which the exit handler in pi-process.ts flips to true the moment
+		// the child goes away). Without this check, the retry timer kept
+		// firing send() against a closed pipe for the full ~10s budget
+		// even after the exit handler had already sent the error frame.
+		const send = (): void => {
+			if (session.ready || attempts >= maxAttempts || session.pi.killed) return;
 			attempts++;
 			session.pi.send({ type: "get_state" });
-			const t = setTimeout(retry, intervalMs);
-			if (typeof t.unref === "function") t.unref();
+			const t = setTimeout(send, intervalMs);
+			safeUnref(t);
 		};
-		session.pi.send({ type: "get_state" });
-		attempts++;
-		const t = setTimeout(retry, intervalMs);
-		if (typeof t.unref === "function") t.unref();
+		send();
 	}
 }
 

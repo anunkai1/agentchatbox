@@ -17,8 +17,9 @@
 
 import type { ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
-import { $, el, type LiveAssistantDom } from "./dom.js";
+import { $, el, escapeHtml, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
+import { services } from "./services.js";
 import { type PersistedMessage, state } from "./state.js";
 import { sessionPath } from "./url.js";
 
@@ -151,8 +152,12 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const text = el("div", { class: "text markdown" }, " ");
 		setRichText(text, m.text || " ");
 		body.append(text);
-		body.append(makeVoiceVariantButton("long", () => m.voiceLong ?? "", "Speak the detailed spoken version"));
-		body.append(makeVoiceVariantButton("short", () => m.voiceShort ?? "", "Speak the concise summary"));
+		body.append(
+			makeVoiceVariantButton("long", () => m.voiceLong ?? "", "Speak the detailed spoken version"),
+		);
+		body.append(
+			makeVoiceVariantButton("short", () => m.voiceShort ?? "", "Speak the concise summary"),
+		);
 		if (m.seq !== undefined) body.append(makeForkButton(() => m.seq));
 		wrap.append(body);
 		return wrap;
@@ -256,9 +261,7 @@ export function makeVoiceVariantButton(
 		const existing = getText().trim();
 		if (existing) {
 			// Variant already generated — play it directly.
-			void import("./voice.js").then(({ toggleSpeak }) => {
-				toggleSpeak(existing, btn);
-			});
+			services.toggleSpeak?.(existing, btn);
 			return;
 		}
 		// Not generated yet — request generation and queue this variant
@@ -267,9 +270,7 @@ export function makeVoiceVariantButton(
 		setBtnLoading(btn);
 		state.pendingVoiceVariant = variant;
 		state.pendingVoiceBtn = btn;
-		void import("./main.js").then(({ sendSlashCommand }) => {
-			sendSlashCommand("/voice-last");
-		});
+		services.sendSlashCommand?.("/voice-last");
 	});
 	return btn;
 }
@@ -297,7 +298,7 @@ function makeForkButton(
 	btn.addEventListener("click", () => {
 		const seq = getSeq();
 		if (seq === undefined) return;
-		void import("./main.js").then(({ forkFromMessage }) => forkFromMessage(seq));
+		services.forkFromMessage?.(seq);
 	});
 	return btn;
 }
@@ -486,9 +487,7 @@ let programmaticScrollTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** All rendered user-message rows, excluding queued "steer" bubbles. */
 function userMessageRows(): HTMLElement[] {
-	return Array.from(
-		document.querySelectorAll<HTMLElement>("#messages .row-user:not(.row-steer)"),
-	);
+	return Array.from(document.querySelectorAll<HTMLElement>("#messages .row-user:not(.row-steer)"));
 }
 
 /**
@@ -606,7 +605,7 @@ function makeJumpPrevUserFab(): HTMLElement {
 		onclick: () => jumpToPrevUserMessage(),
 		html:
 			'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-			"<path d=\"M12 19V6\"/><path d=\"M6 12l6-6 6 6\"/></svg>",
+			'<path d="M12 19V6"/><path d="M6 12l6-6 6 6"/></svg>',
 	});
 }
 
@@ -671,8 +670,16 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	// shown unconditionally without waiting for a voice-reply to arrive.
 	// The getter resolves to the last assistant message's variant, which
 	// is what /voice-last voices anyway.
-	body.append(makeVoiceVariantButton("long", () => lastAssistantVoice("long"), "Speak the detailed spoken version"));
-	body.append(makeVoiceVariantButton("short", () => lastAssistantVoice("short"), "Speak the concise summary"));
+	body.append(
+		makeVoiceVariantButton(
+			"long",
+			() => lastAssistantVoice("long"),
+			"Speak the detailed spoken version",
+		),
+	);
+	body.append(
+		makeVoiceVariantButton("short", () => lastAssistantVoice("short"), "Speak the concise summary"),
+	);
 	body.append(makeForkButton(() => state.lastAssistantSeq ?? undefined));
 	wrap.append(body);
 	appendNode(wrap, { pin: true });
@@ -839,24 +846,14 @@ export function toggleCapabilitiesPopover(): void {
 }
 
 export function refreshStatus(): void {
-	// Helper: prefer the human-readable name from /api/models over the
-	// raw model id (which is the same as the name for MiniMax-M3 but
-	// is "deepseek-v4-pro" rather than "DeepSeek V4 Pro" for deepseek).
-	const modelLabel = (() => {
-		const id = state.currentModelId;
-		if (!id) return "(no model)";
-		const opt = state.availableModels.find((m) => m.id === id);
-		return opt?.name ?? id;
-	})();
+	// The human-readable model label is resolved once per model change
+	// (see state.refreshCurrentModelLabel) instead of searching the model
+	// list here on every status tick (this fires each second while
+	// streaming). Falls back to the raw id when no friendly name is known.
+	const modelLabel = state.currentModelLabel || state.currentModelId || "(no model)";
 
 	// Escape the dynamic bits we interpolate into innerHTML below.
-	const esc = (s: string) =>
-		s
-			.replace(/&/g, "&amp;")
-			.replace(/</g, "&lt;")
-			.replace(/>/g, "&gt;")
-			.replace(/"/g, "&quot;")
-			.replace(/'/g, "&#39;");
+	const esc = escapeHtml;
 
 	const parts: string[] = [];
 	parts.push(esc(modelLabel));
@@ -1441,7 +1438,10 @@ export function renderShell(): void {
 	toastEl = el("div", { class: "toast hidden" });
 	toastEl.addEventListener("click", () => {
 		toastEl?.classList.add("hidden");
-		if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+		if (toastTimer) {
+			clearTimeout(toastTimer);
+			toastTimer = null;
+		}
 	});
 	document.body.append(toastEl);
 
@@ -1461,7 +1461,11 @@ export function renderShell(): void {
 		if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
 			e.preventDefault();
 			shellHandlers?.handleSend();
-		} else if (e.key === "ArrowUp" && !e.altKey && (input.value === "" || input.selectionStart === 0)) {
+		} else if (
+			e.key === "ArrowUp" &&
+			!e.altKey &&
+			(input.value === "" || input.selectionStart === 0)
+		) {
 			e.preventDefault();
 			shellHandlers?.historyBack();
 		} else if (e.key === "ArrowDown") {
@@ -1724,21 +1728,20 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 
 	// 2) Global as its own top-level folder (the default home for new chats).
 	if (globalProject) {
-		const items = (buckets.get("global") ?? []).slice().sort(
-			(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
-		);
+		const items = (buckets.get("global") ?? [])
+			.slice()
+			.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
 		container.append(renderProjectFolder(globalProject, items));
 	}
 
 	// 3) Trailing "Other" bucket for orphaned sessions (deleted projects).
-	const other = (buckets.get("other") ?? []).slice().sort(
-		(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
-	);
+	const other = (buckets.get("other") ?? [])
+		.slice()
+		.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
 	if (other.length > 0) {
-		container.append(renderProjectFolder(
-			{ id: "other", name: "Other", icon: "📦", cwd: "" },
-			other,
-		));
+		container.append(
+			renderProjectFolder({ id: "other", name: "Other", icon: "📦", cwd: "" }, other),
+		);
 	}
 }
 
@@ -1791,9 +1794,9 @@ function renderProjectsContainer(
 
 	const body = el("div", { class: "projects-container-body" });
 	for (const p of userProjects) {
-		const items = (buckets.get(p.id) ?? []).slice().sort(
-			(a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime(),
-		);
+		const items = (buckets.get(p.id) ?? [])
+			.slice()
+			.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
 		body.append(renderProjectFolder(p, items));
 	}
 	if (collapsed) body.style.display = "none";
@@ -1828,7 +1831,10 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	const chevron = el("span", { class: "project-chevron", text: collapsed ? "▸" : "▾" });
 	const icon = el("span", { class: "project-icon", text: p.icon || "📁" });
 	const name = el("span", { class: "project-name", text: p.name });
-	const count = el("span", { class: "project-count", text: items.length > 0 ? String(items.length) : "" });
+	const count = el("span", {
+		class: "project-count",
+		text: items.length > 0 ? String(items.length) : "",
+	});
 	const spacer = el("span", { class: "spacer" });
 	const actions = el("div", { class: "project-actions" });
 	// "+" starts a new chat in this project (Global's "+" is redundant with
@@ -2014,11 +2020,7 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
  * server's rebroadcast refreshes the sidebar. Empty input clears the
  * name (falls back to the auto-derived first-message title).
  */
-function startRename(
-	titleEl: HTMLElement,
-	titleRow: HTMLElement,
-	s: SessionSummary,
-): void {
+function startRename(titleEl: HTMLElement, titleRow: HTMLElement, s: SessionSummary): void {
 	const current = s.title || "";
 	const input = document.createElement("input");
 	input.type = "text";
@@ -2124,7 +2126,11 @@ export function openProjectEditor(id?: string): void {
 
 	// Instructions textarea — the project's AGENTS.md.
 	box.append(
-		el("label", { class: "project-editor-label" }, "Instructions (saved as AGENTS.md — pi loads it automatically)"),
+		el(
+			"label",
+			{ class: "project-editor-label" },
+			"Instructions (saved as AGENTS.md — pi loads it automatically)",
+		),
 	);
 	const instr = document.createElement("textarea");
 	instr.className = "project-editor-instructions";
@@ -2160,10 +2166,12 @@ export function openProjectEditor(id?: string): void {
 	if (editing && !isBuiltin) {
 		const delBtn = el("button", { class: "project-delete-btn", text: "Delete…" });
 		delBtn.addEventListener("click", () => {
-			if (confirm(
-				`Delete project “${editing.name}”? Its folder + AGENTS.md are removed. ` +
-					"Past conversations stay (shown under \"Other\") but can't be continued in this project.",
-			)) {
+			if (
+				confirm(
+					`Delete project “${editing.name}”? Its folder + AGENTS.md are removed. ` +
+						'Past conversations stay (shown under "Other") but can\'t be continued in this project.',
+				)
+			) {
 				shellHandlers?.deleteProject(editing.id);
 				overlay.remove();
 			}

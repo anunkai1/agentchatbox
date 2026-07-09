@@ -24,6 +24,7 @@ import { join, resolve } from "node:path";
 import express, { type Router } from "express";
 import multer from "multer";
 import type { TranscribeResponse } from "../shared/protocol.js";
+import { createCachedProbe } from "./health-cache.js";
 import { projectRoot } from "./paths.js";
 import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 
@@ -111,38 +112,16 @@ export function createTranscribeRouter(): Router {
 
 // ---------------------------------------------------------------------------
 // Used by /api/health to report whether the local Whisper is available.
-// Cached for `HEALTH_CACHE_MS` so the health check doesn't spawn a Python
-// process (and trigger a faster-whisper model load) on every browser poll.
+// Cached for `HEALTH_CACHE_MS` (via createCachedProbe) so the health check
+// doesn't spawn a Python process (and trigger a faster-whisper model
+// load) on every browser poll.
 // ---------------------------------------------------------------------------
 
 const HEALTH_CACHE_MS = 60 * 1000; // 60 s
 
-interface HealthCache {
-	at: number;
-	result: { available: boolean; reason?: string };
-}
-let whisperHealthCache: HealthCache | null = null;
-/** In-flight probe. Concurrent callers share the same spawn so the
- *  first /api/health poll doesn't N-launches faster-whisper model loads. */
-let whisperProbeInFlight: Promise<{ available: boolean; reason?: string }> | null = null;
-
-export async function checkWhisperAvailable(): Promise<{
-	available: boolean;
-	reason?: string;
-}> {
-	const now = Date.now();
-	if (whisperHealthCache && now - whisperHealthCache.at < HEALTH_CACHE_MS) {
-		return whisperHealthCache.result;
-	}
-	if (whisperProbeInFlight) return whisperProbeInFlight;
-	whisperProbeInFlight = computeWhisperAvailable().finally(() => {
-		whisperProbeInFlight = null;
-	});
-	return whisperProbeInFlight;
-}
+export const checkWhisperAvailable = createCachedProbe(HEALTH_CACHE_MS, computeWhisperAvailable);
 
 async function computeWhisperAvailable(): Promise<{ available: boolean; reason?: string }> {
-	const now = Date.now();
 	let result: { available: boolean; reason?: string };
 	try {
 		// Fast path: if the helper script isn't even on disk, fail
@@ -170,6 +149,5 @@ async function computeWhisperAvailable(): Promise<{ available: boolean; reason?:
 			reason: e instanceof Error ? e.message : String(e),
 		};
 	}
-	whisperHealthCache = { at: now, result };
 	return result;
 }

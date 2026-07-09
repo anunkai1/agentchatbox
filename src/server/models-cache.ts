@@ -27,6 +27,7 @@ import { spawnPi } from "./pi-process.js";
 import { getServerApiKey, config } from "./config.js";
 import { log } from "./logger.js";
 import { SDK_PROVIDERS } from "./providers.js";
+import { safeUnref } from "./util.js";
 
 /** Model entry returned by pi's `get_available_models` and served via
  * /api/models. We only surface the subset the picker cares about. */
@@ -40,7 +41,6 @@ export interface AvailableModel {
 /** Cached list, plus bookkeeping for the boot probe lifecycle. */
 class ModelsCache {
 	private models: AvailableModel[] = [];
-	private lastFetchAt = 0;
 	/** Single in-flight probe; concurrent callers await the same promise. */
 	private inflight: Promise<void> | null = null;
 
@@ -99,9 +99,7 @@ class ModelsCache {
 				// `unref` so a hung probe doesn't keep the server alive
 				// past SIGTERM. (The explicit pi.kill() in the finally
 				// block still runs.)
-				if (typeof (timer as { unref?: () => void }).unref === "function") {
-					(timer as { unref: () => void }).unref();
-				}
+				safeUnref(timer);
 
 				pi.on("event", (line) => {
 					if (line.type !== "response" || line.command !== "get_available_models") {
@@ -150,7 +148,6 @@ class ModelsCache {
 			});
 
 			this.models = result;
-			this.lastFetchAt = Date.now();
 			log.info("models cache populated from pi", {
 				count: result.length,
 				probeProvider: start.provider,

@@ -68,6 +68,7 @@ import {
 	type PiSocket,
 	registry,
 } from "./session-registry.js";
+import { safeUnref } from "./util.js";
 
 /**
  * Heartbeat interval. Every connection gets a ws-level ping every
@@ -128,7 +129,7 @@ export function mountChatWs(server: HttpServer): void {
 		}
 	}, HEARTBEAT_INTERVAL_MS);
 	// Don't keep the event loop alive just for the heartbeat.
-	if (typeof heartbeatTimer.unref === "function") heartbeatTimer.unref();
+	safeUnref(heartbeatTimer);
 
 	wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
 		const s = ws as PiSocket & { isAlive?: boolean };
@@ -244,10 +245,7 @@ function toImageContent(images: PromptImage[] | undefined) {
  * each `venice_generate_image` tool call. Separate from this file's
  * main switch so the fire-and-forget call site stays readable.
  */
-async function persistImageModel(
-	modelId: string | null,
-	file: string,
-): Promise<void> {
+async function persistImageModel(modelId: string | null, file: string): Promise<void> {
 	await mkdir(dirname(file), { recursive: true });
 	if (modelId === null) {
 		await rm(file, { force: true });

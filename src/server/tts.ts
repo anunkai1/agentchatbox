@@ -18,10 +18,11 @@
  * The browser never knows which engine is running — it just plays the WAV.
  */
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import express, { type Request, type Response, type Router } from "express";
+import { createCachedProbe } from "./health-cache.js";
 import { projectRoot } from "./paths.js";
 import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 
@@ -279,8 +280,7 @@ async function synthPiper(text: string, voice: string | undefined, res: Response
 }
 
 async function listPiperVoices(): Promise<string[]> {
-	const { readdir, stat } = await import("node:fs/promises");
-	const base = resolve(process.env.HOME || "/root", ".local/share/piper/voices");
+	const base = resolve(homedir(), ".local/share/piper/voices");
 	try {
 		await stat(base);
 	} catch {
@@ -295,35 +295,8 @@ async function listPiperVoices(): Promise<string[]> {
 // ---------------------------------------------------------------------------
 
 const HEALTH_CACHE_MS = 60 * 1000;
-interface HealthCache {
-	at: number;
-	result: { available: boolean; reason?: string; voice?: string; engine: Engine };
-}
-let healthCache: HealthCache | null = null;
-/** In-flight probe — concurrent callers share one Kokoro/Piper probe. */
-let healthProbeInFlight: Promise<{
-	available: boolean;
-	reason?: string;
-	voice?: string;
-	engine: Engine;
-}> | null = null;
 
-export async function checkTtsAvailable(): Promise<{
-	available: boolean;
-	reason?: string;
-	voice?: string;
-	engine?: Engine;
-}> {
-	const now = Date.now();
-	if (healthCache && now - healthCache.at < HEALTH_CACHE_MS) {
-		return healthCache.result;
-	}
-	if (healthProbeInFlight) return healthProbeInFlight;
-	healthProbeInFlight = computeTtsAvailable().finally(() => {
-		healthProbeInFlight = null;
-	});
-	return healthProbeInFlight;
-}
+export const checkTtsAvailable = createCachedProbe(HEALTH_CACHE_MS, computeTtsAvailable);
 
 async function computeTtsAvailable(): Promise<{
 	available: boolean;
@@ -331,14 +304,10 @@ async function computeTtsAvailable(): Promise<{
 	voice?: string;
 	engine: Engine;
 }> {
-	let result: { available: boolean; reason?: string; voice?: string; engine: Engine };
 	if (engine() === "kokoro") {
-		result = await checkKokoroHealth();
-	} else {
-		result = { engine: "piper", ...(await checkPiperHealth()) };
+		return await checkKokoroHealth();
 	}
-	healthCache = { at: Date.now(), result };
-	return result;
+	return { engine: "piper", ...(await checkPiperHealth()) };
 }
 
 async function checkKokoroHealth(): Promise<{
