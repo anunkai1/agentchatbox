@@ -129,13 +129,19 @@ app.get("/api/projects/:id/instructions", (req, res) => {
 app.get("/api/sessions/search", async (req, res) => {
 	// Non-literal specifier: keeps the search module fully removable. TypeScript
 	// won't try to resolve this import, so deleting `src/server/search/` leaves
-	// the core server compiling cleanly (the runtime throw is caught below).
+	// the core server compiling cleanly. The import AND the search call are
+	// try-guarded because the module is OPTIONAL and pluggable: a
+	// better-sqlite3 native-load failure or an ONNX init error must degrade to
+	// 404/500, not hang the request. Express 4 does NOT auto-catch rejected
+	// promises in async route handlers, so an unguarded `await` here would
+	// leak a hung response + an unhandled-rejection warning.
 	const searchPath = "./search/index.js";
-	const loaded = (await import(searchPath)) as {
+	let loaded: {
 		isSearchAvailable: () => Promise<boolean>;
 		searchSessions: (q: string, opts?: { cwd?: string; limit?: number }) => Promise<unknown[]>;
 	};
 	try {
+		loaded = (await import(searchPath)) as typeof loaded;
 		if (!(await loaded.isSearchAvailable())) {
 			res.status(404).json({ error: "search not enabled on this server" });
 			return;
@@ -152,8 +158,14 @@ app.get("/api/sessions/search", async (req, res) => {
 	const cwd = String(req.query.cwd ?? config.piCwd);
 	const limitRaw = Number.parseInt(String(req.query.limit ?? "10"), 10);
 	const limit = Number.isFinite(limitRaw) ? limitRaw : 10;
-	const results = await loaded.searchSessions(q, { cwd, limit });
-	res.json({ results });
+	try {
+		const results = await loaded.searchSessions(q, { cwd, limit });
+		res.json({ results });
+	} catch (e) {
+		res
+			.status(500)
+			.json({ error: `search failed: ${e instanceof Error ? e.message : String(e)}` });
+	}
 });
 
 /**

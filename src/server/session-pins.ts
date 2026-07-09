@@ -21,7 +21,7 @@
  * tolerates future per-pin metadata without a migration.)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { projectRoot } from "./paths.js";
 
@@ -61,9 +61,10 @@ export function isPinned(sessionId: string): boolean {
 
 /**
  * Set or clear the pin for a session id. Returns the new pinned state.
- * Writes atomically enough for a single-user homelab (writeFileSync then
- * the OS flushes); concurrent writers would race, but the only writers
- * are this server's own WS handlers.
+ * Only writers are this server's own WS handlers, so no concurrency — but
+ * the write is still atomic (tmp + rename) so a crash mid-write or a
+ * reader racing the write can't corrupt pins.json into a state
+ * readPinnedSessions() would silently drop, losing the whole pin set.
  */
 export function setPinned(sessionId: string, pinned: boolean): boolean {
 	const current = readPinnedSessions();
@@ -85,5 +86,7 @@ function writePins(ids: Set<string>): void {
 	}
 	const obj: Record<string, true> = {};
 	for (const id of ids) obj[id] = true;
-	writeFileSync(file, JSON.stringify(obj, null, 2));
+	const tmp = `${file}.tmp`;
+	writeFileSync(tmp, JSON.stringify(obj, null, 2));
+	renameSync(tmp, file);
 }

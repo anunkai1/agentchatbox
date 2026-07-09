@@ -464,6 +464,14 @@ export function setPiSessionName(cwd: string, sessionId: string, name: string): 
 	if (!file) return false;
 	const line = JSON.stringify({ type: "session_info", id: sessionId, name }) + "\n";
 	appendFileSync(file, line);
+	// Invalidate the per-file summary cache for THIS file. The cache is
+	// keyed by mtime, but `appendFileSync` racing a prior write inside the
+	// same mtime tick leaves `statSync().mtimeMs` unchanged — the cache
+	// then serves the stale pre-rename summary (the title showed the old
+	// name, and listAllSessions/broadcastSessions hid the rename). Same-
+	// process mutations own their invalidation explicitly; callers reading
+	// externally-written files still get the mtime fast path.
+	sessionFileCache.delete(file);
 	return true;
 }
 /**
