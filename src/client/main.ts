@@ -601,6 +601,16 @@ function onEvent(event: Record<string, unknown>): void {
 			// yanked together with the row at message_end, and the user
 			// watches it appear, get pushed up by the tool card, and
 			// vanish.
+			//
+			// Logic note: the previous incarnation used `||` here, which
+			// was wrong — any single empty field would trigger removal, so
+			// the very case this guard exists to protect (thinking + tool
+			// call, text empty) still tripped it. The correct shape is
+			// AND-of-ANDs: the row is empty only when *both* the streaming-
+			// accumulated state AND the authoritative message_end payload
+			// have no text AND no thinking. That keeps the pi-voice-reply
+			// blanked turn and the error-retry paths working (no text, no
+			// thinking) while preserving `thinking + toolCall` rows.
 			let finalText = "";
 			let finalThinking = "";
 			if (m.role === "assistant") {
@@ -617,10 +627,10 @@ function onEvent(event: Record<string, unknown>): void {
 				m.role === "assistant" &&
 				lastAssistant &&
 				lastAssistant.kind === "assistant" &&
-				(!lastAssistant.text.trim() ||
-					!lastAssistant.thinking.trim() ||
-					!finalText.trim() ||
-					!finalThinking.trim()) &&
+				!lastAssistant.text.trim() &&
+				!lastAssistant.thinking.trim() &&
+				!finalText.trim() &&
+				!finalThinking.trim() &&
 				lastAssistantDom
 			) {
 				if (isEmptyError) {
