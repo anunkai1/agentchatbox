@@ -127,6 +127,22 @@ export interface LiveSession {
 	streaming: boolean;
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	currentTurn: unknown[];
+	/**
+	 * The model+thinking the user just clicked via setModel/setThinking,
+	 * awaiting pi's confirmation. The chat.ts handler stashes the
+	 * request here and we apply it to `init` only when the matching
+	 * pi RPC response comes back with `success: true`. Pessimistic:
+	 * if pi rejects the switch (e.g. a model id advertised in
+	 * EXTRA_MODELS but not registered in pi's model-registry — see
+	 * providers.ts for the drift history), we leave `init` pointing
+	 * at the model pi is actually using, so a reattach reports
+	 * reality and subsequent prompts go to the right place. The
+	 * pre-fix code updated `init` BEFORE pi's response, so a failed
+	 * `set_model` made the picker lie about the current model and
+	 * prompts kept going to the old one — silent-fail mode.
+	 */
+	pendingModel: { provider: string; modelId: string } | null;
+	pendingThinking: ThinkingLevel | null;
 }
 
 class SessionRegistry {
@@ -191,6 +207,8 @@ class SessionRegistry {
 			streaming: false,
 			idleTimer: null,
 			currentTurn: [],
+			pendingModel: null,
+			pendingThinking: null,
 		};
 		// For a resume we know the id up front; register immediately so a
 		// reconnect during the (<1s) spawn window can reattach. For a new
@@ -331,6 +349,58 @@ class SessionRegistry {
 				this.entries.set(id, session); // idempotent for resume, first reg for new
 				this.sendReadyAndCatchup(session);
 			}
+		}
+
+		// Resolve in-flight set_model / set_thinking_level requests.
+		// chat.ts stashes the requested model/thinking in
+		// session.pendingModel/pendingThinking and we apply it to
+		// session.init ONLY when pi confirms with success:true. The
+		// response's `data` carries the model object pi actually set
+		// (with `provider` + `id`), so we trust that over the pending
+		// record (which may have been overwritten by a subsequent
+		// user click). On failure, the pending record is cleared and
+		// session.init keeps pointing at the model pi is actually
+		// using — the picker stays truthful and prompts go to the
+		// right place.
+		//
+		// We also push a small `modelState` frame to the client so the
+		// picker header updates without waiting for the next page
+		// refresh (the client's `ready` handler is the only other
+		// place that adopts the server's model). Runs BEFORE the
+		// "drop success acks" check below so success frames can still
+		// be filtered out as noise.
+		if (line.type === "response" && line.command === "set_model") {
+			const succeeded = line.success !== false;
+			if (succeeded && line.data) {
+				const data = line.data as { provider?: string; id?: string };
+				if (typeof data.provider === "string" && typeof data.id === "string") {
+					session.init = { ...session.init, provider: data.provider, modelId: data.id };
+				}
+			}
+			session.pendingModel = null;
+			deliver(session.ws, {
+				type: "modelState",
+				provider: session.init.provider,
+				modelId: session.init.modelId,
+				thinkingLevel: session.init.thinkingLevel,
+			});
+		}
+		if (line.type === "response" && line.command === "set_thinking_level") {
+			// pi's success response for set_thinking_level has no `data`
+			// (it just acks), so the level we want to apply is the
+			// pending one the user just clicked. Fall through to the
+			// init update on success, keep session.init untouched on
+			// failure (just clear the pending).
+			if (line.success !== false && session.pendingThinking) {
+				session.init = { ...session.init, thinkingLevel: session.pendingThinking };
+			}
+			session.pendingThinking = null;
+			deliver(session.ws, {
+				type: "modelState",
+				provider: session.init.provider,
+				modelId: session.init.modelId,
+				thinkingLevel: session.init.thinkingLevel,
+			});
 		}
 
 		// Drop success acks (noise — pi's events are the real confirmation).

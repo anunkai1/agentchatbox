@@ -728,6 +728,29 @@ function onEvent(event: Record<string, unknown>): void {
 			}
 			break;
 		}
+
+		case "modelState": {
+			// Server confirms a setModel/setThinking round-trip. Adopt
+			// the server's view of the current model+thinking (which is
+			// whatever pi is actually using — NOT the user's last click
+			// if that click was rejected by pi). This is the only path
+			// the client has to learn the truth without a page refresh;
+			// `ready` only fires on attach/reattach.
+			if (typeof e.provider === "string") state.currentProvider = e.provider;
+			if (typeof e.modelId === "string") state.currentModelId = e.modelId;
+			// Narrow at runtime — ThinkingLevel is a string union, and the
+			// wire format is just a string. Avoid an unsafe cast.
+			if (typeof e.thinkingLevel === "string") {
+				const valid = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+				if ((valid as readonly string[]).includes(e.thinkingLevel)) {
+					state.currentThinking = e.thinkingLevel as typeof state.currentThinking;
+				}
+			}
+			// Clear the pending marker — the server has answered.
+			state.pendingModelSet = null;
+			refreshStatus();
+			break;
+		}
 	}
 }
 

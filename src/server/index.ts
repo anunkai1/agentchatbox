@@ -18,7 +18,6 @@ import "dotenv/config";
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { getModels } from "@earendil-works/pi-ai";
 import cors from "cors";
 import express from "express";
 import { getCapabilities } from "./capabilities.js";
@@ -26,8 +25,9 @@ import { mountChatWs, shutdownChatWs } from "./chat.js";
 import { config } from "./config.js";
 import { createFilesRouter } from "./files.js";
 import { log } from "./logger.js";
+import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
-import { EXTRA_MODELS, EXTRA_IMAGE_MODELS, SDK_PROVIDERS } from "./providers.js";
+import { EXTRA_IMAGE_MODELS } from "./providers.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
@@ -251,16 +251,35 @@ app.get("/api/health", async (_req, res) => {
  *
  * Returns the list of LLM models the client can pick from, one entry per
  * (provider, modelId). Only providers with a configured API key are
- * included — the server is the source of truth for what's available,
- * matching the policy in src/shared/protocol.ts.
+ * included.
  *
  * Shape: { models: Array<{ id, provider, name, reasoning }> }
  *   - id:        the model id (what /api/chat's setModel expects)
  *   - provider:  the provider key (e.g. "deepseek", "minimax")
  *   - name:      human-readable label
  *   - reasoning: true if the model supports thinking
+ *
+ * Source: pi's `get_available_models`, cached at boot (see
+ * models-cache.ts). Per AGENTS.md, ACB is a transport shell, so the
+ * picker is a pure mirror of what pi knows — SDK built-ins plus
+ * whatever the user has declared in ~/.pi/agent/models.json. There is
+ * no ACB-side model list. To add a model: put it in models.json. To
+ * retire one: delete it from there.
+ *
+ * Cold start: the boot probe runs in the background. If a request
+ * arrives before the probe completes, we synchronously wait for the
+ * probe to finish (with a 5s timeout) so the picker is populated
+ * immediately. If the probe fails (no API key, pi crash, etc.) the
+ * picker is empty — fix the underlying issue, restart.
  */
-app.get("/api/models", (_req, res) => {
+app.get("/api/models", async (_req, res) => {
+	// Kick off / await the boot probe so the very first /api/models
+	// request on a cold start doesn't return an empty list. After the
+	// first successful probe, this is a no-op (the cache is populated).
+	if (modelsCache.get().length === 0) {
+		await modelsCache.ensureReady();
+	}
+
 	const out: Array<{
 		id: string;
 		provider: string;
@@ -268,32 +287,12 @@ app.get("/api/models", (_req, res) => {
 		reasoning: boolean;
 	}> = [];
 
-	for (const provider of SDK_PROVIDERS) {
-		if (!config.apiKeys[provider]) continue;
-		try {
-			const models = getModels(provider);
-			for (const m of models) {
-				out.push({
-					id: m.id,
-					provider,
-					name: m.name,
-					reasoning: !!m.reasoning,
-				});
-			}
-		} catch (e) {
-			// If the SDK doesn't know this provider, skip it rather than
-			// 500ing the whole endpoint.
-			log.warn("failed to list models for provider", {
-				provider,
-				error: e instanceof Error ? e.message : String(e),
-			});
-		}
-	}
-
-	// Models not in the SDK registry (custom provider, or newer than the
-	// generated list). See providers.ts::EXTRA_MODELS — gated on each
-	// entry's provider having a configured key.
-	for (const m of EXTRA_MODELS) {
+	// Mirror pi's response, gated on the server having an API key for
+	// the provider. The gate is defense-in-depth — pi's getAvailable()
+	// already filters by auth, but a key could be missing on the ACB
+	// side (e.g. env not propagated into the systemd child) and we
+	// shouldn't surface models that won't actually be callable.
+	for (const m of modelsCache.get()) {
 		if (!config.apiKeys[m.provider]) continue;
 		out.push({
 			id: m.id,
@@ -413,6 +412,16 @@ const server = app.listen(config.port, config.host, () => {
 	void checkTtsAvailable().then((t) =>
 		log.info("tts probe ready", { available: t.available, voice: t.voice, reason: t.reason }),
 	);
+	// Populate the models cache (see models-cache.ts) at boot. The
+	// probe spawns a one-shot `pi --mode rpc` child and asks for
+	// `get_available_models` — the authoritative list of what the
+	// picker should show. /api/models awaits `ensureReady()` on the
+	// first request, so even if the boot probe is still in flight
+	// when the browser's first /api/models arrives, the picker
+	// populates immediately (up to a 5s timeout). Failure here
+	// means /api/models returns an empty list until the next probe
+	// succeeds — check the boot log for the reason.
+	void modelsCache.ensureReady();
 });
 
 // WebSocket endpoint. Mounted on the same HTTP server so we don't need a

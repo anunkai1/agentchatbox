@@ -255,9 +255,54 @@ while IFS= read -r line; do
 done
 `;
 
+const SET_MODEL_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that handles set_model / set_thinking_level with realistic
+# data: set_model echoes back the requested model in the response
+# \`data\` field (matches real pi), and set_thinking_level acks with
+# success:true (no data, also matches real pi). For set_model only,
+# a modelId starting with "fail" simulates the "Model not found"
+# error path — the test that exercises it sets provider="p-fail" or
+# modelId starting with "fail-".
+# This is the canonical script for the pessimistic setModel tests
+# (the bug behind the "GLM 5.2 (Venice) silently fails to switch"
+# report from 2026-07-09). Both success and failure cases are driven
+# from this one script; failure is opted into via the modelId prefix.
+sleep 0.05
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"setmodel-session-001","messageCount":0}}'
+      ;;
+    "set_model")
+      provider="$(echo "$line" | jq -r '.provider // ""')"
+      modelId="$(echo "$line" | jq -r '.modelId // ""')"
+      if [ "\${modelId#fail-}" != "\$modelId" ]; then
+        echo '{"type":"response","command":"set_model","success":false,"error":"Model not found: '"$provider"'/'"$modelId"'"}'
+      else
+        echo '{"type":"response","command":"set_model","success":true,"data":{"provider":"'"$provider"'","id":"'"$modelId"'","name":"'"$modelId"'"}}'
+      fi
+      ;;
+    "set_thinking_level")
+      level="$(echo "$line" | jq -r '.level // ""')"
+      if [ "\${level#fail-}" != "\$level" ]; then
+        echo '{"type":"response","command":"set_thinking_level","success":false,"error":"Unknown thinking level"}'
+      else
+        echo '{"type":"response","command":"set_thinking_level","success":true}'
+      fi
+      ;;
+    "")
+      ;;
+    *)
+      echo "{"type":"response","command":"$type","success":true}"
+      ;;
+  esac
+done
+`;
+
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
-	behavior: "echo" | "ack" | "exit-before-session" | "exit-after-read" | "exit-after-delay" | "steer-race" | "track" | "retry" | "running",
+	behavior: "echo" | "ack" | "exit-before-session" | "exit-after-read" | "exit-after-delay" | "steer-race" | "track" | "retry" | "running" | "set-model",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -274,11 +319,13 @@ function makeFakePi(
 							? RETRY_SCRIPT
 							: behavior === "running"
 								? RUNNING_SCRIPT
-								: behavior === "exit-after-read"
-									? EXIT_AFTER_FIRST_READ_SCRIPT
-									: behavior === "exit-after-delay"
-										? EXIT_AFTER_DELAY_SCRIPT
-										: EXIT_BEFORE_SESSION_SCRIPT;
+								: behavior === "set-model"
+									? SET_MODEL_SCRIPT
+									: behavior === "exit-after-read"
+										? EXIT_AFTER_FIRST_READ_SCRIPT
+										: behavior === "exit-after-delay"
+											? EXIT_AFTER_DELAY_SCRIPT
+											: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -370,6 +417,29 @@ class Inbox {
 	}
 }
 
+/**
+ * Wait until the inbox has accumulated at least `n` messages of
+ * `type`, or the timeout fires. Returns whatever messages are in the
+ * inbox at that point (caller filters). Distinct from Inbox.waitFor
+ * which counts ALL messages regardless of type — useful when the
+ * server emits noise (other events, response acks) between the frames
+ * we care about.
+ */
+async function waitForType(
+	inbox: Inbox,
+	type: string,
+	n: number,
+	timeoutMs = 3000,
+): Promise<AnyMsg[]> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const matches = inbox.all().filter((m) => m.type === type);
+		if (matches.length >= n) return matches;
+		await new Promise((r) => setTimeout(r, 20));
+	}
+	return inbox.all().filter((m) => m.type === type);
+}
+
 describe("mountChatWs — pi subprocess pipe", () => {
 	it("emits ready after the first session line, then forwards pi events", async () => {
 		const { mountChatWs } = await import("../src/server/chat.js");
@@ -431,6 +501,147 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			const all = inbox.all();
 			const readyCount = all.filter((m) => m.type === "ready").length;
 			expect(readyCount).toBe(1);
+		} finally {
+			close();
+		}
+	});
+
+	it("forwards setModel/setThinking to pi and only adopts the new model on success", async () => {
+		// Pessimistic setModel/setThinking (the 2026-07-09 fix). The
+		// script echoes back the requested model in set_model's
+		// response data (matches real pi), and acks set_thinking_level
+		// with no data. Both cases must:
+		//   (a) emit a {type:"modelState"} frame to the client carrying
+		//       the new provider/modelId/thinkingLevel;
+		//   (b) leave session.init pointing at the new values so a
+		//       later reattach (page refresh, reconnect) reports the
+		//       truth, not the spawn-time default.
+		fakePiPath = makeFakePi("set-model");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await inbox.waitFor(1);
+
+			ws.send(
+				JSON.stringify({ type: "setModel", modelId: "m2", provider: "p2" }),
+			);
+			ws.send(
+				JSON.stringify({ type: "setThinking", level: "high" }),
+			);
+			// Wait for the two modelState frames (one per RPC).
+			const msgs = await waitForType(inbox, "modelState", 2, 3000);
+			const stateMsgs = msgs.filter((m) => m.type === "modelState");
+			expect(stateMsgs.length).toBeGreaterThanOrEqual(2);
+			const last = stateMsgs[stateMsgs.length - 1] as {
+				provider: string;
+				modelId: string;
+				thinkingLevel: string;
+			};
+			expect(last.provider).toBe("p2");
+			expect(last.modelId).toBe("m2");
+			expect(last.thinkingLevel).toBe("high");
+		} finally {
+			close();
+		}
+	});
+
+	it("keeps session.init on the old model when pi rejects set_model", async () => {
+		// The original bug from the 2026-07-09 report: the user picks
+		// "GLM 5.2 (Venice)" (a model not in pi's registry), pi's
+		// set_model returns success:false, but the server's old
+		// optimistic update had already painted the new model into
+		// session.init. Result: the picker lied, subsequent prompts
+		// kept going to the previous model. After the pessimistic
+		// fix, session.init must stay on the previous model AND the
+		// modelState frame sent to the client must reflect that.
+		fakePiPath = makeFakePi("set-model");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await inbox.waitFor(1);
+
+			// A modelId starting with "fail-" triggers the fake
+			// script's failure branch (which echoes success:false +
+			// error). Mirrors the real-pi "Model not found" path.
+			ws.send(
+				JSON.stringify({
+					type: "setModel",
+					modelId: "fail-glm-5-2",
+					provider: "venice",
+				}),
+			);
+
+			// The modelState frame MUST report the previous model,
+			// not the failed one. Wait up to 2s — it should arrive in
+			// well under that.
+			const state = (await waitForType(inbox, "modelState", 1, 2000))[0] as {
+				provider: string;
+				modelId: string;
+				thinkingLevel: string;
+			};
+			expect(state.provider).toBe("deepseek");
+			expect(state.modelId).toBe("m1");
+			expect(state.thinkingLevel).toBe("off");
+		} finally {
+			close();
+		}
+	});
+
+	it("keeps session.init on the old thinking level when pi rejects set_thinking_level", async () => {
+		// Sibling test of the set_model failure case — same
+		// pessimistic pattern, different RPC.
+		fakePiPath = makeFakePi("set-model");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "high",
+				}),
+			);
+			await inbox.waitFor(1);
+
+			ws.send(JSON.stringify({ type: "setThinking", level: "fail-xhigh" }));
+			const state = (await waitForType(inbox, "modelState", 1, 2000))[0] as {
+				provider: string;
+				modelId: string;
+				thinkingLevel: string;
+			};
+			expect(state.thinkingLevel).toBe("high"); // unchanged
 		} finally {
 			close();
 		}
