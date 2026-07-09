@@ -19,7 +19,15 @@ import type {
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { getCapabilities, getHealth, getImageModels, getModels, sessionExists, type ImageModelInfo, type ModelInfo } from "./api.js";
+import {
+	getCapabilities,
+	getHealth,
+	getImageModels,
+	getModels,
+	sessionExists,
+	type ImageModelInfo,
+	type ModelInfo,
+} from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
 import { setRichText } from "./linkify.js";
@@ -36,6 +44,8 @@ import {
 	registerShellHandlers,
 	renderMessageNode,
 	renderShell,
+	renderSidebarProjects,
+	renderSidebarSessions,
 	resetJumpNav,
 	type ShellHandlers,
 	scrollToBottom,
@@ -59,7 +69,7 @@ import {
 	resetChatState,
 	showSlashMenu,
 } from "./slashes.js";
-import { type PersistedMessage, state } from "./state.js";
+import { type PersistedMessage, refreshCurrentModelLabel, state } from "./state.js";
 import {
 	handleDrop,
 	handleFileAttach,
@@ -68,10 +78,13 @@ import {
 	stopAllVoice,
 	pauseVoice,
 	resumeVoice,
+	speakText,
+	toggleSpeak,
 } from "./voice.js";
 import { createChatClient } from "./ws.js";
 import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
 import { applySessionPrefs } from "./prefs.js";
+import { setServices } from "./services.js";
 
 // ---------------------------------------------------------------------------
 // History (↑/↓)
@@ -160,27 +173,10 @@ function sendAsUser(trimmed: string): void {
 
 	// Find any /uploads/<id>... URLs in the prompt and pull the base64
 	// bytes for each one. The URLs are emitted by handleFileAttach as
-	// markdown image links, so the regex finds them. We dedupe by URL
-	// and remove them from the map after sending so we don't keep
-	// multi-megabase strings around forever.
-	const urlRegex = /(\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)/g;
-	const seen = new Set<string>();
-	const images: Array<{ data: string; mimeType: string }> = [];
-	const uploadedUrls: string[] = [];
-	for (const m of trimmed.matchAll(urlRegex)) {
-		const url = m[1];
-		if (seen.has(url)) continue;
-		seen.add(url);
-		const img = state.uploadedImages.get(url);
-		if (img) {
-			images.push({ data: img.data, mimeType: img.mimeType });
-			// Drop the base64 blob from the in-memory map once we've
-			// shipped it. Multi-MB images would otherwise accumulate
-			// for the lifetime of the page.
-			uploadedUrls.push(url);
-		}
-	}
-	for (const url of uploadedUrls) state.uploadedImages.delete(url);
+	// markdown image links, so the regex finds them. consumeUploadedImages
+	// dedupes by URL and removes them from the map after sending so we
+	// don't keep multi-megabase strings around forever.
+	const images = consumeUploadedImages(trimmed);
 
 	// Hand off the actual send to a hook wired up in boot(), so this
 	// function doesn't have to capture `chatClient` (which is local to
@@ -203,31 +199,6 @@ let sendPromptHook: SendPromptHook = () => {
 let steerHook: SendPromptHook = () => {
 	/* will be replaced by boot() */
 };
-/** Closure over `chatClient.forkSession`, wired in boot(). */
-let forkHook: ((sessionId: string, messageCount: number) => void) | null = null;
-
-/**
- * Fork the current chat at the given message ordinal. Called from the
- * renderer's per-message fork button. Resolves the current session id
- * lazily (it may change between render time and click time), and is a
- * no-op if no session is bound yet or fork wasn't wired by boot().
- */
-export function forkFromMessage(messageCount: number): void {
-	if (!forkHook || !state.sessionId) return;
-	forkHook(state.sessionId, messageCount);
-}
-
-/**
- * Send a slash command to pi WITHOUT the local user-bubble / history
- * bookkeeping of sendAsUser. Used by quiet UI affordances like the
- * per-message "request voice reply" button, where pressing the button
- * shouldn't litter the visible transcript with `/voice-last` bubbles.
- * The command is still sent over the wire as a normal prompt (pi routes
- * extension commands itself); we just skip the local echo.
- */
-export function sendSlashCommand(text: string): void {
-	sendPromptHook(text);
-}
 
 /**
  * Monotonic count of JSONL `type:"message"` entries seen so far in the
@@ -236,6 +207,28 @@ export function sendSlashCommand(text: string): void {
  * (new session). Drives the `seq` stamp each fork button reads.
  */
 let liveMessageSeq = 0;
+
+/**
+ * Pull the base64 bytes for every /uploads/<id> URL referenced in `text`
+ * out of the in-memory image map, and drop them (multi-MB strings
+ * shouldn't linger after they've been shipped). Shared by sendAsUser
+ * and sendSteer, which previously each inlined this ~15-line scan.
+ */
+function consumeUploadedImages(text: string): Array<{ data: string; mimeType: string }> {
+	const images: Array<{ data: string; mimeType: string }> = [];
+	const seen = new Set<string>();
+	for (const m of text.matchAll(/(\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)/g)) {
+		const url = m[1];
+		if (seen.has(url)) continue;
+		seen.add(url);
+		const img = state.uploadedImages.get(url);
+		if (img) {
+			images.push({ data: img.data, mimeType: img.mimeType });
+			state.uploadedImages.delete(url);
+		}
+	}
+	return images;
+}
 
 /**
  * Stamp the most recent user block that has no `seq` yet with the given
@@ -315,21 +308,7 @@ function sendSteer(trimmed: string): void {
 	state.pendingSteerCount += 1;
 	refreshStatus();
 	// Upload-URL rewriting mirrors sendAsUser so attached files resolve.
-	const urlRegex = /(\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)/g;
-	const seen = new Set<string>();
-	const images: Array<{ data: string; mimeType: string }> = [];
-	const uploadedUrls: string[] = [];
-	for (const m of trimmed.matchAll(urlRegex)) {
-		const url = m[1];
-		if (seen.has(url)) continue;
-		seen.add(url);
-		const img = state.uploadedImages.get(url);
-		if (img) {
-			images.push({ data: img.data, mimeType: img.mimeType });
-			uploadedUrls.push(url);
-		}
-	}
-	for (const url of uploadedUrls) state.uploadedImages.delete(url);
+	const images = consumeUploadedImages(trimmed);
 	steerHook(trimmed, images.length > 0 ? images : undefined);
 }
 
@@ -485,10 +464,8 @@ function onEvent(event: Record<string, unknown>): void {
 					state.pendingVoiceBtn = null;
 					const text = (want === "short" ? short : long).trim() || long.trim() || short.trim();
 					if (text) {
-						void import("./voice.js").then(({ toggleSpeak, speakText }) => {
-							if (btn) toggleSpeak(text, btn);
-							else speakText(text);
-						});
+						if (btn) toggleSpeak(text, btn);
+						else speakText(text);
 					}
 				}
 			} else if (e.message.role === "user") {
@@ -574,7 +551,7 @@ function onEvent(event: Record<string, unknown>): void {
 
 		case "message_end": {
 			const m = e.message as AssistantMessage;
-		// Suppress the blank spurious assistant message that the
+			// Suppress the blank spurious assistant message that the
 			// pi-voice-reply extension's sendMessage triggers (see the
 			// extension's spurious-turn handling). The extension blanks
 			// the content; we drop the empty block so the user never
@@ -616,13 +593,11 @@ function onEvent(event: Record<string, unknown>): void {
 			if (m.role === "assistant") {
 				for (const block of m.content) {
 					if (block.type === "text") finalText += (block as TextContent).text;
-					else if (block.type === "thinking")
-						finalThinking += (block as ThinkingContent).thinking;
+					else if (block.type === "thinking") finalThinking += (block as ThinkingContent).thinking;
 				}
 			}
 			const isEmptyError =
-				m.role === "assistant" &&
-				(m as { stopReason?: string }).stopReason === "error";
+				m.role === "assistant" && (m as { stopReason?: string }).stopReason === "error";
 			if (
 				m.role === "assistant" &&
 				lastAssistant &&
@@ -637,7 +612,10 @@ function onEvent(event: Record<string, unknown>): void {
 					// Replace the frozen empty row with a visible error notice.
 					removeLiveAssistantRow(lastAssistantDom);
 					state.messages.pop();
-					const errMsg = { kind: "error" as const, text: "Model returned an error (possibly context too long or provider overloaded). Retrying…" };
+					const errMsg = {
+						kind: "error" as const,
+						text: "Model returned an error (possibly context too long or provider overloaded). Retrying…",
+					};
 					state.messages.push(errMsg);
 					appendNode(renderMessageNode(errMsg));
 				} else {
@@ -722,8 +700,7 @@ function onEvent(event: Record<string, unknown>): void {
 			// are silently ignored (no ACB UI for them yet).
 			if (e.method === "notify" && typeof e.message === "string") {
 				const notifyType =
-					e.notifyType === "error" ? "error" :
-					e.notifyType === "warning" ? "warning" : "info";
+					e.notifyType === "error" ? "error" : e.notifyType === "warning" ? "warning" : "info";
 				showToast(e.message, notifyType);
 			}
 			break;
@@ -738,6 +715,7 @@ function onEvent(event: Record<string, unknown>): void {
 			// `ready` only fires on attach/reattach.
 			if (typeof e.provider === "string") state.currentProvider = e.provider;
 			if (typeof e.modelId === "string") state.currentModelId = e.modelId;
+			refreshCurrentModelLabel();
 			// Narrow at runtime — ThinkingLevel is a string union, and the
 			// wire format is just a string. Avoid an unsafe cast.
 			if (typeof e.thinkingLevel === "string") {
@@ -788,7 +766,7 @@ async function boot(): Promise<void> {
 		getCapabilities()
 			.then((caps) => {
 				state.capabilities = caps;
-				void import("./render.js").then(({ refreshStatus }) => refreshStatus());
+				refreshStatus();
 			})
 			.catch(() => {
 				// capabilities fetch is best-effort — don't block the app
@@ -803,6 +781,9 @@ async function boot(): Promise<void> {
 				provider: p,
 			}));
 		}
+		// The model list just (re)loaded — re-resolve the friendly label
+		// for the current model now that names are available.
+		refreshCurrentModelLabel();
 	} catch (e) {
 		appendError(`server health check failed: ${e instanceof Error ? e.message : String(e)}`);
 	}
@@ -937,6 +918,7 @@ async function boot(): Promise<void> {
 		if (!state.currentModelId || isConfirmingPending) {
 			state.currentModelId = info.modelId;
 			state.currentProvider = info.provider;
+			refreshCurrentModelLabel();
 		}
 		state.pendingModelSet = null;
 		state.currentThinking = info.thinkingLevel;
@@ -966,11 +948,11 @@ async function boot(): Promise<void> {
 		// the sidebar can highlight its folder.
 		const current = sessions.find((s) => s.id === state.sessionId);
 		if (current?.projectId) state.activeProjectId = current.projectId;
-		void import("./render.js").then(({ renderSidebarSessions }) => renderSidebarSessions(sessions));
+		renderSidebarSessions(sessions);
 	});
 	chatClient.onProjectsUpdated((projects) => {
 		state.projects = projects;
-		void import("./render.js").then(({ renderSidebarProjects }) => renderSidebarProjects(projects));
+		renderSidebarProjects(projects);
 	});
 	// On resume: replace the renderer cache with the server's replay
 	// transcript, then re-render the chat scrollback so the past
@@ -1001,17 +983,15 @@ async function boot(): Promise<void> {
 		// On a background reconnect for the same session this is a no-op,
 		// preserving scroll position and avoiding a flicker.
 		if (sameSession && sameLength && lastMatches) return;
-		void import("./render.js").then(({ renderShell, setStreaming }) => {
-			renderShell();
-			// renderShell rebuilds the entire DOM, including a fresh
-			// #stop-btn created hidden. If we're mid-run (server reported
-			// isStreaming=true in the ready that preceded this transcript,
-			// or we never left a run), re-apply that state so the Stop
-			// button is visible after resume. Without this the button we
-			// unhid in onReady is destroyed and replaced by a hidden one —
-			// the "Stop button missing after refresh/resume" bug.
-			setStreaming(state.isStreaming);
-		});
+		renderShell();
+		// renderShell rebuilds the entire DOM, including a fresh
+		// #stop-btn created hidden. If we're mid-run (server reported
+		// isStreaming=true in the ready that preceded this transcript,
+		// or we never left a run), re-apply that state so the Stop
+		// button is visible after resume. Without this the button we
+		// unhid in onReady is destroyed and replaced by a hidden one —
+		// the "Stop button missing after refresh/resume" bug.
+		setStreaming(state.isStreaming);
 	});
 	// After resumeSession/newSession completes, the server reports
 	// the new session's metadata. We adopt it (model/thinking) but
@@ -1062,9 +1042,16 @@ async function boot(): Promise<void> {
 	steerHook = (text, images) => {
 		chatClient.steer(text, images);
 	};
-	forkHook = (sessionId, messageCount) => {
-		chatClient.forkSession(sessionId, messageCount);
-	};
+	// Wire the render→main/render→voice callbacks through the services
+	// registry (a leaf module) so render.ts doesn't have to dynamic-import
+	// this file or voice.ts — breaking the render↔{main,voice} cycle.
+	setServices({
+		forkFromMessage: (count) => {
+			if (state.sessionId) chatClient.forkSession(state.sessionId, count);
+		},
+		sendSlashCommand: (text) => sendPromptHook(text),
+		toggleSpeak,
+	});
 	// When a fork completes server-side, switch this view to the new
 	// session. resumeSession kills the current `pi` child and spawns a
 	// fresh one bound to the forked JSONL, which replays as the prior

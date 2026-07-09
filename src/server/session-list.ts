@@ -37,6 +37,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
+import { extractText, truncate } from "../shared/content.js";
 import { readPinnedSessions } from "./session-pins.js";
 import { GLOBAL_PROJECT_ID, projectIdForCwd } from "./projects.js";
 
@@ -85,19 +86,11 @@ export function defaultSessionsRoot(): string {
 
 /**
  * The per-cwd subdirectory `pi` writes sessions into. The convention
- * in pi 0.79.x is to strip the leading "/" from the cwd, replace
- * every remaining "/" with "-", and wrap the result in "--"
- * delimiters — so `/home/architect/agentchatbox` becomes
- * `--home-architect-agentchatbox--` (NOT `--/home/...--`).
- *
- * (Earlier versions of the docs described a different convention; the
- * installed binary uses this form. Verified empirically on the host's
- * `~/.pi/agent/sessions/`.)
- */
-/**
- * The per-cwd subdirectory `pi` writes sessions into. Exported so the
- * search indexer reuses the exact same path derivation (no second copy
- * to drift).
+ * in pi 0.79.x is to strip the leading "/" from the cwd, replace every
+ * remaining "/" with "-", and wrap the result in "--" delimiters — so
+ * `/home/architect/agentchatbox` becomes `--home-architect-agentchatbox--`
+ * (NOT `--/home/...--`). Exported so the search indexer reuses the exact
+ * same path derivation (no second copy to drift).
  */
 export function sessionsDirFor(cwd: string, root: string = defaultSessionsRoot()): string {
 	const stripped = cwd.startsWith("/") ? cwd.slice(1) : cwd;
@@ -143,6 +136,17 @@ export function listPiSessions(cwd: string): SessionSummary[] {
 }
 
 /**
+ * mtime-keyed cache of per-file session summaries. The sidebar refresh
+ * re-lists every session in every project cwd on each pin/rename/fork/
+ * broadcast; without this each refresh re-read + re-parsed every JSONL
+ * in full (some are MB-sized). An unchanged file is now a stat + Map
+ * lookup. The cached summary excludes the derived `pinned`/`projectId`
+ * fields (applied per-refresh), and we return a fresh copy so callers
+ * can mutate without polluting the cache.
+ */
+const sessionFileCache = new Map<string, { mtime: number; summary: SessionSummary }>();
+
+/**
  * Parse the JSONL files for a single cwd into raw (untagged) summaries.
  * Extracted so the multi-project sidebar listing can reuse it without
  * re-implementing the parser. Returns newest-first within this cwd.
@@ -159,6 +163,15 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 		try {
 			st = statSync(file);
 		} catch {
+			continue;
+		}
+
+		// Fast path: unchanged file → reuse the cached summary (fresh copy;
+		// callers add the derived pinned/projectId fields by mutation).
+		const mtime = st.mtimeMs;
+		const cached = sessionFileCache.get(file);
+		if (cached && cached.mtime === mtime) {
+			out.push({ ...cached.summary });
 			continue;
 		}
 
@@ -226,14 +239,16 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 			}
 		}
 
-		out.push({
+		const summary: SessionSummary = {
 			id: String(firstLine.id ?? name.replace(/\.jsonl$/, "")),
 			cwd: sessionCwd,
 			createdAt: String(firstLine.timestamp ?? st.mtime.toISOString()),
 			modifiedAt: st.mtime.toISOString(),
 			title: sessionName ?? (firstUserText ? truncate(firstUserText, 60) : "(empty session)"),
 			messageCount,
-		});
+		};
+		sessionFileCache.set(file, { mtime, summary });
+		out.push({ ...summary });
 	}
 	// NOTE: no sort here — every caller goes through finishSessions(),
 	// which sorts the merged set. Sorting inside this helper would just
@@ -337,11 +352,49 @@ function listOrphanedSessions(knownCwds: string[]): SessionSummary[] {
 }
 
 /**
+ * Lazily-built index of every session id → its recorded cwd, scanned
+ * once across the whole sessions root. findSessionCwd uses it so an
+ * orphaned / deleted-project session resume is an O(1) lookup instead
+ * of a full filesystem scan every time. Rebuilt on a miss (a brand-new
+ * session file pi just wrote may not be in the stale index yet) and
+ * invalidated whenever this module writes a new session file (fork).
+ */
+let cwdIndex: Map<string, string> | null = null;
+
+function buildCwdIndex(): Map<string, string> {
+	const idx = new Map<string, string>();
+	const root = defaultSessionsRoot();
+	if (!existsSync(root)) return idx;
+	for (const subdir of readdirSync(root)) {
+		const dir = join(root, subdir);
+		try {
+			if (!statSync(dir).isDirectory()) continue;
+		} catch {
+			continue;
+		}
+		for (const name of readdirSync(dir)) {
+			if (!name.endsWith(".jsonl")) continue;
+			const firstLine = readFirstLine(join(dir, name));
+			if (!firstLine) continue;
+			try {
+				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+				if (parsed?.type === "session" && parsed.id) {
+					idx.set(String(parsed.id), String(parsed.cwd ?? ""));
+				}
+			} catch {
+				continue;
+			}
+		}
+	}
+	return idx;
+}
+
+/**
  * Find which cwd (among the known project cwds) a session id lives in.
  * Used on resume/reconnect to spawn `pi` in the correct project folder.
- * Scans known project cwds first, then falls back to a full root scan
- * (for orphaned/deleted-project sessions the user is still resuming).
- * Returns the absolute cwd, or null if not found anywhere.
+ * Checks known project cwds first (fast; the common case), then a cached
+ * root-wide id→cwd index, rebuilding it on a miss in case pi just wrote
+ * a new session file. Returns the absolute cwd, or null if not found.
  */
 export function findSessionCwd(sessionId: string, knownCwds: string[]): string | null {
 	const checked = new Set<string>();
@@ -351,31 +404,15 @@ export function findSessionCwd(sessionId: string, knownCwds: string[]): string |
 		checked.add(ac);
 		if (findPiSessionFile(ac, sessionId)) return ac;
 	}
-	// Full root scan for orphans.
-	const root = defaultSessionsRoot();
-	if (!existsSync(root)) return null;
-	for (const name of readdirSync(root)) {
-		const dir = join(root, name);
-		try {
-			if (!statSync(dir).isDirectory()) continue;
-		} catch {
-			continue;
-		}
-		for (const file of readdirSync(dir)) {
-			if (!file.endsWith(".jsonl")) continue;
-			const firstLine = readFirstLine(join(dir, file));
-			if (!firstLine) continue;
-			try {
-				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
-				if (parsed?.type === "session" && String(parsed.id) === sessionId) {
-					return String(parsed.cwd ?? "");
-				}
-			} catch {
-				continue;
-			}
-		}
+	if (cwdIndex === null) cwdIndex = buildCwdIndex();
+	let cwd = cwdIndex.get(sessionId);
+	if (cwd === undefined) {
+		// Miss → a new session file may have appeared since the index was
+		// built. Rebuild once and look again.
+		cwdIndex = buildCwdIndex();
+		cwd = cwdIndex.get(sessionId);
 	}
-	return null;
+	return cwd || null;
 }
 
 /**
@@ -438,6 +475,51 @@ export function setPiSessionName(cwd: string, sessionId: string, name: string): 
  * ToolResultMessage`). The renderer can hand these straight to its
  * existing message-node projection.
  */
+export function readPiSessionMessages(cwd: string, sessionId: string): Message[] {
+	// Locate the JSONL via the shared first-line header check, then read
+	// just that one file (previously this rescanned the dir itself).
+	const file = findPiSessionFile(cwd, sessionId);
+	if (!file) return [];
+
+	// This is the file — now read the full transcript.
+	const raw = readFileSync(file, "utf8");
+	// Walk every line, collect `type: "message"` entries' `.message` field.
+	// pi writes SDK-shape `Message` objects here; cast through unknown
+	// since JSON.parse returns unknown and we trust the writer.
+	const messages: Message[] = [];
+	for (const l of raw.split("\n")) {
+		const t = l.trim();
+		if (!t) continue;
+		try {
+			const e = JSON.parse(t) as Record<string, unknown>;
+			if (e.type === "message" && e.message) {
+				messages.push(e.message as Message);
+			} else if (e.type === "custom_message") {
+				// Persisted custom message (e.g. pi-voice-reply's voice-reply
+				// entry, which carries the long/short spoken variants).
+				// pi writes these as top-level `custom_message` JSONL lines,
+				// NOT nested under `.message`, so the `type==="message"`
+				// branch above skips them. Reconstruct the live event's
+				// message shape (role:"custom" + customType + details) so the
+				// transcript projection re-attaches the variants to their
+				// assistant message on reconnect. Without this, a page refresh
+				// / WS reconnect drops the in-memory variants and the
+				// Long/Short buttons regenerate (a full LLM round-trip) on
+				// every press.
+				messages.push({
+					role: "custom",
+					customType: e.customType,
+					content: e.content,
+					details: e.details,
+				} as unknown as Message);
+			}
+		} catch {
+			/* skip malformed */
+		}
+	}
+	return messages;
+}
+
 /**
  * Fork (branch) a session: copy the source session's JSONL into a
  * brand-new session file (fresh id + timestamp, same cwd), keeping
@@ -456,7 +538,11 @@ export function setPiSessionName(cwd: string, sessionId: string, name: string): 
  * couldn't be found. `messageCount` is clamped to [0, total]; a 0 or
  * negative count forks an empty session (just the header).
  */
-export function forkPiSession(cwd: string, sourceSessionId: string, messageCount: number): string | null {
+export function forkPiSession(
+	cwd: string,
+	sourceSessionId: string,
+	messageCount: number,
+): string | null {
 	const file = findPiSessionFile(cwd, sourceSessionId);
 	if (!file) return null;
 
@@ -516,88 +602,8 @@ export function forkPiSession(cwd: string, sourceSessionId: string, messageCount
 	const stamp = now.toISOString().replace(/:/g, "-");
 	const newFile = join(dir, `${stamp}_${newId}.jsonl`);
 	writeFileSync(newFile, `${outLines.join("\n")}\n`);
+	// A new session file exists now — drop the id→cwd index so the next
+	// resume finds this fork without waiting for a miss-triggered rebuild.
+	cwdIndex = null;
 	return newId;
-}
-
-export function readPiSessionMessages(cwd: string, sessionId: string): Message[] {
-	const dir = sessionsDirFor(resolve(cwd));
-	// Find the JSONL whose first line has matching id.
-	if (!existsSync(dir)) return [];
-	for (const name of readdirSync(dir)) {
-		if (!name.endsWith(".jsonl")) continue;
-		const file = join(dir, name);
-		// Cheap header check first: avoid reading megabytes of transcript
-		// for every non-matching file in the dir.
-		const firstLine = readFirstLine(file);
-		if (!firstLine) continue;
-		let parsed: Record<string, unknown> | null = null;
-		try {
-			parsed = JSON.parse(firstLine) as Record<string, unknown>;
-		} catch {
-			continue;
-		}
-		if (parsed?.type !== "session" || String(parsed.id) !== sessionId) continue;
-
-		// This is the file — now read the full transcript.
-		const raw = readFileSync(file, "utf8");
-		// Walk every line, collect `type: "message"` entries' `.message` field.
-		// pi writes SDK-shape `Message` objects here; cast through unknown
-		// since JSON.parse returns unknown and we trust the writer.
-		const messages: Message[] = [];
-		for (const l of raw.split("\n")) {
-			const t = l.trim();
-			if (!t) continue;
-			try {
-				const e = JSON.parse(t) as Record<string, unknown>;
-				if (e.type === "message" && e.message) {
-					messages.push(e.message as Message);
-				} else if (e.type === "custom_message") {
-					// Persisted custom message (e.g. pi-voice-reply's voice-reply
-					// entry, which carries the long/short spoken variants).
-					// pi writes these as top-level `custom_message` JSONL lines,
-					// NOT nested under `.message`, so the `type==="message"`
-					// branch above skips them. Reconstruct the live event's
-					// message shape (role:"custom" + customType + details) so the
-					// transcript projection re-attaches the variants to their
-					// assistant message on reconnect. Without this, a page refresh
-					// / WS reconnect drops the in-memory variants and the
-					// Long/Short buttons regenerate (a full LLM round-trip) on
-					// every press.
-					messages.push({
-						role: "custom",
-						customType: e.customType,
-						content: e.content,
-						details: e.details,
-					} as unknown as Message);
-				}
-			} catch {
-				/* skip malformed */
-			}
-		}
-		return messages;
-	}
-	return [];
-}
-
-// (sessionsDirFor / defaultSessionsRoot are now named exports above; no
-// private _internal escape hatch is needed — nothing outside this module
-// referenced it.)
-
-function extractText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (Array.isArray(content)) {
-		const parts: string[] = [];
-		for (const block of content) {
-			if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
-				parts.push(String((block as { text?: string }).text ?? ""));
-			}
-		}
-		return parts.join("");
-	}
-	return "";
-}
-
-function truncate(s: string, n: number): string {
-	if (s.length <= n) return s;
-	return `${s.slice(0, n - 1)}…`;
 }

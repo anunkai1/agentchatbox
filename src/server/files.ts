@@ -20,7 +20,8 @@
  * `path` pointing at `/dev/` or a mount point can't be streamed.
  */
 
-import { readFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
@@ -52,16 +53,6 @@ export function createFilesRouter(): Router {
 			return;
 		}
 
-		let data: Buffer;
-		try {
-			data = await readFile(target);
-		} catch (e) {
-			res.status(500).json({
-				error: `failed to read file: ${e instanceof Error ? e.message : String(e)}`,
-			});
-			return;
-		}
-
 		// Force a download (attachment) with the basename as the
 		// suggested filename. `encodeURIComponent` keeps unicode names
 		// intact across browsers; RFC 5987 `filename*` is the
@@ -75,7 +66,26 @@ export function createFilesRouter(): Router {
 		// extension; we don't ship a mime DB on purpose.
 		res.setHeader("Content-Type", "application/octet-stream");
 		res.setHeader("Content-Length", String(s.size));
-		res.send(data);
+		// Stream the file instead of buffering it. The agent routinely
+		// touches multi-GB logs; loading one into a Buffer to `res.send()`
+		// would spike memory and can OOM the server. Piping reads + sends
+		// in chunks so peak memory stays flat regardless of file size.
+		createReadStream(target)
+			.on("error", (err: NodeJS.ErrnoException) => {
+				if (!res.headersSent) {
+					res.status(500).json({
+						error: `failed to read file: ${err.message}`,
+					});
+				} else {
+					// Headers already flushed (we're mid-stream) — just end.
+					try {
+						res.end();
+					} catch {
+						/* client may be gone */
+					}
+				}
+			})
+			.pipe(res);
 	});
 
 	return router;

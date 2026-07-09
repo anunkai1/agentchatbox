@@ -15,6 +15,7 @@
  * from process.cwd() — see paths.ts.
  */
 
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { projectRoot } from "./paths.js";
 import { PROVIDER_KEYS, providerApiKeyEnvVar } from "./providers.js";
@@ -104,8 +105,7 @@ export const config: ServerConfig = {
 	piBin: process.env.PI_BIN ?? "pi",
 	piCwd: process.env.PI_CWD ?? process.cwd(),
 	imageModelFile:
-		process.env.IMAGE_MODEL_FILE ??
-		resolve(process.env.HOME ?? "/home/lepton", ".config", "acb", "image-model"),
+		process.env.IMAGE_MODEL_FILE ?? resolve(homedir(), ".config", "acb", "image-model"),
 };
 
 /**

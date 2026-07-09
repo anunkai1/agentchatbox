@@ -24,6 +24,7 @@ import { log } from "../logger.js";
 import { embed, isEmbeddingAvailable } from "./embeddings.js";
 import { indexAll } from "./indexer.js";
 import { getCacheStats, isStoreAvailable, loadCache, searchVectors } from "./store.js";
+import { truncate } from "../../shared/content.js";
 
 export interface SessionSearchResult {
 	sessionId: string;
@@ -106,9 +107,4 @@ export async function searchSessions(
 		modifiedAt: h.modifiedAt,
 		messageCount: h.messageCount,
 	}));
-}
-
-function truncate(s: string, n: number): string {
-	if (s.length <= n) return s;
-	return `${s.slice(0, n - 1)}…`;
 }

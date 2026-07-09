@@ -25,26 +25,36 @@ import type { CapabilitiesInfo } from "./api.js";
  * shape on the client so the renderer can stay simple.
  */
 export type PersistedMessage =
-	| { kind: "user"; text: string; /**
-		 * 1-based ordinal of this message within the session's JSONL
-		 * `type:"message"` entries — i.e. how many messages (including
-		 * this one) a "fork from here" should copy. Stamped by
-		 * projectTranscript (from the transcript array index) and by
-		 * the live event dispatcher (from a monotonic counter seeded
-		 * to the transcript length). Undefined only briefly, before
-		 * the echo/stamp lands. Absent on kinds that can't be forked
-		 * (tool/steer/error).
-		 */ seq?: number }
-	| { kind: "assistant"; text: string; thinking: string; seq?: number;
-		 /**
-		 * Listenable spoken-rewrite variants produced by the
-		 * pi-voice-reply extension, attached to this assistant message
-		 * when a voice reply was requested (proactively via trigger
-		 * phrase or retroactively via the 🎙️ button). Rendered as inline
-		 * Long/Short speak buttons on this message's button row — never
-		 * as a separate block — so they share the line with 🔊/🎙️/fork.
-		 */
-		voiceLong?: string; voiceShort?: string }
+	| {
+			kind: "user";
+			text: string /**
+			 * 1-based ordinal of this message within the session's JSONL
+			 * `type:"message"` entries — i.e. how many messages (including
+			 * this one) a "fork from here" should copy. Stamped by
+			 * projectTranscript (from the transcript array index) and by
+			 * the live event dispatcher (from a monotonic counter seeded
+			 * to the transcript length). Undefined only briefly, before
+			 * the echo/stamp lands. Absent on kinds that can't be forked
+			 * (tool/steer/error).
+			 */;
+			seq?: number;
+	  }
+	| {
+			kind: "assistant";
+			text: string;
+			thinking: string;
+			seq?: number;
+			/**
+			 * Listenable spoken-rewrite variants produced by the
+			 * pi-voice-reply extension, attached to this assistant message
+			 * when a voice reply was requested (proactively via trigger
+			 * phrase or retroactively via the 🎙️ button). Rendered as inline
+			 * Long/Short speak buttons on this message's button row — never
+			 * as a separate block — so they share the line with 🔊/🎙️/fork.
+			 */
+			voiceLong?: string;
+			voiceShort?: string;
+	  }
 	| {
 			kind: "tool";
 			name: string;
@@ -105,6 +115,13 @@ export interface AppState {
 	};
 	availableModels: ModelOption[];
 	currentModelId: string | null;
+	/**
+	 * Human-readable label for `currentModelId` (from /api/models' `name`),
+	 * resolved once per model change instead of re-searching the model list
+	 * on every status-bar tick (which fires each second while streaming).
+	 * Falls back to the raw id when no friendly name is known.
+	 */
+	currentModelLabel: string;
 	currentProvider: string | null;
 	currentThinking: ThinkingLevel;
 	/**
@@ -267,6 +284,7 @@ export const state: AppState = {
 	costTotal: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
 	availableModels: [],
 	currentModelId: null,
+	currentModelLabel: "(no model)",
 	currentProvider: null,
 	availableImageModels: [],
 	currentImageModelId: null,
@@ -292,3 +310,19 @@ export const state: AppState = {
 	searchEnabled: false,
 	searchActive: false,
 };
+
+/**
+ * Resolve `state.currentModelLabel` from the model list for the current
+ * model id. Cheap to call whenever the model changes or the available
+ * list (re)loads. Lets the status bar read a precomputed label instead
+ * of searching the list on every 1s tick.
+ */
+export function refreshCurrentModelLabel(): void {
+	const id = state.currentModelId;
+	if (!id) {
+		state.currentModelLabel = "(no model)";
+		return;
+	}
+	const opt = state.availableModels.find((m) => m.id === id);
+	state.currentModelLabel = opt?.name ?? id;
+}

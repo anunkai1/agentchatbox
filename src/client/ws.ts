@@ -168,6 +168,12 @@ export function createChatClient(): ChatClient {
 	const transcriptListeners = new Set<TranscriptListener>();
 	const forkedListeners = new Set<ForkedListener>();
 
+	/** Add a listener to a Set and return an unsubscribe fn. */
+	function subscribe<T>(set: Set<T>, listener: T): () => void {
+		set.add(listener);
+		return () => set.delete(listener);
+	}
+
 	function setStatus(status: "connecting" | "open" | "closed" | "stalled") {
 		currentStatus = status;
 		for (const l of statusListeners) l(status);
@@ -375,38 +381,14 @@ export function createChatClient(): ChatClient {
 		updateProject: (input) => send({ type: "updateProject", ...input }),
 		deleteProject: (id) => send({ type: "deleteProject", id }),
 		reorderProjects: (order) => send({ type: "reorderProjects", order }),
-		onEvent: (l) => {
-			eventListeners.add(l);
-			return () => eventListeners.delete(l);
-		},
-		onReady: (l) => {
-			readyListeners.add(l);
-			return () => readyListeners.delete(l);
-		},
-		onError: (l) => {
-			errorListeners.add(l);
-			return () => errorListeners.delete(l);
-		},
-		onStatus: (l) => {
-			statusListeners.add(l);
-			return () => statusListeners.delete(l);
-		},
-		onSessionsUpdated: (l) => {
-			sessionsListeners.add(l);
-			return () => sessionsListeners.delete(l);
-		},
-		onProjectsUpdated: (l) => {
-			projectsListeners.add(l);
-			return () => projectsListeners.delete(l);
-		},
-		onTranscript: (l) => {
-			transcriptListeners.add(l);
-			return () => transcriptListeners.delete(l);
-		},
-		onForked: (l) => {
-			forkedListeners.add(l);
-			return () => forkedListeners.delete(l);
-		},
+		onEvent: (l) => subscribe(eventListeners, l),
+		onReady: (l) => subscribe(readyListeners, l),
+		onError: (l) => subscribe(errorListeners, l),
+		onStatus: (l) => subscribe(statusListeners, l),
+		onSessionsUpdated: (l) => subscribe(sessionsListeners, l),
+		onProjectsUpdated: (l) => subscribe(projectsListeners, l),
+		onTranscript: (l) => subscribe(transcriptListeners, l),
+		onForked: (l) => subscribe(forkedListeners, l),
 		reconnect: () => {
 			// Suppress the old socket's async close-reconnect so we don't
 			// end up with two racing WebSockets (the one we close here and

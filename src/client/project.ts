@@ -8,6 +8,7 @@
  */
 
 import type { Message } from "@earendil-works/pi-ai";
+import { extractText } from "../shared/content.js";
 import type { PersistedMessage } from "./state.js";
 
 /**
@@ -107,17 +108,6 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 		}
 	}
 	return out;
-}
-
-function extractText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (Array.isArray(content)) {
-		return content
-			.filter((b: { type?: string }) => b && b.type === "text")
-			.map((b: { text?: string }) => b.text ?? "")
-			.join("");
-	}
-	return "";
 }
 
 function extractThinking(content: unknown): string {

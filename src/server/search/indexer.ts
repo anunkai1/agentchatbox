@@ -16,28 +16,13 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import {
-	listPiSessions,
-	sessionsDirFor,
-	type SessionSummary,
-} from "../session-list.js";
+import { extractText } from "../../shared/content.js";
+import { listPiSessions, sessionsDirFor, type SessionSummary } from "../session-list.js";
 import { embed } from "./embeddings.js";
 import { indexSession, isIndexed } from "./store.js";
 
 /** Pull the plain text out of a SDK `Message` content (string or block array). */
-function extractText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (Array.isArray(content)) {
-		const parts: string[] = [];
-		for (const block of content) {
-			if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
-				parts.push(String((block as { text?: string }).text ?? ""));
-			}
-		}
-		return parts.join("");
-	}
-	return "";
-}
+// extractText lives in shared/content.ts now.
 
 interface ParsedMessage {
 	msgIdx: number;

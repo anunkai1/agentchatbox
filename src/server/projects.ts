@@ -28,7 +28,7 @@
  * there is zero drift between the sidecar and pi's session JSONLs.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { config } from "./config.js";
 import { projectRoot } from "./paths.js";
@@ -91,9 +91,26 @@ function globalProject(): ProjectRecord {
  * Read the raw store, ensuring the builtin Global project is always
  * present (in cwd and in the sidebar order). Corrupt / missing file →
  * a fresh store with just Global.
+ *
+ * Cached by the file's mtime: this is read once per session during a
+ * sidebar refresh (via projectIdForCwd), so a busy sidebar previously
+ * re-read + re-parsed the same JSON file dozens of times per refresh.
+ * The cache is invalidated by mtime and by every writeStore().
  */
+let cachedStore: { file: string; mtime: number; data: ProjectsFile } | null = null;
+
 function readStore(): ProjectsFile {
 	const file = defaultProjectsFile();
+	let mtime = 0;
+	try {
+		mtime = statSync(file).mtimeMs;
+	} catch {
+		/* missing — fall through to a fresh store */
+	}
+	if (cachedStore && cachedStore.file === file && cachedStore.mtime === mtime) {
+		return cachedStore.data;
+	}
+
 	let parsed: ProjectsFile | null = null;
 	if (existsSync(file)) {
 		try {
@@ -104,8 +121,7 @@ function readStore(): ProjectsFile {
 				if (Array.isArray(o.projects)) {
 					parsed = {
 						projects: o.projects.filter(
-							(p): p is ProjectRecord =>
-								!!p && typeof p === "object" && typeof p.id === "string",
+							(p): p is ProjectRecord => !!p && typeof p === "object" && typeof p.id === "string",
 						),
 						sidebarOrder: Array.isArray(o.sidebarOrder)
 							? o.sidebarOrder.filter((x) => typeof x === "string")
@@ -132,6 +148,7 @@ function readStore(): ProjectsFile {
 	for (const p of parsed.projects) {
 		if (!parsed.sidebarOrder.includes(p.id)) parsed.sidebarOrder.push(p.id);
 	}
+	cachedStore = { file, mtime, data: parsed };
 	return parsed;
 }
 
@@ -143,6 +160,9 @@ function writeStore(store: ProjectsFile): void {
 		/* dir may already exist */
 	}
 	writeFileSync(file, JSON.stringify(store, null, 2));
+	// Invalidate the read cache so the next read picks up the new bytes
+	// (and its new mtime).
+	cachedStore = null;
 }
 
 /** List all projects in sidebar order (Global always first). */

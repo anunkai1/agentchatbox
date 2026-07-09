@@ -308,7 +308,9 @@ body {
 	line-height: 1;
 	padding: 4px 5px;
 	border-radius: var(--radius-sm);
-	transition: background 0.12s, color 0.12s;
+	transition:
+		background 0.12s,
+		color 0.12s;
 }
 .session-action:hover {
 	background: var(--surface-active);
@@ -328,7 +330,9 @@ body {
 	padding: 0 2px;
 	flex-shrink: 0;
 	filter: grayscale(0.3);
-	transition: filter 0.12s, transform 0.12s;
+	transition:
+		filter 0.12s,
+		transform 0.12s;
 }
 .session-pin-indicator:hover {
 	filter: grayscale(0);
@@ -848,12 +852,20 @@ body {
 	line-height: 1.3;
 	font-weight: 600;
 }
-.body .text.markdown h1 { font-size: 1.5em; }
-.body .text.markdown h2 { font-size: 1.3em; }
-.body .text.markdown h3 { font-size: 1.15em; }
+.body .text.markdown h1 {
+	font-size: 1.5em;
+}
+.body .text.markdown h2 {
+	font-size: 1.3em;
+}
+.body .text.markdown h3 {
+	font-size: 1.15em;
+}
 .body .text.markdown h4,
 .body .text.markdown h5,
-.body .text.markdown h6 { font-size: 1em; }
+.body .text.markdown h6 {
+	font-size: 1em;
+}
 .body .text.markdown ul,
 .body .text.markdown ol {
 	margin: 0 0 0.9em;
@@ -1893,7 +1905,9 @@ body {
 	cursor: pointer;
 	font-family: inherit;
 	font-size: 13px;
-	transition: background 0.15s, border-color 0.15s;
+	transition:
+		background 0.15s,
+		border-color 0.15s;
 }
 .new-project-btn:hover {
 	background: var(--surface-hover, rgba(255, 255, 255, 0.05));
@@ -2129,11 +2143,28 @@ body {
 	user-select: none;
 	animation: toast-in 0.22s ease-out;
 }
-.toast.hidden { display: none; }
-.toast-info    { background: rgba(33, 150, 243, 0.95);  color: #fff; }
-.toast-warning { background: rgba(255, 193, 7, 0.95);   color: #3d2e00; }
-.toast-error   { background: rgba(244, 67, 54, 0.95);   color: #fff; }
+.toast.hidden {
+	display: none;
+}
+.toast-info {
+	background: rgba(33, 150, 243, 0.95);
+	color: #fff;
+}
+.toast-warning {
+	background: rgba(255, 193, 7, 0.95);
+	color: #3d2e00;
+}
+.toast-error {
+	background: rgba(244, 67, 54, 0.95);
+	color: #fff;
+}
 @keyframes toast-in {
-	from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
-	to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+	from {
+		opacity: 0;
+		transform: translateX(-50%) translateY(-10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(-50%) translateY(0);
+	}
 }

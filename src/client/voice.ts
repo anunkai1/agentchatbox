@@ -10,10 +10,10 @@
  *     paste the transcript into the input
  */
 
-import { transcribeAudio, uploadFile } from "./api.js";
+import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
-import { appendError, refreshStatus } from "./render.js";
+import { appendError, autoSize, refreshStatus } from "./render.js";
 import { state } from "./state.js";
 
 /**
@@ -170,10 +170,11 @@ export async function speakText(text: string): Promise<void> {
 		// chunk immediately. If it's unavailable (old server, piper engine, or
 		// a transient failure) and nothing has played yet, fall back to the
 		// whole-blob /api/tts path below.
-		const { streamSynthesizeSpeech } = await import("./api.js");
-		for await (
-			const blob of streamSynthesizeSpeech(spoken, state.ttsVoice ?? undefined, controller.signal)
-		) {
+		for await (const blob of streamSynthesizeSpeech(
+			spoken,
+			state.ttsVoice ?? undefined,
+			controller.signal,
+		)) {
 			// Stop was pressed mid-stream — drop the rest, don't play.
 			if (gen !== speakGeneration) return;
 			queue.push(blob);
@@ -230,7 +231,6 @@ async function playWholeBlob(
 	gen: number,
 	controller: AbortController,
 ): Promise<void> {
-	const { synthesizeSpeech } = await import("./api.js");
 	const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined, controller.signal);
 	if (gen !== speakGeneration) return;
 	const previousUrl = activeObjectUrl;
@@ -330,12 +330,10 @@ export function resumeVoice(): void {
 	// played to its end (a resume here would do nothing useful).
 	if (!userPaused || !audio.src || audio.ended) return;
 	userPaused = false;
-	void audio
-		.play()
-		.catch((err) => {
-			if (err instanceof DOMException && err.name === "AbortError") return;
-			appendError(`tts resume failed: ${err instanceof Error ? err.message : String(err)}`);
-		});
+	void audio.play().catch((err) => {
+		if (err instanceof DOMException && err.name === "AbortError") return;
+		appendError(`tts resume failed: ${err instanceof Error ? err.message : String(err)}`);
+	});
 	// Flip state optimistically; the 'play' event confirms audioPlaying=true.
 	state.audioPaused = false;
 	state.audioPlaying = true;
@@ -435,7 +433,7 @@ export async function attachFiles(files: File[]): Promise<void> {
 				? `\n[image: ${res.filename}](${res.url})`
 				: `\n[file: ${res.filename}](${res.url})`;
 			ta.value = `${ta.value} ${insertion}`.trim();
-			import("./render.js").then(({ autoSize }) => autoSize());
+			autoSize();
 		} catch (err) {
 			appendError(err instanceof Error ? err.message : String(err));
 		}
@@ -527,7 +525,7 @@ export async function handleVoiceRecord(): Promise<void> {
 			try {
 				const text = await transcribeAudio(blob);
 				$<HTMLTextAreaElement>("#input").value = text;
-				import("./render.js").then(({ autoSize }) => autoSize());
+				autoSize();
 				$("#status-bar").textContent = `transcribed (${text.length} chars). Press Enter to send.`;
 			} catch (err) {
 				appendError(`transcription failed: ${err instanceof Error ? err.message : String(err)}`);

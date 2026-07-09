@@ -55,6 +55,19 @@ export function text(s: string): Text {
 }
 
 /**
+ * Escape a string for safe interpolation into innerHTML (or an HTML
+ * attribute). Shared so the status bar and the HTML exporter use one
+ * definition instead of two inline copies that could drift.
+ */
+export function escapeHtml(s: string): string {
+	return s
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+/**
  * Return handles into a live assistant message's DOM nodes so callers
  * (the event dispatcher) can stream updates in place without re-rendering.
  */

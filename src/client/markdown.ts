@@ -75,7 +75,9 @@ export function markdownToSpeechText(text: string): string {
 		const html = DOMPurify.sanitize(marked.parse(src, { async: false }) as string);
 		const container = document.createElement("div");
 		container.innerHTML = html;
-		const out = collectSpeech(container).replace(/\n{3,}/g, "\n\n").trim();
+		const out = collectSpeech(container)
+			.replace(/\n{3,}/g, "\n\n")
+			.trim();
 		return out;
 	} catch {
 		return src;

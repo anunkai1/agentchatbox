@@ -29,7 +29,9 @@
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { config } from "./config.js";
 import { providerApiKeyEnvVar } from "./providers.js";
+import { safeUnref } from "./util.js";
 
 /**
  * The provider key is injected into the child's env via the name returned
@@ -125,7 +127,8 @@ export class PiProcess extends EventEmitter {
 		//     thinkingLevelMap in ~/.pi/agent/models.json is also set
 		//     all-null for qwen3:8b so an explicit user opt-in is
 		//     rejected at the pi side too.
-		const effectiveThinking = opts.thinkingLevel ?? (opts.provider === "ollama" ? "off" : undefined);
+		const effectiveThinking =
+			opts.thinkingLevel ?? (opts.provider === "ollama" ? "off" : undefined);
 		if (effectiveThinking) {
 			args.push("--thinking", effectiveThinking);
 		}
@@ -141,10 +144,25 @@ export class PiProcess extends EventEmitter {
 		// the server isn't reading. The `process.on("SIGTERM", ...)`
 		// handler at server boot sends SIGTERM to every child first,
 		// giving each a 2-second window to flush before SIGKILL.
+		//
+		// `ACB_UPLOADS_DIR` exposes the server's web-servable uploads
+		// directory to extensions running inside the pi child. The
+		// pi-venice-image extension decodes the base64 images Venice
+		// returns, writes them here as `<uuid>.<ext>`, and hands back
+		// `/uploads/<uuid>.<ext>` URLs that the browser renders via the
+		// express.static mount in index.ts. Venice's /image/generate
+		// returns base64, NOT hosted URLs, so the extension must persist
+		// the bytes itself — without this env var it has nowhere to put
+		// them. (Same env-injection pattern as the API key above: env is
+		// mode 0400, so the path isn't leaked to other users.)
 		const child = spawn(opts.bin, args, {
 			cwd: opts.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, [providerApiKeyEnvVar(opts.provider)]: opts.apiKey },
+			env: {
+				...process.env,
+				[providerApiKeyEnvVar(opts.provider)]: opts.apiKey,
+				ACB_UPLOADS_DIR: config.uploadsDir,
+			},
 		});
 		this.child = child;
 		this.pid = child.pid ?? -1;
@@ -260,7 +278,7 @@ export class PiProcess extends EventEmitter {
 		}, 2000);
 		// Don't keep the event loop alive just for the escalation — if the
 		// process is exiting, the SIGTERM (and the exit handler) suffice.
-		if (typeof escalate.unref === "function") escalate.unref();
+		safeUnref(escalate);
 	}
 
 	/**
