@@ -18,7 +18,7 @@
  * The browser never knows which engine is running — it just plays the WAV.
  */
 
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import express, { type Request, type Response, type Router } from "express";
@@ -43,6 +43,41 @@ function engine(): Engine {
 	return e === "kokoro" ? "kokoro" : "piper";
 }
 
+/**
+ * Validate the shared { text, voice? } body for POST / and POST /stream.
+ * Extracted so both routes apply the identical checks (non-empty text,
+ * length cap) in one place — previously copy-pasted, which drifts.
+ */
+type TtsInput = { text: string; voice: string | undefined };
+export function parseTtsBody(req: Request): TtsInput | { error: string; status: number } {
+	const body = req.body as { text?: unknown; voice?: unknown } | undefined;
+	const text = typeof body?.text === "string" ? body.text : "";
+	if (!text.trim()) return { error: "no text (field name: 'text')", status: 400 };
+	if (text.length > MAX_TEXT_CHARS) {
+		return { error: `text too long (max ${MAX_TEXT_CHARS} chars)`, status: 413 };
+	}
+	const voice = typeof body?.voice === "string" && body.voice.length > 0 ? body.voice : undefined;
+	return { text, voice };
+}
+
+/**
+ * Wait for a response's write buffer to drain before writing more. Also
+ * resolves on 'close' so a client that disconnects while we're awaiting
+ * backpressure can't wedge the stream pipe forever — the clientGone abort
+ * then cancels the upstream fetch and the next reader.read() rejects.
+ */
+function waitForDrain(res: Response): Promise<void> {
+	return new Promise((resolve) => {
+		const done = (): void => {
+			res.off("drain", done);
+			res.off("close", done);
+			resolve();
+		};
+		res.once("drain", done);
+		res.once("close", done);
+	});
+}
+
 const KOKORO_BASE =
 	process.env.KOKORO_TTS_URL ||
 	`http://${process.env.KOKORO_HOST || "127.0.0.1"}:${process.env.KOKORO_PORT || "8181"}`;
@@ -57,17 +92,12 @@ export function createTtsRouter(): Router {
 	 * Returns: audio/wav bytes
 	 */
 	router.post("/", async (req: Request, res: Response) => {
-		const body = req.body as { text?: unknown; voice?: unknown } | undefined;
-		const text = typeof body?.text === "string" ? body.text : "";
-		if (!text.trim()) {
-			res.status(400).json({ error: "no text (field name: 'text')" });
+		const parsed = parseTtsBody(req);
+		if ("error" in parsed) {
+			res.status(parsed.status).json({ error: parsed.error });
 			return;
 		}
-		if (text.length > MAX_TEXT_CHARS) {
-			res.status(413).json({ error: `text too long (max ${MAX_TEXT_CHARS} chars)` });
-			return;
-		}
-		const voice = typeof body?.voice === "string" && body.voice.length > 0 ? body.voice : undefined;
+		const { text, voice } = parsed;
 
 		if (engine() === "kokoro") {
 			await synthKokoro(text, voice, res);
@@ -93,17 +123,12 @@ export function createTtsRouter(): Router {
 	 * to the whole-blob POST / above.
 	 */
 	router.post("/stream", async (req: Request, res: Response) => {
-		const body = req.body as { text?: unknown; voice?: unknown } | undefined;
-		const text = typeof body?.text === "string" ? body.text : "";
-		if (!text.trim()) {
-			res.status(400).json({ error: "no text (field name: 'text')" });
+		const parsed = parseTtsBody(req);
+		if ("error" in parsed) {
+			res.status(parsed.status).json({ error: parsed.error });
 			return;
 		}
-		if (text.length > MAX_TEXT_CHARS) {
-			res.status(413).json({ error: `text too long (max ${MAX_TEXT_CHARS} chars)` });
-			return;
-		}
-		const voice = typeof body?.voice === "string" && body.voice.length > 0 ? body.voice : undefined;
+		const { text, voice } = parsed;
 		if (engine() !== "kokoro") {
 			res.status(501).json({ error: "streaming tts requires the kokoro engine" });
 			return;
@@ -150,7 +175,15 @@ export function createTtsRouter(): Router {
 				if (done) break;
 				if (value) {
 					// Zero-copy wrap the Uint8Array into a Buffer for res.write.
-					res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+					const more = res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+					// Honor backpressure: res.write() returns false when the socket's
+					// write buffer is full. Without waiting for 'drain' we'd keep
+					// pulling from upstream and buffer the whole stream in memory on a
+					// slow client (a long voice reply can be several MB of WAV).
+					// waitForDrain also resolves on 'close' so a disconnect mid-wait
+					// can't wedge the pipe — clientGone aborts the upstream fetch,
+					// the next reader.read() rejects, and we drop into the catch.
+					if (!more) await waitForDrain(res);
 				}
 			}
 			res.end();
