@@ -778,15 +778,20 @@ export function openOverflowMenu(): void {
 	});
 	box.append(modelLine);
 
-	// Image-generation model — a separate setting from the chat model.
-	// Defaults to "extension default" (the pi-venice-image extension's
-	// built-in z-image-turbo) when the user hasn't picked one. Same
-	// overflow-row style as the chat model row above so the two look
-	// like a pair.
+	// Image-generation model — owned by the pi-venice-image extension.
+	// Clicking sends `/imagemodel`, which the extension handles via
+	// ctx.ui.select() — ACB renders the picker through the extension_ui
+	// relay. ACB doesn't know the current image model (that state lives
+	// in the extension's override file), so the value is best-effort:
+	// the extension notifies on change, but we don't persist the label.
 	const imageLine = el("div", { class: "overflow-row" });
 	imageLine.append(el("div", { class: "overflow-label" }, "image"));
 	imageLine.append(el("div", { class: "overflow-value" }, state.currentImageModelLabel ?? "default"));
-	imageLine.title = "Use /imagemodel to change";
+	imageLine.title = "Switch image-generation model";
+	imageLine.addEventListener("click", () => {
+		overlay.remove();
+		sendAsUserFn("/imagemodel");
+	});
 	box.append(imageLine);
 
 	// Copy a shareable link to the current chat (`/s/<id>`). Mirrors the

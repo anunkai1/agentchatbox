@@ -728,6 +728,17 @@ function onEvent(event: Record<string, unknown>): void {
 				const notifyType =
 					e.notifyType === "error" ? "error" : e.notifyType === "warning" ? "warning" : "info";
 				showToast(e.message, notifyType);
+				// Capture the image-model label from the pi-venice-image extension's
+				// notify so the Settings row reflects the current model. The
+				// extension owns the state; this is a display-only mirror.
+				const imgMatch = e.message.match(/Image model set to (.+)/);
+				if (imgMatch) {
+					state.currentImageModelLabel = imgMatch[1];
+					refreshStatus();
+				} else if (/reset to default/.test(e.message)) {
+					state.currentImageModelLabel = null;
+					refreshStatus();
+				}
 			} else if (extensionUiResponder) {
 				handleExtensionUiRequest(
 					{ id: String(e.id), method: String(e.method), title: e.title as string | undefined, options: e.options as string[] | undefined, message: e.message as string | undefined, placeholder: e.placeholder as string | undefined },
