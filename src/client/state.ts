@@ -172,6 +172,14 @@ export interface AppState {
 	 * /api/health — the model the pi-voice-reply extension actually uses for
 	 * the text-rewrite phase. null = rewrite falls back to the session model. */
 	voiceRewriteModel: string | null;
+	/** Whisper (STT) model id from /api/health (e.g. "base"). Display-only. */
+	whisperModel: string | null;
+	/** Resolved image-generation model + provenance from /api/health. null
+	 * until the health probe lands. Display-only mirror of the extension's
+	 * resolution chain. */
+	imageModel: { model: string; source: "override" | "env" | "default" } | null;
+	/** Whether the Gemini key is configured for pi-web-access. Display-only. */
+	geminiKey: boolean;
 	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). */
 	ttsSpeed: number;
 	/** Number of TTS requests in flight (for the status bar indicator). */
@@ -285,6 +293,9 @@ export const state: AppState = {
 	ttsEngine: null,
 	ttsDefaultVoice: null,
 	voiceRewriteModel: null,
+	whisperModel: null,
+	imageModel: null,
+	geminiKey: false,
 	ttsSpeed: 1.25,
 	ttsInFlight: 0,
 	audioPlaying: false,
