@@ -82,27 +82,6 @@ export async function getModels(): Promise<ModelInfo[]> {
 	return data.models;
 }
 
-/** A single image-generation model entry returned by /api/image-models. */
-export interface ImageModelInfo {
-	id: string;
-	provider: string;
-	name: string;
-	tags: readonly string[];
-}
-
-/**
- * Returns the list of image-generation models (used by the
- * `venice_generate_image` tool, not the chat agent). Only includes
- * providers that have an API key configured on the server. The picker
- * that consumes this is a separate dialog from the chat-model picker
- * (`/imagemodel` vs `/model`) — see `openImageModelPicker` in slashes.ts.
- */
-export async function getImageModels(): Promise<ImageModelInfo[]> {
-	const res = await fetch(`${BASE}/api/image-models`);
-	if (!res.ok) throw new Error(`image-models failed: ${res.status}`);
-	const data = (await res.json()) as { models: ImageModelInfo[] };
-	return data.models;
-}
 
 /**
  * Local TTS via /api/tts. Returns the WAV bytes. Caller is responsible

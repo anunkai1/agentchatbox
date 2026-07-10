@@ -228,16 +228,21 @@ export type ClientMessage =
 	| { type: "abort" }
 	| { type: "abortRetry" }
 	| { type: "setModel"; modelId: string; provider: string }
-	/**
-	 * User picked a new default image model in the picker (e.g. for the
-	 * `venice_generate_image` tool). Server persists it to a file
-	 * (`/home/lepton/.config/acb/image-model`) that the pi-venice-image
-	 * extension reads on each tool call — live update, no respawn.
-	 * `modelId` may be `null` to clear the override (tool falls back to
-	 * the extension's own default).
-	 */
-	| { type: "setImageModel"; modelId: string | null }
 	| { type: "setThinking"; level: ThinkingLevel }
+	/**
+	 * Response to a pi `extension_ui_request` dialog (select/confirm/
+	 * input). Forwarded verbatim to pi's stdin as
+	 * `extension_ui_response`. This is the generic relay channel: any
+	 * pi extension can ask the user a question through the ACB UI
+	 * without ACB knowing what the extension does.
+	 */
+	| {
+			type: "extensionUiResponse";
+			id: string;
+			value?: string;
+			confirmed?: boolean;
+			cancelled?: boolean;
+	  }
 	| { type: "listSessions" }
 	| { type: "resumeSession"; sessionId: string }
 	/**

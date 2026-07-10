@@ -1208,6 +1208,41 @@ body {
 	border: 1px solid var(--border);
 }
 
+/* Read-along box for the medium/short spoken variants. Rendered below the
+   assistant message's button row once a MedTTS/ShortTTS reply is generated
+   (long is TTS-only and never appears here). Hidden until populated. */
+.voice-text {
+	margin-top: 8px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--accent);
+	border-radius: var(--radius-sm);
+	padding: 8px 12px;
+	max-width: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.voice-text.hidden {
+	display: none;
+}
+.voice-text-section {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.voice-text-label {
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.voice-text-section .markdown {
+	font-size: 13.5px;
+	line-height: 1.5;
+	color: var(--text);
+}
 /* fork-into-new-chat button. Shares the speak-btn base look. */
 .fork-btn {
 	background: transparent;
@@ -2183,4 +2218,53 @@ body {
 		opacity: 1;
 		transform: translateX(-50%) translateY(0);
 	}
+}
+
+/* ── Extension UI relay dialogs (select/confirm/input) ──────────── */
+/* Renders pi extension_ui_request dialogs in the browser. Reuses    */
+/* modal-overlay + modal-box; these are just the inner elements.     */
+
+.ext-ui-search {
+	width: 100%;
+	box-sizing: border-box;
+	padding: 8px 12px;
+	margin-bottom: 8px;
+	border: 1px solid var(--border, #444);
+	border-radius: 6px;
+	background: var(--bg-input, #1a1a1a);
+	color: inherit;
+	font-size: 14px;
+}
+.ext-ui-list {
+	max-height: 50vh;
+	overflow-y: auto;
+}
+.ext-ui-list .model-row {
+	cursor: pointer;
+	padding: 8px 12px;
+	border-radius: 4px;
+}
+.ext-ui-list .model-row:hover {
+	background: var(--bg-hover, rgba(255,255,255,0.06));
+}
+.ext-ui-message {
+	margin: 8px 0 16px;
+	line-height: 1.5;
+}
+.ext-ui-actions {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	margin-top: 12px;
+}
+.ext-ui-input {
+	width: 100%;
+	box-sizing: border-box;
+	padding: 8px 12px;
+	margin-bottom: 8px;
+	border: 1px solid var(--border, #444);
+	border-radius: 6px;
+	background: var(--bg-input, #1a1a1a);
+	color: inherit;
+	font-size: 14px;
 }

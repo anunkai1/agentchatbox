@@ -22,10 +22,8 @@ import type {
 import {
 	getCapabilities,
 	getHealth,
-	getImageModels,
 	getModels,
 	sessionExists,
-	type ImageModelInfo,
 	type ModelInfo,
 } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
@@ -54,6 +52,7 @@ import {
 	showToast,
 	syncSteerBadges,
 	updateJumpFabState,
+	updateVoiceTextBox,
 } from "./render.js";
 import {
 	handleSlash,
@@ -82,6 +81,7 @@ import {
 	toggleSpeak,
 } from "./voice.js";
 import { createChatClient } from "./ws.js";
+import { handleExtensionUiRequest, type ExtensionUiResponder } from "./extension-ui.js";
 import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
 import { applySessionPrefs } from "./prefs.js";
 import { setServices } from "./services.js";
@@ -199,6 +199,13 @@ let sendPromptHook: SendPromptHook = () => {
 let steerHook: SendPromptHook = () => {
 	/* will be replaced by boot() */
 };
+
+/**
+ * Closure over `chatClient.extensionUiResponse`, wired in boot(). Used
+ * by the extension_ui_request event handler to send dialog responses
+ * back to pi. Null until boot() completes.
+ */
+let extensionUiResponder: ExtensionUiResponder | null = null;
 
 /**
  * Monotonic count of JSONL `type:"message"` entries seen so far in the
@@ -379,7 +386,7 @@ function onEvent(event: Record<string, unknown>): void {
 			if (state.pendingVoiceBtn) {
 				const b = state.pendingVoiceBtn;
 				b.classList.remove("is-loading");
-				b.textContent = b.dataset.idleLabel ?? "🗣️ Long";
+				b.textContent = b.dataset.idleLabel ?? "🗣️ LongTTS";
 				state.pendingVoiceVariant = null;
 				state.pendingVoiceBtn = null;
 			}
@@ -429,41 +436,56 @@ function onEvent(event: Record<string, unknown>): void {
 				lastAssistantDom = appendAssistantPlaceholder();
 			} else if (e.message.role === "custom") {
 				// Custom message from an extension. The pi-voice-reply
-				// extension emits customType:"voice-reply" with long/short
-				// spoken variants. The Long/Short buttons are always present
-				// on every assistant row (they generate on demand), so here
-				// we only need to: (1) store the variants on the last
-				// assistant message so the buttons' getters pick them up,
-				// and (2) auto-play the requested variant.
+				// extension emits customType:"voice-reply" carrying ONE
+				// spoken variant (long|medium|short) — generated on demand
+				// by the matching LongTTS/MedTTS/ShortTTS button. The buttons
+				// are always present on every assistant row, so here we only
+				// need to: (1) MERGE the arriving variant onto the last
+				// assistant message (without clearing the others), (2) refresh
+				// its read-along box, and (3) auto-play the requested variant.
 				if (e.message.customType === "voice-reply") {
 					const details =
-						(e.message as { details?: { long?: string; short?: string } }).details ?? {};
-					const long = details.long ?? "";
-					const short = details.short ?? "";
-					// Store the variants on the last assistant message. The
-					// already-rendered Long/Short buttons read these lazily,
-					// so subsequent presses just play (no regeneration).
+						(e.message as { details?: { long?: string; medium?: string; short?: string } })
+							.details ?? {};
+					// Merge only the variant(s) this message carries, so
+					// per-button /voice-last calls accumulate onto one
+					// assistant message without wiping a previously-generated
+					// variant. The already-rendered buttons read these lazily.
+					let updated = false;
 					for (let j = state.messages.length - 1; j >= 0; j--) {
 						const prev = state.messages[j];
 						if (prev.kind === "assistant") {
-							prev.voiceLong = long;
-							prev.voiceShort = short;
+							if (details.long !== undefined) prev.voiceLong = details.long;
+							if (details.medium !== undefined) prev.voiceMedium = details.medium;
+							if (details.short !== undefined) prev.voiceShort = details.short;
+							// Refresh the live DOM's read-along box (medium/short).
+							// lastAssistantDom points at this message's placeholder.
+							if (lastAssistantDom?.voiceTextBox) {
+								updateVoiceTextBox(lastAssistantDom.voiceTextBox, prev);
+							}
+							updated = true;
 							break;
 						}
 					}
-					// Auto-play. If a Long/Short button initiated this
-					// (variants weren't generated yet at press time), honor
-					// the variant they picked and drive THAT button's label
-					// (spin → ⏹) via toggleSpeak so it's stoppable. Otherwise
-					// (keyword trigger like "reply in voice") default to the
-					// long variant with no owning button. Falls back to short
-					// if long is empty.
+					// Auto-play. If a button initiated this (the variant wasn't
+					// generated yet at press time), honor the variant it picked
+					// and drive THAT button's label (spin → ⏹) via toggleSpeak
+					// so it's stoppable. Otherwise (keyword trigger like "reply
+					// in voice") default to long with no owning button. Falls
+					// back to whichever variant actually arrived if the requested
+					// one is empty.
 					const want = state.pendingVoiceVariant ?? "long";
 					const btn = state.pendingVoiceBtn;
 					state.pendingVoiceVariant = null;
 					state.pendingVoiceBtn = null;
-					const text = (want === "short" ? short : long).trim() || long.trim() || short.trim();
-					if (text) {
+					const wantText =
+						want === "short" ? details.short : want === "medium" ? details.medium : details.long;
+					const text =
+						(wantText ?? "").trim() ||
+						(details.long ?? "").trim() ||
+						(details.medium ?? "").trim() ||
+						(details.short ?? "").trim();
+					if (text && updated) {
 						if (btn) toggleSpeak(text, btn);
 						else speakText(text);
 					}
@@ -694,14 +716,23 @@ function onEvent(event: Record<string, unknown>): void {
 			break;
 
 		case "extension_ui_request": {
-			// Extension notifications (e.g. pi-voice-reply's "voice model
-			// failed, fell back to session model" warning). Only the `notify`
-			// method is rendered; others (select/confirm/input/editor/setStatus/…)
-			// are silently ignored (no ACB UI for them yet).
+			// Extension UI relay: pi extensions ask the user questions via
+			// ctx.ui.select()/confirm()/input(). The event is forwarded by
+			// the server verbatim; we render the dialog in the browser and
+			// send the answer back via extensionUiResponse.
+			//
+			// `notify` is fire-and-forget (no response expected) — handled
+			// inline here. Dialog methods (select/confirm/input) are handled
+			// by the extension-ui module, which calls the responder.
 			if (e.method === "notify" && typeof e.message === "string") {
 				const notifyType =
 					e.notifyType === "error" ? "error" : e.notifyType === "warning" ? "warning" : "info";
 				showToast(e.message, notifyType);
+			} else if (extensionUiResponder) {
+				handleExtensionUiRequest(
+					{ id: String(e.id), method: String(e.method), title: e.title as string | undefined, options: e.options as string[] | undefined, message: e.message as string | undefined, placeholder: e.placeholder as string | undefined },
+					extensionUiResponder,
+				);
 			}
 			break;
 		}
@@ -741,13 +772,9 @@ async function boot(): Promise<void> {
 	// aren't set, the lists come back empty and the picker will show a
 	// helpful error.
 	try {
-		const [h, models, imageModels] = await Promise.all([
+		const [h, models] = await Promise.all([
 			getHealth(),
 			getModels(),
-			// Image-model list is best-effort — if it fails (e.g. the
-			// image-models endpoint isn't deployed yet) we just leave
-			// the image picker empty; the chat picker still works.
-			getImageModels().catch(() => [] as ImageModelInfo[]),
 		]);
 		state.searchEnabled = h.search ?? false;
 		state.availableModels = models.map((m: ModelInfo) => ({
@@ -755,12 +782,6 @@ async function boot(): Promise<void> {
 			provider: m.provider,
 			name: m.name,
 			reasoning: m.reasoning,
-		}));
-		state.availableImageModels = imageModels.map((m: ImageModelInfo) => ({
-			id: m.id,
-			provider: m.provider,
-			name: m.name,
-			tags: m.tags,
 		}));
 		// Fetch capabilities (tools, skills, packages) for the header badge.
 		getCapabilities()
@@ -874,7 +895,6 @@ async function boot(): Promise<void> {
 
 	setChatControls({
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
-		setImageModel: (modelId) => chatClient.setImageModel(modelId),
 		setThinking: (level) => chatClient.setThinking(level),
 		abort: () => chatClient.abort(),
 		newSession: (projectId) => chatClient.newSession(projectId),
@@ -1042,6 +1062,7 @@ async function boot(): Promise<void> {
 	steerHook = (text, images) => {
 		chatClient.steer(text, images);
 	};
+	extensionUiResponder = (id, response) => chatClient.extensionUiResponse(id, response);
 	// Wire the render→main/render→voice callbacks through the services
 	// registry (a leaf module) so render.ts doesn't have to dynamic-import
 	// this file or voice.ts — breaking the render↔{main,voice} cycle.

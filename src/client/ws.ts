@@ -58,21 +58,12 @@ export interface ChatClient {
 	steer(text: string, images?: PromptImage[]): void;
 	/** Abort the current run, if any. */
 	abort(): void;
-	/**
-	 * Abort an in-flight auto-retry backoff (the CLI's "interrupt to
-	 * cancel" while the retry countdown is showing). No-op if no retry
-	 * is pending.
-	 */
+	/** Abort an in-flight auto-retry backoff. */
 	abortRetry(): void;
 	/** Switch to a different model mid-session. */
 	setModel(modelId: string, provider: string): void;
-	/**
-	 * Persist the user's chosen image-generation model. Server writes it
-	 * to a file the pi-venice-image extension reads on each tool call,
-	 * so the next agent invocation uses this model. `null` clears the
-	 * override (extension falls back to its built-in default).
-	 */
-	setImageModel(modelId: string | null): void;
+	/** Send a response to a pi extension_ui_request dialog back to pi. */
+	extensionUiResponse(id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): void;
 	/** Set the thinking level. */
 	setThinking(level: ThinkingLevel): void;
 	/** Rename the current session. */
@@ -366,7 +357,7 @@ export function createChatClient(): ChatClient {
 			send({ type: "abortRetry" });
 		},
 		setModel: (modelId, provider) => send({ type: "setModel", modelId, provider }),
-		setImageModel: (modelId) => send({ type: "setImageModel", modelId }),
+		extensionUiResponse: (id, response) => send({ type: "extensionUiResponse", id, ...response }),
 		setThinking: (level) => send({ type: "setThinking", level }),
 		renameSession: (name) => send({ type: "renameSession", name }),
 		renameSessionById: (sessionId, name) => send({ type: "renameSessionById", sessionId, name }),

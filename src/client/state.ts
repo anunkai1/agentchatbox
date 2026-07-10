@@ -48,11 +48,14 @@ export type PersistedMessage =
 			 * Listenable spoken-rewrite variants produced by the
 			 * pi-voice-reply extension, attached to this assistant message
 			 * when a voice reply was requested (proactively via trigger
-			 * phrase or retroactively via the 🎙️ button). Rendered as inline
-			 * Long/Short speak buttons on this message's button row — never
-			 * as a separate block — so they share the line with 🔊/🎙️/fork.
+			 * phrase or retroactively via a Long/Med/Short button). long is
+			 * TTS-only; medium and short are ALSO rendered as a readable
+			 * box below the reply. Rendered as inline LongTTS/MedTTS/ShortTTS
+			 * speak buttons on this message's button row. Each variant is
+			 * generated on demand and merged in independently.
 			 */
 			voiceLong?: string;
+			voiceMedium?: string;
 			voiceShort?: string;
 	  }
 	| {
@@ -125,24 +128,13 @@ export interface AppState {
 	currentProvider: string | null;
 	currentThinking: ThinkingLevel;
 	/**
-	 * Image-generation models (separate from chat models — used by the
-	 * `venice_generate_image` tool registered by the pi-venice-image
-	 * extension, not by the chat agent itself). Populated once at boot
-	 * via `getImageModels()`; the picker is a separate dialog from the
-	 * chat model picker (`openImageModelPicker` vs `openModelPicker`),
-	 * because the two are conceptually independent: changing the image
-	 * model does not change which model the agent chats with.
+	 * Human-readable label for the current image-generation model, shown
+	 * in the status overflow row. Updated by the pi-venice-image
+	 * extension's notify events; defaults to "default". ACB no longer
+	 * owns the image model list or persistence — that moved to the
+	 * extension (selectable via `/imagemodel` → ctx.ui.select relay).
 	 */
-	availableImageModels: ImageModelOption[];
-	/**
-	 * The image model the user selected via `/imagemodel`. Persisted
-	 * server-side (chat.ts::setImageModel handler writes it to
-	 * `/home/lepton/.config/acb/image-model`, which the extension reads
-	 * on each tool call), so the agent's next call to
-	 * `venice_generate_image` uses this model. `null` means "no override"
-	 * — the extension's built-in default applies.
-	 */
-	currentImageModelId: string | null;
+	currentImageModelLabel: string | null;
 	/**
 	 * The model id the user just clicked in the picker. The server will
 	 * confirm it on the next `ready` event. Set to the model id at click
@@ -187,7 +179,7 @@ export interface AppState {
 	 * of leaving the user to press again. Cleared once the voice-reply
 	 * arrives (or on agent_end if generation produced nothing).
 	 */
-	pendingVoiceVariant: "long" | "short" | null;
+	pendingVoiceVariant: "long" | "medium" | "short" | null;
 	pendingVoiceBtn: HTMLElement | null;
 	/**
 	 * Capabilities reported by the server (tools, skills, packages).
@@ -260,19 +252,6 @@ export interface ModelOption {
 	reasoning?: boolean;
 }
 
-/**
- * One image-generation model returned by `/api/image-models`. Same shape
- * as the chat `ModelOption` minus `reasoning` (image models don't have a
- * thinking concept) plus `tags` for UI hints (e.g. "kidstories" badge,
- * "fast" / "pro" / "cheap" labels).
- */
-export interface ImageModelOption {
-	id: string;
-	provider: string;
-	name?: string;
-	tags?: readonly string[];
-}
-
 export const state: AppState = {
 	title: "New chat",
 	sessionId: null,
@@ -286,8 +265,7 @@ export const state: AppState = {
 	currentModelId: null,
 	currentModelLabel: "(no model)",
 	currentProvider: null,
-	availableImageModels: [],
-	currentImageModelId: null,
+	currentImageModelLabel: null,
 	currentThinking: "high",
 	pendingModelSet: null,
 	uploadedImages: new Map(),
