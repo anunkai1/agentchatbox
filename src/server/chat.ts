@@ -252,12 +252,15 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			// so pi's read tool can access uploaded files. The browser
 			// inserts markdown links like [/uploads/<uuid>.csv] in the
 			// prompt, but pi treats the path literally — /uploads/ doesn't
-			// exist on disk; the files live in config.uploadsDir.
-			const message = rewriteUploadUrls(msg.text);
+			// exist on disk; the files live in config.uploadsDir. Image
+			// links are reduced to a bare label when their bytes also ride
+			// in the structured `images` field (see rewriteUploadUrls).
+			const hasImages = !!msg.images && msg.images.length > 0;
+			const message = rewriteUploadUrls(msg.text, hasImages);
 			pi.send({
 				type: "prompt",
 				message,
-				...(msg.images && msg.images.length > 0 ? { images: toImageContent(msg.images) } : {}),
+				...(hasImages ? { images: toImageContent(msg.images) } : {}),
 			});
 			break;
 		}
@@ -265,11 +268,12 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			// Steering messages are queued while the agent runs and delivered
 			// after the current assistant turn finishes its tool calls,
 			// before the next LLM call. Same upload-URL rewriting as `prompt`.
-			const message = rewriteUploadUrls(msg.text);
+			const hasImages = !!msg.images && msg.images.length > 0;
+			const message = rewriteUploadUrls(msg.text, hasImages);
 			pi.send({
 				type: "steer",
 				message,
-				...(msg.images && msg.images.length > 0 ? { images: toImageContent(msg.images) } : {}),
+				...(hasImages ? { images: toImageContent(msg.images) } : {}),
 			});
 			break;
 		}
@@ -476,17 +480,38 @@ function replaceSession(ws: PiSocket, old: LiveSession, init: InitMessage): void
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Image file extensions — delivered as structured `images` attachments,
+ * so their markdown link must NOT be left as a readable on-disk path (see
+ * `rewriteUploadUrls`). */
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif|tiff?)$/i;
+
 /**
  * Rewrite /uploads/<filename> web URLs in prompt text to the absolute
  * filesystem path where the uploaded file actually lives. The browser
  * inserts markdown links like `[file: foo.csv](/uploads/<uuid>.csv)`;
  * pi's `read` tool treats the path literally and fails with ENOENT
  * because /uploads/ is a web route, not a filesystem path.
+ *
+ * Images are a special case: their bytes are ALSO delivered as a
+ * structured `images` attachment. Leaving a readable filesystem path in
+ * the text on top of that makes pi's multimodal-proxy (which gathers
+ * images from BOTH `event.images` AND paths it detects in the prompt)
+ * re-read the same file from disk and analyze it twice — one attachment
+ * shows up as "Analyzing 2 images". So when structured image bytes are
+ * present, the image link is reduced to a bare `[image: name]` label
+ * (no path). Non-image files have no structured equivalent, so their
+ * links are still rewritten to the real path for pi's `read` tool.
  */
-function rewriteUploadUrls(text: string): string {
+export function rewriteUploadUrls(text: string, hasStructuredImages: boolean): string {
 	return text.replace(
-		/\(\/uploads\/([A-Za-z0-9._-]+)\)/g,
-		(_, filename) => `(${join(config.uploadsDir, filename)})`,
+		/\[(image|file):\s*([^\]]*)\]\(\/uploads\/([A-Za-z0-9._-]+)\)/g,
+		(_full, kind: string, label: string, filename: string) => {
+			const name = (label ?? '').trim();
+			if (kind === 'image' && hasStructuredImages && IMAGE_EXT_RE.test(filename)) {
+				return `[image: ${name}]`;
+			}
+			return `[${kind}: ${name}](${join(config.uploadsDir, filename)})`;
+		},
 	);
 }
 
