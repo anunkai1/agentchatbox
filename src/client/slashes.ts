@@ -888,7 +888,7 @@ export function openModelsPanel(): void {
 		svcRow(
 			"Image generation",
 			"Venice text-to-image, via pi-venice-image.",
-			modelLine(pill(imgKind, imgLabel), `venice / ${img?.model ?? "z-image-turbo"}`),
+			modelLine(pill(imgLabel, imgKind), `venice / ${img?.model ?? "z-image-turbo"}`),
 			hint("switch → ", kbd("/imagemodel")),
 			() => {
 				overlay.remove();
@@ -905,9 +905,9 @@ export function openModelsPanel(): void {
 			"Reading images & video frames in chat. Routed by pi-multimodal-proxy.",
 			modelLine(
 				state.visionModel?.source === "env"
-					? pill("set", "env")
+					? pill("env", "set")
 					: state.visionModel?.source === "config"
-						? pill("set", "picked")
+						? pill("picked", "set")
 						: pill("default", "default"),
 				state.visionModel?.model ?? "anthropic/claude-sonnet-4-5",
 			),
@@ -928,7 +928,7 @@ export function openModelsPanel(): void {
 	// ── Web ───────────────────────────────────────────────────────
 	box.append(svcSection("Web & research"));
 
-	const webPill = state.geminiKey ? pill("set", "key set") : pill("missing", "no key");
+	const webPill = state.geminiKey ? pill("key set", "set") : pill("no key", "missing");
 	const webModel = state.geminiKey ? "gemini · implicit" : "unavailable";
 	box.append(
 		svcRow(
@@ -952,7 +952,7 @@ export function openModelsPanel(): void {
 			"Voice-reply rewrite",
 			"Generates the 🗣️ Long / 💬 Short spoken text (pi-voice-reply).",
 			modelLine(
-				rewrite ? pill("set", "env") : pill("implicit", "session"),
+				rewrite ? pill("env", "set") : pill("session", "implicit"),
 				rewrite ?? "(falls back to session model)",
 			),
 			hint("change → ", kbd("VOICE_REWRITE_MODEL"), " or “switch voice rewrite to …”"),
@@ -963,7 +963,7 @@ export function openModelsPanel(): void {
 		svcRow(
 			"Speech-to-text (Whisper)",
 			"Transcribes your mic / voice notes. Local, CPU.",
-			modelLine(pill("set", "env"), `faster-whisper · ${state.whisperModel ?? "medium"}`),
+			modelLine(pill("env", "set"), `faster-whisper · ${state.whisperModel ?? "medium"}`),
 			hint("change → ", kbd("WHISPER_MODEL"), " (tiny/base/small/medium/large)"),
 		),
 	);
@@ -976,7 +976,7 @@ export function openModelsPanel(): void {
 		svcRow(
 			"Text-to-speech",
 			`Synthesises audio for playback & voice replies. Engine: ${engine}.`,
-			modelLine(pill("set", "env"), `voice ${ttsVoice}`),
+			modelLine(pill("env", "set"), `voice ${ttsVoice}`),
 			hint("switch voice → ", kbd("/voice"), " · engine via ", kbd("TTS_ENGINE")),
 			() => {
 				overlay.remove();
