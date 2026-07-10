@@ -156,8 +156,17 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 			makeVoiceVariantButton("long", () => m.voiceLong ?? "", "Speak the detailed spoken version"),
 		);
 		body.append(
+			makeVoiceVariantButton("medium", () => m.voiceMedium ?? "", "Speak a ~250-word summary"),
+		);
+		body.append(
 			makeVoiceVariantButton("short", () => m.voiceShort ?? "", "Speak the concise summary"),
 		);
+		// Read-along box for the medium/short spoken variants (long is
+		// TTS-only). Populated from state at render time; stays hidden
+		// until a variant exists.
+		const voiceBox = makeVoiceTextBox();
+		updateVoiceTextBox(voiceBox, m);
+		body.append(voiceBox);
 		if (m.seq !== undefined) body.append(makeForkButton(() => m.seq));
 		wrap.append(body);
 		return wrap;
@@ -215,11 +224,16 @@ export function syncSteerBadges(): void {
  * mutates onto the message after generation. /voice-last always voices
  * the last assistant message, so this matches that semantics.
  */
-function lastAssistantVoice(variant: "long" | "short"): string {
+function lastAssistantVoice(variant: "long" | "medium" | "short"): string {
 	for (let i = state.messages.length - 1; i >= 0; i--) {
 		const m = state.messages[i];
 		if (m.kind === "assistant") {
-			return (variant === "long" ? m.voiceLong : m.voiceShort) ?? "";
+			return (
+				variant === "long"
+					? m.voiceLong
+					: variant === "medium"
+						? m.voiceMedium
+						: m.voiceShort) ?? "";
 		}
 	}
 	return "";
@@ -236,26 +250,87 @@ function setBtnLoading(btn: HTMLElement): void {
 	btn.classList.add("is-loading");
 }
 
+/** Structural slice updateVoiceTextBox needs from an assistant message. */
+interface VoiceTextSource {
+	voiceMedium?: string;
+	voiceShort?: string;
+}
+
 /**
- * A spoken-variant speak button (🗣️ Long / 💬 Short), shown on every
- * assistant row. Two behaviors depending on whether the variant has
- * been generated yet:
+ * Make an empty, hidden .voice-text read-along box. Populated by
+ * updateVoiceTextBox() once a medium/short variant is generated. Long
+ * is TTS-only and never appears here.
+ */
+function makeVoiceTextBox(): HTMLDivElement {
+	return el("div", { class: "voice-text hidden" });
+}
+
+function makeVoiceTextSection(label: string, text: string): HTMLElement {
+	const s = el("div", { class: "voice-text-section" });
+	s.append(el("div", { class: "voice-text-label" }, label));
+	const body = el("div", { class: "markdown" });
+	setRichText(body, text);
+	s.append(body);
+	return s;
+}
+
+/**
+ * (Re)populate a read-along .voice-text box from an assistant message's
+ * readable spoken variants. Renders medium then short (each with a small
+ * label) so pressing MedTTS and ShortTTS in sequence accumulates both.
+ * Clears + hides the box when neither variant exists yet. Idempotent —
+ * safe to call on every voice-reply arrival.
+ */
+export function updateVoiceTextBox(box: HTMLElement, m: VoiceTextSource): void {
+	const medium = m.voiceMedium?.trim() ?? "";
+	const short = m.voiceShort?.trim() ?? "";
+	box.replaceChildren();
+	if (!medium && !short) {
+		box.classList.add("hidden");
+		return;
+	}
+	box.classList.remove("hidden");
+	if (medium) box.append(makeVoiceTextSection("📝 MedTTS", medium));
+	if (short) box.append(makeVoiceTextSection("💬 ShortTTS", short));
+}
+
+/**
+ * Find the .voice-text read-along box belonging to the last rendered
+ * assistant message in the transcript. Used by the voice-reply handler
+ * to refresh that box live when a spoken variant arrives — WITHOUT
+ * depending on lastAssistantDom, which is a streaming-scoped handle that
+ * is null by the time a /voice-last turn delivers its custom message
+ * (turn_start clears it before the custom message_start arrives).
+ * Returns null if no assistant row exists yet.
+ */
+export function lastAssistantVoiceBox(): HTMLElement | null {
+	const rows = document.querySelectorAll<HTMLElement>("#messages .row-assistant");
+	const last = rows[rows.length - 1];
+	return last?.querySelector<HTMLElement>(".voice-text") ?? null;
+}
+
+/**
+ * A spoken-variant speak button (🗣️ LongTTS / 📝 MedTTS / 💬 ShortTTS),
+ * shown on every assistant row. Two behaviors depending on whether the
+ * variant has been generated yet:
  *
  *   - Already generated (getText() non-empty): a normal speak toggle —
  *     press once to play, press again to stop.
- *   - Not yet generated: the press requests generation (/voice-last),
- *     shows a spinner, and records this variant + button in state so
- *     the voice-reply handler auto-plays THIS variant on THIS button
- *     when it arrives. One press, one play — no two-step.
+ *   - Not yet generated: the press requests generation of JUST this
+ *     variant (/voice-last <variant>), shows a spinner, and records this
+ *     variant + button in state so the voice-reply handler auto-plays
+ *     THIS variant on THIS button when it arrives. One press, one play.
  *
- * This replaces the old two-step 🎙️ button (request, then press Long).
+ * long is TTS-only; medium and short are also rendered as readable text
+ * below the reply (see updateVoiceTextBox) so the user can read along.
  */
 export function makeVoiceVariantButton(
-	variant: "long" | "short",
+	variant: "long" | "medium" | "short",
 	getText: () => string,
 	title: string,
 ): HTMLElement {
-	const label = variant === "long" ? "🗣️ Long" : "💬 Short";
+	const label =
+		variant === "long" ? "🗣️ LongTTS" : variant === "medium" ? "📝 MedTTS" : "💬 ShortTTS";
 	const btn = el("button", { class: "speak-btn voice-variant-btn", title }, label);
 	btn.addEventListener("click", () => {
 		const existing = getText().trim();
@@ -264,13 +339,13 @@ export function makeVoiceVariantButton(
 			services.toggleSpeak?.(existing, btn);
 			return;
 		}
-		// Not generated yet — request generation and queue this variant
-		// for autoplay. Show a spinner immediately so the press has
-		// visible feedback during the (multi-second) LLM round-trip.
+		// Not generated yet — request generation of THIS variant only and
+		// queue it for autoplay. Show a spinner immediately so the press
+		// has visible feedback during the (multi-second) LLM round-trip.
 		setBtnLoading(btn);
 		state.pendingVoiceVariant = variant;
 		state.pendingVoiceBtn = btn;
-		services.sendSlashCommand?.("/voice-last");
+		services.sendSlashCommand?.(`/voice-last ${variant}`);
 	});
 	return btn;
 }
@@ -664,7 +739,7 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	body.append(thinkingWrap);
 	const pre = el("div", { class: "text markdown streaming" });
 	body.append(pre);
-	// Long/Short spoken-variant buttons on EVERY assistant row, including
+	// Long/Med/Short spoken-variant buttons on EVERY assistant row, including
 	// the live-streaming placeholder — the variants are generated on
 	// demand on first press (see makeVoiceVariantButton), so they can be
 	// shown unconditionally without waiting for a voice-reply to arrive.
@@ -678,12 +753,23 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 		),
 	);
 	body.append(
+		makeVoiceVariantButton(
+			"medium",
+			() => lastAssistantVoice("medium"),
+			"Speak a ~250-word summary",
+		),
+	);
+	body.append(
 		makeVoiceVariantButton("short", () => lastAssistantVoice("short"), "Speak the concise summary"),
 	);
+	// Read-along box (hidden until a medium/short variant lands). Returned
+	// so the voice-reply handler can populate it live without a re-render.
+	const voiceBox = makeVoiceTextBox();
+	body.append(voiceBox);
 	body.append(makeForkButton(() => state.lastAssistantSeq ?? undefined));
 	wrap.append(body);
 	appendNode(wrap, { pin: true });
-	return { textPre: pre, thinkingWrap, thinkingPre };
+	return { textPre: pre, thinkingWrap, thinkingPre, voiceTextBox: voiceBox };
 }
 export function appendToolCall(name: string, args: unknown, toolCallId: string): void {
 	const wrap = el("div", { class: "row row-tool" });
