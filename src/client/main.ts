@@ -50,6 +50,7 @@ import {
 	scrollToBottomIfPinned,
 	setStreaming,
 	showToast,
+	hideToast,
 	syncSteerBadges,
 	updateJumpFabState,
 	lastAssistantVoiceBox,
@@ -390,6 +391,9 @@ function onEvent(event: Record<string, unknown>): void {
 				b.textContent = b.dataset.idleLabel ?? "🗣️ LongTTS";
 				state.pendingVoiceVariant = null;
 				state.pendingVoiceBtn = null;
+				// Generation produced no voice reply — clear the blue TTS banner
+				// (it was raised as "generating…" on the button press).
+				hideToast();
 			}
 			// No local save — the server's `pi` child auto-persists
 			// every event to its JSONL session file as it happens.
@@ -792,6 +796,8 @@ async function boot(): Promise<void> {
 			getModels(),
 		]);
 		state.searchEnabled = h.search ?? false;
+		state.ttsEngine = h.ttsEngine ?? null;
+		state.ttsDefaultVoice = h.ttsVoice ?? null;
 		state.availableModels = models.map((m: ModelInfo) => ({
 			id: m.id,
 			provider: m.provider,

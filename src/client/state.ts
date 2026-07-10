@@ -159,8 +159,15 @@ export interface AppState {
 	 * The client will be actively reconnecting when this is set.
 	 */
 	connectionStatus: "connecting" | "open" | "closed" | "stalled";
-	/** Currently selected TTS voice id. */
+	/** Currently selected TTS voice id (user's pick; null = server default). */
 	ttsVoice: string | null;
+	/** TTS engine id from /api/health ("kokoro" | "piper" | null until probed).
+	 * Surfaces the actually-configured engine in the TTS banner instead of
+	 * a hardcoded "Kokoro". */
+	ttsEngine: string | null;
+	/** Server-default TTS voice from /api/health (used as the banner label
+	 * when the user hasn't picked a specific voice). */
+	ttsDefaultVoice: string | null;
 	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). */
 	ttsSpeed: number;
 	/** Number of TTS requests in flight (for the status bar indicator). */
@@ -271,6 +278,8 @@ export const state: AppState = {
 	uploadedImages: new Map(),
 	connectionStatus: "connecting",
 	ttsVoice: null,
+	ttsEngine: null,
+	ttsDefaultVoice: null,
 	ttsSpeed: 1.25,
 	ttsInFlight: 0,
 	audioPlaying: false,
