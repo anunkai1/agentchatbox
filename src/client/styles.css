@@ -2336,9 +2336,11 @@ body {
 	font-size: 13px;
 	font-weight: 600;
 	color: var(--text);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	/* Allow wrapping (long ids like venice/qwen3-vl-235b-a22b wrap at the
+	 * space after the slash) instead of truncating — truncation hides the
+	 * model id, which is the whole point of the panel. */
+	word-break: break-word;
+	overflow-wrap: anywhere;
 }
 .svc-model .mono {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -2415,4 +2417,30 @@ body {
 }
 .svc-actions {
 	text-align: right;
+}
+
+/* Narrow screens (phones): stack label above value so long model ids get
+ * the full row width instead of being squashed into the right column. */
+@media (max-width: 520px) {
+	.models-panel-box {
+		max-width: 94vw;
+		padding: 14px;
+	}
+	.svc-row {
+		grid-template-columns: 1fr;
+		gap: 6px;
+		padding: 10px;
+	}
+	.svc-name {
+		font-size: 13.5px;
+	}
+	.svc-desc {
+		font-size: 11px;
+	}
+	.svc-model {
+		font-size: 12.5px;
+	}
+	.svc-section {
+		margin: 12px 0 4px 2px;
+	}
 }

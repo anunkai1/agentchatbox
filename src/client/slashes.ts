@@ -23,6 +23,7 @@ import {
 	renderShell,
 	toggleCapabilitiesPopover,
 } from "./render.js";
+import { services } from "./services.js";
 import { type ModelOption, refreshCurrentModelLabel, state } from "./state.js";
 import { saveSessionPrefs } from "./prefs.js";
 import { shareableSessionUrl } from "./url.js";
@@ -166,7 +167,15 @@ export function handleSlash(arg: string): void {
 			// Forwarded to pi — the pi-venice-image extension registers the
 			// /imagemodel command and owns the model catalog + persistence.
 			// ACB renders the picker via the extension_ui relay.
-			sendAsUserFn(`/${cmd}`);
+			//
+			// Sent via the lean sendSlashCommand path, NOT sendAsUser.
+			// /imagemodel is an extension command: pi runs it immediately
+			// (extension_ui_request → picker) with NO agent run, so no
+			// agent_start/agent_end is ever emitted. sendAsUser optimistically
+			// sets isStreaming=true and waits for an agent_end that never
+			// comes — leaving the session stuck "streaming", so the user's
+			// next message gets queued as a steer instead of sent.
+			services.sendSlashCommand?.(`/${cmd}`);
 			break;
 		case "think":
 			if (rest && ["off", "minimal", "low", "medium", "high"].includes(rest) && chatControls) {
@@ -883,7 +892,9 @@ export function openModelsPanel(): void {
 			hint("switch → ", kbd("/imagemodel")),
 			() => {
 				overlay.remove();
-				sendAsUserFn("/imagemodel");
+				// Lean send — see /imagemodel case in handleSlash: extension
+				// command, no agent run, must not set isStreaming.
+				services.sendSlashCommand?.("/imagemodel");
 			},
 		),
 	);
@@ -892,8 +903,25 @@ export function openModelsPanel(): void {
 		svcRow(
 			"Multimodal / vision",
 			"Reading images & video frames in chat. Routed by pi-multimodal-proxy.",
-			modelLine(pill("implicit", "same as chat"), chatId),
-			hint("change → “use a different vision model for this”"),
+			modelLine(
+				state.visionModel?.source === "env"
+					? pill("set", "env")
+					: state.visionModel?.source === "config"
+						? pill("set", "picked")
+						: pill("default", "default"),
+				state.visionModel?.model ?? "anthropic/claude-sonnet-4-5",
+			),
+			hint(
+				"switch → ",
+				kbd("/multimodal-proxy"),
+				state.visionModel?.mode === "fallback"
+					? " · mode: fallback (only when chat model can't see images)"
+					: state.visionModel?.mode === "always"
+						? " · mode: always"
+						: state.visionModel?.mode === "off"
+							? " · mode: off"
+							: "",
+			),
 		),
 	);
 
@@ -1008,7 +1036,9 @@ export function openOverflowMenu(): void {
 	imageLine.title = "Switch image-generation model";
 	imageLine.addEventListener("click", () => {
 		overlay.remove();
-		sendAsUserFn("/imagemodel");
+		// Lean send — see /imagemodel case in handleSlash: extension
+		// command, no agent run, must not set isStreaming.
+		services.sendSlashCommand?.("/imagemodel");
 	});
 	box.append(imageLine);
 

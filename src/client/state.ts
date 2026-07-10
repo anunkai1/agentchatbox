@@ -178,6 +178,13 @@ export interface AppState {
 	 * until the health probe lands. Display-only mirror of the extension's
 	 * resolution chain. */
 	imageModel: { model: string; source: "override" | "env" | "default" } | null;
+	/** Resolved vision (image/video) model + mode from /api/health, mirroring
+	 * pi-multimodal-proxy. null until the health probe lands. Display-only. */
+	visionModel: {
+		model: string;
+		source: "env" | "config" | "default";
+		mode: "fallback" | "always" | "off";
+	} | null;
 	/** Whether the Gemini key is configured for pi-web-access. Display-only. */
 	geminiKey: boolean;
 	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). */
@@ -295,6 +302,7 @@ export const state: AppState = {
 	voiceRewriteModel: null,
 	whisperModel: null,
 	imageModel: null,
+	visionModel: null,
 	geminiKey: false,
 	ttsSpeed: 1.25,
 	ttsInFlight: 0,

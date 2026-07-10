@@ -248,6 +248,60 @@ function readImageModel(): { model: string; source: "override" | "env" | "defaul
 	return { model: "z-image-turbo", source: "default" };
 }
 
+/**
+ * Resolve the vision (image/video analysis) model the pi-multimodal-proxy
+ * extension would use, mirroring its resolution chain (the parts ACB can
+ * see without running inside a pi session):
+ *   PI_VISION_PROXY_MODEL env ("provider/model-id") → overrides all
+ *   ~/.pi/agent/multimodal-proxy.json {provider, modelId} → the saved pick
+ *   default anthropic/claude-sonnet-4-5 (the extension's DEFAULT_CONFIG)
+ * Also reports `mode` ("fallback" | "always" | "off") from the same chain
+ * — fallback = only routes to the vision model when the chat model lacks
+ * image support. Read-only; the extension's /multimodal-proxy command
+ * owns the persisted file and any mutations.
+ */
+function readVisionModel(): {
+	model: string;
+	source: "env" | "config" | "default";
+	mode: "fallback" | "always" | "off";
+} {
+	// Default per pi-multimodal-proxy DEFAULT_CONFIG.
+	let model = "anthropic/claude-sonnet-4-5";
+	let source: "env" | "config" | "default" = "default";
+	let mode: "fallback" | "always" | "off" = "fallback";
+	// 1. Persistent config file.
+	const cfgFile = join(homedir(), ".pi", "agent", "multimodal-proxy.json");
+	try {
+		if (existsSync(cfgFile)) {
+			const cfg = JSON.parse(readFileSync(cfgFile, "utf8")) as {
+				provider?: string;
+				modelId?: string;
+				mode?: string;
+			};
+			if (cfg.provider && cfg.modelId) {
+				model = `${cfg.provider}/${cfg.modelId}`;
+				source = "config";
+			}
+			if (cfg.mode === "fallback" || cfg.mode === "always" || cfg.mode === "off") {
+				mode = cfg.mode;
+			}
+		}
+	} catch {
+		/* unreadable/invalid — keep defaults */
+	}
+	// 2. Env overrides everything (matches the extension's resolveConfig).
+	const envModel = process.env.PI_VISION_PROXY_MODEL?.trim();
+	if (envModel) {
+		model = envModel;
+		source = "env";
+	}
+	const envMode = process.env.PI_VISION_PROXY_MODE?.trim().toLowerCase();
+	if (envMode === "fallback" || envMode === "always" || envMode === "off") {
+		mode = envMode;
+	}
+	return { model, source, mode };
+}
+
 // Health check. Reports configured provider keys, local Whisper, local TTS,
 // and the running commit hash (so an operator can verify the live process
 // is on the expected tree). Cross-check against
@@ -294,6 +348,12 @@ app.get("/api/health", async (_req, res) => {
 		// before any extension notify lands. Read-only — the extension still
 		// owns the override file and persistence.
 		imageModel: readImageModel(),
+		// Resolved vision (image/video analysis) model + mode, mirroring the
+		// pi-multimodal-proxy chain: PI_VISION_PROXY_MODEL env →
+		// ~/.pi/agent/multimodal-proxy.json → default anthropic/claude-sonnet-4-5.
+		// `mode` is "fallback" (routes only when chat model lacks image support),
+		// "always", or "off". Read-only — the extension owns mutations.
+		visionModel: readVisionModel(),
 		// Whether the Gemini key is configured for pi-web-access (web search /
 		// fetch / YouTube transcripts). The model itself is implicit inside the
 		// extension, so we only report key presence — boolean, not a secret.

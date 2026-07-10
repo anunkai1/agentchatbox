@@ -801,6 +801,7 @@ async function boot(): Promise<void> {
 		state.voiceRewriteModel = h.voiceRewriteModel ?? null;
 		state.whisperModel = h.whisperModel ?? null;
 		state.imageModel = h.imageModel ?? null;
+		state.visionModel = h.visionModel ?? null;
 		state.geminiKey = h.geminiKey ?? false;
 		state.availableModels = models.map((m: ModelInfo) => ({
 			id: m.id,

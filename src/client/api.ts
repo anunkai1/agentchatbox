@@ -63,6 +63,14 @@ export interface HealthInfo {
 	 * "override" = ~/.config/acb/image-model, "env" = VENICE_IMAGE_MODEL,
 	 * "default" = z-image-turbo. Display-only mirror of the extension's chain. */
 	imageModel?: { model: string; source: "override" | "env" | "default" };
+	/** Resolved vision (image/video analysis) model + mode, mirroring
+	 * pi-multimodal-proxy: PI_VISION_PROXY_MODEL env → multimodal-proxy.json
+	 * → default anthropic/claude-sonnet-4-5. mode is fallback/always/off. */
+	visionModel?: {
+		model: string;
+		source: "env" | "config" | "default";
+		mode: "fallback" | "always" | "off";
+	};
 	/** Whether the Gemini key is configured for pi-web-access (web search /
 	 * fetch / YouTube transcripts). The model itself is implicit in the
 	 * extension, so only key presence is reported. */
