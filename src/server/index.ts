@@ -22,12 +22,11 @@ import cors from "cors";
 import express from "express";
 import { getCapabilities } from "./capabilities.js";
 import { mountChatWs, shutdownChatWs } from "./chat.js";
-import { config } from "./config.js";
+import { config, readPiAuth } from "./config.js";
 import { createFilesRouter } from "./files.js";
 import { log } from "./logger.js";
 import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
-import { EXTRA_IMAGE_MODELS } from "./providers.js";
 import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
@@ -247,7 +246,7 @@ app.get("/api/health", async (_req, res) => {
 	res.json({
 		status: "ok",
 		commit: COMMIT_HASH,
-		providers: Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]),
+		providers: [...readPiAuth().keys()],
 		whisper: whisper.available,
 		whisperReason: whisper.available ? undefined : whisper.reason,
 		tts: tts.available,
@@ -299,13 +298,15 @@ app.get("/api/models", async (_req, res) => {
 		reasoning: boolean;
 	}> = [];
 
-	// Mirror pi's response, gated on the server having an API key for
-	// the provider. The gate is defense-in-depth — pi's getAvailable()
-	// already filters by auth, but a key could be missing on the ACB
-	// side (e.g. env not propagated into the systemd child) and we
-	// shouldn't surface models that won't actually be callable.
+	// Mirror pi's response, gated on the provider being authenticated in
+	// pi's auth.json (the single source of truth — see config.ts). Reading
+	// auth.json live means a `pi auth logout` removes a provider from the
+	// picker on the next request, with no ACB restart. (The model LIST is
+	// still boot-cached — logging into a brand-new provider still needs a
+	// restart for its models to enter the cache.)
+	const authed = readPiAuth();
 	for (const m of modelsCache.get()) {
-		if (!config.apiKeys[m.provider]) continue;
+		if (!authed.has(m.provider)) continue;
 		out.push({
 			id: m.id,
 			provider: m.provider,
@@ -314,35 +315,6 @@ app.get("/api/models", async (_req, res) => {
 		});
 	}
 
-	res.json({ models: out });
-});
-
-/**
- * GET /api/image-models
- *
- * Returns the list of image-generation models the client can pick from.
- * Separate from `/api/models` because image models aren't callable via
- * pi's chat-completions endpoint — they belong to the `venice_generate_image`
- * tool registered by the pi-venice-image extension, and live in the
- * picker's "Venice images" group (or similar) rather than the chat-model
- * section.
- *
- * Shape: { models: Array<{ id, provider, name, tags }> }
- *
- * Gating: each entry is only emitted if the entry's `provider` has a
- * configured API key on this server — same policy as `/api/models`.
- */
-app.get("/api/image-models", (_req, res) => {
-	const out: Array<{
-		id: string;
-		provider: string;
-		name: string;
-		tags: readonly string[];
-	}> = [];
-	for (const m of EXTRA_IMAGE_MODELS) {
-		if (!config.apiKeys[m.provider]) continue;
-		out.push({ id: m.id, provider: m.provider, name: m.name, tags: m.tags });
-	}
 	res.json({ models: out });
 });
 
@@ -403,7 +375,7 @@ if (existsSync(publicDir)) {
 }
 
 const server = app.listen(config.port, config.host, () => {
-	const providers = Object.keys(config.apiKeys).filter((k) => config.apiKeys[k]);
+	const providers = [...readPiAuth().keys()];
 	log.info("agentchatbox listening", {
 		url: `http://${config.host}:${config.port}`,
 		commit: COMMIT_HASH,

@@ -23,8 +23,9 @@
  *
  * On `--api-key` vs env: the provider key is injected into the child's
  * env, NOT passed on the command line (which is world-readable). See the
- * note on `providerApiKeyEnvVar()` below. The key value comes from the
- * server's `config.apiKeys[provider]` lookup.
+ * note on `providerApiKeyEnvVar()` below. The key value comes from
+ * `pi`'s auth.json via `getServerApiKey()` (config.ts) — the single
+ * source of truth for chat auth.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";

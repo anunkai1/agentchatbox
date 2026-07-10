@@ -31,8 +31,7 @@
  */
 
 import type { Server as HttpServer, IncomingMessage } from "node:http";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
 import type {
 	ClientMessage,
@@ -238,24 +237,6 @@ function toImageContent(images: PromptImage[] | undefined) {
 	return images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
 }
 
-/**
- * Atomically write `modelId` (or remove the file when null) to the
- * image-model override file. Used by the `setImageModel` RPC handler so
- * the pi-venice-image extension can read the user's chosen default on
- * each `venice_generate_image` tool call. Separate from this file's
- * main switch so the fire-and-forget call site stays readable.
- */
-async function persistImageModel(modelId: string | null, file: string): Promise<void> {
-	await mkdir(dirname(file), { recursive: true });
-	if (modelId === null) {
-		await rm(file, { force: true });
-		return;
-	}
-	const tmp = file + ".tmp";
-	await writeFile(tmp, modelId + "\n", "utf8");
-	await rename(tmp, file);
-}
-
 function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession): void {
 	const pi = session.pi;
 
@@ -319,27 +300,19 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			pi.send({ type: "set_model", provider: msg.provider, modelId: msg.modelId });
 			break;
 		}
-		case "setImageModel": {
-			// Persist the user's chosen image model to a file the
-			// pi-venice-image extension reads on each `venice_generate_image`
-			// tool call. Writing here keeps selection live across the
-			// existing pi child (no respawn), which matters because image
-			// generation is invoked from inside a long agent loop — a
-			// respawn would lose the loop's progress.
-			//
-			// Fire-and-forget: onClientMessage is sync; the write is
-			// atomic (write-then-rename) so a partially-written file
-			// can't be read mid-update. `null` modelId removes the
-			// override file entirely so the extension falls back to its
-			// own built-in default.
-			const file = config.imageModelFile;
-			void persistImageModel(msg.modelId, file).catch((err) => {
-				log.error("setImageModel write failed", {
-					modelId: msg.modelId,
-					file,
-					error: err instanceof Error ? err.message : String(err),
-				});
-				deliverError(ws, "could not persist image model selection");
+		case "extensionUiResponse": {
+			// Forward the browser's response to a pi extension_ui_request
+			// dialog (select/confirm/input) straight to pi's stdin. This is
+			// the generic relay — pi extensions ask the user questions via
+			// ctx.ui.select() etc., ACB renders the dialog in the browser,
+			// and the answer flows back through this channel. No server-side
+			// logic; pure transport.
+			pi.send({
+				type: "extension_ui_response",
+				id: msg.id,
+				...(msg.value !== undefined ? { value: msg.value } : {}),
+				...(msg.confirmed !== undefined ? { confirmed: msg.confirmed } : {}),
+				...(msg.cancelled ? { cancelled: true } : {}),
 			});
 			break;
 		}
