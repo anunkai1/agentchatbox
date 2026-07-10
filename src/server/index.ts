@@ -253,6 +253,12 @@ app.get("/api/health", async (_req, res) => {
 		ttsEngine: tts.engine,
 		ttsReason: tts.available ? undefined : tts.reason,
 		ttsVoice: tts.voice,
+		// Configured spoken-rewrite model override (pi-voice-reply extension).
+		// Surfaced so the browser banner can name the model actually generating
+		// the spoken text instead of the (often different) session model. Raw
+		// "provider/modelId" string; undefined when the rewrite falls back to
+		// the session model. Read from env — not a secret, just a model id.
+		voiceRewriteModel: process.env.VOICE_REWRITE_MODEL?.trim() || undefined,
 		search,
 	});
 });

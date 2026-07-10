@@ -53,6 +53,10 @@ export interface HealthInfo {
 	ttsEngine?: string;
 	/** Server-default TTS voice (kokoro/piper). */
 	ttsVoice?: string;
+	/** Configured spoken-rewrite model override from /api/health
+	 * ("provider/modelId"), used so the TTS banner names the model actually
+	 * doing the rewrite, not the session model. */
+	voiceRewriteModel?: string;
 	/**
 	 * Whether semantic session search is enabled on this server. When false,
 	 * the sidebar shows no search box. An optional, pluggable feature — see

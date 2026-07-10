@@ -168,6 +168,10 @@ export interface AppState {
 	/** Server-default TTS voice from /api/health (used as the banner label
 	 * when the user hasn't picked a specific voice). */
 	ttsDefaultVoice: string | null;
+	/** Configured spoken-rewrite model override ("provider/modelId") from
+	 * /api/health — the model the pi-voice-reply extension actually uses for
+	 * the text-rewrite phase. null = rewrite falls back to the session model. */
+	voiceRewriteModel: string | null;
 	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). */
 	ttsSpeed: number;
 	/** Number of TTS requests in flight (for the status bar indicator). */
@@ -280,6 +284,7 @@ export const state: AppState = {
 	ttsVoice: null,
 	ttsEngine: null,
 	ttsDefaultVoice: null,
+	voiceRewriteModel: null,
 	ttsSpeed: 1.25,
 	ttsInFlight: 0,
 	audioPlaying: false,
@@ -312,4 +317,25 @@ export function refreshCurrentModelLabel(): void {
 	}
 	const opt = state.availableModels.find((m) => m.id === id);
 	state.currentModelLabel = opt?.name ?? id;
+}
+
+/**
+ * Friendly label for the model that actually generates spoken text in a
+ * voice reply: the configured `VOICE_REWRITE_MODEL` override if set,
+ * else the session model. The override arrives as a raw "provider/modelId"
+ * string from /api/health; we resolve it to the model list's display name
+ * when possible, falling back to the raw string. Used by the TTS banner so
+ * it names the rewrite model (e.g. "Gemini 3 Flash") rather than the
+ * session model (e.g. "GLM-5.2") that isn't doing the work.
+ */
+export function voiceRewriteLabel(): string {
+	const override = state.voiceRewriteModel;
+	if (!override) return state.currentModelLabel;
+	const slash = override.indexOf("/");
+	const provider = slash > 0 ? override.slice(0, slash) : "";
+	const modelId = slash > 0 && slash < override.length - 1 ? override.slice(slash + 1) : override;
+	const opt = state.availableModels.find(
+		(m) => m.provider === provider && m.id === modelId,
+	);
+	return opt?.name ?? override;
 }
