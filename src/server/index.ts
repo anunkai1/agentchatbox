@@ -16,8 +16,9 @@
 import "dotenv/config";
 
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import cors from "cors";
 import express from "express";
 import { getCapabilities } from "./capabilities.js";
@@ -224,6 +225,29 @@ app.get("/api/changelog", (req, res) => {
 	);
 });
 
+/**
+ * Resolve the image-generation model the pi-venice-image extension would
+ * use for a default (no-param) call, mirroring its resolution chain:
+ * override file → VENICE_IMAGE_MODEL env → "z-image-turbo". Read-only —
+ * ACB never writes the override (the extension's /imagemodel command does).
+ * Used by /api/health so the Models & services panel can show the truth
+ * before any extension notify lands.
+ */
+function readImageModel(): { model: string; source: "override" | "env" | "default" } {
+	const overrideFile = join(process.env.HOME ?? homedir(), ".config", "acb", "image-model");
+	try {
+		if (existsSync(overrideFile)) {
+			const id = readFileSync(overrideFile, "utf8").split(/\r?\n/)[0]?.trim();
+			if (id) return { model: id, source: "override" };
+		}
+	} catch {
+		/* unreadable — fall through */
+	}
+	const envModel = process.env.VENICE_IMAGE_MODEL?.trim();
+	if (envModel) return { model: envModel, source: "env" };
+	return { model: "z-image-turbo", source: "default" };
+}
+
 // Health check. Reports configured provider keys, local Whisper, local TTS,
 // and the running commit hash (so an operator can verify the live process
 // is on the expected tree). Cross-check against
@@ -249,6 +273,10 @@ app.get("/api/health", async (_req, res) => {
 		providers: [...readPiAuth().keys()],
 		whisper: whisper.available,
 		whisperReason: whisper.available ? undefined : whisper.reason,
+		// Whisper model id in use. faster-whisper's script default is "medium"
+		// (see scripts/transcribe.py); WHISPER_MODEL env overrides it. Surfaced
+		// for the Models & services panel — display only, not a secret.
+		whisperModel: process.env.WHISPER_MODEL?.trim() || "medium",
 		tts: tts.available,
 		ttsEngine: tts.engine,
 		ttsReason: tts.available ? undefined : tts.reason,
@@ -259,6 +287,17 @@ app.get("/api/health", async (_req, res) => {
 		// "provider/modelId" string; undefined when the rewrite falls back to
 		// the session model. Read from env — not a secret, just a model id.
 		voiceRewriteModel: process.env.VOICE_REWRITE_MODEL?.trim() || undefined,
+		// Resolved image-generation model (pi-venice-image extension). The
+		// extension resolves per call: explicit param → ~/.config/acb/image-model
+		// override → $VENICE_IMAGE_MODEL → "z-image-turbo". We mirror that chain
+		// here for display so the panel shows what a default call would use
+		// before any extension notify lands. Read-only — the extension still
+		// owns the override file and persistence.
+		imageModel: readImageModel(),
+		// Whether the Gemini key is configured for pi-web-access (web search /
+		// fetch / YouTube transcripts). The model itself is implicit inside the
+		// extension, so we only report key presence — boolean, not a secret.
+		geminiKey: !!process.env.GEMINI_API_KEY,
 		search,
 	});
 });

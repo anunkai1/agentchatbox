@@ -57,6 +57,16 @@ export interface HealthInfo {
 	 * ("provider/modelId"), used so the TTS banner names the model actually
 	 * doing the rewrite, not the session model. */
 	voiceRewriteModel?: string;
+	/** Whisper (STT) model id in use (e.g. "base", "medium"). Display-only. */
+	whisperModel?: string;
+	/** Resolved image-generation model (pi-venice-image), with provenance:
+	 * "override" = ~/.config/acb/image-model, "env" = VENICE_IMAGE_MODEL,
+	 * "default" = z-image-turbo. Display-only mirror of the extension's chain. */
+	imageModel?: { model: string; source: "override" | "env" | "default" };
+	/** Whether the Gemini key is configured for pi-web-access (web search /
+	 * fetch / YouTube transcripts). The model itself is implicit in the
+	 * extension, so only key presence is reported. */
+	geminiKey?: boolean;
 	/**
 	 * Whether semantic session search is enabled on this server. When false,
 	 * the sidebar shows no search box. An optional, pluggable feature — see

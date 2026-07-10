@@ -23,7 +23,7 @@ import {
 	renderShell,
 	toggleCapabilitiesPopover,
 } from "./render.js";
-import { type ModelOption, state } from "./state.js";
+import { type ModelOption, refreshCurrentModelLabel, state } from "./state.js";
 import { saveSessionPrefs } from "./prefs.js";
 import { shareableSessionUrl } from "./url.js";
 
@@ -43,6 +43,7 @@ function el_pre(text: string): HTMLPreElement {
 export const SLASH_COMMANDS: Record<string, string> = {
 	// Core
 	model: "open the model picker",
+	models: "show all models & services in use (display-only overview)",
 	imagemodel: "open the image-generation model picker (alias: /image)",
 	image: "open the image-generation model picker (alias: /imagemodel)",
 	think: "set thinking level: /think off|minimal|low|medium|high",
@@ -155,6 +156,10 @@ export function handleSlash(arg: string): void {
 	switch (cmd) {
 		case "model":
 			openModelPicker();
+			break;
+		case "models":
+			openModelsPanel();
+			$<HTMLTextAreaElement>("#input").value = "";
 			break;
 		case "imagemodel":
 		case "image":
@@ -759,6 +764,219 @@ export async function openVoicePicker(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Models & services overview panel (display-only)
+// ---------------------------------------------------------------------------
+
+/** A small coloured status pill: live (mutable now), env, default, etc. */
+function pill(text: string, kind: "live" | "set" | "default" | "implicit" | "missing"): HTMLSpanElement {
+	return el("span", { class: `svc-pill svc-${kind}`, text });
+}
+
+/** Monospace code chip, e.g. an env-var name or slash command. */
+function kbd(text: string): HTMLSpanElement {
+	return el("span", { class: "kbd", text });
+}
+
+/** A hint line under a model value: "switch → /model" etc. */
+function hint(...parts: (string | Node)[]): HTMLDivElement {
+	return el("div", { class: "svc-hint" }, ...parts);
+}
+
+/**
+ * One row in the overview panel. `label`/`desc` is the left column;
+ * `valueNode` (pill + model id) and `hintNode` form the right column.
+ * When `onClick` is given the row is clickable (an actionable switcher);
+ * otherwise it is display-only.
+ */
+function svcRow(
+	name: string,
+	desc: string,
+	valueNode: Node,
+	hintNode: Node,
+	onClick?: () => void,
+): HTMLDivElement {
+	const label = el("div", { class: "svc-label" });
+	label.append(el("div", { class: "svc-name", text: name }));
+	label.append(el("div", { class: "svc-desc", text: desc }));
+	const value = el("div", { class: "svc-value" });
+	value.append(valueNode, hintNode);
+	const row = el("div", { class: "svc-row" }, label, value);
+	if (onClick) {
+		row.classList.add("svc-clickable");
+		row.addEventListener("click", onClick);
+	}
+	return row;
+}
+
+/** A model-id line: pill + provider / id in monospace. */
+function modelLine(p: HTMLSpanElement, id: string): HTMLSpanElement {
+	const line = el("span", { class: "svc-model" });
+	line.append(p, " ", el("span", { class: "mono", text: id }));
+	return line;
+}
+
+/** Section heading inside the panel. */
+function svcSection(text: string): HTMLDivElement {
+	return el("div", { class: "svc-section", text });
+}
+
+/**
+ * The display-only overview of every model/service driving the session.
+ * Read off /api/health + live session state; nothing here is mutated by
+ * ACB. Actionable rows (chat model, thinking, image, TTS voice) open the
+ * existing pickers; the rest show a hint pointing at the env var or at
+ * "tell pi" so the user knows how to change them.
+ */
+export function openModelsPanel(): void {
+	refreshCurrentModelLabel();
+	const { overlay, box } = openModal("Models & services", "models-panel-box");
+	box.append(
+		el("div", {
+			class: "muted",
+			text: "Read-only view of every model in use. To change one, tell pi — or use the command shown.",
+			style: "font-size:12px; margin-bottom:6px;",
+		}),
+	);
+
+	// ── Conversation ──────────────────────────────────────────────
+	box.append(svcSection("Conversation"));
+
+	const chatId = state.currentModelId ?? "(none)";
+	const chatProvider = state.currentProvider ? `${state.currentProvider} / ` : "";
+	box.append(
+		svcRow(
+			"Chat model",
+			"Replies, tool use, coding. The main model — switchable here.",
+			modelLine(pill("live", "live"), `${chatProvider}${chatId}`),
+			hint("switch → ", kbd("/model")),
+			() => {
+				overlay.remove();
+				openModelPicker();
+			},
+		),
+	);
+
+	box.append(
+		svcRow(
+			"Thinking level",
+			"Extended reasoning budget for the chat model.",
+			modelLine(pill("live", "live"), state.currentThinking),
+			hint("switch → ", kbd("/think low")),
+			() => {
+				overlay.remove();
+				openThinkPicker();
+			},
+		),
+	);
+
+	// ── Media ─────────────────────────────────────────────────────
+	box.append(svcSection("Media generation & analysis"));
+
+	const img = state.imageModel;
+	const imgKind = img?.source === "override" ? "set" : img?.source === "env" ? "set" : "default";
+	const imgLabel = img?.source === "default" ? "default" : img?.source === "env" ? "env" : "override";
+	box.append(
+		svcRow(
+			"Image generation",
+			"Venice text-to-image, via pi-venice-image.",
+			modelLine(pill(imgKind, imgLabel), `venice / ${img?.model ?? "z-image-turbo"}`),
+			hint("switch → ", kbd("/imagemodel")),
+			() => {
+				overlay.remove();
+				sendAsUserFn("/imagemodel");
+			},
+		),
+	);
+
+	box.append(
+		svcRow(
+			"Multimodal / vision",
+			"Reading images & video frames in chat. Routed by pi-multimodal-proxy.",
+			modelLine(pill("implicit", "same as chat"), chatId),
+			hint("change → “use a different vision model for this”"),
+		),
+	);
+
+	// ── Web ───────────────────────────────────────────────────────
+	box.append(svcSection("Web & research"));
+
+	const webPill = state.geminiKey ? pill("set", "key set") : pill("missing", "no key");
+	const webModel = state.geminiKey ? "gemini · implicit" : "unavailable";
+	box.append(
+		svcRow(
+			"Web / YouTube",
+			"Search, fetch & YouTube transcripts via pi-web-access (Gemini key).",
+			modelLine(webPill, webModel),
+			hint(
+				state.geminiKey
+					? "model id is implicit — not exposed per-task"
+					: "set GEMINI_API_KEY to enable",
+			),
+		),
+	);
+
+	// ── Voice ─────────────────────────────────────────────────────
+	box.append(svcSection("Voice"));
+
+	const rewrite = state.voiceRewriteModel;
+	box.append(
+		svcRow(
+			"Voice-reply rewrite",
+			"Generates the 🗣️ Long / 💬 Short spoken text (pi-voice-reply).",
+			modelLine(
+				rewrite ? pill("set", "env") : pill("implicit", "session"),
+				rewrite ?? "(falls back to session model)",
+			),
+			hint("change → ", kbd("VOICE_REWRITE_MODEL"), " or “switch voice rewrite to …”"),
+		),
+	);
+
+	box.append(
+		svcRow(
+			"Speech-to-text (Whisper)",
+			"Transcribes your mic / voice notes. Local, CPU.",
+			modelLine(pill("set", "env"), `faster-whisper · ${state.whisperModel ?? "medium"}`),
+			hint("change → ", kbd("WHISPER_MODEL"), " (tiny/base/small/medium/large)"),
+		),
+	);
+
+	const ttsVoice = state.ttsVoice ?? state.ttsDefaultVoice ?? "(unset)";
+	const engine = state.ttsEngine
+		? state.ttsEngine.charAt(0).toUpperCase() + state.ttsEngine.slice(1)
+		: "TTS";
+	box.append(
+		svcRow(
+			"Text-to-speech",
+			`Synthesises audio for playback & voice replies. Engine: ${engine}.`,
+			modelLine(pill("set", "env"), `voice ${ttsVoice}`),
+			hint("switch voice → ", kbd("/voice"), " · engine via ", kbd("TTS_ENGINE")),
+			() => {
+				overlay.remove();
+				void openVoicePicker();
+			},
+		),
+	);
+
+	box.append(el("hr", { class: "svc-divider" }));
+	const footer = el("div", { class: "svc-footer" });
+	footer.append(
+		el("b", { text: "Display only." }),
+		" Actionable rows open a picker; the rest reflect config read from pi & env. To change any model, tell pi in chat, or edit the env var shown. Env-backed rows reload after an ",
+		kbd("agentchatbox"),
+		" restart.",
+	);
+	box.append(footer);
+
+	box.append(
+		el(
+			"div",
+			{ class: "svc-actions" },
+			el("button", { class: "btn", text: "Close", onclick: () => overlay.remove() }),
+		),
+	);
+}
+
+// ---------------------------------------------------------------------------
 // Mobile overflow menu (compact mode)
 // ---------------------------------------------------------------------------
 
@@ -793,6 +1011,18 @@ export function openOverflowMenu(): void {
 		sendAsUserFn("/imagemodel");
 	});
 	box.append(imageLine);
+
+	// All models & services overview — opens the display-only panel that
+	// lists every model driving the session (chat, image, web, voice…).
+	const allModelsLine = el("div", { class: "overflow-row" });
+	allModelsLine.append(el("div", { class: "overflow-label" }, "all models"));
+	allModelsLine.append(el("div", { class: "overflow-value" }, "overview"));
+	allModelsLine.title = "Show all models & services in use";
+	allModelsLine.addEventListener("click", () => {
+		overlay.remove();
+		openModelsPanel();
+	});
+	box.append(allModelsLine);
 
 	// Copy a shareable link to the current chat (`/s/<id>`). Mirrors the
 	// `/link` slash command; surfaced here for discoverability on mobile
