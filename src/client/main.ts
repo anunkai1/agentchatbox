@@ -731,11 +731,11 @@ function onEvent(event: Record<string, unknown>): void {
 				// Capture the image-model label from the pi-venice-image extension's
 				// notify so the Settings row reflects the current model. The
 				// extension owns the state; this is a display-only mirror.
-				const imgMatch = e.message.match(/Image model set to (.+)/);
+				const imgMatch = e.message.match(/image model set to (.+)/i);
 				if (imgMatch) {
 					state.currentImageModelLabel = imgMatch[1];
 					refreshStatus();
-				} else if (/reset to default/.test(e.message)) {
+				} else if (/reset to default/i.test(e.message)) {
 					state.currentImageModelLabel = null;
 					refreshStatus();
 				}
