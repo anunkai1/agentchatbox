@@ -20,7 +20,7 @@ import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, escapeHtml, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
 import { services } from "./services.js";
-import { type PersistedMessage, state } from "./state.js";
+import { type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { sessionPath } from "./url.js";
 
 export function autoSize(): void {
@@ -349,7 +349,7 @@ export function makeVoiceVariantButton(
 		setBtnLoading(btn);
 		state.pendingVoiceVariant = variant;
 		state.pendingVoiceBtn = btn;
-		showTtsBanner(`${label} · generating spoken text via ${state.currentModelLabel}…`);
+		showTtsBanner(`${label} · generating spoken text via ${voiceRewriteLabel()}…`);
 		services.sendSlashCommand?.(`/voice-last ${variant}`);
 	});
 	return btn;

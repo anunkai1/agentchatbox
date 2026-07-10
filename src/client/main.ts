@@ -798,6 +798,7 @@ async function boot(): Promise<void> {
 		state.searchEnabled = h.search ?? false;
 		state.ttsEngine = h.ttsEngine ?? null;
 		state.ttsDefaultVoice = h.ttsVoice ?? null;
+		state.voiceRewriteModel = h.voiceRewriteModel ?? null;
 		state.availableModels = models.map((m: ModelInfo) => ({
 			id: m.id,
 			provider: m.provider,
