@@ -442,9 +442,7 @@ body {
 	color: var(--text);
 }
 
-/* Header brand block — ACB mark + the current chat title.
- * The mark lives on the dark UI, so it's the light-ink variant of
- * the logo (cream stroke + cream letters on transparent background). */
+/* Header brand block — ACB mark + the current chat title. */
 .header-brand {
 	display: inline-flex;
 	align-items: center;
@@ -460,10 +458,7 @@ body {
 	height: 24px;
 	display: block;
 	flex-shrink: 0;
-	/* Ink color follows the brand "paper" tone so the mark reads on
-	 * the dark UI; the SVG's `currentColor` inherits this value. */
-	color: #f5f4ef;
-	/* Subtle drop so the cream ink reads cleanly against #000 and
+	/* Subtle drop so the colored mark reads cleanly against #000 and
 	 * #161616 surfaces without becoming a hard rectangle. */
 	filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.4));
 	user-select: none;
@@ -663,8 +658,6 @@ body {
 	height: 72px;
 	display: block;
 	margin-top: clamp(8px, 4vh, 36px);
-	/* Cream ink on the dark welcome surface (see --text token). */
-	color: var(--text);
 	filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.5));
 	user-select: none;
 	-webkit-user-drag: none;

@@ -1168,24 +1168,16 @@ export function renderShell(): void {
 		el(
 			"div",
 			{ class: "header-brand" },
-			// ACB brand mark on the left, then the chat title.
-			// `logo-mark-light.png` is the navy-in-ink recolored to
-			// cream so it reads on the dark UI; the SVG version is
-			// used at smaller sizes for crispness, with the PNG
-			// as a fallback for browsers that drop the SVG <img>
-			// (Safari on some iOS builds).
+			// ACB brand mark on the left, then the chat title. The
+			// colored robot-in-hexagon mark reads on both the dark UI
+			// and light contexts, so one raster asset serves everywhere.
 			el("img", {
 				class: "header-mark",
-				src: "/logo-mark-light.svg",
+				src: "/logo-mark.png",
 				alt: "ACB",
 				width: 24,
 				height: 24,
 				draggable: false,
-				onerror: (e: Event) => {
-					// Fall back to the PNG if the SVG can't load.
-					const img = e.currentTarget as HTMLImageElement;
-					if (img.src.endsWith(".svg")) img.src = "/logo-mark-light.png";
-				},
 			}),
 			el("span", { class: "title", id: "title" }, state.title),
 		),
@@ -1266,15 +1258,11 @@ export function renderShell(): void {
 	welcome.append(
 		el("img", {
 			class: "welcome-mark",
-			src: "/logo-mark-light.svg",
+			src: "/logo-mark.png",
 			alt: "agentchatbox",
 			width: 72,
 			height: 72,
 			draggable: false,
-			onerror: (e: Event) => {
-				const img = e.currentTarget as HTMLImageElement;
-				if (img.src.endsWith(".svg")) img.src = "/logo-mark-light.png";
-			},
 		}),
 	);
 	welcome.append(el("h1", { class: "welcome-title" }, "What can I build for you?"));
