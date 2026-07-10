@@ -70,9 +70,12 @@ export function escapeHtml(s: string): string {
 /**
  * Return handles into a live assistant message's DOM nodes so callers
  * (the event dispatcher) can stream updates in place without re-rendering.
+ * `voiceTextBox` is the read-along box for medium/short variants; it starts
+ * hidden and is populated by updateVoiceTextBox() when a voice-reply lands.
  */
 export interface LiveAssistantDom {
 	textPre: HTMLElement;
 	thinkingWrap: HTMLDivElement;
 	thinkingPre: HTMLPreElement;
+	voiceTextBox: HTMLDivElement;
 }

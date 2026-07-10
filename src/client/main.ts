@@ -52,6 +52,7 @@ import {
 	showToast,
 	syncSteerBadges,
 	updateJumpFabState,
+	lastAssistantVoiceBox,
 	updateVoiceTextBox,
 } from "./render.js";
 import {
@@ -458,11 +459,14 @@ function onEvent(event: Record<string, unknown>): void {
 							if (details.long !== undefined) prev.voiceLong = details.long;
 							if (details.medium !== undefined) prev.voiceMedium = details.medium;
 							if (details.short !== undefined) prev.voiceShort = details.short;
-							// Refresh the live DOM's read-along box (medium/short).
-							// lastAssistantDom points at this message's placeholder.
-							if (lastAssistantDom?.voiceTextBox) {
-								updateVoiceTextBox(lastAssistantDom.voiceTextBox, prev);
-							}
+							// Refresh the target message's read-along box live.
+							// lastAssistantDom is a streaming-scoped handle that is
+							// null by the time this /voice-last turn delivers its
+							// custom message (turn_start clears it first), so fall
+							// back to querying the last assistant row's .voice-text —
+							// which is exactly the message we just merged onto.
+							const voiceBox = lastAssistantDom?.voiceTextBox ?? lastAssistantVoiceBox();
+							if (voiceBox) updateVoiceTextBox(voiceBox, prev);
 							updated = true;
 							break;
 						}

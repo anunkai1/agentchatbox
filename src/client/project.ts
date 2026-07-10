@@ -93,15 +93,18 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 		// unreachable and would silently drop voice replies on resume).
 		const cm = m as { customType?: string };
 		if (cm.customType === "voice-reply") {
-			// Attach the spoken variants to the most recent assistant
-			// entry so they render as inline Long/Short buttons on that
-			// message's button row — not as a separate block.
-			const details = (m as { details?: { long?: string; short?: string } }).details ?? {};
+			// Merge the variant(s) this custom message carries onto the most
+			// recent assistant entry, without clearing previously-set ones.
+			// A session can carry SEVERAL voice-reply custom messages (one
+			// per /voice-last <variant> press), and each must accumulate onto
+			// the same assistant row so its buttons + read-along box all work.
+			const details = (m as { details?: { long?: string; medium?: string; short?: string } }).details ?? {};
 			for (let j = out.length - 1; j >= 0; j--) {
 				const prev = out[j];
 				if (prev.kind === "assistant") {
-					prev.voiceLong = details.long ?? "";
-					prev.voiceShort = details.short ?? "";
+					if (details.long !== undefined) prev.voiceLong = details.long;
+					if (details.medium !== undefined) prev.voiceMedium = details.medium;
+					if (details.short !== undefined) prev.voiceShort = details.short;
 					break;
 				}
 			}
