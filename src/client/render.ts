@@ -1064,13 +1064,23 @@ export function renderShell(): void {
 	);
 	sidebar.append(sidebarHeader);
 
-	// New chat button
+	// New chat button. Rendered as an <a href="/"> so middle-click
+	// (and ⌘/Ctrl/Shift+click) open a fresh chat in a new tab/window via
+	// the browser's native link handling — same trick the session rows
+	// use. Plain left-click is intercepted below so the SPA keeps the
+	// live WS up and just runs the `clear` slash instead of a full nav.
 	sidebar.append(
 		el(
-			"button",
+			"a",
 			{
 				class: "new-chat-btn",
-				onclick: () => {
+				href: "/",
+				rel: "noopener",
+				title: "New chat — middle-click to open in a new tab",
+				onclick: (e: MouseEvent) => {
+					if (e.button !== 0) return;
+					if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+					e.preventDefault();
 					shellHandlers?.handleSlash("clear");
 					toggleSidebar(true); // auto-close on mobile
 				},

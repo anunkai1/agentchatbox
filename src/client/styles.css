@@ -142,6 +142,22 @@ body {
 	font-size: 14px;
 	font-weight: 600;
 	transition: background 0.15s;
+	text-decoration: none;
+}
+/* Now an <a href="/">, neutralize link pseudo-states so it stays visually
+ * identical to the old <button> (no underline, no visited-colour drift,
+ * no focus ring). The link semantics exist only so middle-click /
+ * modifier-click open a fresh chat in a new tab. */
+.new-chat-btn:link,
+.new-chat-btn:visited,
+.new-chat-btn:hover,
+.new-chat-btn:active {
+	text-decoration: none;
+	color: #fff;
+}
+.new-chat-btn:focus,
+.new-chat-btn:focus-visible {
+	outline: none;
 }
 .new-chat-btn:hover {
 	background: var(--accent-hover);
