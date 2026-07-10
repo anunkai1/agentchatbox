@@ -48,6 +48,10 @@ export interface HealthInfo {
 	whisperReason?: string;
 	tts: boolean;
 	ttsReason?: string;
+	/** TTS engine id from /api/health: "kokoro" or "piper". Drives the
+	 * banner label so it reflects the actually-configured engine. */
+	ttsEngine?: string;
+	/** Server-default TTS voice (kokoro/piper). */
 	ttsVoice?: string;
 	/**
 	 * Whether semantic session search is enabled on this server. When false,

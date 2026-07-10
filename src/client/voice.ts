@@ -13,7 +13,7 @@
 import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
-import { appendError, autoSize, refreshStatus } from "./render.js";
+import { appendError, autoSize, hideToast, refreshStatus, showTtsBanner } from "./render.js";
 import { state } from "./state.js";
 
 /**
@@ -70,10 +70,53 @@ let activeObjectUrl: string | null = null;
 let userPaused = false;
 
 /**
+ * Derive a friendly speak-source label (e.g. "🗣️ LongTTS") from the
+ * owning button so the TTS banner can name the variant. Falls back to a
+ * generic "🔊 TTS" for direct speakText() calls (auto-speak) that have no
+ * owning button.
+ */
+function speakLabelFromSrc(src: unknown): string {
+	if (src instanceof HTMLElement) {
+		const lbl = src.dataset.idleLabel ?? src.textContent ?? "";
+		if (/LongTTS/.test(lbl)) return "🗣️ LongTTS";
+		if (/MedTTS/.test(lbl)) return "📝 MedTTS";
+		if (/ShortTTS/.test(lbl)) return "💬 ShortTTS";
+	}
+	return "🔊 TTS";
+}
+
+/** Collapse a spoken string to a single preview line, capped for the banner. */
+function ttsPreview(spoken: string): string {
+	const oneLine = spoken.replace(/\s+/g, " ").trim();
+	return oneLine.length > 160 ? `${oneLine.slice(0, 160)}…` : oneLine;
+}
+
+/**
+ * Human-readable TTS engine label from /api/health (kokoro→Kokoro,
+ * piper→Piper). Falls back to "TTS" before the health probe lands or
+ * if the server omits the engine — so the banner never lies about
+ * which engine is actually configured.
+ */
+function ttsEngineLabel(): string {
+	const e = state.ttsEngine;
+	if (!e) return "TTS";
+	return e.charAt(0).toUpperCase() + e.slice(1);
+}
+
+/**
+ * The active TTS voice for the banner — the user's pick if set, else the
+ * server default. null when neither is known yet.
+ */
+function ttsVoiceLabel(): string | null {
+	return state.ttsVoice ?? state.ttsDefaultVoice ?? null;
+}
+
+/**
  * Synthesize the given text via /api/tts and play it on the shared <audio>.
  * One call at a time — starting a new one stops the current playback.
+ * `label` (e.g. "🗣️ LongTTS") names the variant on the blue TTS banner.
  */
-export async function speakText(text: string): Promise<void> {
+export async function speakText(text: string, label = "🔊 TTS"): Promise<void> {
 	// Strip markdown before synthesis: the raw text off the wire is full
 	// of **bold**, ### headings, ``` fences, [label](url) links, etc. that
 	// piper would read aloud as literal sigils. See markdown.ts.
@@ -82,6 +125,17 @@ export async function speakText(text: string): Promise<void> {
 	if (spoken.length > TTS_MAX_CHARS) {
 		spoken = `${spoken.slice(0, TTS_MAX_CHARS)} … message truncated.`;
 	}
+	// Raise the blue TTS banner (mirrors the multimodal-proxy toast): the
+	// header names the variant + the actually-configured engine (and voice,
+	// if known), the body shows a preview of the text about to be spoken.
+	// Persistent until playback starts, stops, or errors — at which point
+	// hideToast() clears it.
+	const engine = ttsEngineLabel();
+	const voice = ttsVoiceLabel();
+	const synthHead = voice
+		? `${label} · synthesizing via ${engine} (${voice})…`
+		: `${label} · synthesizing via ${engine}…`;
+	showTtsBanner(synthHead, ttsPreview(spoken));
 	const audio = $<HTMLAudioElement>("#tts-audio");
 	// Mark the initiating button as "synthesizing…" so the user sees a
 	// spinner during the (potentially long) TTS round-trip, then flip to
@@ -141,6 +195,9 @@ export async function speakText(text: string): Promise<void> {
 			started = true;
 			// Playback has begun — flip the button from spinner to ⏹.
 			if (gen === speakGeneration) setSpeakBtnState(currentSpeakSrc, "playing");
+			// Drop the TTS banner now that audio is actually playing — the
+			// status bar takes over with "♪ playing".
+			if (gen === speakGeneration) hideToast();
 		}
 	};
 	// Tear down after the last chunk finishes (or on a clean end with nothing
@@ -154,6 +211,9 @@ export async function speakText(text: string): Promise<void> {
 		audio.onended = null;
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
+		// Nothing more is coming — clear the banner (covers the zero-chunks
+		// case where playback never started to hide it).
+		hideToast();
 	};
 	// Chain chunks: when one finishes, play the next; if none are queued and
 	// the stream is still open we simply wait (underflow) — the next chunk to
@@ -190,6 +250,7 @@ export async function speakText(text: string): Promise<void> {
 		if (err instanceof DOMException && err.name === "AbortError") {
 			setSpeakBtnState(currentSpeakSrc, "idle");
 			currentSpeakSrc = null;
+			hideToast();
 			return;
 		}
 		// If the stream failed before any audio played, fall back to the
@@ -205,12 +266,14 @@ export async function speakText(text: string): Promise<void> {
 				}
 				setSpeakBtnState(currentSpeakSrc, "idle");
 				currentSpeakSrc = null;
+				hideToast();
 				return;
 			}
 		}
 		appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
+		hideToast();
 	} finally {
 		if (activeController === controller) activeController = null;
 		state.ttsInFlight--;
@@ -272,6 +335,9 @@ export function stopAllVoice(): void {
 	speakGeneration++;
 	activeController?.abort();
 	activeController = null;
+
+	// Clear the TTS banner if one is up (a stop is a full reset).
+	hideToast();
 
 	// Clear any user-pause intent — a stop is a full reset, so a subsequent
 	// speak shouldn't start in a paused state, and the status-bar control
@@ -365,7 +431,7 @@ export function toggleSpeak(text: string, src: unknown): void {
 	currentSpeakSrc = src;
 	// Don't flip to playing yet — speakText() will show a spinner while
 	// synthesizing, then flip to ⏹ once playback actually starts.
-	void speakText(text);
+	void speakText(text, speakLabelFromSrc(src));
 }
 
 /**

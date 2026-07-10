@@ -342,9 +342,14 @@ export function makeVoiceVariantButton(
 		// Not generated yet — request generation of THIS variant only and
 		// queue it for autoplay. Show a spinner immediately so the press
 		// has visible feedback during the (multi-second) LLM round-trip.
+		// Also raise the blue TTS banner (like the multimodal-proxy toast):
+		// it reads "generating…" here, then speakText() flips it to
+		// "synthesizing via <engine>…" with a text preview once the spoken
+		// text arrives.
 		setBtnLoading(btn);
 		state.pendingVoiceVariant = variant;
 		state.pendingVoiceBtn = btn;
+		showTtsBanner(`${label} · generating spoken text via ${state.currentModelLabel}…`);
 		services.sendSlashCommand?.(`/voice-last ${variant}`);
 	});
 	return btn;
@@ -1113,6 +1118,43 @@ export function showToast(message: string, type: "info" | "warning" | "error" = 
 		toastEl?.classList.add("hidden");
 		toastTimer = null;
 	}, 8000);
+}
+
+/**
+ * Dismiss the toast / TTS banner immediately. Clears any children the
+ * banner added and cancels the auto-dismiss timer.
+ */
+export function hideToast(): void {
+	if (!toastEl) return;
+	toastEl.classList.add("hidden");
+	toastEl.replaceChildren();
+	if (toastTimer) {
+		clearTimeout(toastTimer);
+		toastTimer = null;
+	}
+}
+
+/**
+ * Persistent info banner for the TTS flow — mirrors the multimodal-proxy
+ * toast (the blue bubble that appears while a vision call is in flight):
+ * a bold header line (e.g. "🗣️ LongTTS · synthesizing via Kokoro…") plus
+ * an optional one-line preview of the text being spoken. Unlike
+ * showToast(), it does NOT auto-dismiss — it stays until hideToast()
+ * (on playback start / stop / error) or until another showToast() /
+ * showTtsBanner() replaces it. Built from DOM nodes (not innerHTML) so a
+ * text preview containing markup is rendered safely.
+ */
+export function showTtsBanner(header: string, bodyPreview?: string): void {
+	if (!toastEl) return;
+	toastEl.replaceChildren();
+	toastEl.append(el("div", { class: "toast-head" }, header));
+	if (bodyPreview) toastEl.append(el("div", { class: "toast-body" }, bodyPreview));
+	toastEl.className = "toast toast-info";
+	toastEl.classList.remove("hidden");
+	if (toastTimer) {
+		clearTimeout(toastTimer);
+		toastTimer = null;
+	}
 }
 
 export function renderShell(): void {

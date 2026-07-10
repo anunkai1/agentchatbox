@@ -2190,6 +2190,19 @@ body {
 .toast.hidden {
 	display: none;
 }
+/* Two-line layout used by the TTS banner (showTtsBanner): a bold header
+   naming the variant + engine, then a dimmed one-line text preview. */
+.toast-head {
+	font-weight: 600;
+}
+.toast-body {
+	margin-top: 4px;
+	font-size: 12px;
+	line-height: 1.35;
+	opacity: 0.92;
+	max-height: 4.2em;
+	overflow: hidden;
+}
 .toast-info {
 	background: rgba(33, 150, 243, 0.95);
 	color: #fff;
