@@ -173,6 +173,47 @@ export interface TranscriptPayload {
 	messages: Message[];
 }
 
+/**
+ * Source metadata for a pi command/skill/prompt, mirroring pi's
+ * `get_commands` RPC `sourceInfo`. Tells us WHERE a resource was loaded
+ * from so the UI can group commands by the extension that owns them
+ * and distinguish package-provided skills from loose user-level ones.
+ */
+export interface PiCommandSourceInfo {
+	/** Absolute file path to the resource (extension .ts, SKILL.md, prompt .md). */
+	path?: string;
+	/**
+	 * Package/source identifier exactly as pi reports it, e.g.
+	 * `npm:pi-web-access`, `../../pi-venice-image`, or `auto` for
+	 * loose user-level resources (top-level skills).
+	 */
+	source?: string;
+	/** `"user"` or `"project"` scope. */
+	scope?: string;
+	/** `"package"` (from an installed package) or `"top-level"` (loose file). */
+	origin?: string;
+	/** Directory the resource was loaded from. */
+	baseDir?: string;
+}
+
+/**
+ * One entry from pi's `get_commands` RPC — a slash command, prompt
+ * template, or skill that pi has loaded for the current session's cwd.
+ * This is the authoritative, always-accurate source of "what's loaded"
+ * (per-project), replacing the old heuristic that parsed `pi list` text
+ * + scanned the filesystem.
+ */
+export interface PiCommand {
+	/** Command name. Skills are prefixed `skill:` by pi. */
+	name: string;
+	/** Human-readable description (optional for extension commands). */
+	description?: string;
+	/** What kind of command this is. */
+	source: "extension" | "prompt" | "skill";
+	/** Where it was loaded from. */
+	sourceInfo?: PiCommandSourceInfo;
+}
+
 /** Server → client. */
 export type ServerMessage =
 	| {
@@ -212,7 +253,8 @@ export type ServerMessage =
 			provider: string;
 			modelId: string;
 			thinkingLevel: ThinkingLevel;
-	  };
+	  }
+	| { type: "capabilities"; commands: PiCommand[] };
 
 /** Client → server. */
 export type ClientMessage =
@@ -281,6 +323,14 @@ export type ClientMessage =
 	 * the transport boundary.
 	 */
 	| { type: "forkSession"; sessionId: string; messageCount: number }
+	/**
+	 * Request the commands/skills/extensions the live `pi` child has
+	 * loaded for its cwd (pi's `get_commands` RPC). The server forwards
+	 * it to pi and relays the response as `{type:"capabilities"}`.
+	 * Client-driven — the browser asks when it needs to refresh the
+	 * header badge (e.g. after each `ready`).
+	 */
+	| { type: "getCapabilities" }
 	// --- Projects ---------------------------------------------------------
 	| { type: "listProjects" }
 	| {

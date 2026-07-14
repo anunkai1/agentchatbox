@@ -15,7 +15,7 @@
  * reaching into state.lastAssistant.
  */
 
-import type { ProjectSummary, SessionSummary } from "../shared/protocol.js";
+import type { PiCommand, ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, escapeHtml, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
@@ -849,25 +849,50 @@ export function appendError(text: string): void {
 // Status bar
 // ---------------------------------------------------------------------------
 
+/**
+ * Turn a pi `sourceInfo.source` identifier into a short display name for
+ * the package that owns a command. pi reports sources like
+ * `npm:pi-web-access` or `../../pi-venice-image`; we want `pi-web-access` /
+ * `pi-venice-image`. Falls back to the raw source.
+ */
+function packageDisplayName(source: string | undefined): string {
+	if (!source) return "(extension)";
+	const clean = source.replace(/^npm:/, "");
+	const seg = clean.split("/").pop();
+	return seg || source;
+}
+
+/** Group extension commands by their owning package (sourceInfo.source). */
+function groupExtensionPackages(commands: PiCommand[]): Map<string, PiCommand[]> {
+	const groups = new Map<string, PiCommand[]>();
+	for (const c of commands) {
+		const key = c.sourceInfo?.source ?? c.name;
+		const list = groups.get(key);
+		if (list) list.push(c);
+		else groups.set(key, [c]);
+	}
+	return groups;
+}
+
 /** Update the capabilities badge in the header. */
 function refreshCapabilitiesBadge(): void {
 	const caps = state.capabilities;
 	const badge = document.getElementById("caps-badge");
 	if (!badge) return;
-	if (
-		!caps ||
-		(caps.tools.length === 0 && caps.skills.length === 0 && caps.packages.length === 0)
-	) {
+	if (!caps || caps.length === 0) {
 		badge.style.display = "none";
 		return;
 	}
+	const skills = caps.filter((c) => c.source === "skill");
+	const extPkgs = new Set(
+		caps
+			.filter((c) => c.source === "extension")
+			.map((c) => c.sourceInfo?.source ?? c.name),
+	);
 	const parts: string[] = [];
-	if (caps.tools.length)
-		parts.push(`${caps.tools.length} tool${caps.tools.length !== 1 ? "s" : ""}`);
-	if (caps.skills.length)
-		parts.push(`${caps.skills.length} skill${caps.skills.length !== 1 ? "s" : ""}`);
-	badge.textContent =
-		parts.join(" · ") || `${caps.packages.length} pkg${caps.packages.length !== 1 ? "s" : ""}`;
+	if (skills.length) parts.push(`${skills.length} skill${skills.length !== 1 ? "s" : ""}`);
+	if (extPkgs.size) parts.push(`${extPkgs.size} extension${extPkgs.size !== 1 ? "s" : ""}`);
+	badge.textContent = parts.join(" · ");
 	badge.style.display = "";
 }
 
@@ -879,7 +904,7 @@ export function toggleCapabilitiesPopover(): void {
 		return;
 	}
 	const caps = state.capabilities;
-	if (!caps) return;
+	if (!caps || caps.length === 0) return;
 
 	const overlay = el("div", { class: "modal-overlay", id: "caps-popover" });
 	const box = el("div", { class: "caps-popover-box" });
@@ -889,44 +914,55 @@ export function toggleCapabilitiesPopover(): void {
 
 	box.append(el("h3", { text: "Loaded capabilities" }));
 
-	// Tools section
-	if (caps.tools.length > 0) {
-		box.append(el("div", { class: "caps-section-header" }, "Tools"));
-		for (const t of caps.tools) {
-			const row = el("div", { class: "caps-row" });
-			row.append(el("span", { class: "caps-name" }, t.name));
-			row.append(el("span", { class: "caps-pkg" }, t.package));
-			box.append(row);
-		}
-	}
-
-	// Skills section
-	if (caps.skills.length > 0) {
-		box.append(el("div", { class: "caps-section-header" }, "Skills"));
-		for (const s of caps.skills) {
-			const row = el("div", { class: "caps-row" });
-			row.append(el("span", { class: "caps-name" }, s.name));
-			row.append(el("span", { class: "caps-pkg" }, s.package));
-			box.append(row);
-		}
-	}
-
-	// Packages section
-	if (caps.packages.length > 0) {
+	// Extensions section — commands grouped by owning package. This is
+	// what the pi TUI's [Extensions] list reflects: each installed
+	// extension and the slash commands it registered. get_commands
+	// reports all of them (including locally-registered path packages the
+	// old `pi list` text parser silently dropped).
+	const extCmds = caps.filter((c) => c.source === "extension");
+	if (extCmds.length > 0) {
 		box.append(el("div", { class: "caps-section-header" }, "Extensions"));
-		for (const p of caps.packages) {
+		const groups = groupExtensionPackages(extCmds);
+		for (const [source, cmds] of [...groups.entries()].sort((a, b) =>
+			packageDisplayName(a[0]).localeCompare(packageDisplayName(b[0])),
+		)) {
 			const row = el("div", { class: "caps-row caps-pkg-row" });
-			const ver = p.version ? ` v${p.version}` : "";
-			row.append(el("span", { class: "caps-name" }, `${p.name}${ver}`));
-			if (p.description) {
-				row.append(el("span", { class: "caps-desc" }, p.description));
+			row.append(el("span", { class: "caps-name" }, packageDisplayName(source)));
+			row.append(el("span", { class: "caps-pkg" }, `${cmds.length}`));
+			box.append(row);
+			for (const c of cmds) {
+				const cr = el("div", { class: "caps-row" });
+				cr.append(el("span", { class: "caps-name" }, `/${c.name}`));
+				if (c.description) cr.append(el("span", { class: "caps-desc" }, c.description));
+				box.append(cr);
 			}
+		}
+	}
+
+	// Skills section — source === "skill". Names come from pi prefixed
+	// `skill:`; strip it for display. Includes user-level skills (loose
+	// SKILL.md files) the old package-only scanner never saw.
+	const skillCmds = caps.filter((c) => c.source === "skill");
+	if (skillCmds.length > 0) {
+		box.append(el("div", { class: "caps-section-header" }, "Skills"));
+		for (const s of skillCmds) {
+			const row = el("div", { class: "caps-row caps-pkg-row" });
+			row.append(el("span", { class: "caps-name" }, s.name.replace(/^skill:/, "")));
+			if (s.description) row.append(el("span", { class: "caps-desc" }, s.description));
 			box.append(row);
 		}
 	}
 
-	if (caps.tools.length === 0 && caps.skills.length === 0 && caps.packages.length === 0) {
-		box.append(el("p", { class: "caps-empty" }, "No extensions loaded."));
+	// Prompts section — prompt templates (project/user `.md` files).
+	const promptCmds = caps.filter((c) => c.source === "prompt");
+	if (promptCmds.length > 0) {
+		box.append(el("div", { class: "caps-section-header" }, "Prompts"));
+		for (const p of promptCmds) {
+			const row = el("div", { class: "caps-row caps-pkg-row" });
+			row.append(el("span", { class: "caps-name" }, `/${p.name}`));
+			if (p.description) row.append(el("span", { class: "caps-desc" }, p.description));
+			box.append(row);
+		}
 	}
 
 	box.append(

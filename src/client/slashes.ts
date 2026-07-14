@@ -1103,13 +1103,19 @@ export function openOverflowMenu(): void {
 	box.append(speedLine);
 
 	// --- loaded capabilities (mobile: badge hidden, show in overflow) ---
-	if (state.capabilities) {
+	if (state.capabilities && state.capabilities.length > 0) {
 		const caps = state.capabilities;
+		const skills = caps.filter((c) => c.source === "skill");
+		const extPkgs = new Set(
+			caps
+				.filter((c) => c.source === "extension")
+				.map((c) => c.sourceInfo?.source ?? c.name),
+		);
 		const parts: string[] = [];
-		if (caps.tools.length)
-			parts.push(`${caps.tools.length} tool${caps.tools.length !== 1 ? "s" : ""}`);
-		if (caps.skills.length)
-			parts.push(`${caps.skills.length} skill${caps.skills.length !== 1 ? "s" : ""}`);
+		if (skills.length)
+			parts.push(`${skills.length} skill${skills.length !== 1 ? "s" : ""}`);
+		if (extPkgs.size)
+			parts.push(`${extPkgs.size} extension${extPkgs.size !== 1 ? "s" : ""}`);
 		if (parts.length > 0) {
 			const capsLine = el("div", { class: "overflow-row" });
 			capsLine.append(el("div", { class: "overflow-label" }, "loaded"));

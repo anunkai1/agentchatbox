@@ -211,33 +211,6 @@ export async function* streamSynthesizeSpeech(
 	}
 }
 
-/** Capabilities of the pi Agent — what tools, skills, extensions are loaded. */
-export interface CapabilitiesInfo {
-	packages: CapabilityPackage[];
-	tools: CapabilityTool[];
-	skills: CapabilitySkill[];
-}
-
-export interface CapabilityPackage {
-	name: string;
-	path: string;
-	version?: string;
-	description?: string;
-}
-
-export interface CapabilityTool {
-	name: string;
-	/** Package that provides this tool */
-	package: string;
-}
-
-export interface CapabilitySkill {
-	name: string;
-	/** Package that provides this skill */
-	package: string;
-}
-
-/** Returns the tools, skills, and extensions that pi has loaded. */
 /**
  * Whether a session id is known to the server for this cwd. Used by the
  * client to validate a shareable `/s/<id>` link before resuming: a stale
@@ -251,12 +224,6 @@ export async function sessionExists(sessionId: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
-}
-
-export async function getCapabilities(): Promise<CapabilitiesInfo> {
-	const res = await fetch(`${BASE}/api/capabilities`);
-	if (!res.ok) throw new Error(`capabilities failed: ${res.status}`);
-	return (await res.json()) as CapabilitiesInfo;
 }
 
 export async function listVoices(): Promise<VoicesResponse> {
