@@ -424,6 +424,15 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			send(ws, { type: "sessions", sessions });
 			break;
 		}
+		case "getCapabilities": {
+			// Pure forward: ask the live pi child for its loaded commands /
+			// skills / extensions. The response is reshaped to
+			// {type:"capabilities"} in session-registry.ts (it must be
+			// intercepted there because a `response` with success:true would
+			// otherwise be dropped as a noisy ack before reaching the client).
+			session.pi.send({ type: "get_commands" });
+			break;
+		}
 		case "newSession": {
 			// Discard the current session and start a fresh one. newSession
 			// is an explicit user action ("new chat"), so killing the old

@@ -21,7 +21,6 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import cors from "cors";
 import express from "express";
-import { getCapabilities } from "./capabilities.js";
 import { mountChatWs, shutdownChatWs } from "./chat.js";
 import { config, readPiAuth } from "./config.js";
 import { createFilesRouter } from "./files.js";
@@ -421,27 +420,6 @@ app.get("/api/models", async (_req, res) => {
 	}
 
 	res.json({ models: out });
-});
-
-/**
- * GET /api/capabilities
- *
- * Returns the tools, skills, and extensions that pi has loaded.
- * Runs `pi list`, parses each installed package's package.json,
- * and extracts registered tool names and skill directories.
- *
- * Shape: { packages: [...], tools: [...], skills: [...] }
- */
-app.get("/api/capabilities", async (_req, res) => {
-	try {
-		const caps = await getCapabilities();
-		res.json(caps);
-	} catch (e) {
-		log.error("capabilities fetch failed", {
-			error: e instanceof Error ? e.message : String(e),
-		});
-		res.json({ packages: [], tools: [], skills: [] });
-	}
 });
 
 // Static files (built client). Resolved against the project root so the

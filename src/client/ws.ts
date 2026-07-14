@@ -15,6 +15,7 @@
 
 import type { Message } from "@earendil-works/pi-ai";
 import type {
+	PiCommand,
 	ProjectSummary,
 	PromptImage,
 	SessionSummary,
@@ -36,6 +37,8 @@ export type ProjectsListener = (projects: ProjectSummary[]) => void;
 export type TranscriptListener = (sessionId: string, messages: Message[]) => void;
 /** Fired with the new session id once a forkSession completes. */
 export type ForkedListener = (sessionId: string) => void;
+/** Fired with the commands/skills/extensions pi has loaded (get_commands). */
+export type CapabilitiesListener = (commands: PiCommand[]) => void;
 
 export interface ChatClient {
 	/**
@@ -86,6 +89,8 @@ export interface ChatClient {
 	resumeSession(sessionId: string): void;
 	/** Request the list of projects. Replies via onProjectsUpdated. */
 	listProjects(): void;
+	/** Request loaded commands/skills/extensions. Replies via onCapabilities. */
+	getCapabilities(): void;
 	createProject(input: {
 		name: string;
 		icon?: string;
@@ -121,6 +126,8 @@ export interface ChatClient {
 	onTranscript(listener: TranscriptListener): () => void;
 	/** Called with the new session id once a forkSession completes. */
 	onForked(listener: ForkedListener): () => void;
+	/** Called with the loaded commands/skills/extensions after each ready. */
+	onCapabilities(listener: CapabilitiesListener): () => void;
 	/** Force a reconnect. */
 	reconnect(): void;
 	/** Permanently close. */
@@ -158,6 +165,7 @@ export function createChatClient(): ChatClient {
 	const projectsListeners = new Set<ProjectsListener>();
 	const transcriptListeners = new Set<TranscriptListener>();
 	const forkedListeners = new Set<ForkedListener>();
+	const capabilitiesListeners = new Set<CapabilitiesListener>();
 
 	/** Add a listener to a Set and return an unsubscribe fn. */
 	function subscribe<T>(set: Set<T>, listener: T): () => void {
@@ -233,6 +241,10 @@ export function createChatClient(): ChatClient {
 					break;
 				case "forked":
 					for (const l of forkedListeners) l(String(msg.sessionId ?? ""));
+					break;
+				case "capabilities":
+					for (const l of capabilitiesListeners)
+						l((msg.commands as PiCommand[]) ?? []);
 					break;
 				case "error":
 					for (const l of errorListeners) l(String(msg.message ?? "unknown error"));
@@ -368,6 +380,13 @@ export function createChatClient(): ChatClient {
 		newSession: (projectId) => send({ type: "newSession", ...(projectId ? { projectId } : {}) }),
 		resumeSession: (sessionId) => send({ type: "resumeSession", sessionId }),
 		listProjects: () => send({ type: "listProjects" }),
+		/**
+		 * Ask pi (via the server) for the commands/skills/extensions the
+		 * live child has loaded. The server forwards pi's `get_commands`
+		 * response back as `onCapabilities`. Call after each `ready` to
+		 * keep the header badge per-project accurate.
+		 */
+		getCapabilities: () => send({ type: "getCapabilities" }),
 		createProject: (input) => send({ type: "createProject", ...input }),
 		updateProject: (input) => send({ type: "updateProject", ...input }),
 		deleteProject: (id) => send({ type: "deleteProject", id }),
@@ -380,6 +399,7 @@ export function createChatClient(): ChatClient {
 		onProjectsUpdated: (l) => subscribe(projectsListeners, l),
 		onTranscript: (l) => subscribe(transcriptListeners, l),
 		onForked: (l) => subscribe(forkedListeners, l),
+		onCapabilities: (l) => subscribe(capabilitiesListeners, l),
 		reconnect: () => {
 			// Suppress the old socket's async close-reconnect so we don't
 			// end up with two racing WebSockets (the one we close here and

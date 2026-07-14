@@ -35,7 +35,12 @@
  */
 
 import type { WebSocket } from "ws";
-import type { ServerMessage, ThinkingLevel, TranscriptPayload } from "../shared/protocol.js";
+import type {
+	PiCommand,
+	ServerMessage,
+	ThinkingLevel,
+	TranscriptPayload,
+} from "../shared/protocol.js";
 import { config, getServerApiKey } from "./config.js";
 import { log } from "./logger.js";
 import { type PiProcess, spawnPi } from "./pi-process.js";
@@ -402,6 +407,22 @@ class SessionRegistry {
 				modelId: session.init.modelId,
 				thinkingLevel: session.init.thinkingLevel,
 			});
+		}
+
+		// pi's `get_commands` response — the authoritative list of slash
+		// commands, prompt templates, and skills loaded for THIS session's
+		// cwd. Forwarded to the client as {type:"capabilities"} so the
+		// header badge reflects the live child (per-project accurate)
+		// instead of a global guess. Intercepted here (before the success-ack
+		// drop below) because a success response would otherwise be filtered
+		// as noise and never reach the browser.
+		if (line.type === "response" && line.command === "get_commands") {
+			const cmds = (line.data as { commands?: unknown[] } | undefined)?.commands;
+			deliver(session.ws, {
+				type: "capabilities",
+				commands: Array.isArray(cmds) ? (cmds as PiCommand[]) : [],
+			});
+			return;
 		}
 
 		// Drop success acks (noise — pi's events are the real confirmation).

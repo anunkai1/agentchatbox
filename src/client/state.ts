@@ -11,8 +11,7 @@
  * to it as the conversation continues.
  */
 
-import type { ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
-import type { CapabilitiesInfo } from "./api.js";
+import type { PiCommand, ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
 
 // ---------------------------------------------------------------------------
 // Renderer cache: messages the browser shows in the chat scrollback
@@ -208,10 +207,11 @@ export interface AppState {
 	pendingVoiceVariant: "long" | "medium" | "short" | null;
 	pendingVoiceBtn: HTMLElement | null;
 	/**
-	 * Capabilities reported by the server (tools, skills, packages).
-	 * Populated by boot() on startup.
+	 * Commands/skills/extensions loaded for the current session, reported
+	 * by the server from pi's `get_commands` RPC (per-project accurate).
+	 * Pushed after every `ready`, so it always matches the live child.
 	 */
-	capabilities: CapabilitiesInfo | null;
+	capabilities: PiCommand[] | null;
 	/** Whether the server has semantic session search enabled. */
 	searchEnabled: boolean;
 	/** Whether the sidebar is currently showing search results (vs the date list). */

@@ -20,7 +20,6 @@ import type {
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import {
-	getCapabilities,
 	getHealth,
 	getModels,
 	sessionExists,
@@ -809,16 +808,6 @@ async function boot(): Promise<void> {
 			name: m.name,
 			reasoning: m.reasoning,
 		}));
-		// Fetch capabilities (tools, skills, packages) for the header badge.
-		getCapabilities()
-			.then((caps) => {
-				state.capabilities = caps;
-				refreshStatus();
-			})
-			.catch(() => {
-				// capabilities fetch is best-effort — don't block the app
-			});
-
 		// Fall back to the legacy single-provider shape if /api/models
 		// returns nothing (older server) — we still get *something* in
 		// the picker so the user isn't stuck.
@@ -982,6 +971,12 @@ async function boot(): Promise<void> {
 		// Subsequent ready events (reconnects, new sessions) also refresh.
 		chatClient.listSessions();
 		chatClient.listProjects();
+		// Refresh the loaded-commands badge for this session's project. A
+		// different project loads a different extension set, so every ready
+		// (new session, resume, fork, reconnect) re-asks pi — the server
+		// just forwards to pi, this is where the browser decides it wants
+		// the data for display.
+		chatClient.getCapabilities();
 	});
 	chatClient.onEvent(onEvent);
 	chatClient.onError((msg) => appendError(msg));
@@ -999,6 +994,15 @@ async function boot(): Promise<void> {
 	chatClient.onProjectsUpdated((projects) => {
 		state.projects = projects;
 		renderSidebarProjects(projects);
+	});
+	// Loaded commands/skills/extensions for the live session, from pi's
+	// get_commands RPC (pushed by the server after every ready). This is
+	// per-project accurate — switching projects re-fires ready, which
+	// re-fetches capabilities — so the header badge always matches what
+	// pi actually has loaded for the current chat.
+	chatClient.onCapabilities((commands) => {
+		state.capabilities = commands;
+		refreshStatus();
 	});
 	// On resume: replace the renderer cache with the server's replay
 	// transcript, then re-render the chat scrollback so the past
