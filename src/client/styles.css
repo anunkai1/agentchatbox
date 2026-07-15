@@ -739,6 +739,33 @@ body {
 	justify-content: flex-start;
 }
 
+/* Timestamp chip on user + assistant bubbles: small, muted, relative
+   label ("2m") with the full Brisbane-time date on hover (title).
+   Inside the user bubble it sits at the bottom-right; under the
+   assistant reply it's a thin left-aligned meta line. See time.ts. */
+.msg-ts {
+	display: block;
+	font-size: 11px;
+	line-height: 1;
+	color: var(--text-muted);
+	white-space: nowrap;
+	margin-top: 6px;
+	text-align: right;
+	cursor: default;
+}
+.row-assistant .body .msg-ts {
+	text-align: left;
+	margin-top: 6px;
+}
+.row-assistant .body .msg-ts:first-child {
+	margin-top: 0;
+}
+/* Relative half of the chip — slightly more faded so the absolute time
+   stays the primary read, but both are always visible inline. */
+.msg-ts-rel {
+	opacity: 0.7;
+}
+
 /* User message — right-aligned bubble */
 .row-user .bubble {
 	background: var(--user-bubble);

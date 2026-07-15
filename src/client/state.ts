@@ -37,12 +37,26 @@ export type PersistedMessage =
 			 * (tool/steer/error).
 			 */;
 			seq?: number;
+			/**
+			 * Epoch-ms when this message was created, sourced from the
+			 * SDK `Message.timestamp` (authoritative — survives
+			 * resume/fork). Live optimistic sends stamp `Date.now()`
+			 * until the echo/replay lands the real value. Rendered as a
+			 * relative label in Brisbane time; see src/client/time.ts.
+			 * Absent on kinds that don't carry a moment in time
+			 * (tool/steer/error).
+			 */
+			ts?: number;
 	  }
 	| {
 			kind: "assistant";
 			text: string;
 			thinking: string;
 			seq?: number;
+			/** Epoch-ms when this assistant message was created (SDK
+			 * `Message.timestamp`); always shown when present. See the
+			 * `user` variant's `ts` for the full rationale. */
+			ts?: number;
 			/**
 			 * Listenable spoken-rewrite variants produced by the
 			 * pi-voice-reply extension, attached to this assistant message
