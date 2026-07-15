@@ -2,18 +2,17 @@
  * Single source of truth for the list of LLM providers the server knows
  * about. Imported by:
  *
- *   - agent.ts:    to validate the `provider` arg of `createAgent` before
- *                  building an Agent (rejects typos like "anhtropic")
+ *   - models-cache.ts: to iterate SDK providers when picking a boot-probe
+ *                  provider, and to derive SDK_PROVIDERS
  *   - index.ts:    to drive the /api/models picker — only providers
- *                  that are both in this set AND have a configured API
- *                  key are returned to the client
+ *                  that are both in this set AND authenticated in `pi`'s
+ *                  auth.json are returned to the client
  *
  * Why a single file: the previous design had two parallel arrays
  * (`KNOWN_PROVIDERS` in agent.ts, `builtinProviders` in index.ts) that
  * drifted in membership and order. Combining the set with the SDK's
- * provider key model is fiddly because some provider keys in
- * `config.apiKeys` (e.g. "kimi-coding") use hyphens — we use the raw
- * string as the set member.
+ * provider key model is fiddly because some provider keys (e.g.
+ * "kimi-coding") use hyphens — we use the raw string as the set member.
  */
 
 import type { KnownProvider } from "@earendil-works/pi-ai";
@@ -61,16 +60,16 @@ export const KNOWN_PROVIDERS: ReadonlySet<string> = new Set<string>(
 
 /**
  * Maps a provider id to the `*_API_KEY` environment-variable name `pi`
- * reads for it. This is the **single source of truth** for both:
+ * reads for it. This is the **single source of truth** for the env-var
+ * name `pi-process.ts` INJECTs into the child's env when spawning
+ * `pi --mode rpc` (the key value itself comes from `pi`'s auth.json via
+ * `getServerApiKey`, NOT from process.env — see config.ts).
  *
- *   - `config.ts`  — which env var to READ at boot to populate apiKeys
- *   - `pi-process.ts` — which env var to INJECT into the child's env
- *
- * Keeping both sides reading from one table means a new provider is a
- * one-line edit here, not a coordinated change across two files (which
- * previously drifted: config.ts read `MiniMax_API_KEY`, pi-process.ts
- * injected `MINIMAX_API_KEY`; same value flowed through, but the two
- * maps had to be maintained by hand and nothing checked they matched).
+ * Keeping the name in one place means a new provider is a one-line edit
+ * here, not a coordinated change across two files (which previously
+ * drifted: config.ts read `MiniMax_API_KEY`, pi-process.ts injected
+ * `MINIMAX_API_KEY`; same value flowed through, but the two maps had to
+ * be maintained by hand and nothing checked they matched).
  *
  * Mirrors `getApiKeyEnvVars()` in `@earendil-works/pi-ai`, which is not
  * exported. Keep this in sync if pi-ai adds providers.

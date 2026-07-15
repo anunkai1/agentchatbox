@@ -19,7 +19,6 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { projectRoot } from "./paths.js";
-import { PROVIDER_KEYS, providerApiKeyEnvVar } from "./providers.js";
 
 export interface ServerConfig {
 	port: number;
@@ -28,8 +27,6 @@ export interface ServerConfig {
 	uploadsDir: string;
 	/** Max upload size in bytes. Default 50 MB. */
 	maxUploadBytes: number;
-	/** Provider API keys, keyed by provider id. */
-	apiKeys: Record<string, string>;
 	/** OpenAI key, used for Whisper transcription of voice notes. */
 	openaiApiKey: string | undefined;
 	/**
@@ -52,34 +49,6 @@ function readKey(name: string): string | undefined {
 	return v && v.trim().length > 0 ? v.trim() : undefined;
 }
 
-/**
- * Build the apiKeys map from the single provider→env-var table in
- * providers.ts. Each provider's key is read from the same env-var name
- * that pi itself reads (see providerApiKeyEnvVar), so adding a provider
- * is a one-line change in providers.ts — no second map to keep in sync.
- *
- * Ollama special-case: it doesn't need a real key, but session-registry
- * throws if the key is empty (see providers.ts::PROVIDER_KEYS for why).
- * Default to the literal string "ollama" so the key-presence check
- * passes. The string is sent in the Authorization header, which Ollama
- * ignores. Override with OLLAMA_API_KEY=... if a different dummy is
- * preferred.
- */
-function readApiKeys(): Record<string, string> {
-	const out: Record<string, string> = {};
-	for (const provider of PROVIDER_KEYS) {
-		const k = readKey(providerApiKeyEnvVar(provider));
-		if (k) {
-			out[provider] = k;
-		} else if (provider === "ollama") {
-			out[provider] = "ollama";
-		} else {
-			out[provider] = "";
-		}
-	}
-	return out;
-}
-
 export const config: ServerConfig = {
 	port: Number.parseInt(process.env.PORT ?? "3000", 10),
 	host: process.env.HOST ?? "0.0.0.0",
@@ -87,7 +56,6 @@ export const config: ServerConfig = {
 		? resolve(process.env.UPLOADS_DIR)
 		: resolve(projectRoot, "uploads"),
 	maxUploadBytes: Number.parseInt(process.env.MAX_UPLOAD_BYTES ?? `${50 * 1024 * 1024}`, 10),
-	apiKeys: readApiKeys(),
 	openaiApiKey: readKey("OPENAI_API_KEY"),
 	// `piBin` and `piCwd` are read lazily — they need to reflect the
 	// process state at boot time, not at module-load time (which could
@@ -114,7 +82,13 @@ export const config: ServerConfig = {
  * is missing/unreadable/malformed (picker stays empty — fix by logging
  * in via `pi`).
  */
-export const PI_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
+// Overridable via AGENTCHATBOX_PI_AUTH_FILE so tests can point at a temp
+// file instead of the operator's real ~/.pi/agent/auth.json (keeps the
+// suite hermetic — previously the tests silently depended on the real
+// auth.json having the provider they spawn with).
+export const PI_AUTH_PATH = process.env.AGENTCHATBOX_PI_AUTH_FILE
+	? resolve(process.env.AGENTCHATBOX_PI_AUTH_FILE)
+	: join(homedir(), ".pi", "agent", "auth.json");
 
 export function readPiAuth(): Map<string, string> {
 	const out = new Map<string, string>();
