@@ -501,7 +501,7 @@ export function findPiSessionFile(cwd: string, sessionId: string): string | null
 export function setPiSessionName(cwd: string, sessionId: string, name: string): boolean {
 	const file = findPiSessionFile(cwd, sessionId);
 	if (!file) return false;
-	const line = JSON.stringify({ type: "session_info", id: sessionId, name }) + "\n";
+	const line = `${JSON.stringify({ type: "session_info", id: sessionId, name })}\n`;
 	appendFileSync(file, line);
 	// Invalidate the per-file summary cache for THIS file. The cache is
 	// keyed by mtime, but `appendFileSync` racing a prior write inside the
