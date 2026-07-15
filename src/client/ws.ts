@@ -15,6 +15,7 @@
 
 import type { Message } from "@earendil-works/pi-ai";
 import type {
+	ContextUsage,
 	PiCommand,
 	ProjectSummary,
 	PromptImage,
@@ -39,6 +40,12 @@ export type TranscriptListener = (sessionId: string, messages: Message[]) => voi
 export type ForkedListener = (sessionId: string) => void;
 /** Fired with the commands/skills/extensions pi has loaded (get_commands). */
 export type CapabilitiesListener = (commands: PiCommand[]) => void;
+/** Fired with pi's context-usage snapshot in response to getSessionStats(). */
+export type SessionStatsListener = (stats: {
+	contextUsage: ContextUsage | null;
+	tokens?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	cost?: number;
+}) => void;
 
 export interface ChatClient {
 	/**
@@ -91,6 +98,8 @@ export interface ChatClient {
 	listProjects(): void;
 	/** Request loaded commands/skills/extensions. Replies via onCapabilities. */
 	getCapabilities(): void;
+	/** Request pi's context-usage snapshot. Replies via onSessionStats. */
+	getSessionStats(): void;
 	createProject(input: {
 		name: string;
 		icon?: string;
@@ -128,6 +137,8 @@ export interface ChatClient {
 	onForked(listener: ForkedListener): () => void;
 	/** Called with the loaded commands/skills/extensions after each ready. */
 	onCapabilities(listener: CapabilitiesListener): () => void;
+	/** Called with pi's context-usage snapshot in response to getSessionStats(). */
+	onSessionStats(listener: SessionStatsListener): () => void;
 	/** Force a reconnect. */
 	reconnect(): void;
 	/** Permanently close. */
@@ -166,6 +177,7 @@ export function createChatClient(): ChatClient {
 	const transcriptListeners = new Set<TranscriptListener>();
 	const forkedListeners = new Set<ForkedListener>();
 	const capabilitiesListeners = new Set<CapabilitiesListener>();
+	const sessionStatsListeners = new Set<SessionStatsListener>();
 
 	/** Add a listener to a Set and return an unsubscribe fn. */
 	function subscribe<T>(set: Set<T>, listener: T): () => void {
@@ -245,6 +257,20 @@ export function createChatClient(): ChatClient {
 				case "capabilities":
 					for (const l of capabilitiesListeners)
 						l((msg.commands as PiCommand[]) ?? []);
+					break;
+				case "sessionStats":
+					for (const l of sessionStatsListeners)
+						l({
+							contextUsage: (msg.contextUsage as ContextUsage | null) ?? null,
+							tokens: msg.tokens as {
+								input: number;
+								output: number;
+								cacheRead: number;
+								cacheWrite: number;
+								total: number;
+							} | undefined,
+							cost: msg.cost as number | undefined,
+						});
 					break;
 				case "error":
 					for (const l of errorListeners) l(String(msg.message ?? "unknown error"));
@@ -387,6 +413,7 @@ export function createChatClient(): ChatClient {
 		 * keep the header badge per-project accurate.
 		 */
 		getCapabilities: () => send({ type: "getCapabilities" }),
+		getSessionStats: () => send({ type: "getSessionStats" }),
 		createProject: (input) => send({ type: "createProject", ...input }),
 		updateProject: (input) => send({ type: "updateProject", ...input }),
 		deleteProject: (id) => send({ type: "deleteProject", id }),
@@ -400,6 +427,7 @@ export function createChatClient(): ChatClient {
 		onTranscript: (l) => subscribe(transcriptListeners, l),
 		onForked: (l) => subscribe(forkedListeners, l),
 		onCapabilities: (l) => subscribe(capabilitiesListeners, l),
+		onSessionStats: (l) => subscribe(sessionStatsListeners, l),
 		reconnect: () => {
 			// Suppress the old socket's async close-reconnect so we don't
 			// end up with two racing WebSockets (the one we close here and

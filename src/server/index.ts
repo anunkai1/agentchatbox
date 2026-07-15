@@ -426,7 +426,22 @@ app.get("/api/models", async (_req, res) => {
 // server works regardless of the process working directory.
 const publicDir = resolve(projectRoot, "public");
 if (existsSync(publicDir)) {
-	app.use(express.static(publicDir));
+	// Cache headers: the HTML document must NEVER be cached, while hashed
+	// asset URLs (app.js?v=…, styles.css?v=…) are safe to cache forever.
+	// index.html references those cache-busted asset URLs, which change
+	// every deploy — if a browser serves a stale index.html it pins itself
+	// to stale asset URLs and never sees updates (the "I refreshed but my
+	// change didn't show up" bug). no-store on HTML forces every navigation
+	// to re-fetch the document, which always points at the current assets.
+	app.use(
+		express.static(publicDir, {
+			setHeaders: (res, path) => {
+				if (path.endsWith(".html")) {
+					res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+				}
+			},
+		}),
+	);
 	// Serve uploaded files at /uploads/<id>.<ext>. We mount the whole
 	// uploads dir as static so the URLs returned by /api/upload are
 	// fetchable. The upload IDs are random UUIDs (unguessable), which
@@ -442,8 +457,10 @@ if (existsSync(publicDir)) {
 			}),
 		);
 	}
-	// SPA fallback: serve index.html for any non-API GET.
+	// SPA fallback: serve index.html for any non-API GET. Same no-store
+	// header as above so the fallback document is never cached either.
 	app.get(/^(?!\/api\/|\/uploads\/).*/, (_req, res) => {
+		res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
 		res.sendFile("index.html", { root: publicDir });
 	});
 } else {

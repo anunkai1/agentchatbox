@@ -36,6 +36,7 @@
 
 import type { WebSocket } from "ws";
 import type {
+	ContextUsage,
 	PiCommand,
 	ServerMessage,
 	ThinkingLevel,
@@ -421,6 +422,37 @@ class SessionRegistry {
 			deliver(session.ws, {
 				type: "capabilities",
 				commands: Array.isArray(cmds) ? (cmds as PiCommand[]) : [],
+			});
+			return;
+		}
+
+		// pi's `get_session_stats` response. We only forward the
+		// `contextUsage` field (tokens / contextWindow / percent) — the
+		// browser accumulates the cumulative token+cost totals itself from
+		// per-turn message_end events, so resending them would just double-
+		// count. contextUsage is undefined when pi can't compute it (no model,
+		// or right after a compaction with no post-compaction reply yet); we
+		// surface that as null so the client can render a neutral `?` state
+		// instead of a stale bar. Intercepted here (before the success-ack
+		// drop below) for the same reason as get_commands.
+		if (line.type === "response" && line.command === "get_session_stats") {
+			const data = line.data as
+				| {
+						contextUsage?: unknown;
+						tokens?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+						cost?: number;
+				  }
+				| undefined;
+			deliver(session.ws, {
+				type: "sessionStats",
+				contextUsage: (data?.contextUsage ?? null) as ContextUsage | null,
+				// Forward the cumulative token totals + cost too, so the client can
+				// seed its display on a fresh page load instead of resetting to 0
+				// (the client accumulates these live from message_end, but that
+				// only captures events seen SINCE the page opened — a refresh wiped
+				// everything before it). These are pi's ground-truth session totals.
+				tokens: data?.tokens,
+				cost: typeof data?.cost === "number" ? data.cost : undefined,
 			});
 			return;
 		}

@@ -58,26 +58,42 @@ async function copyStatic() {
 }
 
 /**
- * Stamp the bundled app.js with a content-hash query string in
- * public/index.html so browsers fetch a fresh copy on every deploy
- * instead of serving a stale cached bundle. Without this, <script
- * src="/app.js"> gets cached indefinitely and a normal reload after a
- * deploy keeps running the old code (the "why don't my changes show
- * up" bug). The hash changes whenever app.js's bytes change, so any
- * real code change forces a re-fetch; no-op rebuilds reuse the same
- * hash and stay cached, which is correct.
+ * Stamp the bundled app.js AND styles.css with content-hash query
+ * strings in public/index.html so browsers fetch fresh copies on every
+ * deploy instead of serving a stale cached bundle/stylesheet.
+ *
+ * Without this, <script src="/app.js"> and <link href="/styles.css">
+ * get cached indefinitely and a normal reload after a deploy keeps
+ * running the old code/CSS (the "why don't my changes show up" bug).
+ *
+ * Each hash is derived from that file's own bytes, so a JS-only change
+ * leaves the CSS hash (and its cache entry) untouched and vice versa;
+ * a change to either forces a re-fetch of just that asset.
  */
 async function stampCacheBust() {
 	const { createHash } = await import("node:crypto");
 	const { readFile, writeFile } = await import("node:fs/promises");
 	const appJsPath = resolve(root, "public/app.js");
+	const cssPath = resolve(root, "public/styles.css");
 	const htmlPath = resolve(root, "public/index.html");
-	const buf = await readFile(appJsPath);
-	const hash = createHash("sha256").update(buf).digest("hex").slice(0, 12);
 	let html = await readFile(htmlPath, "utf8");
-	html = html.replace(/src="\/app\.js(\?v=[a-f0-9]+)?"/, `src="/app.js?v=${hash}"`);
+
+	const appBuf = await readFile(appJsPath);
+	const appHash = createHash("sha256").update(appBuf).digest("hex").slice(0, 12);
+	html = html.replace(/src="\/app\.js(\?v=[a-f0-9]+)?"/, `src="/app.js?v=${appHash}"`);
+	console.log(`client: stamped index.html with app.js?v=${appHash}`);
+
+	// CSS has its OWN content hash — a JS-only rebuild leaves styles.css
+	// cached (correct), and a CSS-only change forces a re-fetch without
+	// needlessly invalidating app.js. Previously styles.css had no
+	// cache-bust at all, so it was cached forever and CSS changes never
+	// reached returning browsers.
+	const cssBuf = await readFile(cssPath);
+	const cssHash = createHash("sha256").update(cssBuf).digest("hex").slice(0, 12);
+	html = html.replace(/href="\/styles\.css(\?v=[a-f0-9]+)?"/, `href="/styles.css?v=${cssHash}"`);
+	console.log(`client: stamped index.html with styles.css?v=${cssHash}`);
+
 	await writeFile(htmlPath, html);
-	console.log(`client: stamped index.html with app.js?v=${hash}`);
 }
 
 const options = {

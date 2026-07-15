@@ -11,7 +11,7 @@
  * to it as the conversation continues.
  */
 
-import type { PiCommand, ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
+import type { ContextUsage, PiCommand, ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
 
 // ---------------------------------------------------------------------------
 // Renderer cache: messages the browser shows in the chat scrollback
@@ -226,6 +226,12 @@ export interface AppState {
 	 * Pushed after every `ready`, so it always matches the live child.
 	 */
 	capabilities: PiCommand[] | null;
+	/** Context-window fill for the active model, from pi's
+	 * `get_session_stats`. `tokens`/`percent` are null right after a
+	 * compaction (pi can't size the context until the next reply). Drives
+	 * the thin fill meter above the status bar. Null before the first
+	 * reply or when the model has no known context window. */
+	contextUsage: ContextUsage | null;
 	/** Whether the server has semantic session search enabled. */
 	searchEnabled: boolean;
 	/** Whether the sidebar is currently showing search results (vs the date list). */
@@ -332,6 +338,7 @@ export const state: AppState = {
 	projects: [],
 	activeProjectId: "global",
 	capabilities: null,
+	contextUsage: null,
 	searchEnabled: false,
 	searchActive: false,
 };

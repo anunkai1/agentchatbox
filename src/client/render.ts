@@ -1015,8 +1015,15 @@ export function refreshStatus(): void {
 	const parts: string[] = [];
 	parts.push(esc(modelLabel));
 	parts.push(`think: ${esc(state.currentThinking)}`);
+	// Context-window fill token count — the SAME number the fill bar above
+	// represents (state.contextUsage.tokens / contextWindow), NOT cumulative
+	// session usage. Cumulative input+output only ever grows and diverges
+	// from the bar after a compaction, which made the number and the bar
+	// disagree. Showing context fill here keeps them in lockstep: both reset
+	// together when pi compacts. `tokens` is null right after a compaction
+	// (pi can't size the context until the next reply) → show `?`.
+	parts.push(contextFillLabel());
 	const c = state.costTotal;
-	parts.push(`${(c.input + c.output).toLocaleString()} tok`);
 	if (c.cost > 0) parts.push(`$${c.cost.toFixed(4)}`);
 	if (state.isStreaming) {
 		// Elapsed-time working indicator — the CLI shows a spinner +
@@ -1099,6 +1106,21 @@ export function refreshStatus(): void {
 	vp.textContent = `voice: ${state.ttsVoice ?? "default"}`;
 	const sp = $<HTMLButtonElement>("#speed-picker");
 	sp.textContent = `speed: ${state.ttsSpeed}×`;
+}
+
+/** Compact text label for the status-line token pill. Reads
+ *  `state.contextUsage` (seeded from pi's `get_session_stats` on every
+ *  `ready`) so it survives a page refresh — unlike the old cumulative
+ *  count, which was accumulated client-side from live events and reset
+ *  to 0 on every load. Returns `?` when pi can't size the context yet
+ *  (right after a compaction, before the next reply). */
+function contextFillLabel(): string {
+	const cu = state.contextUsage;
+	if (!cu || cu.contextWindow <= 0) return "? tok";
+	if (cu.tokens == null || cu.percent == null) return "? tok";
+	const usedK = Math.round(cu.tokens / 1000);
+	const winK = Math.round(cu.contextWindow / 1000);
+	return `${usedK}k/${winK}k tok (${cu.percent.toFixed(0)}%)`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1602,7 +1624,6 @@ export function renderShell(): void {
 		}
 	});
 	main.append(statusBar);
-
 	// Hidden audio element for TTS playback. One shared element so a new
 	// speak request stops the current one.
 	const audio = el("audio", { id: "tts-audio", hidden: true, preload: "auto" });
