@@ -126,9 +126,9 @@ Everything goes through `.env`. Keys for the providers you want to use; an empty
 | `PYTHON_BIN`                   | `python3`                     | Python binary for Piper (TTS) + Whisper (STT)  |
 | `PIPER_VOICE`                  | `en_US-amy-medium`            | Piper TTS voice model                           |
 | `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
-| `*_API_KEY`                    | (unset)                       | One per provider — see `src/server/config.ts`  |
+| `*_API_KEY`                    | (unset)                       | Optional: env keys for non-chat tools (e.g. `VENICE_API_KEY` for pi-venice-image, `GEMINI_API_KEY` for YouTube transcripts). Chat auth itself is NOT configured here — see below. |
 
-Provider keys currently recognised: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `MINIMAX_API_KEY`, `HF_TOKEN`, `FIREWORKS_API_KEY`, `TOGETHER_API_KEY`, `AI_GATEWAY_API_KEY`, `ZAI_API_KEY`, `KIMI_API_KEY`, `OPENCODE_API_KEY`. These names match the env vars `pi` itself reads (single source of truth in `src/server/providers.ts::providerApiKeyEnvVar`). Only providers with a key are exposed via `/api/models`.
+Chat-model providers are authenticated via `pi` itself: run `pi auth login <provider>` once and the key is stored in `~/.pi/agent/auth.json`. agentchatbox reads that file live (`getServerApiKey` in `src/server/config.ts`) both to gate the picker and to decide which providers it may spawn a `pi` child for — so logging a provider in or out of `pi` adds or removes it in the UI on the next request, with no ACB restart and no second key store to keep in sync. The spawned `pi` child reads the same `auth.json` directly; ACB does **not** re-inject the key (verified: `pi --mode rpc` authenticates from `auth.json` alone). The `*_API_KEY` env vars above are therefore only for extensions/tools that need a key ACB doesn't pass on, not for chat auth. Only providers present in `auth.json` are exposed via `/api/models`.
 
 ## Endpoints
 

@@ -22,24 +22,24 @@
  *     REST endpoints
  */
 
+import { randomUUID } from "node:crypto";
 import {
 	appendFileSync,
 	closeSync,
 	existsSync,
 	openSync,
-	readSync,
 	readdirSync,
 	readFileSync,
+	readSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { extractText, truncate } from "../shared/content.js";
-import { readPinnedSessions } from "./session-pins.js";
 import { GLOBAL_PROJECT_ID, projectIdForCwd } from "./projects.js";
+import { readPinnedSessions } from "./session-pins.js";
 
 /**
  * Read just the first non-empty line of a file without loading the whole
@@ -51,7 +51,7 @@ import { GLOBAL_PROJECT_ID, projectIdForCwd } from "./projects.js";
  * `session` header line). On any I/O error returns `null` (callers treat a
  * missing header as "not this session").
  */
-function readFirstLine(path: string, maxBytes = 8192): string | null {
+export function readFirstLine(path: string, maxBytes = 8192): string | null {
 	let fd: number | undefined;
 	try {
 		fd = openSync(path, "r");
@@ -72,6 +72,28 @@ function readFirstLine(path: string, maxBytes = 8192): string | null {
 			}
 		}
 	}
+}
+
+/**
+ * Parse every non-empty line of a pi JSONL string into objects, skipping
+ * blank and malformed lines. The `for (line of raw.split("\n")) { try {
+ * JSON.parse } catch { skip } }` shape appeared ~5× across this module and
+ * the search indexer; this is its single home. Callers that need the
+ * first line *even if malformed*, or the raw line text (e.g. fork copying
+ * pi's exact bytes), still iterate `raw.split("\n")` directly.
+ */
+export function parseJsonl(raw: string): Record<string, unknown>[] {
+	const out: Record<string, unknown>[] = [];
+	for (const line of raw.split("\n")) {
+		const t = line.trim();
+		if (!t) continue;
+		try {
+			out.push(JSON.parse(t) as Record<string, unknown>);
+		} catch {
+			/* skip malformed */
+		}
+	}
+	return out;
 }
 
 /**
@@ -212,30 +234,23 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 		// shows — reading it back here makes a rename done on any device
 		// (CLI, another browser) appear in the sidebar everywhere.
 		let sessionName: string | null = null;
-		for (const l of lines) {
-			const t = l.trim();
-			if (!t) continue;
-			try {
-				const e = JSON.parse(t) as Record<string, unknown>;
-				if (e.type === "message") {
-					messageCount++;
-					if (firstUserText === null) {
-						const m = e.message as { role?: string; content?: unknown } | undefined;
-						if (m?.role === "user" && m.content) {
-							firstUserText = extractText(m.content);
-						}
-					}
-				} else if (e.type === "session_info") {
-					const n = e.name;
-					// Empty string or whitespace clears the name (matches
-					// pi's semantics). undefined = line had no name field,
-					// leave whatever we had.
-					if (typeof n === "string") {
-						sessionName = n.trim() ? n : null;
+		for (const e of parseJsonl(raw)) {
+			if (e.type === "message") {
+				messageCount++;
+				if (firstUserText === null) {
+					const m = e.message as { role?: string; content?: unknown } | undefined;
+					if (m?.role === "user" && m.content) {
+						firstUserText = extractText(m.content);
 					}
 				}
-			} catch {
-				/* skip malformed */
+			} else if (e.type === "session_info") {
+				const n = e.name;
+				// Empty string or whitespace clears the name (matches
+				// pi's semantics). undefined = line had no name field,
+				// leave whatever we had.
+				if (typeof n === "string") {
+					sessionName = n.trim() ? n : null;
+				}
 			}
 		}
 
@@ -310,45 +325,73 @@ export function listAllSessions(cwds: string[]): SessionSummary[] {
  * Scan every session dir under the sessions root whose cwd is NOT in
  * `knownCwds` (a deleted project's leftover sessions). Returns raw
  * summaries; the caller tags them `projectId: "other"`.
+ *
+ * The expensive part — `readdirSync(root)` + a per-dir `readdirSync` +
+ * `readFirstLine` to recover each cwd — is memoized in `orphanCwdCache`,
+ * keyed by the root directory's mtime. That mtime changes only when a
+ * new session-cwd DIRECTORY appears (pi run in a new folder); new session
+ * FILES inside an existing orphan-cwd dir don't change it, and those are
+ * picked up by `listSessionsInCwd`'s own per-file mtime cache. Without
+ * this, every sidebar refresh (pin/rename/fork/list → broadcastSessions →
+ * listAllSessions) re-discovered every orphan cwd by reading first lines
+ * across the whole sessions root.
  */
 function listOrphanedSessions(knownCwds: string[]): SessionSummary[] {
-	const root = defaultSessionsRoot();
-	if (!existsSync(root)) return [];
 	const known = new Set(knownCwds.map((c) => resolve(c)));
 	const out: SessionSummary[] = [];
+	for (const cwd of discoverOrphanCwds()) {
+		if (known.has(resolve(cwd))) continue; // belongs to a live project
+		for (const s of listSessionsInCwd(cwd)) out.push(s);
+	}
+	return out;
+}
+
+/**
+ * Memoized set of every cwd that has sessions on disk, derived by peeking
+ * at one first-line per session dir under the root. Invalidated when the
+ * root's mtime changes (a new cwd dir appears) — see listOrphanedSessions.
+ */
+let orphanCwdCache: { rootMtime: number; cwds: string[] } | null = null;
+
+function discoverOrphanCwds(): string[] {
+	const root = defaultSessionsRoot();
+	if (!existsSync(root)) return [];
+	let mtime = 0;
+	try {
+		mtime = statSync(root).mtimeMs;
+	} catch {
+		return [];
+	}
+	if (orphanCwdCache && orphanCwdCache.rootMtime === mtime) {
+		return orphanCwdCache.cwds;
+	}
+	// Recompute: one first-line read per session dir (every file in a
+	// `--<cwd>--` dir shares that cwd, so the first valid `session` line
+	// is enough — matches the prior per-dir `break`).
+	const cwds = new Set<string>();
 	for (const name of readdirSync(root)) {
 		const dir = join(root, name);
-		let st: ReturnType<typeof statSync>;
 		try {
-			st = statSync(dir);
+			if (!statSync(dir).isDirectory()) continue;
 		} catch {
 			continue;
 		}
-		if (!st.isDirectory()) continue;
-		// listSessionsInCwd resolves cwd from each JSONL's first line, and
-		// filters to sessions whose recorded cwd matches the dir's cwd. We
-		// can't pass a cwd directly (we don't know it), so peek at each
-		// file's first line to recover the cwd, then list that cwd if it's
-		// not known.
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".jsonl")) continue;
 			const firstLine = readFirstLine(join(dir, file));
 			if (!firstLine) continue;
 			try {
 				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
-				if (parsed?.type !== "session") continue;
-				const sessionCwd = String(parsed.cwd ?? "");
-				if (known.has(resolve(sessionCwd))) continue; // belongs to a live project
-				// Recover this orphan cwd's sessions once.
-				for (const s of listSessionsInCwd(sessionCwd)) out.push(s);
-				known.add(resolve(sessionCwd)); // don't re-scan the same orphan cwd
-				break;
-			} catch {
-				continue;
-			}
+				if (parsed?.type === "session" && parsed.cwd) {
+					cwds.add(String(parsed.cwd));
+					break; // all files in this dir share this cwd
+				}
+			} catch {}
 		}
 	}
-	return out;
+	const arr = [...cwds];
+	orphanCwdCache = { rootMtime: mtime, cwds: arr };
+	return arr;
 }
 
 /**
@@ -381,9 +424,7 @@ function buildCwdIndex(): Map<string, string> {
 				if (parsed?.type === "session" && parsed.id) {
 					idx.set(String(parsed.id), String(parsed.cwd ?? ""));
 				}
-			} catch {
-				continue;
-			}
+			} catch {}
 		}
 	}
 	return idx;
@@ -432,9 +473,7 @@ export function findPiSessionFile(cwd: string, sessionId: string): string | null
 		try {
 			const parsed = JSON.parse(firstLine) as Record<string, unknown>;
 			if (parsed?.type === "session" && String(parsed.id) === sessionId) return file;
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 	return null;
 }
@@ -495,34 +534,27 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 	// pi writes SDK-shape `Message` objects here; cast through unknown
 	// since JSON.parse returns unknown and we trust the writer.
 	const messages: Message[] = [];
-	for (const l of raw.split("\n")) {
-		const t = l.trim();
-		if (!t) continue;
-		try {
-			const e = JSON.parse(t) as Record<string, unknown>;
-			if (e.type === "message" && e.message) {
-				messages.push(e.message as Message);
-			} else if (e.type === "custom_message") {
-				// Persisted custom message (e.g. pi-voice-reply's voice-reply
-				// entry, which carries the long/short spoken variants).
-				// pi writes these as top-level `custom_message` JSONL lines,
-				// NOT nested under `.message`, so the `type==="message"`
-				// branch above skips them. Reconstruct the live event's
-				// message shape (role:"custom" + customType + details) so the
-				// transcript projection re-attaches the variants to their
-				// assistant message on reconnect. Without this, a page refresh
-				// / WS reconnect drops the in-memory variants and the
-				// Long/Short buttons regenerate (a full LLM round-trip) on
-				// every press.
-				messages.push({
-					role: "custom",
-					customType: e.customType,
-					content: e.content,
-					details: e.details,
-				} as unknown as Message);
-			}
-		} catch {
-			/* skip malformed */
+	for (const e of parseJsonl(raw)) {
+		if (e.type === "message" && e.message) {
+			messages.push(e.message as Message);
+		} else if (e.type === "custom_message") {
+			// Persisted custom message (e.g. pi-voice-reply's voice-reply
+			// entry, which carries the long/short spoken variants).
+			// pi writes these as top-level `custom_message` JSONL lines,
+			// NOT nested under `.message`, so the `type==="message"`
+			// branch above skips them. Reconstruct the live event's
+			// message shape (role:"custom" + customType + details) so the
+			// transcript projection re-attaches the variants to their
+			// assistant message on reconnect. Without this, a page refresh
+			// / WS reconnect drops the in-memory variants and the
+			// Long/Short buttons regenerate (a full LLM round-trip) on
+			// every press.
+			messages.push({
+				role: "custom",
+				customType: e.customType,
+				content: e.content,
+				details: e.details,
+			} as unknown as Message);
 		}
 	}
 	return messages;
@@ -560,17 +592,10 @@ export function forkPiSession(
 	// Recover the source `session` header so we can preserve its cwd +
 	// version, then rewrite id + timestamp for the fork.
 	let header: Record<string, unknown> | null = null;
-	for (const l of lines) {
-		const t = l.trim();
-		if (!t) continue;
-		try {
-			const parsed = JSON.parse(t) as Record<string, unknown>;
-			if (parsed.type === "session") {
-				header = parsed;
-				break;
-			}
-		} catch {
-			/* skip */
+	for (const parsed of parseJsonl(raw)) {
+		if (parsed.type === "session") {
+			header = parsed;
+			break;
 		}
 	}
 	if (!header) return null;

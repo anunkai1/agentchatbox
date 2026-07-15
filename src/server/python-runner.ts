@@ -13,6 +13,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { BoundedBuffer } from "./bounded-buffer.js";
 
 export const MAX_PYTHON_OUTPUT = 256 * 1024; // 256 KB per stream
 const TRUNCATION_MARKER = `\n…[truncated, showing last ${MAX_PYTHON_OUTPUT} bytes]`;
@@ -24,26 +25,6 @@ export interface PythonResult {
 	code: number;
 	timedOut: boolean;
 	spawnError: boolean;
-}
-
-function push(chunks: Buffer[], chunk: Buffer, meta: { total: number }): void {
-	chunks.push(chunk);
-	meta.total += chunk.length;
-	if (meta.total > MAX_PYTHON_OUTPUT) {
-		let excess = meta.total - MAX_PYTHON_OUTPUT;
-		while (excess > 0 && chunks.length > 0) {
-			const head = chunks[0];
-			if (head.length <= excess) {
-				excess -= head.length;
-				meta.total -= head.length;
-				chunks.shift();
-			} else {
-				chunks[0] = head.subarray(excess);
-				meta.total -= excess;
-				excess = 0;
-			}
-		}
-	}
 }
 
 /**
@@ -69,12 +50,10 @@ export function runPython(args: {
 			env: args.env,
 		});
 
-		const outChunks: Buffer[] = [];
-		const errChunks: Buffer[] = [];
-		const outMeta = { total: 0 };
-		const errMeta = { total: 0 };
-		child.stdout.on("data", (chunk: Buffer) => push(outChunks, chunk, outMeta));
-		child.stderr.on("data", (chunk: Buffer) => push(errChunks, chunk, errMeta));
+		const outBuf = new BoundedBuffer(MAX_PYTHON_OUTPUT);
+		const errBuf = new BoundedBuffer(MAX_PYTHON_OUTPUT);
+		child.stdout.on("data", (chunk: Buffer) => outBuf.push(chunk));
+		child.stderr.on("data", (chunk: Buffer) => errBuf.push(chunk));
 
 		let timedOut = false;
 		const timer = setTimeout(() => {
@@ -86,7 +65,7 @@ export function runPython(args: {
 			clearTimeout(timer);
 			resolveP({
 				stdout: "",
-				stderr: `${Buffer.concat(errChunks).toString("utf8")}\nspawn error`,
+				stderr: `${errBuf.toString()}\nspawn error`,
 				code: -1,
 				timedOut: false,
 				spawnError: true,
@@ -95,13 +74,9 @@ export function runPython(args: {
 
 		child.on("close", (code) => {
 			clearTimeout(timer);
-			const outRaw = Buffer.concat(outChunks).toString("utf8");
-			const errRaw = Buffer.concat(errChunks).toString("utf8");
-			const outTruncated = outMeta.total >= MAX_PYTHON_OUTPUT;
-			const errTruncated = errMeta.total >= MAX_PYTHON_OUTPUT;
 			resolveP({
-				stdout: outTruncated ? outRaw + TRUNCATION_MARKER : outRaw,
-				stderr: errTruncated ? errRaw + TRUNCATION_MARKER : errRaw,
+				stdout: outBuf.toString(TRUNCATION_MARKER),
+				stderr: errBuf.toString(TRUNCATION_MARKER),
 				code: code ?? -1,
 				timedOut,
 				spawnError: false,

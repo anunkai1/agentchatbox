@@ -523,8 +523,8 @@ export function rewriteUploadUrls(text: string, hasStructuredImages: boolean): s
 	return text.replace(
 		/\[(image|file):\s*([^\]]*)\]\(\/uploads\/([A-Za-z0-9._-]+)\)/g,
 		(_full, kind: string, label: string, filename: string) => {
-			const name = (label ?? '').trim();
-			if (kind === 'image' && hasStructuredImages && IMAGE_EXT_RE.test(filename)) {
+			const name = (label ?? "").trim();
+			if (kind === "image" && hasStructuredImages && IMAGE_EXT_RE.test(filename)) {
 				return `[image: ${name}]`;
 			}
 			return `[${kind}: ${name}](${join(config.uploadsDir, filename)})`;
@@ -586,14 +586,8 @@ function send(ws: PiSocket, msg: ServerMessage): void {
  * so the caller doesn't need a separate reply.
  */
 function broadcastSessions(): void {
-	if (!chatWss) return;
 	const sessions = gatherSessions();
-	const msg: ServerMessage = { type: "sessions", sessions };
-	for (const ws of chatWss.clients) {
-		if (ws.readyState === ws.OPEN) {
-			deliver(ws as PiSocket, msg);
-		}
-	}
+	broadcast({ type: "sessions", sessions });
 }
 
 /**
@@ -636,9 +630,17 @@ function gatherSessions(): SessionSummary[] {
  * structure live (mirrors broadcastSessions).
  */
 function broadcastProjects(): void {
-	if (!chatWss) return;
 	const projects: ProjectSummary[] = listProjects() as ProjectSummary[];
-	const msg: ServerMessage = { type: "projects", projects };
+	broadcast({ type: "projects", projects });
+}
+
+/**
+ * Send `msg` to every open client. Shared by broadcastSessions /
+ * broadcastProjects (and any future server-pushed list refresh) so the
+ * "iterate chatWss.clients, gate on OPEN, deliver" loop lives once.
+ */
+function broadcast(msg: ServerMessage): void {
+	if (!chatWss) return;
 	for (const ws of chatWss.clients) {
 		if (ws.readyState === ws.OPEN) {
 			deliver(ws as PiSocket, msg);
