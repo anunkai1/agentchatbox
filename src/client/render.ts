@@ -21,8 +21,8 @@ import { $, el, escapeHtml, type LiveAssistantDom } from "./dom.js";
 import { setRichText } from "./linkify.js";
 import { services } from "./services.js";
 import { type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
-import { sessionPath } from "./url.js";
 import { formatAbsolute, formatRelative } from "./time.js";
+import { sessionPath } from "./url.js";
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
@@ -252,11 +252,9 @@ function lastAssistantVoice(variant: "long" | "medium" | "short"): string {
 		const m = state.messages[i];
 		if (m.kind === "assistant") {
 			return (
-				variant === "long"
-					? m.voiceLong
-					: variant === "medium"
-						? m.voiceMedium
-						: m.voiceShort) ?? "";
+				(variant === "long" ? m.voiceLong : variant === "medium" ? m.voiceMedium : m.voiceShort) ??
+				""
+			);
 		}
 	}
 	return "";
@@ -915,9 +913,7 @@ function refreshCapabilitiesBadge(): void {
 	}
 	const skills = caps.filter((c) => c.source === "skill");
 	const extPkgs = new Set(
-		caps
-			.filter((c) => c.source === "extension")
-			.map((c) => c.sourceInfo?.source ?? c.name),
+		caps.filter((c) => c.source === "extension").map((c) => c.sourceInfo?.source ?? c.name),
 	);
 	const parts: string[] = [];
 	if (skills.length) parts.push(`${skills.length} skill${skills.length !== 1 ? "s" : ""}`);

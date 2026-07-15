@@ -19,12 +19,12 @@
  * whatever is indexed so far.
  */
 
+import { truncate } from "../../shared/content.js";
 import { config } from "../config.js";
 import { log } from "../logger.js";
 import { embed, isEmbeddingAvailable } from "./embeddings.js";
 import { indexAll } from "./indexer.js";
 import { getCacheStats, isStoreAvailable, loadCache, searchVectors } from "./store.js";
-import { truncate } from "../../shared/content.js";
 
 export interface SessionSearchResult {
 	sessionId: string;

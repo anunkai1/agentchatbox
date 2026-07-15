@@ -14,6 +14,7 @@
 import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { listVoices } from "./api.js";
 import { $, el, escapeHtml } from "./dom.js";
+import { saveSessionPrefs } from "./prefs.js";
 import {
 	appendError,
 	appendNode,
@@ -25,7 +26,6 @@ import {
 } from "./render.js";
 import { services } from "./services.js";
 import { type ModelOption, refreshCurrentModelLabel, state } from "./state.js";
-import { saveSessionPrefs } from "./prefs.js";
 import { shareableSessionUrl } from "./url.js";
 
 /**
@@ -143,6 +143,7 @@ function resetChatState(): void {
 	state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 	renderShell();
 }
+
 /** Public so main.ts's `newSessionInProject` can reset before spawning. */
 export { resetChatState };
 
@@ -777,7 +778,10 @@ export async function openVoicePicker(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** A small coloured status pill: live (mutable now), env, default, etc. */
-function pill(text: string, kind: "live" | "set" | "default" | "implicit" | "missing"): HTMLSpanElement {
+function pill(
+	text: string,
+	kind: "live" | "set" | "default" | "implicit" | "missing",
+): HTMLSpanElement {
 	return el("span", { class: `svc-pill svc-${kind}`, text });
 }
 
@@ -883,7 +887,8 @@ export function openModelsPanel(): void {
 
 	const img = state.imageModel;
 	const imgKind = img?.source === "override" ? "set" : img?.source === "env" ? "set" : "default";
-	const imgLabel = img?.source === "default" ? "default" : img?.source === "env" ? "env" : "override";
+	const imgLabel =
+		img?.source === "default" ? "default" : img?.source === "env" ? "env" : "override";
 	box.append(
 		svcRow(
 			"Image generation",
@@ -1032,7 +1037,9 @@ export function openOverflowMenu(): void {
 	// the extension notifies on change, but we don't persist the label.
 	const imageLine = el("div", { class: "overflow-row" });
 	imageLine.append(el("div", { class: "overflow-label" }, "image"));
-	imageLine.append(el("div", { class: "overflow-value" }, state.currentImageModelLabel ?? "default"));
+	imageLine.append(
+		el("div", { class: "overflow-value" }, state.currentImageModelLabel ?? "default"),
+	);
 	imageLine.title = "Switch image-generation model";
 	imageLine.addEventListener("click", () => {
 		overlay.remove();
@@ -1107,15 +1114,11 @@ export function openOverflowMenu(): void {
 		const caps = state.capabilities;
 		const skills = caps.filter((c) => c.source === "skill");
 		const extPkgs = new Set(
-			caps
-				.filter((c) => c.source === "extension")
-				.map((c) => c.sourceInfo?.source ?? c.name),
+			caps.filter((c) => c.source === "extension").map((c) => c.sourceInfo?.source ?? c.name),
 		);
 		const parts: string[] = [];
-		if (skills.length)
-			parts.push(`${skills.length} skill${skills.length !== 1 ? "s" : ""}`);
-		if (extPkgs.size)
-			parts.push(`${extPkgs.size} extension${extPkgs.size !== 1 ? "s" : ""}`);
+		if (skills.length) parts.push(`${skills.length} skill${skills.length !== 1 ? "s" : ""}`);
+		if (extPkgs.size) parts.push(`${extPkgs.size} extension${extPkgs.size !== 1 ? "s" : ""}`);
 		if (parts.length > 0) {
 			const capsLine = el("div", { class: "overflow-row" });
 			capsLine.append(el("div", { class: "overflow-label" }, "loaded"));

@@ -44,7 +44,10 @@ export type ExtensionUiResponder = (id: string, response: Record<string, unknown
  * for select/confirm/input; silently ignores anything else (the caller
  * handles `notify` separately).
  */
-export function handleExtensionUiRequest(e: ExtensionUiRequest, respond: ExtensionUiResponder): void {
+export function handleExtensionUiRequest(
+	e: ExtensionUiRequest,
+	respond: ExtensionUiResponder,
+): void {
 	switch (e.method) {
 		case "select":
 			renderSelect(e, respond);

@@ -21,16 +21,16 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import cors from "cors";
 import express from "express";
-import { mountChatWs, shutdownChatWs } from "./chat.js";
 import { asyncHandler } from "./async-handler.js";
+import { mountChatWs, shutdownChatWs } from "./chat.js";
 import { config, readPiAuth } from "./config.js";
 import { createFilesRouter } from "./files.js";
 import { jsonErrorHandler } from "./json-error.js";
 import { log } from "./logger.js";
 import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
-import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
+import { listPiSessions, readPiSessionMessages } from "./session-list.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
 import { createUploadsRouter } from "./uploads.js";
@@ -127,47 +127,50 @@ app.get("/api/projects/:id/instructions", (req, res) => {
  * `search: false` so the sidebar hides the search box. See
  * `src/server/search/`.
  */
-app.get("/api/sessions/search", asyncHandler(async (req, res) => {
-	// Non-literal specifier: keeps the search module fully removable. TypeScript
-	// won't try to resolve this import, so deleting `src/server/search/` leaves
-	// the core server compiling cleanly. The import AND the search call are
-	// try-guarded because the module is OPTIONAL and pluggable: a
-	// better-sqlite3 native-load failure or an ONNX init error must degrade to
-	// 404/500, not hang the request. Express 4 does NOT auto-catch rejected
-	// promises in async route handlers, so an unguarded `await` here would
-	// leak a hung response + an unhandled-rejection warning.
-	const searchPath = "./search/index.js";
-	let loaded: {
-		isSearchAvailable: () => Promise<boolean>;
-		searchSessions: (q: string, opts?: { cwd?: string; limit?: number }) => Promise<unknown[]>;
-	};
-	try {
-		loaded = (await import(searchPath)) as typeof loaded;
-		if (!(await loaded.isSearchAvailable())) {
+app.get(
+	"/api/sessions/search",
+	asyncHandler(async (req, res) => {
+		// Non-literal specifier: keeps the search module fully removable. TypeScript
+		// won't try to resolve this import, so deleting `src/server/search/` leaves
+		// the core server compiling cleanly. The import AND the search call are
+		// try-guarded because the module is OPTIONAL and pluggable: a
+		// better-sqlite3 native-load failure or an ONNX init error must degrade to
+		// 404/500, not hang the request. Express 4 does NOT auto-catch rejected
+		// promises in async route handlers, so an unguarded `await` here would
+		// leak a hung response + an unhandled-rejection warning.
+		const searchPath = "./search/index.js";
+		let loaded: {
+			isSearchAvailable: () => Promise<boolean>;
+			searchSessions: (q: string, opts?: { cwd?: string; limit?: number }) => Promise<unknown[]>;
+		};
+		try {
+			loaded = (await import(searchPath)) as typeof loaded;
+			if (!(await loaded.isSearchAvailable())) {
+				res.status(404).json({ error: "search not enabled on this server" });
+				return;
+			}
+		} catch {
 			res.status(404).json({ error: "search not enabled on this server" });
 			return;
 		}
-	} catch {
-		res.status(404).json({ error: "search not enabled on this server" });
-		return;
-	}
-	const q = String(req.query.q ?? "").trim();
-	if (!q) {
-		res.json({ results: [] });
-		return;
-	}
-	const cwd = String(req.query.cwd ?? config.piCwd);
-	const limitRaw = Number.parseInt(String(req.query.limit ?? "10"), 10);
-	const limit = Number.isFinite(limitRaw) ? limitRaw : 10;
-	try {
-		const results = await loaded.searchSessions(q, { cwd, limit });
-		res.json({ results });
-	} catch (e) {
-		res
-			.status(500)
-			.json({ error: `search failed: ${e instanceof Error ? e.message : String(e)}` });
-	}
-}));
+		const q = String(req.query.q ?? "").trim();
+		if (!q) {
+			res.json({ results: [] });
+			return;
+		}
+		const cwd = String(req.query.cwd ?? config.piCwd);
+		const limitRaw = Number.parseInt(String(req.query.limit ?? "10"), 10);
+		const limit = Number.isFinite(limitRaw) ? limitRaw : 10;
+		try {
+			const results = await loaded.searchSessions(q, { cwd, limit });
+			res.json({ results });
+		} catch (e) {
+			res
+				.status(500)
+				.json({ error: `search failed: ${e instanceof Error ? e.message : String(e)}` });
+		}
+	}),
+);
 
 /**
  * GET /api/sessions/:id
@@ -307,61 +310,64 @@ function readVisionModel(): {
 // and the running commit hash (so an operator can verify the live process
 // is on the expected tree). Cross-check against
 // `git -C /home/architect/agentchatbox rev-parse HEAD` on the host.
-app.get("/api/health", asyncHandler(async (_req, res) => {
-	const whisper = await checkWhisperAvailable();
-	const tts = await checkTtsAvailable();
-	// Semantic session search is an optional, pluggable feature. Probe it the
-	// same way we probe Whisper/TTS so the UI can show/hide the search box.
-	let search = false;
-	try {
-		// Non-literal specifier: keeps the search module fully removable (see
-		// /api/sessions/search handler for the same rationale).
-		const searchPath = "./search/index.js";
-		const loaded = (await import(searchPath)) as { isSearchAvailable: () => Promise<boolean> };
-		search = await loaded.isSearchAvailable();
-	} catch {
-		search = false;
-	}
-	res.json({
-		status: "ok",
-		commit: COMMIT_HASH,
-		providers: [...readPiAuth().keys()],
-		whisper: whisper.available,
-		whisperReason: whisper.available ? undefined : whisper.reason,
-		// Whisper model id in use. faster-whisper's script default is "medium"
-		// (see scripts/transcribe.py); WHISPER_MODEL env overrides it. Surfaced
-		// for the Models & services panel — display only, not a secret.
-		whisperModel: process.env.WHISPER_MODEL?.trim() || "medium",
-		tts: tts.available,
-		ttsEngine: tts.engine,
-		ttsReason: tts.available ? undefined : tts.reason,
-		ttsVoice: tts.voice,
-		// Configured spoken-rewrite model override (pi-voice-reply extension).
-		// Surfaced so the browser banner can name the model actually generating
-		// the spoken text instead of the (often different) session model. Raw
-		// "provider/modelId" string; undefined when the rewrite falls back to
-		// the session model. Read from env — not a secret, just a model id.
-		voiceRewriteModel: process.env.VOICE_REWRITE_MODEL?.trim() || undefined,
-		// Resolved image-generation model (pi-venice-image extension). The
-		// extension resolves per call: explicit param → ~/.config/acb/image-model
-		// override → $VENICE_IMAGE_MODEL → "z-image-turbo". We mirror that chain
-		// here for display so the panel shows what a default call would use
-		// before any extension notify lands. Read-only — the extension still
-		// owns the override file and persistence.
-		imageModel: readImageModel(),
-		// Resolved vision (image/video analysis) model + mode, mirroring the
-		// pi-multimodal-proxy chain: PI_VISION_PROXY_MODEL env →
-		// ~/.pi/agent/multimodal-proxy.json → default anthropic/claude-sonnet-4-5.
-		// `mode` is "fallback" (routes only when chat model lacks image support),
-		// "always", or "off". Read-only — the extension owns mutations.
-		visionModel: readVisionModel(),
-		// Whether the Gemini key is configured for pi-web-access (web search /
-		// fetch / YouTube transcripts). The model itself is implicit inside the
-		// extension, so we only report key presence — boolean, not a secret.
-		geminiKey: !!process.env.GEMINI_API_KEY,
-		search,
-	});
-}));
+app.get(
+	"/api/health",
+	asyncHandler(async (_req, res) => {
+		const whisper = await checkWhisperAvailable();
+		const tts = await checkTtsAvailable();
+		// Semantic session search is an optional, pluggable feature. Probe it the
+		// same way we probe Whisper/TTS so the UI can show/hide the search box.
+		let search = false;
+		try {
+			// Non-literal specifier: keeps the search module fully removable (see
+			// /api/sessions/search handler for the same rationale).
+			const searchPath = "./search/index.js";
+			const loaded = (await import(searchPath)) as { isSearchAvailable: () => Promise<boolean> };
+			search = await loaded.isSearchAvailable();
+		} catch {
+			search = false;
+		}
+		res.json({
+			status: "ok",
+			commit: COMMIT_HASH,
+			providers: [...readPiAuth().keys()],
+			whisper: whisper.available,
+			whisperReason: whisper.available ? undefined : whisper.reason,
+			// Whisper model id in use. faster-whisper's script default is "medium"
+			// (see scripts/transcribe.py); WHISPER_MODEL env overrides it. Surfaced
+			// for the Models & services panel — display only, not a secret.
+			whisperModel: process.env.WHISPER_MODEL?.trim() || "medium",
+			tts: tts.available,
+			ttsEngine: tts.engine,
+			ttsReason: tts.available ? undefined : tts.reason,
+			ttsVoice: tts.voice,
+			// Configured spoken-rewrite model override (pi-voice-reply extension).
+			// Surfaced so the browser banner can name the model actually generating
+			// the spoken text instead of the (often different) session model. Raw
+			// "provider/modelId" string; undefined when the rewrite falls back to
+			// the session model. Read from env — not a secret, just a model id.
+			voiceRewriteModel: process.env.VOICE_REWRITE_MODEL?.trim() || undefined,
+			// Resolved image-generation model (pi-venice-image extension). The
+			// extension resolves per call: explicit param → ~/.config/acb/image-model
+			// override → $VENICE_IMAGE_MODEL → "z-image-turbo". We mirror that chain
+			// here for display so the panel shows what a default call would use
+			// before any extension notify lands. Read-only — the extension still
+			// owns the override file and persistence.
+			imageModel: readImageModel(),
+			// Resolved vision (image/video analysis) model + mode, mirroring the
+			// pi-multimodal-proxy chain: PI_VISION_PROXY_MODEL env →
+			// ~/.pi/agent/multimodal-proxy.json → default anthropic/claude-sonnet-4-5.
+			// `mode` is "fallback" (routes only when chat model lacks image support),
+			// "always", or "off". Read-only — the extension owns mutations.
+			visionModel: readVisionModel(),
+			// Whether the Gemini key is configured for pi-web-access (web search /
+			// fetch / YouTube transcripts). The model itself is implicit inside the
+			// extension, so we only report key presence — boolean, not a secret.
+			geminiKey: !!process.env.GEMINI_API_KEY,
+			search,
+		});
+	}),
+);
 
 /**
  * GET /api/models
@@ -389,40 +395,43 @@ app.get("/api/health", asyncHandler(async (_req, res) => {
  * immediately. If the probe fails (no API key, pi crash, etc.) the
  * picker is empty — fix the underlying issue, restart.
  */
-app.get("/api/models", asyncHandler(async (_req, res) => {
-	// Kick off / await the boot probe so the very first /api/models
-	// request on a cold start doesn't return an empty list. After the
-	// first successful probe, this is a no-op (the cache is populated).
-	if (modelsCache.get().length === 0) {
-		await modelsCache.ensureReady();
-	}
+app.get(
+	"/api/models",
+	asyncHandler(async (_req, res) => {
+		// Kick off / await the boot probe so the very first /api/models
+		// request on a cold start doesn't return an empty list. After the
+		// first successful probe, this is a no-op (the cache is populated).
+		if (modelsCache.get().length === 0) {
+			await modelsCache.ensureReady();
+		}
 
-	const out: Array<{
-		id: string;
-		provider: string;
-		name: string;
-		reasoning: boolean;
-	}> = [];
+		const out: Array<{
+			id: string;
+			provider: string;
+			name: string;
+			reasoning: boolean;
+		}> = [];
 
-	// Mirror pi's response, gated on the provider being authenticated in
-	// pi's auth.json (the single source of truth — see config.ts). Reading
-	// auth.json live means a `pi auth logout` removes a provider from the
-	// picker on the next request, with no ACB restart. (The model LIST is
-	// still boot-cached — logging into a brand-new provider still needs a
-	// restart for its models to enter the cache.)
-	const authed = readPiAuth();
-	for (const m of modelsCache.get()) {
-		if (!authed.has(m.provider)) continue;
-		out.push({
-			id: m.id,
-			provider: m.provider,
-			name: m.name,
-			reasoning: m.reasoning,
-		});
-	}
+		// Mirror pi's response, gated on the provider being authenticated in
+		// pi's auth.json (the single source of truth — see config.ts). Reading
+		// auth.json live means a `pi auth logout` removes a provider from the
+		// picker on the next request, with no ACB restart. (The model LIST is
+		// still boot-cached — logging into a brand-new provider still needs a
+		// restart for its models to enter the cache.)
+		const authed = readPiAuth();
+		for (const m of modelsCache.get()) {
+			if (!authed.has(m.provider)) continue;
+			out.push({
+				id: m.id,
+				provider: m.provider,
+				name: m.name,
+				reasoning: m.reasoning,
+			});
+		}
 
-	res.json({ models: out });
-}));
+		res.json({ models: out });
+	}),
+);
 
 // Static files (built client). Resolved against the project root so the
 // server works regardless of the process working directory.

@@ -19,15 +19,12 @@ import type {
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import {
-	getHealth,
-	getModels,
-	sessionExists,
-	type ModelInfo,
-} from "./api.js";
+import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
+import { type ExtensionUiResponder, handleExtensionUiRequest } from "./extension-ui.js";
 import { setRichText } from "./linkify.js";
+import { applySessionPrefs } from "./prefs.js";
 import { projectTranscript } from "./project.js";
 import {
 	appendAssistantPlaceholder,
@@ -35,8 +32,10 @@ import {
 	appendToolCall,
 	autoSize,
 	finalizeToolCall,
+	hideToast,
 	isAtBottom,
 	jumpToPrevUserMessage,
+	lastAssistantVoiceBox,
 	refreshStatus,
 	registerShellHandlers,
 	renderMessageNode,
@@ -49,12 +48,11 @@ import {
 	scrollToBottomIfPinned,
 	setStreaming,
 	showToast,
-	hideToast,
 	syncSteerBadges,
 	updateJumpFabState,
-	lastAssistantVoiceBox,
 	updateVoiceTextBox,
 } from "./render.js";
+import { setServices } from "./services.js";
 import {
 	handleSlash,
 	isKnownSlash,
@@ -64,28 +62,25 @@ import {
 	openThinkPicker,
 	openVoicePicker,
 	renderSessionsIntoPicker,
+	resetChatState,
 	setChatControls,
 	setSendAsUser,
-	resetChatState,
 	showSlashMenu,
 } from "./slashes.js";
 import { type PersistedMessage, refreshCurrentModelLabel, state } from "./state.js";
+import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
 import {
 	handleDrop,
 	handleFileAttach,
 	handlePaste,
 	handleVoiceRecord,
-	stopAllVoice,
 	pauseVoice,
 	resumeVoice,
 	speakText,
+	stopAllVoice,
 	toggleSpeak,
 } from "./voice.js";
 import { createChatClient } from "./ws.js";
-import { handleExtensionUiRequest, type ExtensionUiResponder } from "./extension-ui.js";
-import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
-import { applySessionPrefs } from "./prefs.js";
-import { setServices } from "./services.js";
 
 // ---------------------------------------------------------------------------
 // History (↑/↓)
@@ -506,7 +501,13 @@ function onEvent(event: Record<string, unknown>): void {
 			}
 			if (e.message.role === "assistant") {
 				// New assistant message — create a fresh block.
-				lastAssistant = { kind: "assistant", text: "", thinking: "", seq: liveMessageSeq, ts: e.message.timestamp };
+				lastAssistant = {
+					kind: "assistant",
+					text: "",
+					thinking: "",
+					seq: liveMessageSeq,
+					ts: e.message.timestamp,
+				};
 				state.messages.push(lastAssistant);
 				// Mirror the ordinal into state so the live fork button (rendered
 				// via appendAssistantPlaceholder) can read it without a
@@ -823,7 +824,14 @@ function onEvent(event: Record<string, unknown>): void {
 				}
 			} else if (extensionUiResponder) {
 				handleExtensionUiRequest(
-					{ id: String(e.id), method: String(e.method), title: e.title as string | undefined, options: e.options as string[] | undefined, message: e.message as string | undefined, placeholder: e.placeholder as string | undefined },
+					{
+						id: String(e.id),
+						method: String(e.method),
+						title: e.title as string | undefined,
+						options: e.options as string[] | undefined,
+						message: e.message as string | undefined,
+						placeholder: e.placeholder as string | undefined,
+					},
 					extensionUiResponder,
 				);
 			}
@@ -871,10 +879,7 @@ async function boot(): Promise<void> {
 	// aren't set, the lists come back empty and the picker will show a
 	// helpful error.
 	try {
-		const [h, models] = await Promise.all([
-			getHealth(),
-			getModels(),
-		]);
+		const [h, models] = await Promise.all([getHealth(), getModels()]);
 		state.searchEnabled = h.search ?? false;
 		state.ttsEngine = h.ttsEngine ?? null;
 		state.ttsDefaultVoice = h.ttsVoice ?? null;

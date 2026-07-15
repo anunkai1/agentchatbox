@@ -99,7 +99,8 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 			// A session can carry SEVERAL voice-reply custom messages (one
 			// per /voice-last <variant> press), and each must accumulate onto
 			// the same assistant row so its buttons + read-along box all work.
-			const details = (m as { details?: { long?: string; medium?: string; short?: string } }).details ?? {};
+			const details =
+				(m as { details?: { long?: string; medium?: string; short?: string } }).details ?? {};
 			for (let j = out.length - 1; j >= 0; j--) {
 				const prev = out[j];
 				if (prev.kind === "assistant") {

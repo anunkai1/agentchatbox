@@ -93,10 +93,7 @@ export const PI_AUTH_PATH = process.env.AGENTCHATBOX_PI_AUTH_FILE
 export function readPiAuth(): Map<string, string> {
 	const out = new Map<string, string>();
 	try {
-		const obj = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8")) as Record<
-			string,
-			{ key?: unknown }
-		>;
+		const obj = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8")) as Record<string, { key?: unknown }>;
 		for (const [provider, entry] of Object.entries(obj)) {
 			// Trim — API keys never carry intentional whitespace, and the
 			// env-key reader (readKey) already trims. Keeps a stray
