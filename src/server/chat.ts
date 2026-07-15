@@ -433,6 +433,14 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			session.pi.send({ type: "get_commands" });
 			break;
 		}
+		case "getSessionStats": {
+			// Pure forward: ask pi for `get_session_stats` so the browser can
+			// render the context-window fill meter. The response is reshaped
+			// to {type:"sessionStats"} in session-registry.ts (same
+			// success-ack-interception reason as getCapabilities above).
+			session.pi.send({ type: "get_session_stats" });
+			break;
+		}
 		case "newSession": {
 			// Discard the current session and start a fresh one. newSession
 			// is an explicit user action ("new chat"), so killing the old

@@ -214,6 +214,16 @@ export interface PiCommand {
 	sourceInfo?: PiCommandSourceInfo;
 }
 
+/** Context-window fill for the active model. Mirrors pi's `ContextUsage`
+ * (see @earendil-works/pi-coding-agent). `tokens`/`percent` are null when
+ * the count is unknown — e.g. right after an auto-compaction, before the
+ * next LLM response settles the post-compaction context size. */
+export interface ContextUsage {
+	tokens: number | null;
+	contextWindow: number;
+	percent: number | null;
+}
+
 /** Server → client. */
 export type ServerMessage =
 	| {
@@ -254,7 +264,14 @@ export type ServerMessage =
 			modelId: string;
 			thinkingLevel: ThinkingLevel;
 	  }
-	| { type: "capabilities"; commands: PiCommand[] };
+	| { type: "capabilities"; commands: PiCommand[] }
+	/** Reply to getSessionStats: pi's `get_session_stats` context-usage
+	 * (and the token totals it computes server-side). We only forward the
+	 * `contextUsage` field — the client already accumulates token/cost totals
+	 * itself from per-turn `message_end` events, so the rest would be
+	 * redundant. `contextUsage` is null when pi couldn't compute it (no
+	 * model set, or right after compaction with no post-compaction reply yet). */
+	| { type: "sessionStats"; contextUsage: ContextUsage | null; tokens?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost?: number };
 
 /** Client → server. */
 export type ClientMessage =
@@ -331,6 +348,12 @@ export type ClientMessage =
 	 * header badge (e.g. after each `ready`).
 	 */
 	| { type: "getCapabilities" }
+	/** Request pi's `get_session_stats` so the browser can render the
+	 * context-window fill meter. The server relays the response as
+	 * `{type:"sessionStats"}`. Client-driven — the browser asks after a
+	 * run finishes, on resume, and after a model switch (different models
+	 * have different context windows). */
+	| { type: "getSessionStats" }
 	// --- Projects ---------------------------------------------------------
 	| { type: "listProjects" }
 	| {

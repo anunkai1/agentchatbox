@@ -203,6 +203,12 @@ let sendPromptHook: SendPromptHook = () => {
 let steerHook: SendPromptHook = () => {
 	/* will be replaced by boot() */
 };
+/** Closure over `chatClient.getSessionStats`, wired in boot(). onEvent is
+ *  module-scoped but `chatClient` is a boot()-local const, so the event
+ *  handlers reach it through this hook (same pattern as steerHook). */
+let getSessionStatsHook: () => void = () => {
+	/* will be replaced by boot() */
+};
 
 /**
  * Closure over `chatClient.extensionUiResponse`, wired in boot(). Used
@@ -403,6 +409,12 @@ function onEvent(event: Record<string, unknown>): void {
 			// (it finished before draining the steer) can't be delivered
 			// until the next run — recover now.
 			recoverStrandedSteer();
+			// The run just finished — refresh the context-window fill meter
+			// so the user can see how close they are to needing a /compact.
+			// Fired once per complete run (not per intermediate message_end),
+			// which is the cadence that actually matters and avoids a request
+			// storm in a tool-heavy multi-turn run.
+			getSessionStatsHook();
 			break;
 
 		case "turn_start":
@@ -779,6 +791,12 @@ function onEvent(event: Record<string, unknown>): void {
 			// Clear the pending marker — the server has answered.
 			state.pendingModelSet = null;
 			refreshStatus();
+			// Different models have different context windows — re-fetch the
+			// context usage so the percent (and the meter) reflects the NEW
+			// model's limit rather than the old one's. Without this, switching
+			// e.g. from a 1M-token model to a 256k one would leave the meter
+			// showing a stale, far-too-low fill.
+			getSessionStatsHook();
 			break;
 		}
 	}
@@ -980,6 +998,11 @@ async function boot(): Promise<void> {
 		// just forwards to pi, this is where the browser decides it wants
 		// the data for display.
 		chatClient.getCapabilities();
+		// Fetch the context-window fill so the meter reflects where this
+		// session stands on resume/reconnect (a long resumed chat may already
+		// be near its limit). Different models have different windows, so
+		// we re-fetch on every model change too (see modelState below).
+		chatClient.getSessionStats();
 	});
 	chatClient.onEvent(onEvent);
 	chatClient.onError((msg) => appendError(msg));
@@ -1005,6 +1028,31 @@ async function boot(): Promise<void> {
 	// pi actually has loaded for the current chat.
 	chatClient.onCapabilities((commands) => {
 		state.capabilities = commands;
+		refreshStatus();
+	});
+	// Context-window fill from pi's get_session_stats RPC. Updates the
+	// thin meter above the status bar. Fired after each run (agent_end),
+	// on resume (ready), and after a model switch (modelState — the
+	// context window size can change with the model, so the percent would
+	// otherwise be stale).
+	chatClient.onSessionStats((stats) => {
+		state.contextUsage = stats.contextUsage;
+		// Seed cumulative token + cost totals from pi's ground truth so a
+		// fresh page load shows the session's REAL running totals instead
+		// of resetting to 0. The client still accumulates live from
+		// message_end during the session, but those deltas only capture
+		// events seen since this page opened; seeding from the server makes
+		// the numbers survive a refresh. We always adopt the server's value
+		// (not max) because getSessionStats fires at turn boundaries and
+		// reflects the complete session — there's no live-delta drift to
+		// clobber.
+		if (stats.tokens) {
+			state.costTotal.input = stats.tokens.input;
+			state.costTotal.output = stats.tokens.output;
+			state.costTotal.cacheRead = stats.tokens.cacheRead;
+			state.costTotal.cacheWrite = stats.tokens.cacheWrite;
+		}
+		if (typeof stats.cost === "number") state.costTotal.cost = stats.cost;
 		refreshStatus();
 	});
 	// On resume: replace the renderer cache with the server's replay
@@ -1095,6 +1143,7 @@ async function boot(): Promise<void> {
 	steerHook = (text, images) => {
 		chatClient.steer(text, images);
 	};
+	getSessionStatsHook = () => chatClient.getSessionStats();
 	extensionUiResponder = (id, response) => chatClient.extensionUiResponse(id, response);
 	// Wire the render→main/render→voice callbacks through the services
 	// registry (a leaf module) so render.ts doesn't have to dynamic-import
