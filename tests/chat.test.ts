@@ -331,6 +331,7 @@ function makeFakePi(
 }
 
 let fakePiPath: string | null = null;
+let authFile: string | null = null;
 let server: HttpServer | null = null;
 let port = 0;
 
@@ -339,14 +340,18 @@ beforeEach(async () => {
 	fakePiPath = makeFakePi("echo");
 	process.env.PI_BIN = fakePiPath;
 	process.env.PI_CWD = "/tmp";
-	// Server's getServerApiKey reads DEEPSEEK_API_KEY into apiKeys["deepseek"];
-	// we need it set so the server passes the gate that fires before spawning
-	// `pi`. The fake script doesn't use the key.
-	process.env.DEEPSEEK_API_KEY = "test-dummy";
+	// The server's spawn gate calls getServerApiKey(provider), which reads
+	// pi's auth.json — NOT process.env. Point it at a temp auth file with a
+	// known provider so the gate passes without depending on the operator's
+	// real ~/.pi/agent/auth.json (which previously made the whole suite
+	// break the moment the user logged `deepseek` out of `pi`).
+	authFile = join(tmpdir(), `acb-chat-auth-${process.pid}-${Date.now()}.json`);
+	writeFileSync(authFile, JSON.stringify({ deepseek: { key: "test-dummy" } }));
+	process.env.AGENTCHATBOX_PI_AUTH_FILE = authFile;
 	// Reset the module cache so each test re-reads config (and sees the
-	// current PI_BIN / PI_CWD env vars). Without this, vitest's
-	// default module cache makes every test after the first spawn
-	// `pi` with the env vars from the first test.
+	// current PI_BIN / PI_CWD / AGENTCHATBOX_PI_AUTH_FILE env vars). Without
+	// this, vitest's default module cache makes every test after the first
+	// spawn `pi` with the env vars from the first test.
 	vi.resetModules();
 
 	server = createServer();
@@ -370,6 +375,15 @@ afterEach(async () => {
 		}
 		fakePiPath = null;
 	}
+	if (authFile) {
+		try {
+			rmSync(authFile, { force: true });
+		} catch {
+			/* ignore */
+		}
+		authFile = null;
+	}
+	delete process.env.AGENTCHATBOX_PI_AUTH_FILE;
 });
 
 /** Connect a WS, register the inbox listener before `open`, return helpers. */

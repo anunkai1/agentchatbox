@@ -25,68 +25,72 @@ import { stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
+import { asyncHandler } from "./async-handler.js";
 
 export function createFilesRouter(): Router {
 	const router = express.Router();
 
-	router.get("/", async (req: Request, res: Response) => {
-		const raw = typeof req.query.path === "string" ? req.query.path : "";
-		if (!raw) {
-			res.status(400).json({ error: "missing ?path=<absolute path>" });
-			return;
-		}
+	router.get(
+		"/",
+		asyncHandler(async (req: Request, res: Response) => {
+			const raw = typeof req.query.path === "string" ? req.query.path : "";
+			if (!raw) {
+				res.status(400).json({ error: "missing ?path=<absolute path>" });
+				return;
+			}
 
-		// `resolve` collapses `..` segments so a traversal like
-		// "../../etc/passwd" still lands on a real absolute path; the
-		// only remaining gate is that it must be a regular file.
-		const target = resolve(raw);
+			// `resolve` collapses `..` segments so a traversal like
+			// "../../etc/passwd" still lands on a real absolute path; the
+			// only remaining gate is that it must be a regular file.
+			const target = resolve(raw);
 
-		let s: Awaited<ReturnType<typeof stat>>;
-		try {
-			s = await stat(target);
-		} catch {
-			res.status(404).json({ error: "file not found" });
-			return;
-		}
-		if (!s.isFile()) {
-			res.status(400).json({ error: "path is not a regular file" });
-			return;
-		}
+			let s: Awaited<ReturnType<typeof stat>>;
+			try {
+				s = await stat(target);
+			} catch {
+				res.status(404).json({ error: "file not found" });
+				return;
+			}
+			if (!s.isFile()) {
+				res.status(400).json({ error: "path is not a regular file" });
+				return;
+			}
 
-		// Force a download (attachment) with the basename as the
-		// suggested filename. `encodeURIComponent` keeps unicode names
-		// intact across browsers; RFC 5987 `filename*` is the
-		// broadly-supported way to encode non-ASCII filenames.
-		const name = basename(target);
-		res.setHeader(
-			"Content-Disposition",
-			`attachment; filename="${encodeURIComponent(name)}"; filename*=UTF-8''${encodeURIComponent(name)}`,
-		);
-		// Let the browser sniff a sane content type from the bytes /
-		// extension; we don't ship a mime DB on purpose.
-		res.setHeader("Content-Type", "application/octet-stream");
-		res.setHeader("Content-Length", String(s.size));
-		// Stream the file instead of buffering it. The agent routinely
-		// touches multi-GB logs; loading one into a Buffer to `res.send()`
-		// would spike memory and can OOM the server. Piping reads + sends
-		// in chunks so peak memory stays flat regardless of file size.
-		createReadStream(target)
-			.on("error", (err: NodeJS.ErrnoException) => {
-				if (!res.headersSent) {
-					res.status(500).json({
-						error: `failed to read file: ${err.message}`,
-					});
-				} else {
-					// Headers already flushed (we're mid-stream) — just end.
-					try {
-						res.end();
-					} catch {
-						/* client may be gone */
+			// Force a download (attachment) with the basename as the
+			// suggested filename. `encodeURIComponent` keeps unicode names
+			// intact across browsers; RFC 5987 `filename*` is the
+			// broadly-supported way to encode non-ASCII filenames.
+			const name = basename(target);
+			res.setHeader(
+				"Content-Disposition",
+				`attachment; filename="${encodeURIComponent(name)}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+			);
+			// Let the browser sniff a sane content type from the bytes /
+			// extension; we don't ship a mime DB on purpose.
+			res.setHeader("Content-Type", "application/octet-stream");
+			res.setHeader("Content-Length", String(s.size));
+			// Stream the file instead of buffering it. The agent routinely
+			// touches multi-GB logs; loading one into a Buffer to `res.send()`
+			// would spike memory and can OOM the server. Piping reads + sends
+			// in chunks so peak memory stays flat regardless of file size.
+			createReadStream(target)
+				.on("error", (err: NodeJS.ErrnoException) => {
+					if (!res.headersSent) {
+						res.status(500).json({
+							error: `failed to read file: ${err.message}`,
+						});
+					} else {
+						// Headers already flushed (we're mid-stream) — just end.
+						try {
+							res.end();
+						} catch {
+							/* client may be gone */
+						}
 					}
-				}
-			})
-			.pipe(res);
-	});
+				})
+				.pipe(res);
+		}),
+	);
 
 	return router;
 }
