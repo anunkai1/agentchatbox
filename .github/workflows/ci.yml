@@ -31,6 +31,14 @@ jobs:
         # voice/state modules.
         run: npm run typecheck
 
+      - name: Lint (biome)
+        # Catches formatting drift + dead-code/suspicious-pattern issues
+        # that tsc won't. Scoped to src/ (app code) — scripts/ holds dev
+        # tooling/smoke tests outside this gate's scope. The 5 remaining
+        # styles.css warnings (CSS specificity / !important) are warnings,
+        # not errors, so biome exits 0.
+        run: npx biome check src/
+
       - name: Test
         run: npm test -- --reporter=verbose 2>&1
 
