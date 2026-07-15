@@ -1,82 +1,107 @@
 /**
- * config.ts — env → ServerConfig.
+ * config.ts — provider key resolution.
  *
- * Verifies the apiKeys map is built from the single provider→env-var
- * table in providers.ts (the #4 consolidation). The key behavior: the
- * server reads each provider's key from the SAME env-var name that pi
- * itself reads, so setting the legacy mixed-case name no longer works.
+ * `getServerApiKey` is the single source of truth for a provider's API
+ * key: it reads `pi`'s auth.json (the file `pi auth login`/`logout`
+ * writes), NOT process.env. This keeps ACB in lockstep with `pi`'s own
+ * auth state — a `logout` removes the provider from the picker and from
+ * the spawned-children env on the next request, with no ACB restart and
+ * no second key store to drift out of sync.
+ *
+ * These tests point AGENTCHATBOX_PI_AUTH_FILE at a temp auth.json so the
+ * suite is hermetic: it does NOT read (or depend on) the operator's real
+ * ~/.pi/agent/auth.json. (Previously the suite set *_API_KEY env vars,
+ * which stopped affecting getServerApiKey once it moved to auth.json —
+ * the tests passed only on machines whose real auth.json happened to
+ * lack those providers, and failed here.)
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Snapshot of process.env so each test starts clean. config.ts reads
-// env at module-eval time, so we reset modules between cases.
-const ENV_KEYS = [
-	"MINIMAX_API_KEY",
-	"MiniMax_API_KEY",
-	"DEEPSEEK_API_KEY",
-	"ZAI_API_KEY",
-	"GEMINI_API_KEY",
-	"GOOGLE_API_KEY",
-];
+let authFile: string;
+let authDir: string;
 
-const snapshot: Record<string, string | undefined> = {};
 beforeEach(() => {
-	for (const k of ENV_KEYS) snapshot[k] = process.env[k];
-	for (const k of ENV_KEYS) delete process.env[k];
+	authDir = mkdtempSync(join(tmpdir(), "acb-config-auth-"));
+	authFile = join(authDir, "auth.json");
+	process.env.AGENTCHATBOX_PI_AUTH_FILE = authFile;
 });
+
 afterEach(() => {
-	for (const k of ENV_KEYS) {
-		if (snapshot[k] === undefined) delete process.env[k];
-		else process.env[k] = snapshot[k];
+	delete process.env.AGENTCHATBOX_PI_AUTH_FILE;
+	try {
+		rmSync(authDir, { recursive: true, force: true });
+	} catch {
+		/* best-effort */
 	}
 });
 
-async function loadConfig() {
-	const mod = await import("../src/server/config.js");
-	return mod.config;
+/** Write a fresh auth.json and re-import config so it re-reads PI_AUTH_PATH. */
+async function withAuth(auth: Record<string, unknown>) {
+	writeFileSync(authFile, JSON.stringify(auth));
+	vi.resetModules();
+	return (await import("../src/server/config.js")) as {
+		getServerApiKey: (provider: string) => string | undefined;
+		readPiAuth: () => Map<string, string>;
+	};
 }
 
-describe("config.apiKeys — single-source-of-truth env names", () => {
-	it("reads MINIMAX_API_KEY into apiKeys.minimax", async () => {
-		process.env.MINIMAX_API_KEY = "mm-secret";
-		vi.resetModules();
-		const config = await loadConfig();
-		expect(config.apiKeys.minimax).toBe("mm-secret");
+describe("getServerApiKey — auth.json is the single source of truth", () => {
+	it("returns the key recorded in pi's auth.json", async () => {
+		const { getServerApiKey } = await withAuth({
+			deepseek: { key: "ds-secret" },
+		});
+		expect(getServerApiKey("deepseek")).toBe("ds-secret");
 	});
 
-	it("does NOT read the legacy MiniMax_API_KEY name", async () => {
-		// Regression guard for the pre-consolidation drift: setting the
-		// old mixed-case name must leave minimax empty, because the
-		// canonical name is now MINIMAX_API_KEY everywhere.
-		process.env.MiniMax_API_KEY = "legacy-should-not-work";
-		vi.resetModules();
-		const config = await loadConfig();
-		expect(config.apiKeys.minimax).toBe("");
+	it("is case-insensitive on the provider id (auth.json stores lowercase)", async () => {
+		const { getServerApiKey } = await withAuth({
+			zai: { key: "zai-secret" },
+		});
+		expect(getServerApiKey("ZAI")).toBe("zai-secret");
+		expect(getServerApiKey("zai")).toBe("zai-secret");
 	});
 
-	it("reads GEMINI_API_KEY (not GOOGLE_API_KEY) into apiKeys.google", async () => {
-		process.env.GEMINI_API_KEY = "gem-secret";
-		process.env.GOOGLE_API_KEY = "should-be-ignored";
-		vi.resetModules();
-		const config = await loadConfig();
-		expect(config.apiKeys.google).toBe("gem-secret");
+	it("resolves to undefined for a provider not in auth.json", async () => {
+		const { getServerApiKey } = await withAuth({
+			deepseek: { key: "ds-secret" },
+		});
+		// Not "" — undefined, so the key-presence gate in session-registry /
+		// models-cache treats it as genuinely unset.
+		expect(getServerApiKey("anthropic")).toBeUndefined();
 	});
 
-	it("getServerApiKey resolves the configured key and treats blank as unset", async () => {
-		process.env.DEEPSEEK_API_KEY = "ds-secret";
-		vi.resetModules();
-		const mod = await import("../src/server/config.js");
-		expect(mod.getServerApiKey("deepseek")).toBe("ds-secret");
-		// A provider with no key set resolves to undefined (not "").
-		expect(mod.getServerApiKey("anthropic")).toBeUndefined();
+	it("ignores entries whose key is blank, null, or non-string", async () => {
+		const { getServerApiKey, readPiAuth } = await withAuth({
+			deepseek: { key: "ds-secret" },
+			empty: { key: "" },
+			whitespace: { key: "   " },
+			nullkey: { key: null },
+			notstring: { key: 12345 },
+		});
+		expect(readPiAuth().get("deepseek")).toBe("ds-secret");
+		expect(getServerApiKey("empty")).toBeUndefined();
+		expect(getServerApiKey("whitespace")).toBeUndefined();
+		expect(getServerApiKey("nullkey")).toBeUndefined();
+		expect(getServerApiKey("notstring")).toBeUndefined();
 	});
 
-	it("getServerApiKey is case-insensitive on the provider id", async () => {
-		process.env.ZAI_API_KEY = "zai-secret";
+	it("returns undefined for everything when auth.json is missing/unreadable", async () => {
+		// Point at a path that doesn't exist on disk.
+		process.env.AGENTCHATBOX_PI_AUTH_FILE = join(authDir, "nope.json");
 		vi.resetModules();
-		const mod = await import("../src/server/config.js");
-		expect(mod.getServerApiKey("ZAI")).toBe("zai-secret");
-		expect(mod.getServerApiKey("zai")).toBe("zai-secret");
+		const { getServerApiKey } = await import("../src/server/config.js");
+		expect(getServerApiKey("deepseek")).toBeUndefined();
+		expect(getServerApiKey("anthropic")).toBeUndefined();
+	});
+
+	it("returns undefined for everything when auth.json is malformed", async () => {
+		writeFileSync(authFile, "{ this is not valid json");
+		vi.resetModules();
+		const { getServerApiKey } = await import("../src/server/config.js");
+		expect(getServerApiKey("deepseek")).toBeUndefined();
 	});
 });

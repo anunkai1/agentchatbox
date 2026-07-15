@@ -1436,8 +1436,8 @@ body {
 	color: var(--text-muted);
 	font-size: 11px;
 	text-align: center;
-	white-space: pre;
-	overflow: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 	max-width: var(--chat-max);
 	margin: 0 auto;
 	font-family: var(--font-mono);
