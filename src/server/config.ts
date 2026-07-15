@@ -98,9 +98,11 @@ export function readPiAuth(): Map<string, string> {
 			{ key?: unknown }
 		>;
 		for (const [provider, entry] of Object.entries(obj)) {
-			if (entry && typeof entry.key === "string" && entry.key.length > 0) {
-				out.set(provider.toLowerCase(), entry.key);
-			}
+			// Trim — API keys never carry intentional whitespace, and the
+			// env-key reader (readKey) already trims. Keeps a stray
+			// padded/blank entry from masquerading as a configured key.
+			const key = entry && typeof entry.key === "string" ? entry.key.trim() : "";
+			if (key.length > 0) out.set(provider.toLowerCase(), key);
 		}
 	} catch {
 		// Missing/unreadable/malformed — treat as "logged out of everything".

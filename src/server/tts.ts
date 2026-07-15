@@ -22,6 +22,7 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promise
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import express, { type Request, type Response, type Router } from "express";
+import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
 import { projectRoot } from "./paths.js";
 import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
@@ -91,20 +92,23 @@ export function createTtsRouter(): Router {
 	 * Body: { text: string, voice?: string }
 	 * Returns: audio/wav bytes
 	 */
-	router.post("/", async (req: Request, res: Response) => {
-		const parsed = parseTtsBody(req);
-		if ("error" in parsed) {
-			res.status(parsed.status).json({ error: parsed.error });
-			return;
-		}
-		const { text, voice } = parsed;
+	router.post(
+		"/",
+		asyncHandler(async (req: Request, res: Response) => {
+			const parsed = parseTtsBody(req);
+			if ("error" in parsed) {
+				res.status(parsed.status).json({ error: parsed.error });
+				return;
+			}
+			const { text, voice } = parsed;
 
-		if (engine() === "kokoro") {
-			await synthKokoro(text, voice, res);
-		} else {
-			await synthPiper(text, voice, res);
-		}
-	});
+			if (engine() === "kokoro") {
+				await synthKokoro(text, voice, res);
+			} else {
+				await synthPiper(text, voice, res);
+			}
+		}),
+	);
 
 	/**
 	 * POST /api/tts/stream
@@ -122,91 +126,95 @@ export function createTtsRouter(): Router {
 	 * Only the kokoro engine streams; piper callers get a 501 and fall back
 	 * to the whole-blob POST / above.
 	 */
-	router.post("/stream", async (req: Request, res: Response) => {
-		const parsed = parseTtsBody(req);
-		if ("error" in parsed) {
-			res.status(parsed.status).json({ error: parsed.error });
-			return;
-		}
-		const { text, voice } = parsed;
-		if (engine() !== "kokoro") {
-			res.status(501).json({ error: "streaming tts requires the kokoro engine" });
-			return;
-		}
-
-		// Abort upstream the moment the browser goes away (stop button,
-		// navigation) so pi-voice-server stops spending CPU on chunks no one
-		// will hear. res 'close' also fires on normal completion, where
-		// aborting an already-finished fetch is a harmless no-op.
-		const clientGone = new AbortController();
-		res.on("close", () => clientGone.abort());
-
-		let upstream: globalThis.Response;
-		try {
-			upstream = await fetch(`${KOKORO_BASE}/tts/stream`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed: 1 }),
-				signal: clientGone.signal,
-			});
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			res.status(502).json({ error: `kokoro tts unreachable at ${KOKORO_BASE}: ${message}` });
-			return;
-		}
-		// Pre-stream upstream failure (e.g. 503 model not loaded): relay as JSON
-		// so the client can fall back to the whole-blob endpoint.
-		if (!upstream.ok || !upstream.body) {
-			const errText = await upstream.text().catch(() => "");
-			res.status(502).json({
-				error: `kokoro tts/stream upstream ${upstream.status}: ${errText.slice(0, 300)}`,
-			});
-			return;
-		}
-
-		res.setHeader("Content-Type", "application/octet-stream");
-		res.setHeader("Cache-Control", "no-store");
-		res.setHeader("X-Accel-Buffering", "no"); // defeat any reverse-proxy buffering
-
-		const reader = upstream.body.getReader();
-		try {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				if (value) {
-					// Zero-copy wrap the Uint8Array into a Buffer for res.write.
-					const more = res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
-					// Honor backpressure: res.write() returns false when the socket's
-					// write buffer is full. Without waiting for 'drain' we'd keep
-					// pulling from upstream and buffer the whole stream in memory on a
-					// slow client (a long voice reply can be several MB of WAV).
-					// waitForDrain also resolves on 'close' so a disconnect mid-wait
-					// can't wedge the pipe — clientGone aborts the upstream fetch,
-					// the next reader.read() rejects, and we drop into the catch.
-					if (!more) await waitForDrain(res);
-				}
+	router.post(
+		"/stream",
+		asyncHandler(async (req: Request, res: Response) => {
+			const parsed = parseTtsBody(req);
+			if ("error" in parsed) {
+				res.status(parsed.status).json({ error: parsed.error });
+				return;
 			}
-			res.end();
-		} catch (e) {
-			if (!res.headersSent) {
+			const { text, voice } = parsed;
+			if (engine() !== "kokoro") {
+				res.status(501).json({ error: "streaming tts requires the kokoro engine" });
+				return;
+			}
+
+			// Abort upstream the moment the browser goes away (stop button,
+			// navigation) so pi-voice-server stops spending CPU on chunks no one
+			// will hear. res 'close' also fires on normal completion, where
+			// aborting an already-finished fetch is a harmless no-op.
+			const clientGone = new AbortController();
+			res.on("close", () => clientGone.abort());
+
+			let upstream: globalThis.Response;
+			try {
+				upstream = await fetch(`${KOKORO_BASE}/tts/stream`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed: 1 }),
+					signal: clientGone.signal,
+				});
+			} catch (e) {
 				const message = e instanceof Error ? e.message : String(e);
-				res.status(502).json({ error: `tts stream pipe failed: ${message}` });
-			} else {
-				try {
-					res.end();
-				} catch {
-					/* client already gone */
+				res.status(502).json({ error: `kokoro tts unreachable at ${KOKORO_BASE}: ${message}` });
+				return;
+			}
+			// Pre-stream upstream failure (e.g. 503 model not loaded): relay as JSON
+			// so the client can fall back to the whole-blob endpoint.
+			if (!upstream.ok || !upstream.body) {
+				const errText = await upstream.text().catch(() => "");
+				res.status(502).json({
+					error: `kokoro tts/stream upstream ${upstream.status}: ${errText.slice(0, 300)}`,
+				});
+				return;
+			}
+
+			res.setHeader("Content-Type", "application/octet-stream");
+			res.setHeader("Cache-Control", "no-store");
+			res.setHeader("X-Accel-Buffering", "no"); // defeat any reverse-proxy buffering
+
+			const reader = upstream.body.getReader();
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					if (value) {
+						// Zero-copy wrap the Uint8Array into a Buffer for res.write.
+						const more = res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+						// Honor backpressure: res.write() returns false when the socket's
+						// write buffer is full. Without waiting for 'drain' we'd keep
+						// pulling from upstream and buffer the whole stream in memory on a
+						// slow client (a long voice reply can be several MB of WAV).
+						// waitForDrain also resolves on 'close' so a disconnect mid-wait
+						// can't wedge the pipe — clientGone aborts the upstream fetch,
+						// the next reader.read() rejects, and we drop into the catch.
+						if (!more) await waitForDrain(res);
+					}
+				}
+				res.end();
+			} catch (e) {
+				if (!res.headersSent) {
+					const message = e instanceof Error ? e.message : String(e);
+					res.status(502).json({ error: `tts stream pipe failed: ${message}` });
+				} else {
+					try {
+						res.end();
+					} catch {
+						/* client already gone */
+					}
 				}
 			}
-		}
-	});
+		}),
+	);
 
 	/**
 	 * GET /api/tts/voices
 	 * Returns: { default: string, available: string[] }
 	 */
-	router.get("/voices", async (_req, res) => {
-		try {
+	router.get(
+		"/voices",
+		asyncHandler(async (_req, res) => {
 			if (engine() === "kokoro") {
 				const list = await kokoroVoices();
 				res.json({ default: KOKORO_DEFAULT_VOICE, available: list });
@@ -217,11 +225,8 @@ export function createTtsRouter(): Router {
 					available: voices,
 				});
 			}
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			res.status(500).json({ error: `voice list failed: ${message}` });
-		}
-	});
+		}),
+	);
 
 	return router;
 }

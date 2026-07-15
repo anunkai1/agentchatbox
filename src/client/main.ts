@@ -372,6 +372,60 @@ function removeLiveAssistantRow(dom: LiveAssistantDom): void {
 	dom.textPre.closest(".row")?.remove();
 }
 
+/**
+ * Streaming-token render coalescer.
+ *
+ * `message_update` fires for every token the model streams (often tens
+ * per second). The markdown render it triggers — marked.parse +
+ * DOMPurify.sanitize + a full innerHTML rebuild of the WHOLE growing
+ * message — is O(n²) over message length: a long reply re-parses the
+ * entire text on every token, burning main-thread time and janking the
+ * UI.
+ *
+ * Coalesce the expensive DOM repaint to one pass per animation frame.
+ * The text still accumulates on the model object (`lastAssistant.text`)
+ * on every token, so the data is always current; only the paint is
+ * batched. A final flush at message_end (see flushStreamDom) guarantees
+ * the last tokens render before the row finalizes — message_end does
+ * not otherwise re-render the text.
+ */
+let pendingStreamDom: { dom: LiveAssistantDom; text: string; thinking: string } | null = null;
+let streamRafId: number | null = null;
+
+function paintStreamDom(p: { dom: LiveAssistantDom; text: string; thinking: string }): void {
+	setRichText(p.dom.textPre, p.text || " ");
+	if (p.thinking) {
+		p.dom.thinkingPre.textContent = p.thinking;
+		p.dom.thinkingWrap.classList.remove("hidden-thinking");
+	}
+}
+
+/** Schedule a streaming-token repaint on the next frame, coalescing
+ *  a burst of tokens into a single DOM update. */
+function scheduleStreamDom(dom: LiveAssistantDom, text: string, thinking: string): void {
+	pendingStreamDom = { dom, text, thinking };
+	if (streamRafId !== null) return; // one frame batches every pending token
+	streamRafId = requestAnimationFrame(() => {
+		streamRafId = null;
+		const p = pendingStreamDom;
+		pendingStreamDom = null;
+		if (p) paintStreamDom(p);
+	});
+}
+
+/** Flush any pending repaint synchronously. Called at message_end so the
+ *  final tokens (which may have arrived after the last frame fired) are
+ *  painted before the row is finalized or removed. */
+function flushStreamDom(): void {
+	if (streamRafId !== null) {
+		cancelAnimationFrame(streamRafId);
+		streamRafId = null;
+	}
+	const p = pendingStreamDom;
+	pendingStreamDom = null;
+	if (p) paintStreamDom(p);
+}
+
 function onEvent(event: Record<string, unknown>): void {
 	// The server forwards raw `pi --mode rpc` events, which is a
 	// superset of the bare `AgentEvent` union. Cast to a permissive
@@ -385,6 +439,8 @@ function onEvent(event: Record<string, unknown>): void {
 			break;
 
 		case "agent_end":
+			// Flush any final pending repaint before tearing down streaming UI.
+			flushStreamDom();
 			setStreaming(false);
 			state.streamingStartedAt = null;
 			state.retry = null;
@@ -418,6 +474,10 @@ function onEvent(event: Record<string, unknown>): void {
 			break;
 
 		case "turn_start":
+			// Flush any repaint still pending from the prior turn before we
+			// drop the live-assistant references — otherwise the pending
+			// rAF would later paint into a detached/old node.
+			flushStreamDom();
 			// Reset per-turn state. The assistant block for the next message
 			// gets created on the first message_start.
 			lastAssistant = null;
@@ -554,14 +614,10 @@ function onEvent(event: Record<string, unknown>): void {
 			// render.ts) always replays the final text.
 			state.lastAssistantText = text;
 			if (lastAssistantDom) {
-				setRichText(lastAssistantDom.textPre, text || " ");
-				// Stream thinking content into the (collapsed) thinking block.
-				// If this is the first non-empty chunk, remove the
-				// hidden-thinking marker so the toggle is visible.
-				if (thinking) {
-					lastAssistantDom.thinkingPre.textContent = thinking;
-					lastAssistantDom.thinkingWrap.classList.remove("hidden-thinking");
-				}
+				// Coalesce the expensive markdown repaint to one per frame
+				// (see scheduleStreamDom). The model object above is always
+				// current regardless of when the paint lands.
+				scheduleStreamDom(lastAssistantDom, text, thinking);
 			}
 			// Update cost incrementally.
 			if (m.usage) {
@@ -594,6 +650,10 @@ function onEvent(event: Record<string, unknown>): void {
 		}
 
 		case "message_end": {
+			// Flush any streaming repaint still pending from the last tokens
+			// (message_update coalesces to rAF) so the final text is painted
+			// before this case finalizes or removes the row.
+			flushStreamDom();
 			const m = e.message as AssistantMessage;
 			// Suppress the blank spurious assistant message that the
 			// pi-voice-reply extension's sendMessage triggers (see the

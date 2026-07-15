@@ -19,6 +19,7 @@ import type { Request, Response, Router } from "express";
 import express from "express";
 import multer from "multer";
 import type { UploadResponse } from "../shared/protocol.js";
+import { asyncHandler } from "./async-handler.js";
 import { config } from "./config.js";
 
 // Multer uses memory storage; we write to disk ourselves so we control
@@ -42,36 +43,40 @@ function safeExtension(name: string): string {
 export function createUploadsRouter(): Router {
 	const router = express.Router();
 
-	router.post("/", upload.single("file"), async (req: Request, res: Response) => {
-		await ensureUploadsDir();
-		const file = (req as Request & { file?: Express.Multer.File }).file;
-		if (!file) {
-			res.status(400).json({ error: "no file uploaded (field name: 'file')" });
-			return;
-		}
+	router.post(
+		"/",
+		upload.single("file"),
+		asyncHandler(async (req: Request, res: Response) => {
+			await ensureUploadsDir();
+			const file = (req as Request & { file?: Express.Multer.File }).file;
+			if (!file) {
+				res.status(400).json({ error: "no file uploaded (field name: 'file')" });
+				return;
+			}
 
-		const id = randomUUID();
-		const ext = safeExtension(file.originalname);
-		const storedName = `${id}${ext}`;
-		const storedPath = join(config.uploadsDir, storedName);
+			const id = randomUUID();
+			const ext = safeExtension(file.originalname);
+			const storedName = `${id}${ext}`;
+			const storedPath = join(config.uploadsDir, storedName);
 
-		try {
-			await writeFile(storedPath, file.buffer);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			res.status(500).json({ error: `failed to write upload: ${message}` });
-			return;
-		}
+			try {
+				await writeFile(storedPath, file.buffer);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				res.status(500).json({ error: `failed to write upload: ${message}` });
+				return;
+			}
 
-		const response: UploadResponse = {
-			id,
-			filename: file.originalname,
-			mimeType: file.mimetype || "application/octet-stream",
-			size: file.size,
-			url: `/uploads/${id}${ext}`,
-		};
-		res.json(response);
-	});
+			const response: UploadResponse = {
+				id,
+				filename: file.originalname,
+				mimeType: file.mimetype || "application/octet-stream",
+				size: file.size,
+				url: `/uploads/${id}${ext}`,
+			};
+			res.json(response);
+		}),
+	);
 
 	return router;
 }

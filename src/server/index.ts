@@ -22,8 +22,10 @@ import { join, resolve } from "node:path";
 import cors from "cors";
 import express from "express";
 import { mountChatWs, shutdownChatWs } from "./chat.js";
+import { asyncHandler } from "./async-handler.js";
 import { config, readPiAuth } from "./config.js";
 import { createFilesRouter } from "./files.js";
+import { jsonErrorHandler } from "./json-error.js";
 import { log } from "./logger.js";
 import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
@@ -125,7 +127,7 @@ app.get("/api/projects/:id/instructions", (req, res) => {
  * `search: false` so the sidebar hides the search box. See
  * `src/server/search/`.
  */
-app.get("/api/sessions/search", async (req, res) => {
+app.get("/api/sessions/search", asyncHandler(async (req, res) => {
 	// Non-literal specifier: keeps the search module fully removable. TypeScript
 	// won't try to resolve this import, so deleting `src/server/search/` leaves
 	// the core server compiling cleanly. The import AND the search call are
@@ -165,7 +167,7 @@ app.get("/api/sessions/search", async (req, res) => {
 			.status(500)
 			.json({ error: `search failed: ${e instanceof Error ? e.message : String(e)}` });
 	}
-});
+}));
 
 /**
  * GET /api/sessions/:id
@@ -305,7 +307,7 @@ function readVisionModel(): {
 // and the running commit hash (so an operator can verify the live process
 // is on the expected tree). Cross-check against
 // `git -C /home/architect/agentchatbox rev-parse HEAD` on the host.
-app.get("/api/health", async (_req, res) => {
+app.get("/api/health", asyncHandler(async (_req, res) => {
 	const whisper = await checkWhisperAvailable();
 	const tts = await checkTtsAvailable();
 	// Semantic session search is an optional, pluggable feature. Probe it the
@@ -359,7 +361,7 @@ app.get("/api/health", async (_req, res) => {
 		geminiKey: !!process.env.GEMINI_API_KEY,
 		search,
 	});
-});
+}));
 
 /**
  * GET /api/models
@@ -387,7 +389,7 @@ app.get("/api/health", async (_req, res) => {
  * immediately. If the probe fails (no API key, pi crash, etc.) the
  * picker is empty — fix the underlying issue, restart.
  */
-app.get("/api/models", async (_req, res) => {
+app.get("/api/models", asyncHandler(async (_req, res) => {
 	// Kick off / await the boot probe so the very first /api/models
 	// request on a cold start doesn't return an empty list. After the
 	// first successful probe, this is a no-op (the cache is populated).
@@ -420,7 +422,7 @@ app.get("/api/models", async (_req, res) => {
 	}
 
 	res.json({ models: out });
-});
+}));
 
 // Static files (built client). Resolved against the project root so the
 // server works regardless of the process working directory.
@@ -473,6 +475,12 @@ if (existsSync(publicDir)) {
 			);
 	});
 }
+
+// JSON error handler — mounted LAST (see json-error.ts). Catches any error
+// forwarded via next(err) by a route/middleware above and returns the same
+// `{ error }` JSON shape every other path returns, instead of Express's
+// default HTML page.
+app.use(jsonErrorHandler);
 
 const server = app.listen(config.port, config.host, () => {
 	const providers = [...readPiAuth().keys()];

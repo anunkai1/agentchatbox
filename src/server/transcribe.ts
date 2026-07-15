@@ -24,6 +24,7 @@ import { join, resolve } from "node:path";
 import express, { type Router } from "express";
 import multer from "multer";
 import type { TranscribeResponse } from "../shared/protocol.js";
+import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
 import { projectRoot } from "./paths.js";
 import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
@@ -46,66 +47,69 @@ interface HelperOutput {
 export function createTranscribeRouter(): Router {
 	const router = express.Router();
 
-	router.post("/", upload.single("audio"), async (req, res) => {
-		const file = (req as express.Request & { file?: Express.Multer.File }).file;
-		if (!file) {
-			res.status(400).json({ error: "no audio uploaded (field name: 'audio')" });
-			return;
-		}
-
-		// Stage the audio to a temp dir (faster-whisper wants a real path).
-		// We sanitize the filename to a safe stem so the temp path can't
-		// escape the dir via a malicious originalname.
-		let dir: string | undefined;
-		try {
-			dir = await mkdtemp(join(tmpdir(), "agentchatbox-transcribe-"));
-			const safeStem = (file.originalname || "voice.webm").replace(/[^\w.-]+/g, "_").slice(0, 64);
-			const audioPath = join(dir, safeStem || "voice.webm");
-			await writeFile(audioPath, file.buffer);
-
-			const { stdout, stderr, code, timedOut } = await runPython({
-				bin: process.env.PYTHON_BIN || "python3",
-				helperPath: HELPER_PATH,
-				helperArgs: [audioPath],
-				timeoutMs: DEFAULT_PYTHON_TIMEOUT_MS,
-			});
-
-			if (timedOut) {
-				res.status(504).json({
-					error: `transcribe.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms`,
-				});
-				return;
-			}
-			if (code !== 0) {
-				res.status(500).json({
-					error: `transcribe.py exited ${code}: ${stderr.slice(0, 500)}`,
-				});
+	router.post(
+		"/",
+		upload.single("audio"),
+		asyncHandler(async (req, res) => {
+			const file = (req as express.Request & { file?: Express.Multer.File }).file;
+			if (!file) {
+				res.status(400).json({ error: "no audio uploaded (field name: 'audio')" });
 				return;
 			}
 
-			let parsed: HelperOutput;
+			// Stage the audio to a temp dir (faster-whisper wants a real path).
+			// We sanitize the filename to a safe stem so the temp path can't
+			// escape the dir via a malicious originalname.
+			let dir: string | undefined;
 			try {
-				parsed = JSON.parse(stdout) as HelperOutput;
-			} catch {
-				res.status(500).json({
-					error: `transcribe.py: malformed JSON output: ${stdout.slice(0, 200)}`,
-				});
-				return;
-			}
+				dir = await mkdtemp(join(tmpdir(), "agentchatbox-transcribe-"));
+				const safeStem = (file.originalname || "voice.webm").replace(/[^\w.-]+/g, "_").slice(0, 64);
+				const audioPath = join(dir, safeStem || "voice.webm");
+				await writeFile(audioPath, file.buffer);
 
-			const response: TranscribeResponse = { text: parsed.text };
-			res.json(response);
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			res.status(500).json({ error: `transcription failed: ${message}` });
-		} finally {
-			if (dir) {
-				rm(dir, { recursive: true, force: true }).catch(() => {
-					/* best-effort */
+				const { stdout, stderr, code, timedOut } = await runPython({
+					bin: process.env.PYTHON_BIN || "python3",
+					helperPath: HELPER_PATH,
+					helperArgs: [audioPath],
+					timeoutMs: DEFAULT_PYTHON_TIMEOUT_MS,
 				});
+
+				if (timedOut) {
+					res.status(504).json({
+						error: `transcribe.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms`,
+					});
+					return;
+				}
+				if (code !== 0) {
+					res.status(500).json({
+						error: `transcribe.py exited ${code}: ${stderr.slice(0, 500)}`,
+					});
+					return;
+				}
+
+				let parsed: HelperOutput;
+				try {
+					parsed = JSON.parse(stdout) as HelperOutput;
+				} catch {
+					res.status(500).json({
+						error: `transcribe.py: malformed JSON output: ${stdout.slice(0, 200)}`,
+					});
+					return;
+				}
+
+				const response: TranscribeResponse = { text: parsed.text };
+				res.json(response);
+			} finally {
+				// Always clean up the temp dir — even if the handler throws
+				// (the asyncHandler + jsonErrorHandler backstop catches that).
+				if (dir) {
+					rm(dir, { recursive: true, force: true }).catch(() => {
+						/* best-effort */
+					});
+				}
 			}
-		}
-	});
+		}),
+	);
 
 	return router;
 }
