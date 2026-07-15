@@ -22,10 +22,10 @@
  */
 
 import { getModels } from "@earendil-works/pi-ai";
+import { config, getServerApiKey } from "./config.js";
+import { log } from "./logger.js";
 import type { PiProcess } from "./pi-process.js";
 import { spawnPi } from "./pi-process.js";
-import { getServerApiKey, config } from "./config.js";
-import { log } from "./logger.js";
 import { SDK_PROVIDERS } from "./providers.js";
 import { safeUnref } from "./util.js";
 

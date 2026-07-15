@@ -439,7 +439,13 @@ class SessionRegistry {
 			const data = line.data as
 				| {
 						contextUsage?: unknown;
-						tokens?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+						tokens?: {
+							input: number;
+							output: number;
+							cacheRead: number;
+							cacheWrite: number;
+							total: number;
+						};
 						cost?: number;
 				  }
 				| undefined;

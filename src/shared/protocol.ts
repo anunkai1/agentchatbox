@@ -271,7 +271,18 @@ export type ServerMessage =
 	 * itself from per-turn `message_end` events, so the rest would be
 	 * redundant. `contextUsage` is null when pi couldn't compute it (no
 	 * model set, or right after compaction with no post-compaction reply yet). */
-	| { type: "sessionStats"; contextUsage: ContextUsage | null; tokens?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost?: number };
+	| {
+			type: "sessionStats";
+			contextUsage: ContextUsage | null;
+			tokens?: {
+				input: number;
+				output: number;
+				cacheRead: number;
+				cacheWrite: number;
+				total: number;
+			};
+			cost?: number;
+	  };
 
 /** Client → server. */
 export type ClientMessage =

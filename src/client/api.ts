@@ -108,7 +108,6 @@ export async function getModels(): Promise<ModelInfo[]> {
 	return data.models;
 }
 
-
 /**
  * Local TTS via /api/tts. Returns the WAV bytes. Caller is responsible
  * for turning them into playable audio (we use a single shared <audio>

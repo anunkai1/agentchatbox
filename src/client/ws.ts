@@ -73,7 +73,10 @@ export interface ChatClient {
 	/** Switch to a different model mid-session. */
 	setModel(modelId: string, provider: string): void;
 	/** Send a response to a pi extension_ui_request dialog back to pi. */
-	extensionUiResponse(id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): void;
+	extensionUiResponse(
+		id: string,
+		response: { value?: string; confirmed?: boolean; cancelled?: boolean },
+	): void;
 	/** Set the thinking level. */
 	setThinking(level: ThinkingLevel): void;
 	/** Rename the current session. */
@@ -255,20 +258,21 @@ export function createChatClient(): ChatClient {
 					for (const l of forkedListeners) l(String(msg.sessionId ?? ""));
 					break;
 				case "capabilities":
-					for (const l of capabilitiesListeners)
-						l((msg.commands as PiCommand[]) ?? []);
+					for (const l of capabilitiesListeners) l((msg.commands as PiCommand[]) ?? []);
 					break;
 				case "sessionStats":
 					for (const l of sessionStatsListeners)
 						l({
 							contextUsage: (msg.contextUsage as ContextUsage | null) ?? null,
-							tokens: msg.tokens as {
-								input: number;
-								output: number;
-								cacheRead: number;
-								cacheWrite: number;
-								total: number;
-							} | undefined,
+							tokens: msg.tokens as
+								| {
+										input: number;
+										output: number;
+										cacheRead: number;
+										cacheWrite: number;
+										total: number;
+								  }
+								| undefined,
 							cost: msg.cost as number | undefined,
 						});
 					break;

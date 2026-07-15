@@ -374,8 +374,6 @@ export function voiceRewriteLabel(): string {
 	const slash = override.indexOf("/");
 	const provider = slash > 0 ? override.slice(0, slash) : "";
 	const modelId = slash > 0 && slash < override.length - 1 ? override.slice(slash + 1) : override;
-	const opt = state.availableModels.find(
-		(m) => m.provider === provider && m.id === modelId,
-	);
+	const opt = state.availableModels.find((m) => m.provider === provider && m.id === modelId);
 	return opt?.name ?? override;
 }
