@@ -22,6 +22,7 @@ import { setRichText } from "./linkify.js";
 import { services } from "./services.js";
 import { type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { sessionPath } from "./url.js";
+import { formatAbsolute, formatRelative } from "./time.js";
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
@@ -106,10 +107,31 @@ export function updateWelcomeVisibility(): void {
 	if (w) w.classList.toggle("hidden", state.messages.length > 0);
 }
 
+/**
+ * Small muted timestamp chip showing BOTH the absolute Brisbane time
+ * ("2 July 2026, 4:33pm") and the relative distance ("2m ago") inline,
+ * always visible — no hover needed. Appended inside the user bubble
+ * (bottom) or under the assistant reply.
+ */
+function makeTimestampEl(ts: number): HTMLElement {
+	const rel = formatRelative(ts);
+	const relLabel = rel === "just now" ? rel : `${rel} ago`;
+	return el(
+		"span",
+		{ class: "msg-ts" },
+		formatAbsolute(ts),
+		el("span", { class: "msg-ts-rel" }, ` · ${relLabel}`),
+	);
+}
+
+/**
+ * Paint one message row.
+ */
 export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	if (m.kind === "user") {
 		const row = el("div", { class: "row row-user" });
 		const bubble = el("div", { class: "bubble" }, m.text);
+		if (m.ts !== undefined) bubble.append(makeTimestampEl(m.ts));
 		row.append(bubble);
 		if (m.seq !== undefined) row.append(makeForkButton(() => m.seq, { align: "right" }));
 		return row;
@@ -152,6 +174,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const text = el("div", { class: "text markdown" }, " ");
 		setRichText(text, m.text || " ");
 		body.append(text);
+		if (m.ts !== undefined) body.append(makeTimestampEl(m.ts));
 		body.append(
 			makeVoiceVariantButton("long", () => m.voiceLong ?? "", "Speak the detailed spoken version"),
 		);
@@ -744,6 +767,13 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	body.append(thinkingWrap);
 	const pre = el("div", { class: "text markdown streaming" });
 	body.append(pre);
+	// Timestamp on the live placeholder too, so it's visible while the
+	// reply streams in (renderMessageNode repaints it on full re-render).
+	// The just-pushed assistant message is the last entry in state.
+	{
+		const am = state.messages[state.messages.length - 1];
+		if (am && am.kind === "assistant" && am.ts !== undefined) body.append(makeTimestampEl(am.ts));
+	}
 	// Long/Med/Short spoken-variant buttons on EVERY assistant row, including
 	// the live-streaming placeholder — the variants are generated on
 	// demand on first press (see makeVoiceVariantButton), so they can be

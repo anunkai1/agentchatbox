@@ -158,13 +158,16 @@ function sendAsUser(trimmed: string): void {
 	if (state.history[state.history.length - 1] !== trimmed) state.history.push(trimmed);
 	state.historyIdx = null;
 
-	// Add user message to in-memory transcript.
-	state.messages.push({ kind: "user", text: trimmed });
+	// Add user message to in-memory transcript. ts is stamped locally
+	// at send time (ms-accurate enough for a relative "2m" label); the
+	// authoritative SDK timestamp lands on resume via projectTranscript.
+	const userMsg = { kind: "user" as const, text: trimmed, ts: Date.now() };
+	state.messages.push(userMsg);
 	// New message resets the jump walk: the next Alt+↑ / button press
 	// should start fresh from this newest position, not resume a stale
 	// index from before the send.
 	resetJumpNav();
-	appendNode(renderMessageNode({ kind: "user", text: trimmed }));
+	appendNode(renderMessageNode(userMsg));
 
 	// Auto-title from the first user message.
 	if (state.title === "New chat" || !state.title) {
@@ -431,7 +434,7 @@ function onEvent(event: Record<string, unknown>): void {
 			}
 			if (e.message.role === "assistant") {
 				// New assistant message — create a fresh block.
-				lastAssistant = { kind: "assistant", text: "", thinking: "", seq: liveMessageSeq };
+				lastAssistant = { kind: "assistant", text: "", thinking: "", seq: liveMessageSeq, ts: e.message.timestamp };
 				state.messages.push(lastAssistant);
 				// Mirror the ordinal into state so the live fork button (rendered
 				// via appendAssistantPlaceholder) can read it without a
