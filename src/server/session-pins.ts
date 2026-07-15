@@ -21,8 +21,8 @@
  * tolerates future per-pin metadata without a migration.)
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
+import { readJson, writeJsonAtomic } from "./json-store.js";
 import { projectRoot } from "./paths.js";
 
 /** Default location: `<projectRoot>/data/pins.json` (matches `data/search.db`). Overridable via AGENTCHATBOX_PINS_FILE for tests. */
@@ -34,29 +34,14 @@ function defaultPinsFile(): string {
 
 /** Read the pin set for a given cwd (absolute session ids). */
 export function readPinnedSessions(): Set<string> {
-	const file = defaultPinsFile();
-	if (!existsSync(file)) return new Set();
-	try {
-		const raw = readFileSync(file, "utf8");
-		const parsed = JSON.parse(raw) as unknown;
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-			const out = new Set<string>();
-			for (const [id, val] of Object.entries(parsed as Record<string, unknown>)) {
-				if (val === true) out.add(id);
-			}
-			return out;
-		}
-		return new Set();
-	} catch {
-		// Corrupt or partially-written file — treat as empty rather than
-		// crashing the session list. The next write replaces it.
-		return new Set();
+	// readJson tolerates a missing/corrupt file (degrades to the empty
+	// object); we then keep only entries whose value is exactly `true`.
+	const parsed = readJson<Record<string, unknown>>(defaultPinsFile(), {});
+	const out = new Set<string>();
+	for (const [id, val] of Object.entries(parsed)) {
+		if (val === true) out.add(id);
 	}
-}
-
-/** Is the given session id pinned? Cheap membership check. */
-export function isPinned(sessionId: string): boolean {
-	return readPinnedSessions().has(sessionId);
+	return out;
 }
 
 /**
@@ -78,15 +63,8 @@ export function setPinned(sessionId: string, pinned: boolean): boolean {
 }
 
 function writePins(ids: Set<string>): void {
-	const file = defaultPinsFile();
-	try {
-		mkdirSync(dirname(file), { recursive: true });
-	} catch {
-		/* dir may already exist */
-	}
+	// Serialize as { id: true } for both the file and the in-memory shape.
 	const obj: Record<string, true> = {};
 	for (const id of ids) obj[id] = true;
-	const tmp = `${file}.tmp`;
-	writeFileSync(tmp, JSON.stringify(obj, null, 2));
-	renameSync(tmp, file);
+	writeJsonAtomic(defaultPinsFile(), obj);
 }

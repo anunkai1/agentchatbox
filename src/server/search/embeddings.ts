@@ -78,13 +78,6 @@ export async function embed(text: string): Promise<Float32Array> {
 	return new Float32Array(output.data);
 }
 
-/** Cosine similarity between two L2-normalized vectors (== dot product). */
-export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-	let dot = 0;
-	for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
-	return dot;
-}
-
 /** Float32Array → Buffer for SQLite BLOB storage. */
 export function vectorToBuffer(v: Float32Array): Buffer {
 	return Buffer.from(v.buffer, v.byteOffset, v.byteLength);

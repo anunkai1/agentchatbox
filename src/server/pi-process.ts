@@ -21,28 +21,30 @@
  * Model switch mid-conversation does NOT respawn — `pi` supports in-process
  * model switching via the `set_model` RPC command.
  *
- * On `--api-key` vs env: the provider key is injected into the child's
- * env, NOT passed on the command line (which is world-readable). See the
- * note on `providerApiKeyEnvVar()` below. The key value comes from
- * `pi`'s auth.json via `getServerApiKey()` (config.ts) — the single
- * source of truth for chat auth.
+ * On `--api-key` vs env: the provider key is NOT passed on the command
+ * line (which is world-readable), and is also NOT injected into the
+ * child's env. `pi` reads it directly from its own `~/.pi/agent/auth.json`
+ * (the same file ACB gates spawning on via `getServerApiKey()` in
+ * config.ts). See the header comment below for the verification.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { config } from "./config.js";
-import { providerApiKeyEnvVar } from "./providers.js";
 import { safeUnref } from "./util.js";
 
 /**
- * The provider key is injected into the child's env via the name returned
- * by `providerApiKeyEnvVar()` (defined in providers.ts, the single source
- * of truth shared with config.ts). On `--api-key` vs env: `/proc/<pid>/cmdline`
- * (and `ps`) are world-readable, so `--api-key <key>` leaks the secret to
- * every user on the box; the child's env (`/proc/<pid>/environ`) is mode
- * 0400 — owner and root only. `pi` resolves the key from env at priority 4
- * (below its own `--api-key` / auth.json), so this is functionally
- * equivalent while keeping the key off the command line.
+ * The provider key is NOT passed on the command line. `/proc/<pid>/cmdline`
+ * (and `ps`) are world-readable, so `--api-key <key>` would leak the secret
+ * to every user on the box. Instead `pi` resolves the key itself from its
+ * own `~/.pi/agent/auth.json` (which ACB already reads via `getServerApiKey`
+ * to gate spawning) — so we pass NOTHING key-related and let the child read
+ * the same auth.json it always does. Verified for every authed provider
+ * (deepseek/zai/venice): `pi --mode rpc` with the `*_API_KEY` env var
+ * blanked still authenticates and streams real replies from auth.json alone.
+ * This also removes a redundant copy of the secret from the child's env
+ * (`/proc/<pid>/environ`) and retired the drift-prone hand-maintained
+ * provider→env-var map that used to live in providers.ts.
  */
 
 export interface PiProcessOptions {
@@ -56,8 +58,10 @@ export interface PiProcessOptions {
 	thinkingLevel?: string;
 	/** Optional session id to resume. Omit to start a fresh session. */
 	sessionId?: string;
-	/** API key for the provider. Injected into the child's env as the
-	 * provider's `*_API_KEY` var (see `providerApiKeyEnvVar`). */
+	/** API key for the provider. Used ONLY by the registry's spawn gate
+	 * (it reads auth.json via `getServerApiKey` and refuses to spawn if
+	 * absent). NOT injected into the child — `pi` resolves it from
+	 * auth.json itself. Kept on this struct so the registry can gate. */
 	apiKey: string;
 	/** Working directory — the project root `pi` treats as the session scope. */
 	cwd: string;
@@ -154,14 +158,18 @@ export class PiProcess extends EventEmitter {
 		// express.static mount in index.ts. Venice's /image/generate
 		// returns base64, NOT hosted URLs, so the extension must persist
 		// the bytes itself — without this env var it has nowhere to put
-		// them. (Same env-injection pattern as the API key above: env is
-		// mode 0400, so the path isn't leaked to other users.)
+		// them. Unlike the API key (which pi reads from auth.json itself —
+		// see the header comment), this path is genuinely needed here:
+		// the venice-image extension has no other way to learn it.
+		// The provider API key is intentionally NOT injected here. `pi`
+		// reads it from `~/.pi/agent/auth.json` itself (ACB already gated
+		// the spawn on that key existing via getServerApiKey). See the
+		// header comment for the verification.
 		const child = spawn(opts.bin, args, {
 			cwd: opts.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
 			env: {
 				...process.env,
-				[providerApiKeyEnvVar(opts.provider)]: opts.apiKey,
 				ACB_UPLOADS_DIR: config.uploadsDir,
 			},
 		});

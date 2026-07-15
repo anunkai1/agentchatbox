@@ -28,11 +28,12 @@
  * there is zero drift between the sidecar and pi's session JSONLs.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { config } from "./config.js";
-import { projectRoot } from "./paths.js";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ThinkingLevel } from "../shared/protocol.js";
+import { config } from "./config.js";
+import { writeJsonAtomic } from "./json-store.js";
+import { projectRoot } from "./paths.js";
 
 /** The builtin Global project id. */
 export const GLOBAL_PROJECT_ID = "global";
@@ -153,19 +154,10 @@ function readStore(): ProjectsFile {
 }
 
 function writeStore(store: ProjectsFile): void {
-	const file = defaultProjectsFile();
-	try {
-		mkdirSync(dirname(file), { recursive: true });
-	} catch {
-		/* dir may already exist */
-	}
-	// Write to a sibling temp file then rename, so a crash mid-write (or a
-	// reader racing the write) can't leave a truncated JSON that readStore()
-	// would silently drop, losing every project definition. renameSync is
-	// atomic on POSIX when src+dst share a filesystem (they do here — same dir).
-	const tmp = `${file}.tmp`;
-	writeFileSync(tmp, JSON.stringify(store, null, 2));
-	renameSync(tmp, file);
+	// Atomic write (tmp + rename) via the shared json-store helper: a crash
+	// mid-write or a reader racing the write can't leave a truncated JSON
+	// that readStore() would silently drop, losing every project definition.
+	writeJsonAtomic(defaultProjectsFile(), store);
 	// Invalidate the read cache so the next read picks up the new bytes
 	// (and its new mtime).
 	cachedStore = null;

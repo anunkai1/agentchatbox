@@ -15,9 +15,14 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { Message } from "@earendil-works/pi-ai";
 import { extractText } from "../../shared/content.js";
-import { listPiSessions, sessionsDirFor, type SessionSummary } from "../session-list.js";
+import {
+	listPiSessions,
+	parseJsonl,
+	readFirstLine,
+	type SessionSummary,
+	sessionsDirFor,
+} from "../session-list.js";
 import { embed } from "./embeddings.js";
 import { indexSession, isIndexed } from "./store.js";
 
@@ -46,15 +51,7 @@ function readSessionMessages(sessionDir: string, name: string): ParsedMessage[] 
 	}
 	const out: ParsedMessage[] = [];
 	let idx = 0;
-	for (const line of raw.split("\n")) {
-		const t = line.trim();
-		if (!t) continue;
-		let entry: Record<string, unknown>;
-		try {
-			entry = JSON.parse(t) as Record<string, unknown>;
-		} catch {
-			continue;
-		}
+	for (const entry of parseJsonl(raw)) {
 		if (entry.type !== "message") continue;
 		const msg = entry.message as { role?: string; content?: unknown } | undefined;
 		if (!msg) continue;
@@ -81,15 +78,16 @@ export async function ensureSessionIndexed(session: SessionSummary): Promise<num
 	if (await isIndexed(session.id, mtimeIso)) return 0;
 
 	const dir = sessionsDirFor(resolve(session.cwd));
-	// Find the JSONL file whose first-line session id matches.
+	// Find the JSONL file whose first-line session id matches. Use the
+	// bounded `readFirstLine` (8 KB read) — NOT a whole-file readFileSync
+	// + split — session transcripts can be MB-sized and this loop runs
+	// across every file in the dir during an index sweep.
 	let messages: ParsedMessage[] = [];
 	if (existsSync(dir)) {
 		for (const name of readdirSync(dir)) {
 			if (!name.endsWith(".jsonl")) continue;
 			const file = join(dir, name);
-			const firstLine = readFileSync(file, "utf8")
-				.split("\n")
-				.find((l) => l.trim());
+			const firstLine = readFirstLine(file);
 			if (!firstLine) continue;
 			try {
 				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
@@ -134,6 +132,3 @@ export async function indexAll(cwd: string): Promise<{ scanned: number; indexed:
 	}
 	return { scanned: sessions.length, indexed };
 }
-
-/** Re-export the message type for callers that want it. */
-export type { Message };
