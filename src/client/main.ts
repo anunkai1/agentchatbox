@@ -50,6 +50,7 @@ import {
 	showToast,
 	syncSteerBadges,
 	updateJumpFabState,
+	updateJumpToBottomFabState,
 	updateVoiceTextBox,
 } from "./render.js";
 import { setServices } from "./services.js";
@@ -303,6 +304,9 @@ function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
 	// A new row may change the user-message count (e.g. the user just
 	// sent one), so refresh the jump button's show/disabled state.
 	updateJumpFabState();
+	// Reflect whether we're still pinned at the bottom after the new
+	// row landed, so the jump-to-bottom button hides / shows correctly.
+	updateJumpToBottomFabState();
 }
 
 /**

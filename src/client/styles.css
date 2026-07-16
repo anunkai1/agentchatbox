@@ -564,13 +564,23 @@ body {
 	flex-direction: column;
 }
 
-/* ---------- "jump to previous user message" floating button ---------- */
-.jump-prev-user {
+/* ---------- floating nav buttons (jump-to-prev-user + jump-to-bottom) ---------- */
+/* A stacked group anchored to the bottom-right of the messages area.
+   The up button walks through the user's own messages; the down button
+   jumps straight to the latest message. Shared appearance below. */
+.jump-fabs {
 	position: absolute;
 	right: 18px;
 	/* A little above the bottom of the messages viewport, clear of the
 	   composer that lives below this region. */
 	bottom: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	z-index: 20;
+}
+.jump-prev-user,
+.jump-to-bottom {
 	width: 38px;
 	height: 38px;
 	display: inline-flex;
@@ -582,7 +592,6 @@ body {
 	border: 1px solid var(--border-strong);
 	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 	cursor: pointer;
-	z-index: 20;
 	opacity: 0.82;
 	padding: 0;
 	transition:
@@ -590,18 +599,22 @@ body {
 		transform 0.12s,
 		color 0.12s;
 }
-.jump-prev-user:hover {
+.jump-prev-user:hover,
+.jump-to-bottom:hover {
 	opacity: 1;
 	color: var(--text);
 	transform: translateY(-1px);
 }
-.jump-prev-user:active {
+.jump-prev-user:active,
+.jump-to-bottom:active {
 	transform: translateY(0);
 }
-.jump-prev-user.hidden {
+.jump-prev-user.hidden,
+.jump-to-bottom.hidden {
 	display: none;
 }
-.jump-prev-user[disabled] {
+.jump-prev-user[disabled],
+.jump-to-bottom[disabled] {
 	opacity: 0.3;
 	cursor: default;
 	pointer-events: none;
@@ -1890,9 +1903,12 @@ body {
 		max-width: 86%;
 	}
 
-	/* Nudge the jump button a touch smaller / closer on narrow screens. */
-	.jump-prev-user {
+	/* Nudge the jump buttons a touch smaller / closer on narrow screens. */
+	.jump-fabs {
 		right: 12px;
+	}
+	.jump-prev-user,
+	.jump-to-bottom {
 		width: 34px;
 		height: 34px;
 		opacity: 0.9;
