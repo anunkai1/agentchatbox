@@ -710,6 +710,42 @@ function makeJumpPrevUserFab(): HTMLElement {
 	});
 }
 
+/**
+ * Build the floating "jump to the latest message" button. Sits just
+ * below the jump-to-previous-user button in the same stacked FAB group.
+ * Only meaningful when the view is scrolled away from the bottom, so
+ * its visibility is driven by updateJumpToBottomFabState() (hidden while
+ * pinned at the bottom).
+ */
+function makeJumpToBottomFab(): HTMLElement {
+	return el("button", {
+		class: "jump-to-bottom hidden",
+		id: "jump-to-bottom",
+		type: "button",
+		"aria-label": "Jump to the latest message",
+		title: "Jump to the latest message",
+		onclick: () => {
+			scrollToBottom();
+			updateJumpToBottomFabState();
+		},
+		html:
+			'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+			'<path d="M12 5v13"/><path d="M6 12l6 6 6-6"/></svg>',
+	});
+}
+
+/**
+ * Show the jump-to-bottom button only when the view is NOT already at
+ * the bottom — once pinned there it's redundant. Called from the scroll
+ * listener (every scroll, programmatic or not) and after explicit
+ * scrollToBottom() calls.
+ */
+export function updateJumpToBottomFabState(): void {
+	const fab = document.getElementById("jump-to-bottom");
+	if (!fab) return;
+	fab.classList.toggle("hidden", isAtBottom());
+}
+
 export function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
 	// Capture pinning BEFORE appending. The new node may be tall (a ⚙
 	// tool card, a thinking block, a result <pre>), and once it's in the
@@ -1509,21 +1545,29 @@ export function renderShell(): void {
 	// Messages list
 	messagesWrap.append(el("div", { class: "messages", id: "messages" }));
 
-	// Messages region wraps the scroll area + the floating "jump to
-	// previous user message" button, so the button anchors to the
-	// bottom-right of the messages viewport — independent of how tall
-	// the composer / status bar happen to be. Clicking (or Alt+↑) walks
-	// up through the user's own messages one at a time.
+	// Messages region wraps the scroll area + the floating nav buttons
+	// (jump to previous user message, and jump to latest), so the group
+	// anchors to the bottom-right of the messages viewport — independent
+	// of how tall the composer / status bar happen to be. Clicking the
+	// up button (or Alt+↑) walks up through the user's own messages one
+	// at a time; the down button jumps straight to the bottom.
 	const messagesRegion = el("div", { class: "messages-region" });
 	messagesRegion.append(messagesWrap);
-	messagesRegion.append(makeJumpPrevUserFab());
+	const jumpFabs = el("div", { class: "jump-fabs" });
+	jumpFabs.append(makeJumpPrevUserFab());
+	jumpFabs.append(makeJumpToBottomFab());
+	messagesRegion.append(jumpFabs);
 	main.append(messagesRegion);
 
 	// A manual scroll (wheel / drag / touch) means the user repositioned
 	// themselves, so the next jump should restart from the new spot.
 	// Programmatic scrolls from scrollRowToTop set a guard to skip this.
+	// The jump-to-bottom button tracks every scroll (programmatic or
+	// not) so it appears once the view leaves the bottom and hides again
+	// once it returns.
 	messagesWrap.addEventListener("scroll", () => {
 		if (!programmaticScroll) resetJumpNav();
+		updateJumpToBottomFabState();
 	});
 
 	// Composer — pill with attach + voice buttons on the left, textarea
