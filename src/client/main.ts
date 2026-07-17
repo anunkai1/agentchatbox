@@ -45,7 +45,6 @@ import {
 	resetJumpNav,
 	type ShellHandlers,
 	scrollToBottom,
-	scrollToBottomIfPinned,
 	setStreaming,
 	showToast,
 	syncSteerBadges,
@@ -392,11 +391,22 @@ let pendingStreamDom: { dom: LiveAssistantDom; text: string; thinking: string } 
 let streamRafId: number | null = null;
 
 function paintStreamDom(p: { dom: LiveAssistantDom; text: string; thinking: string }): void {
+	// Capture pinning BEFORE the DOM mutation. The new tokens grow the
+	// message — and thinking blocks grow fast: reasoning streams in
+	// rapidly, and the very first thinking paint removes `hidden-thinking`
+	// (`display: none`), adding the whole thinking container in one
+	// frame. An after-mutation isAtBottom() check would then falsely
+	// report "not at bottom" and silently kill autoscroll for the rest
+	// of the turn (every later scrollToBottomIfPinned() would no-op).
+	// Same capture-before/scroll-after pattern as appendNode and
+	// finalizeToolCall in render.ts.
+	const wasPinned = isAtBottom();
 	setRichText(p.dom.textPre, p.text || " ");
 	if (p.thinking) {
 		p.dom.thinkingPre.textContent = p.thinking;
 		p.dom.thinkingWrap.classList.remove("hidden-thinking");
 	}
+	if (wasPinned) scrollToBottom();
 }
 
 /** Schedule a streaming-token repaint on the next frame, coalescing
@@ -633,9 +643,12 @@ function onEvent(event: Record<string, unknown>): void {
 				state.costTotal.cost += m.usage.cost?.total ?? 0;
 			}
 			// Don't yank the user back to the bottom on every token — if they've
-			// scrolled up to re-read, leave them there. scrollToBottomIfPinned
-			// only scrolls when they were already near the bottom.
-			scrollToBottomIfPinned();
+			// scrolled up to re-read, leave them there. The actual scroll is
+			// performed in paintStreamDom (inside the rAF repaint) using the
+			// captured pinning state, because the DOM mutation happens there —
+			// scrolling here would be one frame behind the content and let a
+			// fast-growing thinking block slip past the isAtBottom() slack,
+			// silently disabling autoscroll for the rest of the turn.
 			refreshStatus();
 			break;
 		}
