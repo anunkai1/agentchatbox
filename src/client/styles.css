@@ -165,11 +165,75 @@ body {
 
 .sidebar-sessions {
 	flex: 1;
+	/* Now a flex parent of [projects-pane | splitter | sessions-pane].
+	   The panes scroll themselves; the wrap just holds the layout. */
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	padding: 0;
+	gap: 0;
+}
+/* Each independently-scrolling region of the sidebar. */
+.sidebar-pane {
 	overflow-y: auto;
-	padding: 4px 8px 12px;
+	padding: 4px 8px 8px;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
+}
+/* Top pane (Projects) — fixed height, draggable via the splitter. */
+.sidebar-projects-pane {
+	flex: 0 0 auto;
+}
+/* Bottom pane (Global + Other) — fills whatever the splitter leaves. */
+.sidebar-sessions-pane {
+	flex: 1 1 auto;
+	min-height: 40px;
+}
+/* Drag handle between the two panes. */
+.sidebar-splitter {
+	flex: 0 0 6px;
+	cursor: row-resize;
+	background: transparent;
+	position: relative;
+	margin: 0;
+}
+.sidebar-splitter::after {
+	content: "";
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	transform: translate(-50%, -50%);
+	width: 36px;
+	height: 2px;
+	border-radius: 1px;
+	background: var(--border);
+	opacity: 0.55;
+	transition:
+		background 0.12s,
+		opacity 0.12s;
+}
+.sidebar-splitter:hover::after,
+.sidebar-splitter.dragging::after {
+	background: var(--accent);
+	opacity: 1;
+}
+/* Hide splitter + empty projects pane when there are no user projects,
+   and during search (results take over the sessions pane). */
+.sidebar-sessions.no-projects > .sidebar-projects-pane,
+.sidebar-sessions.no-projects > .sidebar-splitter,
+.sidebar-sessions.search-active > .sidebar-projects-pane,
+.sidebar-sessions.search-active > .sidebar-splitter {
+	display: none;
+}
+/* While dragging the splitter: kill text selection + let mousemove win
+   over iframes (e.g. the rooster editor) that would swallow events. */
+body.sidebar-resizing {
+	cursor: row-resize !important;
+	user-select: none !important;
+}
+body.sidebar-resizing iframe {
+	pointer-events: none;
 }
 .sidebar-search-row {
 	display: flex;
@@ -1006,7 +1070,7 @@ body {
 .thinking-body {
 	margin: 6px 0 6px 0;
 	font-size: 13px;
-	max-height: 440px;
+	max-height: 410px;
 	overflow: auto;
 	white-space: pre-wrap;
 	border-left: 2px solid var(--border-strong);
@@ -1954,14 +2018,14 @@ body {
 
 /* Scrollbars — subtle, modern */
 .messages-wrap::-webkit-scrollbar,
-.sidebar-sessions::-webkit-scrollbar,
+.sidebar-pane::-webkit-scrollbar,
 .thinking-body::-webkit-scrollbar,
 .tool-result::-webkit-scrollbar,
 .modal-box::-webkit-scrollbar {
 	width: 8px;
 }
 .messages-wrap::-webkit-scrollbar-thumb,
-.sidebar-sessions::-webkit-scrollbar-thumb,
+.sidebar-pane::-webkit-scrollbar-thumb,
 .thinking-body::-webkit-scrollbar-thumb,
 .tool-result::-webkit-scrollbar-thumb,
 .modal-box::-webkit-scrollbar-thumb {
@@ -1969,7 +2033,7 @@ body {
 	border-radius: 4px;
 }
 .messages-wrap::-webkit-scrollbar-track,
-.sidebar-sessions::-webkit-scrollbar-track {
+.sidebar-pane::-webkit-scrollbar-track {
 	background: transparent;
 }
 
@@ -2204,6 +2268,8 @@ body {
 	gap: 2px;
 	/* Indent the nested projects so the hierarchy reads at a glance. */
 	padding-left: 8px;
+	/* No own scroll here — the surrounding .sidebar-projects-pane handles
+	   that, so we avoid nested scrollbars. */
 }
 .projects-container.collapsed .projects-container-body {
 	display: none;

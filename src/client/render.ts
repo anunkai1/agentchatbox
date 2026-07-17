@@ -1386,12 +1386,30 @@ export function renderShell(): void {
 		sidebar.append(searchRow);
 	}
 
-	// Session list container — populated by renderSidebarSessions()
+	// Session list area — split into two independently-scrolling panes
+	// (Projects on top, Global/Other on the bottom) divided by a draggable
+	// splitter. Populated by renderSidebarSessions(); search takes over the
+	// bottom pane and hides the top via the .search-active class.
 	const sessionsWrap = el("div", { class: "sidebar-sessions", id: "sidebar-sessions" });
-	sessionsWrap.append(el("div", { class: "sidebar-empty" }, "Loading sessions…"));
+	const projectsPane = el("div", {
+		class: "sidebar-pane sidebar-projects-pane",
+		id: "sidebar-projects-pane",
+	});
+	const splitter = el("div", { class: "sidebar-splitter", id: "sidebar-splitter" });
+	const sessionsPane = el("div", {
+		class: "sidebar-pane sidebar-sessions-pane",
+		id: "sidebar-sessions-pane",
+	});
+	sessionsPane.append(el("div", { class: "sidebar-empty" }, "Loading sessions…"));
+	sessionsWrap.append(projectsPane, splitter, sessionsPane);
 	sidebar.append(sessionsWrap);
 
 	root.append(sidebar);
+	// Wire the draggable splitter AFTER the sidebar is in the document so
+	// getBoundingClientRect() returns real dimensions for the default split.
+	// Idempotent across renderShell rebuilds (per-drag listeners are cleaned
+	// up on mouseup, so nothing leaks).
+	initSidebarSplitter();
 
 	// ── Main column ────────────────────────────────────────────────
 	const main = el("div", { class: "main" });
@@ -1880,10 +1898,14 @@ function onSidebarSearchInput(q: string): void {
 		const trimmed = q.trim();
 		if (!trimmed) {
 			state.searchActive = false;
+			setSidebarSearchMode(false);
 			renderSidebarSessions(lastSessions);
 			return;
 		}
-		const container = document.getElementById("sidebar-sessions");
+		// Search owns the bottom pane; the top (Projects) pane + splitter
+		// are hidden via the .search-active class so results get full height.
+		setSidebarSearchMode(true);
+		const container = document.getElementById("sidebar-sessions-pane");
 		if (container) {
 			container.innerHTML = "";
 			container.append(el("div", { class: "sidebar-empty" }, "Searching…"));
@@ -1901,9 +1923,17 @@ function onSidebarSearchInput(q: string): void {
 	}, 250);
 }
 
+/** Toggle the sidebar's search layout: when active, the Projects pane and
+ *  splitter are hidden (via CSS) so the sessions pane fills the area with
+ *  ranked search results. Pure visual flag; does not touch state. */
+function setSidebarSearchMode(active: boolean): void {
+	const wrap = document.getElementById("sidebar-sessions");
+	if (wrap) wrap.classList.toggle("search-active", active);
+}
+
 /** Render semantic-search hits as flat result cards (no date grouping). */
 function renderSidebarSearchResults(hits: SessionSearchHit[]): void {
-	const container = document.getElementById("sidebar-sessions");
+	const container = document.getElementById("sidebar-sessions-pane");
 	if (!container) return;
 	container.innerHTML = "";
 	if (hits.length === 0) {
@@ -1944,13 +1974,18 @@ function renderSidebarSearchResults(hits: SessionSearchHit[]): void {
  * "Other" bucket. When the search box is active this is a no-op.
  */
 export function renderSidebarSessions(sessions: SessionSummary[]): void {
-	const container = document.getElementById("sidebar-sessions");
-	if (!container) return;
+	const wrap = document.getElementById("sidebar-sessions");
+	if (!wrap) return;
 	// Cache the full list so the search box can restore it when cleared.
 	lastSessions = sessions;
 	// If the user is mid-search, don't clobber the search results.
 	if (state.searchActive) return;
-	container.innerHTML = "";
+
+	const projectsPane = document.getElementById("sidebar-projects-pane");
+	const sessionsPane = document.getElementById("sidebar-sessions-pane");
+	if (!projectsPane || !sessionsPane) return;
+	projectsPane.innerHTML = "";
+	sessionsPane.innerHTML = "";
 
 	// Project order from state.projects; sessions tagged "other" trail last.
 	const projects = [...state.projects];
@@ -1967,24 +2002,28 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	// separate whole-list empty state is needed.)
 
 	// Global always exists. Split out the user-created projects (everything
-	// non-global) so they can nest inside a top-level "Projects" container,
-	// with Global and Other rendered as siblings below it.
+	// non-global) so they can nest inside a top-level "Projects" container
+	// in the TOP pane, with Global and Other rendered in the BOTTOM pane.
 	const globalProject = projects.find((p) => p.id === "global");
 	const userProjects = projects.filter((p) => p.id !== "global");
 
-	// 1) Top-level "Projects" container — expandable, holds every user
-	//    project. Only rendered when at least one user project exists; with
-	//    none, Global alone is the whole sidebar.
+	// Toggle the splitter/pane visibility: with no user projects, Projects
+	// vanishes and the bottom pane fills the sidebar (single-scroll mode).
+	wrap.classList.toggle("no-projects", userProjects.length === 0);
+
+	// 1) Top pane — top-level "Projects" container holding every user
+	//    project. Only rendered when at least one user project exists.
 	if (userProjects.length > 0) {
-		container.append(renderProjectsContainer(userProjects, buckets));
+		projectsPane.append(renderProjectsContainer(userProjects, buckets));
 	}
 
-	// 2) Global as its own top-level folder (the default home for new chats).
+	// 2) Bottom pane — Global as its own top-level folder (the default
+	//    home for new chats).
 	if (globalProject) {
 		const items = (buckets.get("global") ?? [])
 			.slice()
 			.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
-		container.append(renderProjectFolder(globalProject, items));
+		sessionsPane.append(renderProjectFolder(globalProject, items));
 	}
 
 	// 3) Trailing "Other" bucket for orphaned sessions (deleted projects).
@@ -1992,7 +2031,7 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 		.slice()
 		.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
 	if (other.length > 0) {
-		container.append(
+		sessionsPane.append(
 			renderProjectFolder({ id: "other", name: "Other", icon: "📦", cwd: "" }, other),
 		);
 	}
@@ -2065,6 +2104,91 @@ function renderProjectsContainer(
 		wrap.classList.toggle("collapsed", set.has(PROJECTS_CONTAINER_ID));
 	});
 	return wrap;
+}
+
+/**
+ * Draggable splitter between the Projects (top) and Global/Other (bottom)
+ * sidebar panes. The Projects pane height is persisted to localStorage so
+ * the user's preferred split survives reloads. The document-level
+ * mousemove/mouseup handlers are attached exactly once (renderShell can
+ * rebuild the DOM many times); the per-element mousedown is rebound on
+ * every rebuild because the splitter node is brand new each time.
+ */
+const SIDEBAR_SPLIT_KEY = "acb-sidebar-projects-pane-height";
+const SIDEBAR_SPLIT_MIN = 60; // px — don't let either pane collapse to nothing
+
+function initSidebarSplitter(): void {
+	const splitter = document.getElementById("sidebar-splitter");
+	const wrap = document.getElementById("sidebar-sessions");
+	const projectsPane = document.getElementById("sidebar-projects-pane");
+	if (!splitter || !wrap || !projectsPane) return;
+
+	// Restore the persisted height (px). Falls back to ~38% of the wrap,
+	// clamped, so first run looks reasonable rather than lopsided.
+	let heightPx: number | null = null;
+	try {
+		const raw = localStorage.getItem(SIDEBAR_SPLIT_KEY);
+		if (raw) {
+			const px = Number.parseInt(raw, 10);
+			if (Number.isFinite(px) && px > 0) heightPx = px;
+		}
+	} catch {
+		/* ignore */
+	}
+	if (heightPx === null) {
+		const wrapH = wrap.getBoundingClientRect().height;
+		// If the sidebar isn't laid out yet (collapsed, display:none ancestor),
+		// fall back to a fixed default rather than computing 0 * 0.38 = 0.
+		heightPx = wrapH > 0 ? Math.round(wrapH * 0.38) : 220;
+	}
+	projectsPane.style.height = `${heightPx}px`;
+
+	// Per-instance mousedown: start a drag.
+	splitter.addEventListener("mousedown", (e) => {
+		if (wrap.classList.contains("no-projects")) return;
+		e.preventDefault();
+		const startY = e.clientY;
+		const startHeight = projectsPane.getBoundingClientRect().height;
+		document.body.classList.add("sidebar-resizing");
+		splitter.classList.add("dragging");
+		// Capture the latest dimensions on the fly so clamping tracks a
+		// resized window even mid-drag.
+		const applyMove = (clientY: number) => {
+			const delta = clientY - startY;
+			const wrapH = wrap.getBoundingClientRect().height;
+			const max = Math.max(SIDEBAR_SPLIT_MIN, wrapH - SIDEBAR_SPLIT_MIN - 6);
+			const h = Math.max(SIDEBAR_SPLIT_MIN, Math.min(max, startHeight + delta));
+			projectsPane.style.height = `${h}px`;
+		};
+		const onMove = (ev: MouseEvent) => applyMove(ev.clientY);
+		const onUp = () => {
+			document.body.classList.remove("sidebar-resizing");
+			splitter.classList.remove("dragging");
+			document.removeEventListener("mousemove", onMove);
+			document.removeEventListener("mouseup", onUp);
+			try {
+				const h = projectsPane.getBoundingClientRect().height;
+				if (h > 0) localStorage.setItem(SIDEBAR_SPLIT_KEY, String(Math.round(h)));
+			} catch {
+				/* ignore quota */
+			}
+		};
+		document.addEventListener("mousemove", onMove);
+		document.addEventListener("mouseup", onUp);
+	});
+
+	// Double-click resets to the default 38% split and clears the saved pref.
+	splitter.addEventListener("dblclick", () => {
+		if (wrap.classList.contains("no-projects")) return;
+		const wrapH = wrap.getBoundingClientRect().height;
+		const def = wrapH > 0 ? Math.round(wrapH * 0.38) : 220;
+		projectsPane.style.height = `${def}px`;
+		try {
+			localStorage.removeItem(SIDEBAR_SPLIT_KEY);
+		} catch {
+			/* ignore */
+		}
+	});
 }
 
 /**
