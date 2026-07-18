@@ -586,6 +586,22 @@ function onEvent(event: Record<string, unknown>): void {
 						if (btn) toggleSpeak(text, btn);
 						else speakText(text);
 					}
+				} else if (e.message.customType === "note") {
+					// Extension-emitted display note (e.g. /imggen's model-free
+					// image result). Pure render — markdown content shown as its
+					// own row. No LLM turn is involved (the command emitted this
+					// with display:true and no triggerTurn).
+					const content =
+						typeof (e.message as { content?: unknown }).content === "string"
+							? ((e.message as { content?: string }).content ?? "")
+							: "";
+					const note = {
+						kind: "note" as const,
+						text: content,
+						ts: (e.message as { timestamp?: number }).timestamp,
+					};
+					state.messages.push(note);
+					appendNode(renderMessageNode(note));
 				}
 			} else if (e.message.role === "user") {
 				// User message echoed by the server (we already showed it

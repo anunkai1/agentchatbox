@@ -105,7 +105,16 @@ export type PersistedMessage =
 	 * buttons. The actual TTS synthesis happens via the existing
 	 * /api/tts endpoint (Kokoro); this message only carries the words.
 	 */
-	| { kind: "voice-reply"; long: string; short: string };
+	| { kind: "voice-reply"; long: string; short: string }
+	/**
+	 * A display-only note injected by an extension via pi.sendMessage()
+	 * (customType:"note", display:true, no triggerTurn). No LLM turn is
+	 * involved — it's a way for a slash command to surface content
+	 * (e.g. /imggen's generated image + path) directly into the chat.
+	 * Rendered as its own markdown row. Carries no seq (custom messages
+	 * aren't `type:"message"` JSONL entries, so they have no fork ordinal).
+	 */
+	| { kind: "note"; text: string; ts?: number };
 
 // ---------------------------------------------------------------------------
 // In-memory app state

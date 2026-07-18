@@ -212,6 +212,20 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		wrap.append(card);
 		return wrap;
 	}
+	if (m.kind === "note") {
+		// Extension-injected display note (e.g. /imggen's model-free image
+		// result). Pure markdown render — same pipeline as assistant text,
+		// but its own lightweight row (no avatar, no voice buttons). No LLM
+		// turn produced this; it's an extension surfacing content directly.
+		const row = el("div", { class: "row row-note" });
+		const body = el("div", { class: "body" });
+		const text = el("div", { class: "text markdown" }, " ");
+		setRichText(text, m.text || " ");
+		body.append(text);
+		if (m.ts !== undefined) body.append(makeTimestampEl(m.ts));
+		row.append(body);
+		return row;
+	}
 	// error (voice-reply is attached inline to the assistant row, never
 	// rendered as its own node, so it never reaches here — narrow so the
 	// remaining union is just the error case with `.text`.)

@@ -914,6 +914,19 @@ body.sidebar-resizing iframe {
 	flex: 1;
 	min-width: 0;
 }
+/* Extension-injected display note (e.g. /imggen's model-free image result).
+ * A lightweight markdown row — same .text.markdown rendering as assistant
+ * text, but with a subtle left accent so it reads as a system/extension
+ * note rather than a model reply. No avatar, no voice buttons. */
+.row-note {
+	margin: 0.5rem 0;
+}
+.row-note .body {
+	border-left: 3px solid var(--accent, #5b8);
+	background: var(--note-bg, rgba(120, 200, 140, 0.06));
+	padding: 0.5rem 0.85rem;
+	border-radius: 0 8px 8px 0;
+}
 .body .text {
 	margin: 0;
 	font-family: inherit;

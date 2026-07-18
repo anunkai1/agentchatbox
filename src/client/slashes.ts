@@ -47,6 +47,7 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	models: "show all models & services in use (display-only overview)",
 	imagemodel: "open the image-generation model picker (alias: /image)",
 	image: "open the image-generation model picker (alias: /imagemodel)",
+	imggen: "generate an image directly (no LLM): /imggen [-a ASPECT] [-m MODEL] \"prompt\"",
 	think: "set thinking level: /think off|minimal|low|medium|high",
 	clear: "start a new chat (alias: /new)",
 	new: "start a new chat (alias: /clear)",
@@ -177,6 +178,15 @@ export function handleSlash(arg: string): void {
 			// comes — leaving the session stuck "streaming", so the user's
 			// next message gets queued as a steer instead of sent.
 			services.sendSlashCommand?.(`/${cmd}`);
+			break;
+		case "imggen":
+			// Model-free image generation (pi-local-image extension). Same
+			// lean sendSlashCommand path as /imagemodel — /imggen is an
+			// extension command that runs with NO agent loop (it calls the
+			// image backend directly and surfaces the result via a custom
+			// "note" message), so sendAsUser would hang waiting for an
+			// agent_end that never fires. `rest` carries the prompt + flags.
+			services.sendSlashCommand?.(`/imggen ${rest}`);
 			break;
 		case "think":
 			if (rest && ["off", "minimal", "low", "medium", "high"].includes(rest) && chatControls) {
