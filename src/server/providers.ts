@@ -42,7 +42,6 @@ export const PROVIDER_KEYS = [
 	"kimi-coding",
 	"opencode",
 	"minimax",
-	"ollama",
 	"venice",
 ] as const;
 
@@ -60,7 +59,7 @@ export type SupportedProvider = (typeof PROVIDER_KEYS)[number];
  * probe discovers from ~/.pi/agent/models.json — see models-cache.ts. The
  * picker is purely a mirror of `pi`, no ACB-side curation.
  */
-const NON_SDK_PROVIDERS = new Set(["ollama", "venice"]);
+const NON_SDK_PROVIDERS = new Set(["venice"]);
 const SDK_PROVIDER_KEYS = PROVIDER_KEYS.filter((p) => !NON_SDK_PROVIDERS.has(p));
 
 /**
