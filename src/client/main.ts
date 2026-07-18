@@ -847,7 +847,10 @@ function onEvent(event: Record<string, unknown>): void {
 				// Capture the image-model label from the pi-venice-image extension's
 				// notify so the Settings row reflects the current model. The
 				// extension owns the state; this is a display-only mirror.
-				const imgMatch = e.message.match(/image model set to (.+)/i);
+				// (\S+) = stop at first whitespace, so we capture just the model id
+				// even when the notify appends extra context (e.g. pi-local-image's
+				// "... — port 8012, GPU switched").
+				const imgMatch = e.message.match(/image model set to (\S+)/i);
 				if (imgMatch) {
 					state.currentImageModelLabel = imgMatch[1];
 					refreshStatus();
@@ -919,6 +922,13 @@ async function boot(): Promise<void> {
 		state.voiceRewriteModel = h.voiceRewriteModel ?? null;
 		state.whisperModel = h.whisperModel ?? null;
 		state.imageModel = h.imageModel ?? null;
+		// Seed the Settings-row label from the server-known model (override/env),
+		// so it shows the actual model on load instead of "default". The notify
+		// path below keeps it fresh after in-session picks. "default" source
+		// stays null → renders as "default" (accurate: nothing explicitly set).
+		if (state.imageModel && state.imageModel.source !== "default") {
+			state.currentImageModelLabel = state.imageModel.model;
+		}
 		state.visionModel = h.visionModel ?? null;
 		state.geminiKey = h.geminiKey ?? false;
 		state.availableModels = models.map((m: ModelInfo) => ({
