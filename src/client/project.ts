@@ -110,6 +110,13 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 					break;
 				}
 			}
+		} else if (cm.customType === "note") {
+			// Extension-emitted display note (e.g. /imggen image result).
+			// Reconstruct as a renderable note row (mirrors the live
+			// message_start "note" branch in main.ts).
+			const noteMsg = m as { content?: unknown; timestamp?: number };
+			const content = typeof noteMsg.content === "string" ? (noteMsg.content ?? "") : "";
+			out.push({ kind: "note", text: content, ts: noteMsg.timestamp });
 		}
 	}
 	return out;
