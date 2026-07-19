@@ -1205,6 +1205,8 @@ export interface ShellHandlers {
 	setSessionPinned: (sessionId: string, pinned: boolean) => void;
 	/** Rename any session by id (sidebar pencil). Server appends to the JSONL. */
 	renameSessionById: (sessionId: string, name: string) => void;
+	/** Delete any session by id (sidebar trash). Server removes the JSONL. */
+	deleteSession: (sessionId: string) => void;
 	// --- Projects --------------------------------------------------------
 	/** Start a new chat in a specific project (folder "+" button). */
 	newSessionInProject: (projectId: string) => void;
@@ -2335,6 +2337,14 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 			text: "⭐",
 		});
 		starBtn.addEventListener("click", (e) => {
+			// preventDefault: the star sits INSIDE the row's <a href>, so
+			// without it the browser would follow the link and reload the
+			// page (stopPropagation alone does NOT cancel link navigation —
+			// it only stops the click bubbling up to the row's own
+			// intercept-and-resume handler, which is the one that calls
+			// preventDefault for normal row clicks). stopPropagation keeps
+			// the click from triggering a resume.
+			e.preventDefault();
 			e.stopPropagation();
 			shellHandlers?.setSessionPinned(s.id, false);
 		});
@@ -2348,9 +2358,12 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		titleRow.append(starBtn);
 	}
 
-	// Hover-revealed action buttons. Each stops propagation so they
-	// don't trigger the row's resume-on-click. The pin toggle is only
-	// shown when not pinned — pinned rows use the always-visible star.
+	// Hover-revealed action buttons. Each calls preventDefault (to stop
+	// the parent <a href> from navigating — stopPropagation alone does
+	// NOT cancel link navigation) AND stopPropagation (so the click
+	// doesn't bubble up to the row's intercept-and-resume handler).
+	// The pin toggle is only shown when not pinned — pinned rows use
+	// the always-visible star.
 	const actions = el("div", { class: "session-item-actions" });
 	const renameBtn = el("button", {
 		class: "session-action rename",
@@ -2358,6 +2371,12 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		html: "✎",
 	});
 	actions.append(renameBtn);
+	const deleteBtn = el("button", {
+		class: "session-action delete",
+		title: "Delete",
+		html: "🗑",
+	});
+	actions.append(deleteBtn);
 	if (!pinned) {
 		const pinBtn = el("button", {
 			class: "session-action pin",
@@ -2365,6 +2384,9 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 			text: "☆",
 		});
 		pinBtn.addEventListener("click", (e) => {
+			// See starBtn above: preventDefault stops the <a> navigation,
+			// stopPropagation stops the row's resume-on-click.
+			e.preventDefault();
 			e.stopPropagation();
 			shellHandlers?.setSessionPinned(s.id, true);
 		});
@@ -2392,12 +2414,27 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	});
 
 	renameBtn.addEventListener("click", (e) => {
+		// See starBtn above: preventDefault is the difference between
+		// opening the rename input and a full-page navigation to /s/<id>
+		// (which is exactly the bug that made rename impossible — the
+		// page reloaded before the input could render).
+		e.preventDefault();
 		e.stopPropagation();
 		startRename(titleEl, titleRow, s);
 	});
 	// Same mousedown guard as the star/pin buttons — middle-clicking the
 	// pencil shouldn't open the link.
 	renameBtn.addEventListener("mousedown", (e) => {
+		if (e.button !== 0) e.stopPropagation();
+	});
+
+	deleteBtn.addEventListener("click", (e) => {
+		// See starBtn above for the preventDefault/stopPropagation pair.
+		e.preventDefault();
+		e.stopPropagation();
+		confirmDeleteSession(s);
+	});
+	deleteBtn.addEventListener("mousedown", (e) => {
 		if (e.button !== 0) e.stopPropagation();
 	});
 
@@ -2457,6 +2494,24 @@ function startRename(titleEl: HTMLElement, titleRow: HTMLElement, s: SessionSumm
 		}
 	});
 	input.addEventListener("blur", () => finish(true));
+}
+
+/**
+ * Confirm and dispatch a session delete. The confirm dialog is the only
+ * guardrail — there's no undo (the JSONL is unlinked, and pi's session
+ * files aren't shadow-copied anywhere). If the user is deleting the
+ * session they're currently viewing, the shell handler starts a fresh
+ * chat afterwards so the message area doesn't linger on a now-deleted
+ * conversation (and so the live pi child doesn't get a chance to
+ * re-create the file by writing its next event).
+ */
+function confirmDeleteSession(s: SessionSummary): void {
+	const title = s.title || "Untitled";
+	const active = s.id === state.sessionId;
+	const msg = active
+		? `Delete "${title}"? This is your current chat — it will be cleared and a new chat started. This cannot be undone.`
+		: `Delete "${title}"? This cannot be undone.`;
+	if (confirm(msg)) shellHandlers?.deleteSession(s.id);
 }
 
 /** Format a relative time string for session meta. */

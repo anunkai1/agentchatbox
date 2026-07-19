@@ -32,6 +32,7 @@ import {
 	readFileSync,
 	readSync,
 	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -511,6 +512,37 @@ export function setPiSessionName(cwd: string, sessionId: string, name: string): 
 	// process mutations own their invalidation explicitly; callers reading
 	// externally-written files still get the mtime fast path.
 	sessionFileCache.delete(file);
+	return true;
+}
+
+/**
+ * Delete a session by removing its JSONL file from disk. Symmetric with
+ * `setPiSessionName` / `forkPiSession`: it operates on pi's own
+ * persistence format directly (no pi subprocess involvement), so the
+ * deletion is immediately visible to every device via the next
+ * broadcastSessions. Returns true if the file was removed, false if the
+ * session couldn't be found (already deleted, or never existed).
+ *
+ * This does NOT touch any live `pi` child still bound to that session id
+ * — that's the caller's concern (see chat.ts's deleteSession handler).
+ * The caller also clears any pin for the id so `data/pins.json` doesn't
+ * accumulate dead entries. Invalidates the per-file summary cache and the
+ * root-wide id→cwd index so the next list/resume doesn't surface a ghost
+ * session.
+ */
+export function deletePiSession(cwd: string, sessionId: string): boolean {
+	const file = findPiSessionFile(cwd, sessionId);
+	if (!file) return false;
+	try {
+		unlinkSync(file);
+	} catch {
+		return false;
+	}
+	// Drop the cached summary (mtime key is meaningless for a deleted file)
+	// and force the id→cwd index to rebuild on the next miss, so the deleted
+	// session isn't resurrected by a stale lookup.
+	sessionFileCache.delete(file);
+	cwdIndex = null;
 	return true;
 }
 /**

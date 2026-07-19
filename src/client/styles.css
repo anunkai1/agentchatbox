@@ -399,6 +399,13 @@ body.sidebar-resizing iframe {
 .session-action.pin.active {
 	color: var(--text);
 }
+/* Trash button — same hit target as the other row actions, but tinted
+ * red on hover so it reads as destructive (matches the project-delete
+ * button's color). */
+.session-action.delete:hover {
+	background: rgba(224, 86, 86, 0.12);
+	color: #e05656;
+}
 /* Always-visible ⭐ shown next to the title of pinned sessions.
  * Click to unpin. Not hover-gated like the action buttons. */
 .session-pin-indicator {
