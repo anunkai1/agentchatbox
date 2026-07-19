@@ -909,7 +909,7 @@ export function openModelsPanel(): void {
 	box.append(
 		svcRow(
 			"Image generation",
-			"Local GPU (free) or Venice API. Routes via /imagemodel.",
+			"Local GPU (free), Venice/OpenRouter APIs, or OpenAI Codex OAuth. Routes via /imagemodel.",
 			modelLine(pill(imgLabel, imgKind), `${imgProvider} / ${imgId}`),
 			hint("switch → ", kbd("/imagemodel")),
 			() => {

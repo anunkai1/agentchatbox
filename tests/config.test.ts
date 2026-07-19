@@ -65,6 +65,14 @@ describe("getServerApiKey — auth.json is the single source of truth", () => {
 		expect(getServerApiKey("zai")).toBe("zai-secret");
 	});
 
+	it("recognizes an OAuth access token without returning the rotating secret", async () => {
+		const { getServerApiKey, readPiAuth } = await withAuth({
+			"openai-codex": { type: "oauth", access: "oauth-access-secret", refresh: "refresh-secret" },
+		});
+		expect(readPiAuth().get("openai-codex")).toBe("oauth");
+		expect(getServerApiKey("openai-codex")).toBe("oauth");
+	});
+
 	it("resolves to undefined for a provider not in auth.json", async () => {
 		const { getServerApiKey } = await withAuth({
 			deepseek: { key: "ds-secret" },

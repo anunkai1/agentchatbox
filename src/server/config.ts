@@ -93,13 +93,30 @@ export const PI_AUTH_PATH = process.env.AGENTCHATBOX_PI_AUTH_FILE
 export function readPiAuth(): Map<string, string> {
 	const out = new Map<string, string>();
 	try {
-		const obj = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8")) as Record<string, { key?: unknown }>;
+		const obj = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8")) as Record<
+			string,
+			{ type?: unknown; key?: unknown; access?: unknown }
+		>;
 		for (const [provider, entry] of Object.entries(obj)) {
-			// Trim — API keys never carry intentional whitespace, and the
-			// env-key reader (readKey) already trims. Keeps a stray
-			// padded/blank entry from masquerading as a configured key.
-			const key = entry && typeof entry.key === "string" ? entry.key.trim() : "";
-			if (key.length > 0) out.set(provider.toLowerCase(), key);
+			// Two credential shapes live in auth.json:
+			//   - { type: "api_key", key: "sk-..." }   (env-key providers)
+			//   - { type: "oauth", access, refresh, expires, accountId }
+			//                                          (ChatGPT Plus/Pro login,
+			//                                           e.g. openai-codex)
+			// Both mean "authenticated" for picker/spawn-gate purposes. The
+			// value returned is NEVER passed to the pi child — pi reads
+			// auth.json itself (see pi-process.ts header) — so for OAuth we
+			// return a non-empty sentinel rather than the (rotating) access
+			// token. The sentinel just needs to be truthy to pass the spawn
+			// gate in session-registry.ts and the picker gate in index.ts.
+			const type = entry?.type;
+			const key = typeof entry?.key === "string" ? entry.key.trim() : "";
+			const access = typeof entry?.access === "string" ? entry.access.trim() : "";
+			if (type === "oauth" && access.length > 0) {
+				out.set(provider.toLowerCase(), "oauth");
+			} else if (key.length > 0) {
+				out.set(provider.toLowerCase(), key);
+			}
 		}
 	} catch {
 		// Missing/unreadable/malformed — treat as "logged out of everything".
