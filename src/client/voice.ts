@@ -572,6 +572,11 @@ let recordingStart = 0;
 export async function handleVoiceRecord(): Promise<void> {
 	if (mediaRecorder && mediaRecorder.state === "recording") {
 		mediaRecorder.stop();
+		// Flip the button back to the mic icon immediately so the user
+		// sees that recording has stopped, before the transcription
+		// round-trip even begins. (onstop also resets it as the
+		// canonical teardown point.)
+		$<HTMLButtonElement>("#voice-btn").textContent = "🎙";
 		return;
 	}
 	try {
@@ -582,6 +587,10 @@ export async function handleVoiceRecord(): Promise<void> {
 			if (e.data.size > 0) recordedChunks.push(e.data);
 		};
 		mediaRecorder.onstop = async () => {
+			// Canonical teardown: ensure the mic button reverts to its
+			// idle icon no matter how recording stopped (button click,
+			// an OS/permission revoke, etc.).
+			$<HTMLButtonElement>("#voice-btn").textContent = "🎙";
 			stream.getTracks().forEach((t) => {
 				t.stop();
 			});
@@ -590,7 +599,22 @@ export async function handleVoiceRecord(): Promise<void> {
 			$("#status-bar").textContent = `transcribing ${secs.toFixed(1)}s of audio…`;
 			try {
 				const text = await transcribeAudio(blob);
-				$<HTMLTextAreaElement>("#input").value = text;
+				// Insert the transcript at the cursor, preserving any text
+				// already in the box — so recording again appends rather
+				// than wiping what's there. A single space is added before
+				// the transcript only when needed (non-empty prefix that
+				// doesn't already end in whitespace).
+				if (text) {
+					const ta = $<HTMLTextAreaElement>("#input");
+					const start = ta.selectionStart;
+					const end = ta.selectionEnd;
+					const before = ta.value.slice(0, start);
+					const after = ta.value.slice(end);
+					const lead = before.length > 0 && !/\s$/.test(before) ? " " : "";
+					ta.value = before + lead + text + after;
+					ta.selectionStart = ta.selectionEnd = before.length + lead.length + text.length;
+					ta.focus();
+				}
 				autoSize();
 				$("#status-bar").textContent = `transcribed (${text.length} chars). Press Enter to send.`;
 			} catch (err) {
@@ -599,8 +623,8 @@ export async function handleVoiceRecord(): Promise<void> {
 		};
 		recordingStart = Date.now();
 		mediaRecorder.start();
-		$<HTMLButtonElement>("#voice-btn").textContent = "⏹";
-		$("#status-bar").textContent = "recording… click ⏹ to stop";
+		$<HTMLButtonElement>("#voice-btn").textContent = "🔴";
+		$("#status-bar").textContent = "recording… click 🔴 to stop";
 	} catch (err) {
 		appendError(`microphone access denied: ${err instanceof Error ? err.message : String(err)}`);
 	}
