@@ -2376,11 +2376,86 @@ body.sidebar-resizing iframe {
 }
 .ext-ui-list .model-row {
 	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
 	padding: 8px 12px;
 	border-radius: 4px;
 }
 .ext-ui-list .model-row:hover {
 	background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+/* Model name (the part before the trailing " — <provider>" tag). */
+.ext-ui-row-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Provider tag rendered as a tinted right-aligned pill so the provider
+   is scannable at a glance instead of blending into the row text.
+   Tints are keyed off the provider keyword in the tag (purely visual). */
+.ext-ui-provider {
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid transparent;
+	white-space: nowrap;
+}
+.ext-ui-provider--local {
+	color: #4ade80;
+	background: rgba(74, 222, 128, 0.12);
+	border-color: rgba(74, 222, 128, 0.35);
+}
+.ext-ui-provider--venice {
+	color: #c4b5fd;
+	background: rgba(196, 181, 253, 0.12);
+	border-color: rgba(196, 181, 253, 0.35);
+}
+.ext-ui-provider--openrouter {
+	color: #93c5fd;
+	background: rgba(147, 197, 253, 0.12);
+	border-color: rgba(147, 197, 253, 0.35);
+}
+.ext-ui-provider--openai {
+	color: #5eead4;
+	background: rgba(94, 234, 212, 0.12);
+	border-color: rgba(94, 234, 212, 0.35);
+}
+.ext-ui-provider--default {
+	color: var(--text-secondary);
+	background: var(--surface-active);
+	border-color: var(--border);
+}
+/* Section separator rows (e.g. "── Venice (API, paid) ──") rendered as a
+   full-width, non-interactive divider header. */
+.ext-ui-separator {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 12px 4px 4px;
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--text-muted);
+	user-select: none;
+	pointer-events: none;
+}
+.ext-ui-separator::before,
+.ext-ui-separator::after {
+	content: "";
+	flex: 1 1 auto;
+	height: 1px;
+	background: var(--border);
+}
+.ext-ui-separator span {
+	flex: 0 0 auto;
 }
 .ext-ui-message {
 	margin: 8px 0 16px;
