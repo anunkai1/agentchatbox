@@ -78,9 +78,10 @@ export const config: ServerConfig = {
  *
  * `~/.pi/agent/auth.json` is a symlink to `.secrets/llm/pi-auth.json`.
  * Read fresh each call (the file is tiny and `pi` rewrites it on every
- * login/logout). Returns provider id → API key; an empty map if the file
- * is missing/unreadable/malformed (picker stays empty — fix by logging
- * in via `pi`).
+ * login/logout). Returns provider id → an authentication-presence value:
+ * the API key for key-backed providers, or the non-secret "oauth" sentinel
+ * for OAuth providers. An empty map if the file is missing/unreadable/malformed
+ * (picker stays empty — fix by logging in via `pi`).
  */
 // Overridable via AGENTCHATBOX_PI_AUTH_FILE so tests can point at a temp
 // file instead of the operator's real ~/.pi/agent/auth.json (keeps the
