@@ -53,6 +53,7 @@ import {
 	updateProject,
 } from "./projects.js";
 import {
+	deletePiSession,
 	findSessionCwd,
 	forkPiSession,
 	listAllSessions,
@@ -361,6 +362,41 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			broadcastSessions();
 			break;
 		}
+		case "deleteSession": {
+			// Remove the session's JSONL from disk (pi's own persistence
+			// format) so it disappears from every sidebar after the
+			// rebroadcast. Resolve the actual cwd the same way
+			// renameSessionById does — a project session is NOT under
+			// config.piCwd, so hardcoding the global cwd would silently
+			// miss every non-global chat. We don't kill any live pi child
+			// bound to this id (the issuing client decides whether to start
+			// a fresh chat afterwards); a still-running child could in
+			// principle re-create the file on its next write, but that's
+			// only possible if the user keeps chatting in a session they
+			// just deleted, which the client prevents by starting a new
+			// chat when the active session is the one being deleted. Clear
+			// any pin too so data/pins.json doesn't keep a dead entry.
+			const delCwd = findSessionCwd(msg.sessionId, projectCwds()) ?? config.piCwd;
+			const deleted = deletePiSession(delCwd, msg.sessionId);
+			if (!deleted) {
+				deliverError(ws, "could not delete session (not found on disk)");
+				break;
+			}
+			setPinned(msg.sessionId, false);
+			// Also purge the session from the semantic-search index
+			// (data/search.db) so its messages stop surfacing in
+			// /api/sessions/search. The index is a DERIVED copy of the
+			// JSONL transcript — without this the deleted session's text
+			// would linger in search results forever. Search is a
+			// pluggable feature (the module may not even be installed),
+			// so the import is dynamic + try-guarded; a failure degrades
+			// to "index not purged" rather than failing the delete.
+			// Fire-and-forget: the purge is self-contained (errors are
+			// caught + logged inside) and onClientMessage is sync.
+			void purgeSessionFromSearchIndex(msg.sessionId);
+			broadcastSessions();
+			break;
+		}
 		case "forkSession": {
 			// Fork the source session's JSONL into a new session file (a
 			// truncated copy of pi's own persistence format — see
@@ -576,6 +612,33 @@ function waitForMessage<T>(ws: WebSocket, type: ClientMessage["type"]): Promise<
  */
 function send(ws: PiSocket, msg: ServerMessage): void {
 	deliver(ws, msg);
+}
+
+/**
+ * Purge a session from the optional semantic-search index
+ * (`data/search.db`). The search module is PLUGGABLE — deleting
+ * `src/server/search/` leaves the core server compiling — so we use a
+ * dynamic import with a non-literal specifier (TypeScript won't try to
+ * resolve it) and wrap it in try/catch. A failure (module missing, native
+ * `better-sqlite3` load error, ONNX init error) degrades to "index not
+ * purged" rather than failing the delete: the JSONL is already gone, the
+ * pin is cleared, and stale search hits are a recoverable nuisance, not a
+ * data-loss event. Same try-guarded-dynamic-import pattern the
+ * `/api/sessions/search` route in index.ts uses.
+ */
+async function purgeSessionFromSearchIndex(sessionId: string): Promise<void> {
+	const searchPath = "./search/index.js";
+	try {
+		const mod = (await import(searchPath)) as {
+			deleteIndexedSession?: (id: string) => Promise<void>;
+		};
+		await mod.deleteIndexedSession?.(sessionId);
+	} catch (e) {
+		log.warn("search index purge failed (non-fatal)", {
+			sessionId,
+			error: String(e),
+		});
+	}
 }
 
 /**

@@ -1010,6 +1010,20 @@ async function boot(): Promise<void> {
 		abortRetry: () => chatClient.abortRetry(),
 		setSessionPinned: (sessionId, pinned) => chatClient.setSessionPinned(sessionId, pinned),
 		renameSessionById: (sessionId, name) => chatClient.renameSessionById(sessionId, name),
+		deleteSession: (sessionId) => {
+			// Tell the server to unlink the JSONL. If the deleted session is
+			// the one we're currently viewing, swap to a brand-new chat so
+			// the message area doesn't linger on a now-deleted conversation
+			// and so the live pi child doesn't re-create the file by writing
+			// its next event. The server's broadcastSessions refresh will
+			// drop the row from every sidebar.
+			const wasActive = sessionId === state.sessionId;
+			chatClient.deleteSession(sessionId);
+			if (wasActive) {
+				resetChatState();
+				chatClient.newSession();
+			}
+		},
 		newSessionInProject: (projectId) => {
 			if (confirm("Start a new chat in this project?")) {
 				resetChatState();

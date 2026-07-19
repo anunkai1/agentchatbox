@@ -345,6 +345,64 @@ describe("setPiSessionName", () => {
 	});
 });
 
+describe("deletePiSession", () => {
+	it("unlinks the JSONL so listPiSessions no longer returns it", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["first prompt"],
+		);
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T11-00-00_bbb.jsonl",
+			"bbb",
+			"2026-06-15T11:00:00.000Z",
+			["second prompt"],
+		);
+		const { listPiSessions, deletePiSession } = await import("../src/server/session-list.js");
+		expect(
+			listPiSessions(cwd)
+				.map((s) => s.id)
+				.sort(),
+		).toEqual(["aaa", "bbb"]);
+
+		expect(deletePiSession(cwd, "aaa")).toBe(true);
+
+		// After: only bbb remains; aaa's file is gone.
+		const remaining = listPiSessions(cwd).map((s) => s.id);
+		expect(remaining).toEqual(["bbb"]);
+	});
+
+	it("returns false for an unknown session id (nothing to unlink)", async () => {
+		const { deletePiSession } = await import("../src/server/session-list.js");
+		expect(deletePiSession(cwd, "does-not-exist")).toBe(false);
+	});
+
+	it("clears the per-file summary cache so a same-mtime re-create isn't stale", async () => {
+		// deletePiSession must invalidate the cache entry; otherwise a
+		// brand-new file reusing the same name within the same mtime tick
+		// would be served from the stale cache and the deleted session's
+		// old summary would "come back". We approximate this by deleting,
+		// re-listing (proves it's gone), then confirming a second delete
+		// is a clean miss rather than a ghost hit.
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["first prompt"],
+		);
+		const { listPiSessions, deletePiSession } = await import("../src/server/session-list.js");
+		expect(listPiSessions(cwd).map((s) => s.id)).toEqual(["aaa"]);
+		expect(deletePiSession(cwd, "aaa")).toBe(true);
+		expect(listPiSessions(cwd)).toEqual([]);
+		// Second delete is a clean miss (file already gone, no cache hit).
+		expect(deletePiSession(cwd, "aaa")).toBe(false);
+	});
+});
+
 describe("findSessionCwd", () => {
 	it("resolves a session's cwd from the known-cwd fast path", async () => {
 		writeSession(

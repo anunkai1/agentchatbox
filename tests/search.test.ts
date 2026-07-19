@@ -50,3 +50,24 @@ describe("search availability (pluggability)", () => {
 		expect(typeof avail).toBe("boolean");
 	});
 });
+
+describe("deleteIndexedSession (pluggability)", () => {
+	// The delete path must not throw when search is off — chat.ts's
+	// deleteSession handler always calls it, so it must be a safe no-op in
+	// environments without better-sqlite3 / the optional packages. A throw
+	// here would surface as an unhandled rejection in chat.ts's
+	// fire-and-forget call.
+	it("is a no-op (no throw) when search is disabled", async () => {
+		delete process.env.AGENTCHATBOX_SEARCH_ENABLED;
+		const mod = await import("../src/server/search/index.js");
+		await expect(mod.deleteIndexedSession("any-id")).resolves.toBeUndefined();
+	});
+
+	it("does not throw when enabled but packages are missing", async () => {
+		process.env.AGENTCHATBOX_SEARCH_ENABLED = "1";
+		const mod = await import("../src/server/search/index.js");
+		// Search unavailable (no optional packages in this test env) → the
+		// delete must bail before touching SQLite and resolve cleanly.
+		await expect(mod.deleteIndexedSession("any-id")).resolves.toBeUndefined();
+	});
+});

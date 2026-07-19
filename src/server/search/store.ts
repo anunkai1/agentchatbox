@@ -245,6 +245,54 @@ export async function indexSession(
 	await refreshCacheForSession(meta.sessionId);
 }
 
+/**
+ * Remove a session from the index entirely — wipe its embeddings and
+ * metadata rows from SQLite AND drop its entries from the in-memory
+ * cache. Idempotent (no-op if the session was never indexed). Used by
+ * chat.ts's deleteSession handler so a deleted session's messages stop
+ * surfacing in /api/sessions/search: the store is a DERIVED copy of the
+ * JSONL transcript, so it must follow the source-of-truth deletion or
+ * the messages linger here forever (the JSONL is gone, but search keeps
+ * returning hits). Order matters: the caller deletes the JSONL first,
+ * then calls this, so a future index sweep can't resurrect the rows.
+ */
+export async function deleteSession(sessionId: string): Promise<void> {
+	const database = await getDb();
+	const tx = database.transaction(() => {
+		database.prepare("DELETE FROM embeddings WHERE session_id = ?").run(sessionId);
+		database.prepare("DELETE FROM indexed_sessions WHERE session_id = ?").run(sessionId);
+	});
+	tx();
+	sessionMeta.delete(sessionId);
+	// If the cache hasn't been loaded yet, nothing to prune — the next
+	// loadCache() reads from SQLite, where the rows are already gone.
+	if (cacheLoaded) pruneCacheForSession(sessionId);
+}
+
+/** Drop a single session's entries from the in-memory cache (after a delete). */
+function pruneCacheForSession(sessionId: string): void {
+	let removed = 0;
+	for (let i = 0; i < cacheMeta.length; i++) {
+		if (cacheMeta[i].sessionId === sessionId) removed++;
+	}
+	if (removed === 0) return;
+	const kept = cacheMeta.length - removed;
+	const newVecs = new Float32Array(kept * EMBEDDING_DIM);
+	const newMeta: CacheMeta[] = [];
+	let w = 0;
+	for (let i = 0; i < cacheMeta.length; i++) {
+		if (cacheMeta[i].sessionId === sessionId) continue;
+		newMeta.push(cacheMeta[i]);
+		newVecs.set(
+			cacheVectors.subarray(i * EMBEDDING_DIM, (i + 1) * EMBEDDING_DIM),
+			w * EMBEDDING_DIM,
+		);
+		w++;
+	}
+	cacheMeta = newMeta;
+	cacheVectors = newVecs;
+}
+
 /** Reload a single session's rows into the cache (after indexing). */
 async function refreshCacheForSession(sessionId: string): Promise<void> {
 	if (!cacheLoaded) await loadCache();

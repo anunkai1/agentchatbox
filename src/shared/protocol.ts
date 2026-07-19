@@ -340,6 +340,18 @@ export type ClientMessage =
 	 */
 	| { type: "setSessionPinned"; sessionId: string; pinned: boolean }
 	/**
+	 * Delete ANY session (not just the current one) by id. The server
+	 * removes the session's JSONL file (pi's own persistence format) and
+	 * clears any pin for it, then rebroadcasts the session list to every
+	 * connected client so the row vanishes from every sidebar. The client
+	 * that issued the delete is responsible for starting a new chat if it
+	 * deleted the currently-active session (the server has no notion of
+	 * which session a given WS is "viewing" beyond the live pi child it's
+	 * bound to, and killing that child here would surprise other tabs
+	 * reattached to the same session).
+	 */
+	| { type: "deleteSession"; sessionId: string }
+	/**
 	 * Fork (branch) a session into a new one. The server copies the
 	 * source session's JSONL — its `session` header rewritten with a
 	 * fresh id/timestamp, plus the first `messageCount` `type:"message"`

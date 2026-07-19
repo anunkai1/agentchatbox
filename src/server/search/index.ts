@@ -24,7 +24,13 @@ import { config } from "../config.js";
 import { log } from "../logger.js";
 import { embed, isEmbeddingAvailable } from "./embeddings.js";
 import { indexAll } from "./indexer.js";
-import { getCacheStats, isStoreAvailable, loadCache, searchVectors } from "./store.js";
+import {
+	getCacheStats,
+	isStoreAvailable,
+	loadCache,
+	searchVectors,
+	deleteSession as storeDeleteSession,
+} from "./store.js";
 
 export interface SessionSearchResult {
 	sessionId: string;
@@ -107,4 +113,21 @@ export async function searchSessions(
 		modifiedAt: h.modifiedAt,
 		messageCount: h.messageCount,
 	}));
+}
+
+/**
+ * Drop a session from the search index entirely (embeddings + metadata,
+ * both on disk in search.db and in the in-memory cache). Idempotent —
+ * a no-op if the session was never indexed or if search is disabled.
+ * Used by the WS deleteSession handler so a deleted session's messages
+ * stop surfacing in /api/sessions/search: the index is a DERIVED copy of
+ * the JSONL transcript, so when the source is deleted the derived copy
+ * must follow, or the messages linger here forever.
+ */
+export async function deleteIndexedSession(sessionId: string): Promise<void> {
+	// Search is a pluggable feature — if it isn't available, the index
+	// doesn't exist and there's nothing to delete. Bail before touching
+	// SQLite so the delete path stays a no-op when search is off.
+	if (!(await isSearchAvailable())) return;
+	await storeDeleteSession(sessionId);
 }
