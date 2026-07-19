@@ -90,6 +90,57 @@ function onCancel(overlay: HTMLDivElement, id: string, respond: ExtensionUiRespo
 }
 
 /**
+ * Separator rows look like "── Venice (API, paid) ──". We detect the
+ * leading pair of em-dashes (U+2014) and render such rows as a full-width
+ * non-interactive section header instead of a clickable model row.
+ */
+const SEPARATOR_RE = /^\s*──/;
+const isSeparatorRow = (s: string): boolean => SEPARATOR_RE.test(s);
+
+/**
+ * Provider tint heuristics — purely presentational. The extension tags
+ * each option with a trailing " — <provider>" segment; we tint the badge
+ * by the provider keyword so the user can scan provider groups at a
+ * glance. This is the only place ACB reads provider names, and it only
+ * affects paint — the original option string is what gets sent back.
+ */
+const PROVIDER_TINTS: { match: RegExp; cls: string }[] = [
+	{ match: /local|\bfree\b/i, cls: "ext-ui-provider--local" },
+	{ match: /venice/i, cls: "ext-ui-provider--venice" },
+	{ match: /openrouter/i, cls: "ext-ui-provider--openrouter" },
+	{ match: /openai|codex/i, cls: "ext-ui-provider--openai" },
+];
+function providerClass(tag: string): string {
+	for (const t of PROVIDER_TINTS) if (t.match.test(tag)) return t.cls;
+	return "ext-ui-provider--default";
+}
+
+/**
+ * Build one option row. Model rows split "Name (id) — provider tag" on the
+ * last em-dash segment so the provider renders as a right-aligned tinted
+ * badge; separator rows render as a divider header. The row carries its
+ * index into `filtered` via `data-idx` so keyboard nav can toggle `.active`.
+ */
+function buildOptionRow(opt: string, idx: number, active: boolean): HTMLElement {
+	if (isSeparatorRow(opt)) {
+		const label = opt.replace(/^\s*──\s*/, "").replace(/\s*──\s*$/, "");
+		return el("div", { class: "ext-ui-separator" }, el("span", { text: label }));
+	}
+	const dashIdx = opt.lastIndexOf(" \u2014 "); // " — " (em-dash)
+	let label = opt;
+	let tag = "";
+	if (dashIdx >= 0) {
+		label = opt.slice(0, dashIdx);
+		tag = opt.slice(dashIdx + 3); // skip " — "
+	}
+	const row = el("div", { class: `model-row${active ? " active" : ""}` });
+	row.dataset.idx = String(idx);
+	row.append(el("span", { class: "ext-ui-row-label", text: label }));
+	if (tag) row.append(el("span", { class: `ext-ui-provider ${providerClass(tag)}`, text: tag }));
+	return row;
+}
+
+/**
  * Select dialog — a searchable list of plain-string options. The option
  * text IS the value sent back (pi's `ctx.ui.select` is string-based).
  */
@@ -115,39 +166,54 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 	box.append(list);
 
 	let filtered = options;
-	let selectedIdx = 0;
+	// Start on the first selectable (non-separator) row.
+	let selectedIdx = Math.max(0, filtered.findIndex((o) => !isSeparatorRow(o)));
 
 	function renderList(): void {
 		list.innerHTML = "";
 		filtered.forEach((opt, i) => {
-			const row = el("div", {
-				class: `model-row${i === selectedIdx ? " active" : ""}`,
-				text: opt,
-			});
-			row.addEventListener("click", () => {
-				overlay.remove();
-				respond(e.id, { value: opt });
-			});
-			row.addEventListener("mouseenter", () => {
-				selectedIdx = i;
-				renderActive();
-			});
+			const row = buildOptionRow(opt, i, i === selectedIdx);
+			if (!isSeparatorRow(opt)) {
+				row.addEventListener("click", () => {
+					overlay.remove();
+					respond(e.id, { value: opt });
+				});
+				row.addEventListener("mouseenter", () => {
+					selectedIdx = i;
+					renderActive();
+				});
+			}
 			list.append(row);
 		});
 	}
 
 	function renderActive(): void {
-		for (const row of list.querySelectorAll(".model-row")) {
-			row.classList.toggle("active", false);
+		const rows = list.querySelectorAll<HTMLElement>(".model-row[data-idx]");
+		rows.forEach((r) => {
+			const on = Number(r.dataset.idx) === selectedIdx;
+			r.classList.toggle("active", on);
+		});
+		const target = list.querySelector(`.model-row[data-idx="${selectedIdx}"]`);
+		target?.scrollIntoView({ block: "nearest" });
+	}
+
+	/** Move selection by ±1, skipping separator rows. */
+	function moveSelection(dir: 1 | -1): void {
+		let i = selectedIdx;
+		for (let n = 0; n < filtered.length; n++) {
+			i += dir;
+			if (i < 0 || i >= filtered.length) return;
+			if (!isSeparatorRow(filtered[i])) {
+				selectedIdx = i;
+				return;
+			}
 		}
-		const rows = list.querySelectorAll(".model-row");
-		if (rows[selectedIdx]) rows[selectedIdx].classList.add("active");
 	}
 
 	function applyFilter(): void {
 		const q = search.value.toLowerCase().trim();
 		filtered = q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
-		selectedIdx = 0;
+		selectedIdx = Math.max(0, filtered.findIndex((o) => !isSeparatorRow(o)));
 		renderList();
 	}
 
@@ -156,20 +222,20 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 	// Keyboard navigation.
 	box.tabIndex = -1;
 	search.addEventListener("keydown", (ev) => {
-		const rows = list.querySelectorAll(".model-row");
 		if (ev.key === "ArrowDown") {
 			ev.preventDefault();
-			selectedIdx = Math.min(selectedIdx + 1, rows.length - 1);
+			moveSelection(1);
 			renderActive();
 		} else if (ev.key === "ArrowUp") {
 			ev.preventDefault();
-			selectedIdx = Math.max(selectedIdx - 1, 0);
+			moveSelection(-1);
 			renderActive();
 		} else if (ev.key === "Enter") {
 			ev.preventDefault();
-			if (filtered[selectedIdx]) {
+			const pick = filtered[selectedIdx];
+			if (pick && !isSeparatorRow(pick)) {
 				overlay.remove();
-				respond(e.id, { value: filtered[selectedIdx] });
+				respond(e.id, { value: pick });
 			}
 		} else if (ev.key === "Escape") {
 			ev.preventDefault();
