@@ -899,11 +899,18 @@ export function openModelsPanel(): void {
 	const imgKind = img?.source === "override" ? "set" : img?.source === "env" ? "set" : "default";
 	const imgLabel =
 		img?.source === "default" ? "default" : img?.source === "env" ? "env" : "override";
+	// Derive provider from the (source-tagged) model id so the row tells the
+	// truth for local picks too. The unified /imagemodel picker writes
+	// `local/<id>` or `venice/<id>`; bare legacy ids default to venice.
+	const imgModelRaw = img?.model ?? "z-image-turbo";
+	const imgSlash = imgModelRaw.indexOf("/");
+	const imgProvider = imgSlash >= 0 ? imgModelRaw.slice(0, imgSlash) : "venice";
+	const imgId = imgSlash >= 0 ? imgModelRaw.slice(imgSlash + 1) : imgModelRaw;
 	box.append(
 		svcRow(
 			"Image generation",
-			"Venice text-to-image, via pi-venice-image.",
-			modelLine(pill(imgLabel, imgKind), `venice / ${img?.model ?? "z-image-turbo"}`),
+			"Local GPU (free) or Venice API. Routes via /imagemodel.",
+			modelLine(pill(imgLabel, imgKind), `${imgProvider} / ${imgId}`),
 			hint("switch → ", kbd("/imagemodel")),
 			() => {
 				overlay.remove();
