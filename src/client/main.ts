@@ -181,7 +181,11 @@ function sendAsUser(trimmed: string): void {
 	// function doesn't have to capture `chatClient` (which is local to
 	// boot()). The hook is `(text, images?) => void`.
 	sendPromptHook(trimmed, images.length > 0 ? images : undefined);
-	setStreaming(true);
+	// Only pi's agent_start/agent_end events own the streaming state. A
+	// slash command can be handled entirely by an extension (including a
+	// picker or config update) and legitimately emits neither event; marking
+	// it streaming optimistically would leave the next real message stranded
+	// as a steer forever.
 }
 
 /**
