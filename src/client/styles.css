@@ -1073,7 +1073,7 @@ body.sidebar-resizing iframe {
 .thinking {
 	color: var(--text-muted);
 	font-size: 13px;
-	margin: 2px 0 6px;
+	margin: 2px 0 4px;
 }
 .thinking.hidden-thinking {
 	display: none;
@@ -1088,15 +1088,15 @@ body.sidebar-resizing iframe {
 	color: var(--text);
 }
 .thinking-body {
-	margin: 6px 0 6px 0;
-	font-size: 13px;
-	max-height: 410px;
+	margin: 3px 0 3px 0;
+	font-size: 12.5px;
+	max-height: 280px;
 	overflow: auto;
 	white-space: pre-wrap;
 	border-left: 2px solid var(--border-strong);
-	padding: 2px 0 2px 12px;
+	padding: 1px 0 1px 12px;
 	color: var(--text-secondary);
-	line-height: 1.55;
+	line-height: 1.38;
 }
 .thinking-body.hidden {
 	display: none;
