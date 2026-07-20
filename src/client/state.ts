@@ -11,7 +11,21 @@
  * to it as the conversation continues.
  */
 
-import type { ContextUsage, PiCommand, ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
+import type {
+	ContextUsage,
+	PiCommand,
+	ProjectSummary,
+	ThinkingLevel,
+} from "../shared/protocol.js";
+
+/**
+ * The builtin Global project id — the workspace every brand-new chat
+ * starts in, and the project whose `defaultModelId`/`defaultProvider`/
+ * `defaultThinkingLevel` fields hold the user's chosen default model
+ * for new tabs (set via the model picker's star button). Kept in sync
+ * with the server constant in projects.ts.
+ */
+export const GLOBAL_PROJECT_ID = "global";
 
 // ---------------------------------------------------------------------------
 // Renderer cache: messages the browser shows in the chat scrollback
@@ -366,6 +380,27 @@ export function refreshCurrentModelLabel(): void {
 	}
 	const opt = state.availableModels.find((m) => m.id === id);
 	state.currentModelLabel = opt?.name ?? id;
+}
+
+/**
+ * The user's chosen default model for brand-new chats/tabs, read from
+ * the Global project's `defaultModelId`/`defaultProvider`/
+ * `defaultThinkingLevel` (the single server-authoritative store — set
+ * via the model picker's star button, persisted in data/projects.json).
+ * Returns null when no default is configured (new chats then fall back
+ * to the first available model on the server). `thinking` is optional
+ * because the user can set a default model without it being persisted.
+ */
+export function defaultModelForNewChats():
+	| { id: string; provider: string; thinking?: ThinkingLevel }
+	| null {
+	const g = state.projects.find((p) => p.id === GLOBAL_PROJECT_ID);
+	if (!g || !g.defaultModelId || !g.defaultProvider) return null;
+	return {
+		id: g.defaultModelId,
+		provider: g.defaultProvider,
+		...(g.defaultThinkingLevel ? { thinking: g.defaultThinkingLevel } : {}),
+	};
 }
 
 /**

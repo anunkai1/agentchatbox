@@ -52,6 +52,7 @@ import {
 	reorderProjects,
 	updateProject,
 } from "./projects.js";
+import type { ProjectRecord } from "./projects.js";
 import {
 	deletePiSession,
 	findSessionCwd,
@@ -182,7 +183,17 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 	// normal reconnect path), otherwise spawn a fresh child. Binding the
 	// ws sends `ready` + catch-up immediately if the session is already
 	// up (reattach), or once `get_state` reports back (fresh spawn).
-	const resolvedInit = resolveInitCwd(init);
+	//
+	// For a BRAND-NEW session (no sessionId — a freshly opened tab),
+	// override the client's model/provider/thinking with the Global
+	// project's configured defaults, if any. The client always sends a
+	// concrete modelId (it can't know the configured default before the
+	// projects list loads), but for a new tab that model is never a
+	// deliberate choice — it's the client's fallback — so the server,
+	// which owns project defaults, is authoritative here. A reconnect
+	// (sessionId present) keeps the client's model: we're resuming and
+	// the client knows the live model. See resolveInitDefaults.
+	const resolvedInit = resolveInitDefaults(resolveInitCwd(init), getProject(GLOBAL_PROJECT_ID));
 	const session = registry.acquire(resolvedInit);
 	registry.attach(session, ws);
 
@@ -483,7 +494,10 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			// child is expected — this is NOT the phone-lock case. `projectId`
 			// selects which project folder the new `pi` runs in (defaults to
 			// Global); pi auto-loads that folder's AGENTS.md as instructions.
-			const project = msg.projectId ? getProject(msg.projectId) : undefined;
+			// When no projectId is given, fall back to the Global project so
+			// "+ New chat" respects its configured default model (if any)
+			// instead of silently inheriting the current session's model.
+			const project = msg.projectId ? getProject(msg.projectId) : getProject(GLOBAL_PROJECT_ID);
 			const cwd = project?.cwd ?? config.piCwd;
 			replaceSession(ws, session, {
 				provider: project?.defaultProvider ?? session.init.provider,
@@ -727,4 +741,26 @@ function resolveInitCwd(init: InitMessage): InitMessage {
 	if (!init.sessionId) return init;
 	const cwd = findSessionCwd(init.sessionId, projectCwds());
 	return cwd ? { ...init, cwd } : init;
+}
+
+/**
+ * For a brand-new session (no sessionId), fill in the Global project's
+ * configured default model/provider/thinking when the user has set one.
+ * A reconnect (sessionId present) is left untouched — the client's
+ * model is the live one we want to resume with. Pure + exported so the
+ * resolution can be unit-tested without spawning a `pi` child.
+ */
+export function resolveInitDefaults(
+	init: InitMessage,
+	global: ProjectRecord | undefined,
+): InitMessage {
+	if (init.sessionId) return init;
+	if (!global) return init;
+	const provider = global.defaultProvider ?? init.provider;
+	const modelId = global.defaultModelId ?? init.modelId;
+	const thinkingLevel = global.defaultThinkingLevel ?? init.thinkingLevel;
+	if (provider === init.provider && modelId === init.modelId && thinkingLevel === init.thinkingLevel) {
+		return init;
+	}
+	return { ...init, provider, modelId, thinkingLevel };
 }
