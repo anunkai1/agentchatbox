@@ -137,9 +137,25 @@ function readStore(): ProjectsFile {
 	if (!parsed) parsed = { projects: [], sidebarOrder: [] };
 
 	// Always (re)inject Global so config.piCwd changes (e.g. PI_CWD) are
-	// reflected without a manual edit. Remove any stale Global first.
+	// reflected without a manual edit. We MERGE the on-disk Global record
+	// over a fresh globalProject() rather than replacing it wholesale:
+	// the operator's chosen default model/provider/thinking for new chats
+	// (set via the model picker star) live on the Global record itself,
+	// and a blind replace would wipe them on every read — so the default
+	// would be written to disk by updateProject but never read back, and
+	// resolveInitDefaults would always see no default. Only the
+	// config-derived fields (cwd, builtin, id) are forced; everything
+	// else (name, icon, defaults) is preserved from disk when present.
+	const diskGlobal = parsed.projects.find((p) => p.id === GLOBAL_PROJECT_ID);
+	const mergedGlobal: ProjectRecord = {
+		...globalProject(),
+		...(diskGlobal ?? {}),
+		id: GLOBAL_PROJECT_ID,
+		cwd: config.piCwd,
+		builtin: true,
+	};
 	parsed.projects = parsed.projects.filter((p) => p.id !== GLOBAL_PROJECT_ID);
-	parsed.projects.unshift(globalProject());
+	parsed.projects.unshift(mergedGlobal);
 	parsed.sidebarOrder = parsed.sidebarOrder.filter((id) => id !== GLOBAL_PROJECT_ID);
 	parsed.sidebarOrder.unshift(GLOBAL_PROJECT_ID);
 	// Drop any sidebarOrder ids that no longer have a project, and append
