@@ -1547,7 +1547,7 @@ export function renderShell(): void {
 			draggable: false,
 		}),
 	);
-	welcome.append(el("h1", { class: "welcome-title" }, "What can I build for you?"));
+	welcome.append(el("h1", { class: "welcome-title" }, "What can I do for you?"));
 	welcome.append(
 		el("p", { class: "welcome-sub" }, "Ask anything — I'll think, use tools, and answer."),
 	);
