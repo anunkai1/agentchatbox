@@ -170,22 +170,16 @@ export function handleSlash(arg: string): void {
 			// /imagemodel command and owns the model catalog + persistence.
 			// ACB renders the picker via the extension_ui relay.
 			//
-			// Sent via the lean sendSlashCommand path, NOT sendAsUser.
-			// /imagemodel is an extension command: pi runs it immediately
-			// (extension_ui_request → picker) with NO agent run, so no
-			// agent_start/agent_end is ever emitted. sendAsUser optimistically
-			// sets isStreaming=true and waits for an agent_end that never
-			// comes — leaving the session stuck "streaming", so the user's
-			// next message gets queued as a steer instead of sent.
+			// Sent via the lean sendSlashCommand path, NOT sendAsUser, because
+			// this is an extension-owned picker rather than a user prompt.
 			services.sendSlashCommand?.(`/${cmd}`);
 			break;
 		case "imggen":
 			// Model-free image generation (pi-local-image extension). Same
 			// lean sendSlashCommand path as /imagemodel — /imggen is an
-			// extension command that runs with NO agent loop (it calls the
-			// image backend directly and surfaces the result via a custom
-			// "note" message), so sendAsUser would hang waiting for an
-			// agent_end that never fires. `rest` carries the prompt + flags.
+			// extension command that calls the image backend directly and
+			// surfaces the result via a custom "note" message. `rest` carries
+			// the prompt + flags.
 			services.sendSlashCommand?.(`/imggen ${rest}`);
 			break;
 		case "think":
