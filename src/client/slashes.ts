@@ -25,7 +25,13 @@ import {
 	toggleCapabilitiesPopover,
 } from "./render.js";
 import { services } from "./services.js";
-import { type ModelOption, refreshCurrentModelLabel, state } from "./state.js";
+import {
+	defaultModelForNewChats,
+	GLOBAL_PROJECT_ID,
+	type ModelOption,
+	refreshCurrentModelLabel,
+	state,
+} from "./state.js";
 import { shareableSessionUrl } from "./url.js";
 
 /**
@@ -124,6 +130,17 @@ export interface ChatControls {
 	resumeSession(sessionId: string): void;
 	listSessions(): void;
 	renameSession(name: string): void;
+	/**
+	 * Update a project's metadata/defaults. Used by the model picker's
+	 * star button to set (or clear) the Global project's default model
+	 * for new chats. Mirrors chatClient.updateProject — pure transport.
+	 */
+	updateProject(input: {
+		id: string;
+		defaultModelId?: string | null;
+		defaultProvider?: string | null;
+		defaultThinkingLevel?: ThinkingLevel | null;
+	}): void;
 }
 let chatControls: ChatControls | null = null;
 export function setChatControls(c: ChatControls): void {
@@ -526,16 +543,54 @@ export function openModelPicker(): void {
 
 		const rows = el("div", { class: "model-group-rows" });
 		const raw: HTMLElement[] = [];
+		// The user's configured default for new chats (from the Global
+		// project). A row whose model matches this gets a filled ★ star
+		// button + a "default" badge; every other row gets an ☆ that,
+		// when clicked, makes THAT model the default (persisted server-side
+		// via updateProject, so every new tab picks it up).
+		const currentDefault = defaultModelForNewChats();
 		for (const m of models) {
 			const row = el("div", { class: "model-row" });
+			row.dataset.modelId = m.id;
+			row.dataset.modelProvider = m.provider;
+			const info = el("div", { class: "model-row-info" });
 			const main = el("div", { class: "model-name" }, m.name ?? m.id);
 			if (m.reasoning) {
 				main.append(
 					el("span", { class: "model-badge", title: "Supports extended thinking" }, "thinking"),
 				);
 			}
-			row.append(main);
-			row.append(el("div", { class: "model-provider" }, m.id === m.name ? "" : m.id));
+			const isDefault =
+				!!currentDefault && currentDefault.id === m.id && currentDefault.provider === m.provider;
+			if (isDefault) {
+				main.append(
+					el("span", { class: "model-badge model-badge-default", title: "Default for new chats" }, "default"),
+				);
+			}
+			info.append(main);
+			info.append(el("div", { class: "model-provider" }, m.id === m.name ? "" : m.id));
+			row.append(info);
+
+			// Star button: set / clear the Global default for new chats.
+			// stopPropagation so the row click (which switches the live
+			// session) doesn't also fire.
+			const star = el(
+				"button",
+				{
+					class: `model-default-btn${isDefault ? " is-default" : ""}`,
+					type: "button",
+					title: isDefault
+						? "Default for new chats — click to clear"
+						: "Set as default for new chats",
+				},
+				isDefault ? "★" : "☆",
+			);
+			star.addEventListener("click", (ev) => {
+				ev.stopPropagation();
+				toggleDefaultModel(box, m);
+			});
+			row.append(star);
+
 			if (m.id === state.currentModelId) row.classList.add("active");
 			row.addEventListener("click", () => {
 				// Update displayed model optimistically so the picker
@@ -612,6 +667,10 @@ export function openModelPicker(): void {
 	// Autofocus so you can just start typing.
 	setTimeout(() => filterInput.focus(), 0);
 
+	// Footer hint: explains the star affordance + names the current
+	// default so the user can see at a glance what new tabs will load.
+	box.append(renderDefaultFooter());
+
 	box.append(
 		el("button", {
 			class: "btn",
@@ -619,6 +678,94 @@ export function openModelPicker(): void {
 			onclick: () => overlay.remove(),
 		}),
 	);
+}
+
+/**
+ * Toggle the Global project's default model for new chats. Setting a
+ * new default persists `defaultModelId`/`defaultProvider` (plus the
+ * current thinking level) server-side via updateProject, so every
+ * brand-new tab picks it up at spawn time (see resolveInitDefaults in
+ * chat.ts). Clicking the star on the already-default model CLEARS the
+ * default (new tabs then fall back to the first available model).
+ *
+ * We optimistically mutate `state.projects` so the picker updates
+ * instantly, then refresh every row's star + badge to match. The
+ * server's authoritative projects rebroadcast lands later and matches.
+ */
+function toggleDefaultModel(box: HTMLElement, m: ModelOption): void {
+	const cur = defaultModelForNewChats();
+	const clearing = !!cur && cur.id === m.id && cur.provider === m.provider;
+	const global = state.projects.find((p) => p.id === GLOBAL_PROJECT_ID);
+	if (global) {
+		global.defaultModelId = clearing ? null : m.id;
+		global.defaultProvider = clearing ? null : m.provider;
+		global.defaultThinkingLevel = clearing ? null : state.currentThinking;
+	}
+	chatControls?.updateProject({
+		id: GLOBAL_PROJECT_ID,
+		defaultModelId: clearing ? null : m.id,
+		defaultProvider: clearing ? null : m.provider,
+		defaultThinkingLevel: clearing ? null : state.currentThinking,
+	});
+	refreshDefaultStars(box);
+	// The footer names the current default — rebuild it too.
+	const footer = box.querySelector(".model-default-footer");
+	if (footer) footer.replaceWith(renderDefaultFooter());
+}
+
+/**
+ * Walk every `.model-row` in the picker and resync its star button +
+ * "default" badge to the current Global default. Called after a toggle.
+ * Rows carry their model id/provider on dataset so this stays O(rows)
+ * with no closure bookkeeping.
+ */
+function refreshDefaultStars(box: HTMLElement): void {
+	const d = defaultModelForNewChats();
+	const rows = box.querySelectorAll<HTMLElement>(".model-row");
+	for (const row of rows) {
+		const mid = row.dataset.modelId ?? "";
+		const mprov = row.dataset.modelProvider ?? "";
+		const isDefault = !!d && d.id === mid && d.provider === mprov;
+		const btn = row.querySelector<HTMLButtonElement>(".model-default-btn");
+		if (btn) {
+			btn.textContent = isDefault ? "★" : "☆";
+			btn.classList.toggle("is-default", isDefault);
+			btn.title = isDefault
+				? "Default for new chats — click to clear"
+				: "Set as default for new chats";
+		}
+		const name = row.querySelector<HTMLElement>(".model-name");
+		const badge = name?.querySelector<HTMLElement>(".model-badge-default");
+		if (isDefault && !badge && name) {
+			name.append(
+				el("span", { class: "model-badge model-badge-default", title: "Default for new chats" }, "default"),
+			);
+		} else if (!isDefault && badge) {
+			badge.remove();
+		}
+	}
+}
+
+/**
+ * Footer line naming the current default model for new chats (or
+ * "none" if unset). Pure render — rebuilt by toggleDefaultModel so the
+ * name tracks the latest pick without a full picker rebuild.
+ */
+function renderDefaultFooter(): HTMLElement {
+	const d = defaultModelForNewChats();
+	const label = d
+		? (state.availableModels.find((m) => m.id === d.id && m.provider === d.provider)?.name ?? d.id)
+		: "none";
+	const footer = el("div", { class: "model-default-footer" });
+	footer.append(
+		el("span", { class: "model-default-footer-star" }, "★"),
+		el(
+			"span",
+			{ class: "model-default-footer-text" },
+			`Default for new tabs: ${label}. Click a ☆ to change it.`,
+		),
+	);
+	return footer;
 }
 
 export function openThinkPicker(): void {

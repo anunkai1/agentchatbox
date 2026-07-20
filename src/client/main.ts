@@ -1063,6 +1063,7 @@ async function boot(): Promise<void> {
 		resumeSession: (id) => chatClient.resumeSession(id),
 		listSessions: () => chatClient.listSessions(),
 		renameSession: (name) => chatClient.renameSession(name),
+		updateProject: (input) => chatClient.updateProject(input),
 	});
 	chatClient.onStatus((s) => {
 		state.connectionStatus = s;
