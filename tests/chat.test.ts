@@ -332,6 +332,7 @@ function makeFakePi(
 
 let fakePiPath: string | null = null;
 let authFile: string | null = null;
+let projectsFile: string | null = null;
 let server: HttpServer | null = null;
 let port = 0;
 
@@ -348,6 +349,17 @@ beforeEach(async () => {
 	authFile = join(tmpdir(), `acb-chat-auth-${process.pid}-${Date.now()}.json`);
 	writeFileSync(authFile, JSON.stringify({ deepseek: { key: "test-dummy" } }));
 	process.env.AGENTCHATBOX_PI_AUTH_FILE = authFile;
+	// Isolate the projects store too: resolveInitDefaults() reads the
+	// Global project's default model from data/projects.json, so without
+	// this the suite would pick up the OPERATOR's real default model
+	// (set via the model picker) and override every test's spawn — every
+	// test that sent init without a sessionId would suddenly use the
+	// operator's model/provider instead of the one the test set up a key
+	// for. Point at a temp path that doesn't exist yet; readStore()
+	// synthesizes a Global-only store (no defaults), making
+	// resolveInitDefaults a no-op and restoring the pre-feature behavior.
+	projectsFile = join(tmpdir(), `acb-chat-projects-${process.pid}-${Date.now()}.json`);
+	process.env.AGENTCHATBOX_PROJECTS_FILE = projectsFile;
 	// Reset the module cache so each test re-reads config (and sees the
 	// current PI_BIN / PI_CWD / AGENTCHATBOX_PI_AUTH_FILE env vars). Without
 	// this, vitest's default module cache makes every test after the first
@@ -383,7 +395,16 @@ afterEach(async () => {
 		}
 		authFile = null;
 	}
+	if (projectsFile) {
+		try {
+			rmSync(projectsFile, { force: true });
+		} catch {
+			/* ignore */
+		}
+		projectsFile = null;
+	}
 	delete process.env.AGENTCHATBOX_PI_AUTH_FILE;
+	delete process.env.AGENTCHATBOX_PROJECTS_FILE;
 });
 
 /** Connect a WS, register the inbox listener before `open`, return helpers. */

@@ -114,6 +114,33 @@ describe("updateProject", () => {
 		const { updateProject } = await import("../src/server/projects.js");
 		expect(updateProject("nope", { name: "x" })).toBeUndefined();
 	});
+
+	// Regression: readStore() used to replace the Global record with a
+	// pristine globalProject() on every read, wiping the operator's
+	// default-model-for-new-chats. updateProject wrote the defaults to
+	// disk, but getProject("global") then read them back as empty — so
+	// resolveInitDefaults never applied them and new tabs ignored the
+	// configured default. The fix merges the on-disk Global over a fresh
+	// globalProject(), preserving defaults while still tracking piCwd.
+	it("preserves Global default-model-for-new-chats across reads", async () => {
+		const { updateProject, getProject, GLOBAL_PROJECT_ID } = await import(
+			"../src/server/projects.js"
+		);
+		updateProject(GLOBAL_PROJECT_ID, {
+			defaultModelId: "glm-4.7",
+			defaultProvider: "zai",
+			defaultThinkingLevel: "high",
+		});
+		// A fresh getProject re-reads the store (cache is mtime-invalidated);
+		// the defaults must survive, not be wiped by the Global re-injection.
+		const g = getProject(GLOBAL_PROJECT_ID);
+		expect(g?.defaultModelId).toBe("glm-4.7");
+		expect(g?.defaultProvider).toBe("zai");
+		expect(g?.defaultThinkingLevel).toBe("high");
+		// And the builtin/config-derived fields still track config.
+		expect(g?.builtin).toBe(true);
+		expect(g?.cwd).toBe(piCwd);
+	});
 });
 
 describe("deleteProject", () => {
