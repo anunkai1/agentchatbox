@@ -30,7 +30,7 @@ import { log } from "./logger.js";
 import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
-import { listPiSessions, readPiSessionMessages } from "./session-list.js";
+import { findSessionCwd, listPiSessions, readPiSessionMessages } from "./session-list.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
 import { createUploadsRouter } from "./uploads.js";
@@ -183,8 +183,19 @@ app.get(
  * Shape: { id, cwd, createdAt, messages: Array<UserMessage|AssistantMessage|ToolResultMessage> }
  */
 app.get("/api/sessions/:id", (req, res) => {
-	const cwd = String(req.query.cwd ?? config.piCwd);
 	const id = req.params.id;
+	// An explicit ?cwd= is a STRICT per-cwd lookup (e.g. a future tool
+	// scoping a query to one project). When omitted — the common case,
+	// used by the client's sessionExists check on a shareable /s/<id>
+	// link — resolve the cwd across ALL known project folders + orphaned
+	// session dirs, exactly like the WS resume path (chat.ts
+	// resolveInitCwd / resumeSession). Without this, a refresh of a
+	// PROJECT chat 404s here: the session lives under the project's cwd,
+	// not the global one, so the client treats the link as stale and
+	// dumps the user into a brand-new global chat instead of resuming.
+	const cwd = req.query.cwd
+		? String(req.query.cwd)
+		: (findSessionCwd(id, listProjects().map((p) => p.cwd)) ?? config.piCwd);
 	const all = listPiSessions(cwd);
 	const meta = all.find((s) => s.id === id);
 	if (!meta) {

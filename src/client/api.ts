@@ -211,10 +211,13 @@ export async function* streamSynthesizeSpeech(
 }
 
 /**
- * Whether a session id is known to the server for this cwd. Used by the
- * client to validate a shareable `/s/<id>` link before resuming: a stale
- * link (session deleted, or shared from another machine/project) should
- * start a fresh chat rather than hand `pi` a missing session id.
+ * Whether a session id is known to the server. Used by the client to
+ * validate a shareable `/s/<id>` link before resuming: a stale link
+ * (session deleted, or shared from another machine) should start a
+ * fresh chat rather than hand `pi` a missing session id. The server
+ * searches every known project cwd (+ orphans), so a link to a
+ * PROJECT chat survives a refresh — no project needs to be encoded
+ * in the URL.
  */
 export async function sessionExists(sessionId: string): Promise<boolean> {
 	try {
