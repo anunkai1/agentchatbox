@@ -718,9 +718,12 @@ function makeJumpPrevUserFab(): HTMLElement {
 		"aria-label": "Jump to your previous message",
 		title: "Jump to your previous message (Alt+↑)",
 		onclick: () => jumpToPrevUserMessage(),
+		// Speech-bubble + chevron (not a bare arrow): this FAB sits right above
+		// the composer's circular Send button, so a plain up-arrow collides
+		// with it visually (see the mobile "two identical buttons" report).
 		html:
-			'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-			'<path d="M12 19V6"/><path d="M6 12l6-6 6 6"/></svg>',
+			'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+			'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m8 10 4-4 4 4"/></svg>',
 	});
 }
 
@@ -743,8 +746,8 @@ function makeJumpToBottomFab(): HTMLElement {
 			updateJumpToBottomFabState();
 		},
 		html:
-			'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-			'<path d="M12 5v13"/><path d="M6 12l6 6 6-6"/></svg>',
+			'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+			'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m8 11 4 4 4-4"/></svg>',
 	});
 }
 
