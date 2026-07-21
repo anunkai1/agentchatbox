@@ -1466,6 +1466,22 @@ export function renderShell(): void {
 			}),
 			el("span", { class: "title", id: "title" }, state.title),
 		),
+		// Keep the primary new-chat action in the main header as well as
+		// the sidebar, so it remains one click away when the sidebar is shut.
+		// Reuse /clear so confirmation and session-reset behavior have one
+		// implementation regardless of which UI affordance starts the chat.
+		el(
+			"button",
+			{
+				class: "header-new-chat",
+				id: "header-new-chat",
+				title: "New chat",
+				ariaLabel: "New chat",
+				onclick: () => shellHandlers?.handleSlash("clear"),
+			},
+			el("span", { ariaHidden: "true" }, "+"),
+			el("span", { class: "header-new-chat-label" }, "New chat"),
+		),
 		el("div", { class: "spacer" }),
 		el(
 			"button",

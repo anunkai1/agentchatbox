@@ -581,6 +581,27 @@ body.sidebar-resizing iframe {
 	display: none !important;
 }
 
+/* Primary new-chat action stays visible even while the sidebar is closed. */
+.header-new-chat {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	background: var(--accent);
+	border: 1px solid var(--accent);
+	color: #fff;
+	padding: 6px 10px;
+	border-radius: var(--radius-pill);
+	cursor: pointer;
+	font-family: inherit;
+	font-size: 13px;
+	font-weight: 600;
+	white-space: nowrap;
+	transition: background 0.12s;
+}
+.header-new-chat:hover {
+	background: var(--accent-hover);
+}
+
 /* The "API ↗" header affordance — z.ai style icon-label-arrow button. */
 .header-overflow {
 	display: inline-flex;
@@ -2032,6 +2053,18 @@ body.sidebar-resizing iframe {
 	.header .title {
 		max-width: 40vw;
 		font-size: 13.5px;
+	}
+	/* Preserve the header action in the tight mobile bar without letting
+	 * its label crowd out the conversation title. */
+	.header-new-chat {
+		width: 34px;
+		height: 34px;
+		justify-content: center;
+		padding: 0;
+		font-size: 18px;
+	}
+	.header-new-chat-label {
+		display: none;
 	}
 	/* On mobile, hide the inline model pill — it's still reachable via
 	 * the overflow menu. */
