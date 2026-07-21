@@ -598,6 +598,13 @@ body.sidebar-resizing iframe {
 	white-space: nowrap;
 	transition: background 0.12s;
 }
+.header-new-chat:link,
+.header-new-chat:visited,
+.header-new-chat:hover,
+.header-new-chat:active {
+	color: #fff;
+	text-decoration: none;
+}
 .header-new-chat:hover {
 	background: var(--accent-hover);
 }

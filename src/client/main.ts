@@ -1028,6 +1028,10 @@ async function boot(): Promise<void> {
 				chatClient.newSession();
 			}
 		},
+		newGlobalSession: () => {
+			resetChatState();
+			chatClient.newSession();
+		},
 		newSessionInProject: (projectId) => {
 			if (confirm("Start a new chat in this project?")) {
 				resetChatState();

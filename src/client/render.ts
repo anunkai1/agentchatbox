@@ -1210,6 +1210,8 @@ export interface ShellHandlers {
 	renameSessionById: (sessionId: string, name: string) => void;
 	/** Delete any session by id (sidebar trash). Server removes the JSONL. */
 	deleteSession: (sessionId: string) => void;
+	/** Start a fresh Global chat without a confirmation prompt. */
+	newGlobalSession: () => void;
 	// --- Projects --------------------------------------------------------
 	/** Start a new chat in a specific project (folder "+" button). */
 	newSessionInProject: (projectId: string) => void;
@@ -1348,7 +1350,7 @@ export function renderShell(): void {
 					if (e.button !== 0) return;
 					if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
 					e.preventDefault();
-					shellHandlers?.handleSlash("clear");
+					shellHandlers?.newGlobalSession();
 					toggleSidebar(true); // auto-close on mobile
 				},
 			},
@@ -1466,18 +1468,23 @@ export function renderShell(): void {
 			}),
 			el("span", { class: "title", id: "title" }, state.title),
 		),
-		// Keep the primary new-chat action in the main header as well as
-		// the sidebar, so it remains one click away when the sidebar is shut.
-		// Reuse /clear so confirmation and session-reset behavior have one
-		// implementation regardless of which UI affordance starts the chat.
+		// A real link makes middle-click / modifier-click open a fresh chat
+		// in another tab. Plain clicks stay in the SPA and start immediately.
 		el(
-			"button",
+			"a",
 			{
 				class: "header-new-chat",
 				id: "header-new-chat",
-				title: "New chat",
+				href: "/",
+				rel: "noopener",
+				title: "New chat — middle-click to open in a new tab",
 				ariaLabel: "New chat",
-				onclick: () => shellHandlers?.handleSlash("clear"),
+				onclick: (e: MouseEvent) => {
+					if (e.button !== 0) return;
+					if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+					e.preventDefault();
+					shellHandlers?.newGlobalSession();
+				},
 			},
 			el("span", { ariaHidden: "true" }, "+"),
 			el("span", { class: "header-new-chat-label" }, "New chat"),
