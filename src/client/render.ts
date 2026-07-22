@@ -2390,8 +2390,10 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	const timeStr = formatRelativeTime(s.modifiedAt);
 	link.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
 	item.append(link);
-	if (starBtn) item.append(starBtn);
 	item.append(actions);
+	// Keep the destructive control to the left of the pin on pinned rows:
+	// pencil → basket → star, matching the mobile sidebar's visual order.
+	if (starBtn) item.append(starBtn);
 
 	// Only intercept the primary left click (no modifiers). Middle-click
 	// and ⌘/Ctrl/Shift+click intentionally fall through to the browser's
