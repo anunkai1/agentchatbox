@@ -2380,14 +2380,14 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		// basket → pencil → star.
 		actions.append(deleteBtn, renameBtn);
 	} else {
-		actions.append(renameBtn, deleteBtn);
 		const pinBtn = el("button", {
 			class: "session-action pin",
 			title: "Pin to top",
 			text: "☆",
 		});
 		pinBtn.addEventListener("click", () => shellHandlers?.setSessionPinned(s.id, true));
-		actions.insertBefore(pinBtn, renameBtn);
+		// Keep the same order before pinning: basket → pencil → star.
+		actions.append(deleteBtn, renameBtn, pinBtn);
 	}
 	link.append(titleRow);
 	const timeStr = formatRelativeTime(s.modifiedAt);
