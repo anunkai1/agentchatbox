@@ -2335,14 +2335,12 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	const displayTitle = s.title || "Untitled";
 	const pinned = !!s.pinned;
 
-	// Render the row as an actual <a href> so middle-click (and
-	// ⌘/Ctrl/Shift + left-click) open the session in a new tab/window
-	// the way Firefox handles any regular link — no JS window.open dance,
-	// no pop-up blocker caveats, keyboard-activatable for free. Left
-	// click is intercepted below so the SPA keeps the live WS up
-	// instead of doing a full page nav to `/s/<id>`.
-	const item = el("a", {
-		class: "session-item",
+	// Keep the link and its controls as siblings. Buttons inside an <a> are
+	// invalid interactive-content nesting, and Chrome on Android can then
+	// dispatch a tap to the wrong sibling control.
+	const item = el("div", { class: "session-item" });
+	const link = el("a", {
+		class: "session-item-link",
 		href: sessionPath(s.id),
 		rel: "noopener",
 		title: `${displayTitle} — middle-click to open in a new tab`,
@@ -2354,42 +2352,18 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	const titleEl = el("div", { class: "session-item-title" }, displayTitle);
 	titleRow.append(titleEl);
 
-	// Pinned sessions show an always-visible ⭐ indicator next to the
-	// title. Clicking it unpins — no need to hover first.
+	// The pin is a sibling of the link, not a button nested inside it. This
+	// keeps its touch hit target independent from the rename/delete controls.
+	let starBtn: HTMLElement | null = null;
 	if (pinned) {
-		const starBtn = el("button", {
+		starBtn = el("button", {
 			class: "session-pin-indicator",
 			title: "Unpin",
 			text: "⭐",
 		});
-		starBtn.addEventListener("click", (e) => {
-			// preventDefault: the star sits INSIDE the row's <a href>, so
-			// without it the browser would follow the link and reload the
-			// page (stopPropagation alone does NOT cancel link navigation —
-			// it only stops the click bubbling up to the row's own
-			// intercept-and-resume handler, which is the one that calls
-			// preventDefault for normal row clicks). stopPropagation keeps
-			// the click from triggering a resume.
-			e.preventDefault();
-			e.stopPropagation();
-			shellHandlers?.setSessionPinned(s.id, false);
-		});
-		// Browsers decide on mousedown (button===1) whether to follow
-		// the parent link, before auxclick fires — so block it at
-		// mousedown, otherwise middle-click on the star would
-		// accidentally open the session in a new tab.
-		starBtn.addEventListener("mousedown", (e) => {
-			if (e.button !== 0) e.stopPropagation();
-		});
-		titleRow.append(starBtn);
+		starBtn.addEventListener("click", () => shellHandlers?.setSessionPinned(s.id, false));
 	}
 
-	// Hover-revealed action buttons. Each calls preventDefault (to stop
-	// the parent <a href> from navigating — stopPropagation alone does
-	// NOT cancel link navigation) AND stopPropagation (so the click
-	// doesn't bubble up to the row's intercept-and-resume handler).
-	// The pin toggle is only shown when not pinned — pinned rows use
-	// the always-visible star.
 	const actions = el("div", { class: "session-item-actions" });
 	const renameBtn = el("button", {
 		class: "session-action rename",
@@ -2409,29 +2383,20 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 			title: "Pin to top",
 			text: "☆",
 		});
-		pinBtn.addEventListener("click", (e) => {
-			// See starBtn above: preventDefault stops the <a> navigation,
-			// stopPropagation stops the row's resume-on-click.
-			e.preventDefault();
-			e.stopPropagation();
-			shellHandlers?.setSessionPinned(s.id, true);
-		});
-		pinBtn.addEventListener("mousedown", (e) => {
-			if (e.button !== 0) e.stopPropagation();
-		});
+		pinBtn.addEventListener("click", () => shellHandlers?.setSessionPinned(s.id, true));
 		actions.insertBefore(pinBtn, renameBtn);
 	}
-	titleRow.append(actions);
-	item.append(titleRow);
-
+	link.append(titleRow);
 	const timeStr = formatRelativeTime(s.modifiedAt);
-	item.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
+	link.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
+	item.append(link);
+	if (starBtn) item.append(starBtn);
+	item.append(actions);
 
 	// Only intercept the primary left click (no modifiers). Middle-click
 	// and ⌘/Ctrl/Shift+click intentionally fall through to the browser's
-	// default `<a href>` handling so the user opens the session in a
-	// new tab/window — identical to Firefox link behaviour.
-	item.addEventListener("click", (e) => {
+	// default <a> behaviour so the user opens the session in a new tab/window.
+	link.addEventListener("click", (e) => {
 		if (e.button !== 0) return;
 		if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
 		e.preventDefault();
@@ -2439,30 +2404,8 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		toggleSidebar(true); // auto-close on mobile
 	});
 
-	renameBtn.addEventListener("click", (e) => {
-		// See starBtn above: preventDefault is the difference between
-		// opening the rename input and a full-page navigation to /s/<id>
-		// (which is exactly the bug that made rename impossible — the
-		// page reloaded before the input could render).
-		e.preventDefault();
-		e.stopPropagation();
-		startRename(titleEl, titleRow, s);
-	});
-	// Same mousedown guard as the star/pin buttons — middle-clicking the
-	// pencil shouldn't open the link.
-	renameBtn.addEventListener("mousedown", (e) => {
-		if (e.button !== 0) e.stopPropagation();
-	});
-
-	deleteBtn.addEventListener("click", (e) => {
-		// See starBtn above for the preventDefault/stopPropagation pair.
-		e.preventDefault();
-		e.stopPropagation();
-		confirmDeleteSession(s);
-	});
-	deleteBtn.addEventListener("mousedown", (e) => {
-		if (e.button !== 0) e.stopPropagation();
-	});
+	renameBtn.addEventListener("click", () => startRename(titleEl, actions, s));
+	deleteBtn.addEventListener("click", () => confirmDeleteSession(s));
 
 	return item;
 }
@@ -2474,7 +2417,7 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
  * server's rebroadcast refreshes the sidebar. Empty input clears the
  * name (falls back to the auto-derived first-message title).
  */
-function startRename(titleEl: HTMLElement, titleRow: HTMLElement, s: SessionSummary): void {
+function startRename(titleEl: HTMLElement, actions: HTMLElement, s: SessionSummary): void {
 	const current = s.title || "";
 	const input = document.createElement("input");
 	input.type = "text";
@@ -2485,8 +2428,7 @@ function startRename(titleEl: HTMLElement, titleRow: HTMLElement, s: SessionSumm
 
 	titleEl.replaceWith(input);
 	// Hide the action row while editing so the input gets full width.
-	const actions = titleRow.querySelector(".session-item-actions");
-	if (actions) (actions as HTMLElement).style.display = "none";
+	actions.style.display = "none";
 
 	input.focus();
 	input.select();

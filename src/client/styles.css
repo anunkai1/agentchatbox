@@ -314,32 +314,35 @@ body.sidebar-resizing iframe {
 }
 .session-item {
 	display: flex;
-	flex-direction: column;
-	gap: 1px;
+	align-items: flex-start;
+	gap: 2px;
 	padding: 8px 10px;
 	border-radius: var(--radius-sm);
-	cursor: pointer;
 	color: var(--text-secondary);
 	position: relative;
-	text-decoration: none;
 	transition:
 		background 0.12s,
 		color 0.12s;
 }
-/* `<a>` flavour of .session-item: keep it visually identical to the
- * previous <div> — no underline, no visited/active link colour shifts,
- * no focus ring on click. The link semantics are just there so
- * middle-click (and ⌘/Ctrl/Shift+click) open the session in a new
- * tab/window like a regular Firefox link. */
-.session-item:link,
-.session-item:visited,
-.session-item:hover,
-.session-item:active {
+/* The session link and its controls are siblings: nesting buttons in an
+ * anchor is invalid HTML and produced unreliable touch targets on Android. */
+.session-item-link {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+	cursor: pointer;
+}
+.session-item-link:link,
+.session-item-link:visited,
+.session-item-link:hover,
+.session-item-link:active {
 	text-decoration: none;
 	color: inherit;
 }
-.session-item:focus,
-.session-item:focus-visible {
+.session-item-link:focus,
+.session-item-link:focus-visible {
 	outline: none;
 }
 .session-item:hover {
@@ -373,20 +376,25 @@ body.sidebar-resizing iframe {
 .session-item-actions {
 	display: none;
 	flex-shrink: 0;
-	gap: 2px;
+	gap: 0;
 }
 .session-item:hover .session-item-actions,
 .session-item:focus-within .session-item-actions {
 	display: flex;
 }
 .session-action {
+	width: 28px;
+	height: 28px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
 	background: transparent;
 	border: none;
 	color: var(--text-muted);
 	cursor: pointer;
 	font-size: 14px;
 	line-height: 1;
-	padding: 4px 5px;
 	border-radius: var(--radius-sm);
 	transition:
 		background 0.12s,
@@ -409,12 +417,17 @@ body.sidebar-resizing iframe {
 /* Always-visible ⭐ shown next to the title of pinned sessions.
  * Click to unpin. Not hover-gated like the action buttons. */
 .session-pin-indicator {
+	width: 28px;
+	height: 28px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
 	background: transparent;
 	border: none;
 	cursor: pointer;
 	font-size: 13px;
 	line-height: 1;
-	padding: 0 2px;
 	flex-shrink: 0;
 	filter: grayscale(0.3);
 	transition:
