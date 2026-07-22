@@ -2370,14 +2370,17 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		title: "Rename",
 		html: "✎",
 	});
-	actions.append(renameBtn);
 	const deleteBtn = el("button", {
 		class: "session-action delete",
 		title: "Delete",
 		html: "🗑",
 	});
-	actions.append(deleteBtn);
-	if (!pinned) {
+	if (pinned) {
+		// Swap the pin and basket positions while keeping the pencil centred:
+		// basket → pencil → star.
+		actions.append(deleteBtn, renameBtn);
+	} else {
+		actions.append(renameBtn, deleteBtn);
 		const pinBtn = el("button", {
 			class: "session-action pin",
 			title: "Pin to top",
