@@ -515,7 +515,7 @@ const server = app.listen(config.port, config.host, () => {
 
 	// Warm the Whisper + TTS health caches in the background. The first
 	// /api/health call would otherwise block for seconds (faster-whisper
-	// model load / piper voice init); pre-running the probes at boot means
+	// model load); pre-running the probes at boot means
 	// the browser's first poll returns instantly from cache. Fire-and-forget
 	// — failure here just means the cache fills lazily on first request.
 	void checkWhisperAvailable().then((w) =>

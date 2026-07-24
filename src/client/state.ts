@@ -197,8 +197,8 @@ export interface AppState {
 	connectionStatus: "connecting" | "open" | "closed" | "stalled";
 	/** Currently selected TTS voice id (user's pick; null = server default). */
 	ttsVoice: string | null;
-	/** TTS engine id from /api/health ("kokoro" | "piper" | null until probed).
-	 * Surfaces the actually-configured engine in the TTS banner instead of
+	/** TTS engine id from /api/health (always "kokoro" now — Piper was removed).
+	 * Surfaces the configured engine in the TTS banner instead of
 	 * a hardcoded "Kokoro". */
 	ttsEngine: string | null;
 	/** Server-default TTS voice from /api/health (used as the banner label

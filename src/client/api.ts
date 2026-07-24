@@ -48,10 +48,10 @@ export interface HealthInfo {
 	whisperReason?: string;
 	tts: boolean;
 	ttsReason?: string;
-	/** TTS engine id from /api/health: "kokoro" or "piper". Drives the
-	 * banner label so it reflects the actually-configured engine. */
+	/** TTS engine id from /api/health (always "kokoro" — Piper was removed).
+	 * Drives the banner label so it reflects the configured engine. */
 	ttsEngine?: string;
-	/** Server-default TTS voice (kokoro/piper). */
+	/** Server-default TTS voice. */
 	ttsVoice?: string;
 	/** Configured spoken-rewrite model override from /api/health
 	 * ("provider/modelId"), used so the TTS banner names the model actually

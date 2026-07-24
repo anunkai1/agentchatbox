@@ -8,7 +8,7 @@
  * refreshes and reconnects.
  *
  * What's persisted here (client-owned only):
- *   - ttsVoice   (selected Kokoro/Piper voice)
+ *   - ttsVoice   (selected Kokoro voice)
  *   - ttsSpeed   (playback rate)
  *
  * What is NOT persisted here:

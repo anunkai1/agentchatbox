@@ -92,8 +92,8 @@ function ttsPreview(spoken: string): string {
 }
 
 /**
- * Human-readable TTS engine label from /api/health (kokoro→Kokoro,
- * piper→Piper). Falls back to "TTS" before the health probe lands or
+ * Human-readable TTS engine label from /api/health (kokoro→Kokoro).
+ * Falls back to "TTS" before the health probe lands or
  * if the server omits the engine — so the banner never lies about
  * which engine is actually configured.
  */
@@ -119,7 +119,7 @@ function ttsVoiceLabel(): string | null {
 export async function speakText(text: string, label = "🔊 TTS"): Promise<void> {
 	// Strip markdown before synthesis: the raw text off the wire is full
 	// of **bold**, ### headings, ``` fences, [label](url) links, etc. that
-	// piper would read aloud as literal sigils. See markdown.ts.
+	// the TTS engine would read aloud as literal sigils. See markdown.ts.
 	let spoken = markdownToSpeechText(text);
 	if (!spoken) return;
 	if (spoken.length > TTS_MAX_CHARS) {
@@ -227,7 +227,7 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 
 	try {
 		// Prefer the streaming endpoint: it lets us start playing the first
-		// chunk immediately. If it's unavailable (old server, piper engine, or
+		// chunk immediately. If it's unavailable (old server, or
 		// a transient failure) and nothing has played yet, fall back to the
 		// whole-blob /api/tts path below.
 		for await (const blob of streamSynthesizeSpeech(
@@ -255,7 +255,7 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 		}
 		// If the stream failed before any audio played, fall back to the
 		// classic whole-blob synthesis once (covers an old pi-voice-server
-		// without /tts/stream, or the piper engine).
+		// without /tts/stream).
 		if (!started) {
 			try {
 				await playWholeBlob(audio, spoken, gen, controller);
@@ -284,8 +284,8 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 /**
  * Whole-utterance fallback: synthesize the entire text in one /api/tts
  * request and play the resulting single WAV on the shared <audio>. Used
- * when the streaming endpoint is unavailable (old pi-voice-server, or the
- * piper engine which can't stream). Mirrors the original non-streaming
+ * when the streaming endpoint is unavailable (old pi-voice-server).
+ * Mirrors the original non-streaming
  * speakText() lifecycle so the fallback path behaves exactly as before.
  */
 async function playWholeBlob(

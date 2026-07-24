@@ -12,7 +12,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - **Agent → you file delivery** — every tool call that touches a `path` (write / edit / read) gets a `⬇ download` link on its card, served from the project dir via `GET /api/file`
 - Persistent sessions on disk (`pi` manages JSONL files — survive page reloads and server restarts)
 - **Shareable session links** — every chat lives at `/s/<session-id>`. Bookmark it, copy it (`/link` or the Settings menu), or open it on another device to resume the same conversation
-- Local TTS (Piper, 1.4× playback) and STT (faster-whisper) — no paid cloud APIs
+- Local TTS (Kokoro, 1.4× playback) and STT (faster-whisper) — no paid cloud APIs
 - Slash commands, model switching mid-conversation, session history / resume / rename
 - Session list / transcript replay via `/api/sessions`
 
@@ -24,7 +24,7 @@ Browser (vanilla DOM, no framework)
   │  POST /api/upload   — multipart file upload
   │  GET  /api/file    — download a file the agent created (path-contained to piCwd)
   │  POST /api/transcribe — audio → text (Whisper)
-  │  POST /api/tts      — text → audio (Piper)
+  │  POST /api/tts      — text → audio (Kokoro)
   │  GET  /api/models   — list of models with configured API keys
   │  GET  /api/sessions — list pi sessions for the server's cwd
   │  GET  /api/health   — liveness + provider list
@@ -76,7 +76,7 @@ src/
     uploads.ts            # /api/upload
     files.ts              # /api/file (download agent-created files, piCwd-contained)
     transcribe.ts         # /api/transcribe (faster-whisper)
-    tts.ts                # /api/tts (piper)
+    tts.ts                # /api/tts (Kokoro)
     search/               # OPTIONAL pluggable semantic session search
                           #   (see "Semantic session search" below; absent by
                           #   default — delete the folder and the server is
@@ -123,8 +123,7 @@ Everything goes through `.env`. Keys for the providers you want to use; an empty
 | `MAX_UPLOAD_BYTES`             | `52428800`                    | 50 MB upload cap                               |
 | `PI_BIN`                       | `pi`                          | Path to the `pi` CLI binary (overridable for tests) |
 | `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
-| `PYTHON_BIN`                   | `python3`                     | Python binary for Piper (TTS) + Whisper (STT)  |
-| `PIPER_VOICE`                  | `en_US-amy-medium`            | Piper TTS voice model                           |
+| `PYTHON_BIN`                   | `python3`                     | Python binary for faster-whisper (STT)           |
 | `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
 | `*_API_KEY`                    | (unset)                       | Optional: env keys for non-chat tools (e.g. `VENICE_API_KEY` for pi-venice-image, `GEMINI_API_KEY` for YouTube transcripts). Chat auth itself is NOT configured here — see below. |
 
@@ -138,7 +137,7 @@ Chat-model providers are authenticated via `pi` itself: run `pi auth login <prov
 | GET    | `/uploads/:filename`  | Download a previously uploaded file                    |
 | DELETE | `/uploads/:filename`  | Remove an upload                                       |
 | POST   | `/api/transcribe`     | Audio → text (faster-whisper)                          |
-| POST   | `/api/tts`            | Text → audio (piper)                                   |
+| POST   | `/api/tts`            | Text → audio (Kokoro)                                  |
 | GET    | `/api/health`         | `{ status, commit, providers, whisper, tts, ttsVoice }` |
 | GET    | `/api/models`         | List of available models (only configured providers)   |
 | GET    | `/api/sessions`       | List pi sessions for the server's cwd (`?cwd=<path>`)  |
