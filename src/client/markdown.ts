@@ -2,7 +2,7 @@
  * Markdown → plain spoken text.
  *
  * Why this exists: the 🔊 speak button and auto-speak feed *raw assistant
- * markdown* to the local TTS (piper). Piper has no concept of markdown,
+ * markdown* to the local TTS engine. The engine has no concept of markdown,
  * so it reads the literal sigils — "asterisk asterisk bold asterisk
  * asterisk", "hash hash heading", pipes from tables, fenced ``` blocks,
  * the `[label](url)` URL in full, etc. The result sounds like gibberish.
@@ -63,7 +63,7 @@ const BLOCK_TAGS = new Set([
  *   - images → their alt text, if any
  *   - everything else → the rendered textContent (sigils/markers gone)
  *   - bare-URL-only text nodes → dropped
- *   - collapses 3+ newlines down to 2 so piper doesn't make long pauses
+ *   - collapses 3+ newlines down to 2 so the engine doesn't make long pauses
  *
  * Never throws: if the parser chokes on something, we fall back to the
  * raw text rather than silence the speak button.

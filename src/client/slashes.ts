@@ -897,7 +897,7 @@ export async function openVoicePicker(): Promise<void> {
 		return;
 	}
 	if (voices.length === 0) {
-		appendError("no piper voices found. Download one to ~/.local/share/piper/voices/.");
+		appendError("no TTS voices found.");
 		return;
 	}
 

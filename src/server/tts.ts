@@ -1,33 +1,26 @@
 /**
  * TTS endpoint.
  *
- * Two engines, selected by the `TTS_ENGINE` env var:
+ * Proxies to the pi-voice-server systemd service at http://127.0.0.1:8181
+ * (Kokoro-82M ONNX, warm in memory, ~1.5s for a sentence on CPU). The server
+ * is operated separately — see /home/lepton/pi-voice-server and the
+ * `pi-voice-server.service` unit.
  *
- *   - `kokoro` (recommended): proxies to the pi-voice-server systemd service
- *     at http://127.0.0.1:8181 (Kokoro-82M ONNX, warm in memory, ~1.5s for a
- *     sentence on CPU). The server is operated separately — see
- *     /home/lepton/pi-voice-server and the `pi-voice-server.service` unit.
+ * (A legacy Piper engine path was removed 2026-07-24 — Kokoro had been the
+ * sole configured engine in production for a long time; Piper was dead code.)
  *
- *   - `piper` (legacy default): shells out to scripts/tts.py (piper-tts).
- *     Kept as a fallback; lower quality but no separate service required.
- *
- * Both expose the same contract to the browser:
- *   POST /api/tts        { text, voice? } → audio/wav
+ * Two routes, same contract to the browser:
+ *   POST /api/tts        { text, voice? } → audio/wav (whole blob)
+ *   POST /api/tts/stream { text, voice? } → binary frame stream (chunked)
  *   GET  /api/tts/voices { default, available: string[] }
  *
- * The browser never knows which engine is running — it just plays the WAV.
+ * The browser never knows the engine — it just plays the WAV / frames.
  */
 
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
 import express, { type Request, type Response, type Router } from "express";
 import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
-import { projectRoot } from "./paths.js";
-import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 
-const HELPER_PATH = resolve(projectRoot, "scripts/tts.py");
 /**
  * Hard cap on input length. Kokoro itself has no text limit — this exists
  * only to reject absurd/misuse-sized payloads before we spend minutes of CPU
@@ -37,17 +30,19 @@ const HELPER_PATH = resolve(projectRoot, "scripts/tts.py");
  */
 const MAX_TEXT_CHARS = 30_000;
 
-type Engine = "kokoro" | "piper";
+type Engine = "kokoro";
 
+/** Always Kokoro now (the Piper fallback was removed). Kept as a function so
+ *  the rest of the file reads `engine()` and a future second engine could be
+ *  re-added without touching every call site. */
 function engine(): Engine {
-	const e = (process.env.TTS_ENGINE || "piper").toLowerCase();
-	return e === "kokoro" ? "kokoro" : "piper";
+	return "kokoro";
 }
 
 /**
  * Validate the shared { text, voice? } body for POST / and POST /stream.
  * Extracted so both routes apply the identical checks (non-empty text,
- * length cap) in one place — previously copy-pasted, which drifts.
+ * length cap) in one place.
  */
 type TtsInput = { text: string; voice: string | undefined };
 export function parseTtsBody(req: Request): TtsInput | { error: string; status: number } {
@@ -101,12 +96,7 @@ export function createTtsRouter(): Router {
 				return;
 			}
 			const { text, voice } = parsed;
-
-			if (engine() === "kokoro") {
-				await synthKokoro(text, voice, res);
-			} else {
-				await synthPiper(text, voice, res);
-			}
+			await synthKokoro(text, voice, res);
 		}),
 	);
 
@@ -123,8 +113,6 @@ export function createTtsRouter(): Router {
 	 *
 	 * This route is a pure byte pipe — no parsing, no business logic. The
 	 * server stays the transport layer; the browser owns chunked playback.
-	 * Only the kokoro engine streams; piper callers get a 501 and fall back
-	 * to the whole-blob POST / above.
 	 */
 	router.post(
 		"/stream",
@@ -135,10 +123,6 @@ export function createTtsRouter(): Router {
 				return;
 			}
 			const { text, voice } = parsed;
-			if (engine() !== "kokoro") {
-				res.status(501).json({ error: "streaming tts requires the kokoro engine" });
-				return;
-			}
 
 			// Abort upstream the moment the browser goes away (stop button,
 			// navigation) so pi-voice-server stops spending CPU on chunks no one
@@ -215,16 +199,8 @@ export function createTtsRouter(): Router {
 	router.get(
 		"/voices",
 		asyncHandler(async (_req, res) => {
-			if (engine() === "kokoro") {
-				const list = await kokoroVoices();
-				res.json({ default: KOKORO_DEFAULT_VOICE, available: list });
-			} else {
-				const voices = await listPiperVoices();
-				res.json({
-					default: process.env.PIPER_VOICE || "en_US-amy-medium",
-					available: voices,
-				});
-			}
+			const list = await kokoroVoices();
+			res.json({ default: KOKORO_DEFAULT_VOICE, available: list });
 		}),
 	);
 
@@ -267,67 +243,6 @@ async function kokoroVoices(): Promise<string[]> {
 	return data.voices ?? [];
 }
 
-// ── Piper: shell out to scripts/tts.py (legacy) ────────────────────
-
-async function synthPiper(text: string, voice: string | undefined, res: Response): Promise<void> {
-	let dir: string | undefined;
-	try {
-		dir = await mkdtemp(join(tmpdir(), "agentchatbox-tts-"));
-		const txtPath = join(dir, "input.txt");
-		const wavPath = join(dir, "output.wav");
-		await writeFile(txtPath, text, "utf8");
-
-		const env = { ...process.env };
-		if (voice) env.PIPER_VOICE = voice;
-
-		const { stdout, stderr, code, timedOut } = await runPython({
-			bin: process.env.PYTHON_BIN || "python3",
-			helperPath: HELPER_PATH,
-			helperArgs: [txtPath, wavPath],
-			env,
-			timeoutMs: DEFAULT_PYTHON_TIMEOUT_MS,
-		});
-
-		if (timedOut) {
-			res.status(504).json({
-				error: `tts.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms`,
-			});
-			return;
-		}
-		if (code !== 0) {
-			const tail = (stderr || stdout).slice(-500);
-			res.status(500).json({ error: `tts.py exited ${code}: ${tail}` });
-			return;
-		}
-
-		const wav = await readFile(wavPath);
-		res.setHeader("Content-Type", "audio/wav");
-		res.setHeader("Content-Length", String(wav.length));
-		res.setHeader("Cache-Control", "no-store");
-		res.send(wav);
-	} catch (e) {
-		const message = e instanceof Error ? e.message : String(e);
-		res.status(500).json({ error: `tts failed: ${message}` });
-	} finally {
-		if (dir) {
-			rm(dir, { recursive: true, force: true }).catch(() => {
-				/* best-effort */
-			});
-		}
-	}
-}
-
-async function listPiperVoices(): Promise<string[]> {
-	const base = resolve(homedir(), ".local/share/piper/voices");
-	try {
-		await stat(base);
-	} catch {
-		return [];
-	}
-	const entries = await readdir(base);
-	return entries.filter((n) => n.endsWith(".onnx")).map((n) => n.replace(/\.onnx$/, ""));
-}
-
 // ---------------------------------------------------------------------------
 // Health probe (used by /api/health)
 // ---------------------------------------------------------------------------
@@ -342,10 +257,7 @@ async function computeTtsAvailable(): Promise<{
 	voice?: string;
 	engine: Engine;
 }> {
-	if (engine() === "kokoro") {
-		return await checkKokoroHealth();
-	}
-	return { engine: "piper", ...(await checkPiperHealth()) };
+	return checkKokoroHealth();
 }
 
 async function checkKokoroHealth(): Promise<{
@@ -383,25 +295,8 @@ async function checkKokoroHealth(): Promise<{
 	}
 }
 
-async function checkPiperHealth(): Promise<{
-	available: boolean;
-	reason?: string;
-	voice?: string;
-}> {
-	const { stdout, stderr, code, timedOut } = await runPython({
-		bin: process.env.PYTHON_BIN || "python3",
-		helperPath: HELPER_PATH,
-		helperArgs: ["--self-test"],
-		env: process.env,
-		timeoutMs: 30_000,
-	});
-
-	if (timedOut) return { available: false, reason: "self-test timed out" };
-	if (code !== 0) return { available: false, reason: stderr || stdout || "unknown" };
-	try {
-		const info = JSON.parse(stdout) as { voice: string };
-		return { available: true, voice: info.voice };
-	} catch {
-		return { available: true };
-	}
-}
+// NOTE: this module previously also hosted a Piper engine (shell out to
+// scripts/tts.py). It was removed 2026-07-24 — Kokoro had been the sole
+// configured engine in production for a long time. If a second engine is ever
+// needed again, reintroduce an `engine()` discriminator + a synth/health path
+// per engine; the route handlers above already centralize body validation.
