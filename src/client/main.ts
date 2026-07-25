@@ -19,6 +19,7 @@ import type {
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
+import type { ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
@@ -914,7 +915,59 @@ function onEvent(event: Record<string, unknown>): void {
 // Boot
 // ---------------------------------------------------------------------------
 
+/**
+ * A display-only snapshot makes a hard refresh paint the sidebar immediately.
+ * The server remains authoritative and refreshes this in the background; no
+ * transcript or editable state is kept in the browser.
+ */
+const SIDEBAR_CACHE_KEY = "acb-sidebar-summaries-v1";
+type SidebarCache = { sessions: SessionSummary[]; projects: ProjectSummary[] };
+let sidebarSessionsForCache: SessionSummary[] = [];
+
+function readSidebarCache(): SidebarCache | null {
+	try {
+		const value = JSON.parse(localStorage.getItem(SIDEBAR_CACHE_KEY) ?? "null") as Partial<SidebarCache> | null;
+		if (!value || !Array.isArray(value.sessions) || !Array.isArray(value.projects)) return null;
+		if (
+			!value.sessions.every(
+				(s) =>
+					typeof s?.id === "string" &&
+					typeof s.cwd === "string" &&
+					typeof s.createdAt === "string" &&
+					typeof s.modifiedAt === "string" &&
+					typeof s.title === "string" &&
+					typeof s.messageCount === "number",
+			) ||
+			!value.projects.every(
+				(p) =>
+					typeof p?.id === "string" &&
+					typeof p.name === "string" &&
+					typeof p.icon === "string" &&
+					typeof p.cwd === "string",
+			)
+		) {
+			return null;
+		}
+		return { sessions: value.sessions, projects: value.projects };
+	} catch {
+		return null;
+	}
+}
+
+function saveSidebarCache(): void {
+	if (state.projects.length === 0) return;
+	try {
+		localStorage.setItem(
+			SIDEBAR_CACHE_KEY,
+			JSON.stringify({ sessions: sidebarSessionsForCache, projects: state.projects }),
+		);
+	} catch {
+		// Storage can be disabled/full; the live server response still renders.
+	}
+}
+
 async function boot(): Promise<void> {
+	const cachedSidebar = readSidebarCache();
 	// Probe the server's health and model list. If the relevant API keys
 	// aren't set, the lists come back empty and the picker will show a
 	// helpful error.
@@ -1047,6 +1100,13 @@ async function boot(): Promise<void> {
 	setSendAsUser(sendAsUser);
 
 	renderShell();
+	// Paint the previous display-only sidebar snapshot before pi finishes
+	// starting. The authoritative WS response below replaces it shortly after.
+	if (cachedSidebar) {
+		state.projects = cachedSidebar.projects;
+		sidebarSessionsForCache = cachedSidebar.sessions;
+		renderSidebarSessions(cachedSidebar.sessions);
+	}
 
 	// Global shortcut: Alt+↑ jumps to the previous user message (same as
 	// the floating button). Attached once at boot; the handler queries the
@@ -1141,6 +1201,8 @@ async function boot(): Promise<void> {
 	// open modal. The listener is a no-op if no picker is open.
 	// Also refresh the sidebar session list.
 	chatClient.onSessionsUpdated((sessions) => {
+		sidebarSessionsForCache = sessions;
+		saveSidebarCache();
 		renderSessionsIntoPicker(sessions);
 		// Derive which project the currently-viewed session belongs to, so
 		// the sidebar can highlight its folder.
@@ -1150,6 +1212,7 @@ async function boot(): Promise<void> {
 	});
 	chatClient.onProjectsUpdated((projects) => {
 		state.projects = projects;
+		saveSidebarCache();
 		renderSidebarProjects(projects);
 	});
 	// Loaded commands/skills/extensions for the live session, from pi's
@@ -1259,6 +1322,11 @@ async function boot(): Promise<void> {
 			thinkingLevel,
 			...(state.sessionId ? { sessionId: state.sessionId } : {}),
 		});
+		// These are server-side filesystem reads, independent of pi's ready
+		// response. Starting them now overlaps the cold session scan with pi
+		// startup instead of making the sidebar wait for it serially.
+		chatClient.listSessions();
+		chatClient.listProjects();
 	};
 	chatClient.onStatus(onWsOpen);
 
