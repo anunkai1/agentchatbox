@@ -68,7 +68,12 @@ import {
 	setSendAsUser,
 	showSlashMenu,
 } from "./slashes.js";
-import { type PersistedMessage, refreshCurrentModelLabel, state } from "./state.js";
+import {
+	defaultModelForNewChats,
+	type PersistedMessage,
+	refreshCurrentModelLabel,
+	state,
+} from "./state.js";
 import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
 import {
 	handleDrop,
@@ -968,47 +973,27 @@ function saveSidebarCache(): void {
 
 async function boot(): Promise<void> {
 	const cachedSidebar = readSidebarCache();
-	// Probe the server's health and model list. If the relevant API keys
-	// aren't set, the lists come back empty and the picker will show a
-	// helpful error.
-	try {
-		const [h, models] = await Promise.all([getHealth(), getModels()]);
-		state.searchEnabled = h.search ?? false;
-		state.ttsEngine = h.ttsEngine ?? null;
-		state.ttsDefaultVoice = h.ttsVoice ?? null;
-		state.voiceRewriteModel = h.voiceRewriteModel ?? null;
-		state.whisperModel = h.whisperModel ?? null;
-		state.imageModel = h.imageModel ?? null;
-		// Seed the Settings-row label from the server-known model (override/env),
-		// so it shows the actual model on load instead of "default". The notify
-		// path below keeps it fresh after in-session picks. "default" source
-		// stays null → renders as "default" (accurate: nothing explicitly set).
-		if (state.imageModel && state.imageModel.source !== "default") {
-			state.currentImageModelLabel = state.imageModel.model;
-		}
-		state.visionModel = h.visionModel ?? null;
-		state.geminiKey = h.geminiKey ?? false;
-		state.availableModels = models.map((m: ModelInfo) => ({
-			id: m.id,
-			provider: m.provider,
-			name: m.name,
-			reasoning: m.reasoning,
-		}));
-		// Fall back to the legacy single-provider shape if /api/models
-		// returns nothing (older server) — we still get *something* in
-		// the picker so the user isn't stuck.
-		if (state.availableModels.length === 0) {
-			state.availableModels = h.providers.map((p) => ({
-				id: "MiniMax-M3",
-				provider: p,
-			}));
-		}
-		// The model list just (re)loaded — re-resolve the friendly label
-		// for the current model now that names are available.
-		refreshCurrentModelLabel();
-	} catch (e) {
-		appendError(`server health check failed: ${e instanceof Error ? e.message : String(e)}`);
+	// These display-only requests must never delay the chat handshake. On a
+	// cold server /api/models may be waiting for its one-shot pi probe, while
+	// the actual session child can already be starting in parallel.
+	const metadataPromise = Promise.all([getHealth(), getModels()]);
+
+	// A cached Global project tells us the model a brand-new tab will use.
+	// Paint it immediately rather than showing "(no model)" until pi's
+	// get_state reply arrives. The server remains authoritative and corrects
+	// this provisional value in the first ready frame.
+	if (cachedSidebar) state.projects = cachedSidebar.projects;
+	const cachedDefault = defaultModelForNewChats();
+	if (cachedDefault) {
+		state.currentModelId = cachedDefault.id;
+		state.currentProvider = cachedDefault.provider;
+		if (cachedDefault.thinking) state.currentThinking = cachedDefault.thinking;
+	} else {
+		// This is the same new-chat fallback sent in the init handshake below.
+		state.currentModelId = "glm-5.2";
+		state.currentProvider = "zai";
 	}
+	refreshCurrentModelLabel();
 
 	// Shareable-session links: if the URL names a session (`/s/<id>`),
 	// resolve it BEFORE opening the WS so the first `init` resumes it.
@@ -1103,7 +1088,6 @@ async function boot(): Promise<void> {
 	// Paint the previous display-only sidebar snapshot before pi finishes
 	// starting. The authoritative WS response below replaces it shortly after.
 	if (cachedSidebar) {
-		state.projects = cachedSidebar.projects;
 		sidebarSessionsForCache = cachedSidebar.sessions;
 		renderSidebarSessions(cachedSidebar.sessions);
 	}
@@ -1133,6 +1117,7 @@ async function boot(): Promise<void> {
 		state.connectionStatus = s;
 		refreshStatus();
 	});
+	let awaitingInitialReady = true;
 	chatClient.onReady((info) => {
 		// A fresh `pi` child is up (new session, resume, or reconnect).
 		// Reset the live message ordinal — it gets re-seeded to the
@@ -1162,12 +1147,13 @@ async function boot(): Promise<void> {
 		// We detect (2) by tracking `pendingModelSet` — set when the user
 		// clicks a model in the picker, cleared on the matching `ready`.
 		const isConfirmingPending = state.pendingModelSet === info.modelId;
-		if (!state.currentModelId || isConfirmingPending) {
+		if (awaitingInitialReady || !state.currentModelId || isConfirmingPending) {
 			state.currentModelId = info.modelId;
 			state.currentProvider = info.provider;
 			refreshCurrentModelLabel();
 		}
 		state.pendingModelSet = null;
+		awaitingInitialReady = false;
 		state.currentThinking = info.thinkingLevel;
 		// Recover isStreaming from the server's ground truth. A hard refresh
 		// wipes the browser's local isStreaming (and the Stop button with
@@ -1296,8 +1282,9 @@ async function boot(): Promise<void> {
 	// waiting for this before it spawns the `pi` child. If we have
 	// no model picked yet, default to GLM-5.2 (if available in
 	// the model list) or the first available model otherwise.
-	const defaultModel =
-		state.availableModels.find((m) => m.id === "glm-5.2") ?? state.availableModels[0];
+	const defaultModel = defaultModelForNewChats() ??
+		state.availableModels.find((m) => m.id === "glm-5.2") ??
+		state.availableModels[0] ?? { id: "glm-5.2", provider: "zai" };
 	// Send the init handshake every time the WS (re)opens. On mobile
 	// browsers (especially Android Firefox), backgrounding the tab kills
 	// the WebSocket — the OS suspends JS, the TCP connection times out,
@@ -1307,8 +1294,8 @@ async function boot(): Promise<void> {
 	// hits "prompt sent before init".
 	const onWsOpen = (s: "connecting" | "open" | "closed" | "stalled") => {
 		if (s !== "open") return;
-		const modelId = state.currentModelId ?? defaultModel?.id ?? "glm-5.2";
-		const provider = state.currentProvider ?? defaultModel?.provider ?? "zai";
+		const modelId = state.currentModelId ?? defaultModel.id;
+		const provider = state.currentProvider ?? defaultModel.provider;
 		const thinkingLevel = state.currentThinking;
 		// On reconnect (after a dropped/stalled connection), pass the
 		// current session id so the server spawns `pi --session <id>`
@@ -1361,6 +1348,47 @@ async function boot(): Promise<void> {
 	chatClient.onForked((newSessionId) => {
 		chatClient.resumeSession(newSessionId);
 	});
+
+	// Fill the non-essential metadata once it arrives. This runs after the
+	// WebSocket has been opened, so a slow model-cache probe cannot hold up a
+	// new tab or leave it looking disconnected.
+	void metadataPromise
+		.then(([h, models]) => {
+			state.searchEnabled = h.search ?? false;
+			state.ttsEngine = h.ttsEngine ?? null;
+			state.ttsDefaultVoice = h.ttsVoice ?? null;
+			state.voiceRewriteModel = h.voiceRewriteModel ?? null;
+			state.whisperModel = h.whisperModel ?? null;
+			state.imageModel = h.imageModel ?? null;
+			// Seed the Settings-row label from the server-known model (override/env),
+			// so it shows the actual model on load instead of "default". The notify
+			// path below keeps it fresh after in-session picks.
+			if (state.imageModel && state.imageModel.source !== "default") {
+				state.currentImageModelLabel = state.imageModel.model;
+			}
+			state.visionModel = h.visionModel ?? null;
+			state.geminiKey = h.geminiKey ?? false;
+			state.availableModels = models.map((m: ModelInfo) => ({
+				id: m.id,
+				provider: m.provider,
+				name: m.name,
+				reasoning: m.reasoning,
+			}));
+			// Fall back to the legacy single-provider shape if /api/models
+			// returns nothing (older server) — we still get *something* in
+			// the picker so the user isn't stuck.
+			if (state.availableModels.length === 0) {
+				state.availableModels = h.providers.map((p) => ({
+					id: "MiniMax-M3",
+					provider: p,
+				}));
+			}
+			refreshCurrentModelLabel();
+			refreshStatus();
+		})
+		.catch((e) => {
+			appendError(`server health check failed: ${e instanceof Error ? e.message : String(e)}`);
+		});
 }
 
 boot();
