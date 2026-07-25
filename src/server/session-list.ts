@@ -31,6 +31,7 @@ import {
 	readdirSync,
 	readFileSync,
 	readSync,
+	renameSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
@@ -167,7 +168,80 @@ export function listPiSessions(cwd: string): SessionSummary[] {
  * fields (applied per-refresh), and we return a fresh copy so callers
  * can mutate without polluting the cache.
  */
-const sessionFileCache = new Map<string, { mtime: number; summary: SessionSummary }>();
+interface CachedSessionSummary {
+	mtime: number;
+	size: number;
+	summary: SessionSummary;
+}
+
+/**
+ * A small, derived on-disk counterpart to sessionFileCache. A fresh ACB
+ * process used to parse every JSONL before it could answer the first sidebar
+ * request; that is several hundred MB for an established history. Persisting
+ * only the already-derived summaries makes a restart's first listing a stat +
+ * map lookup per file. The JSONLs remain the source of truth: any mtime/size
+ * mismatch is parsed again.
+ */
+const sessionFileCache = new Map<string, CachedSessionSummary>();
+const SESSION_SUMMARY_CACHE_VERSION = 1;
+let summaryCacheLoaded = false;
+let summaryCacheDirty = false;
+let summaryCacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
+
+function summaryCacheFile(): string {
+	return process.env.AGENTCHATBOX_SESSION_CACHE_FILE
+		? resolve(process.env.AGENTCHATBOX_SESSION_CACHE_FILE)
+		: join(defaultSessionsRoot(), ".agentchatbox-session-summaries.json");
+}
+
+function loadPersistentSummaryCache(): void {
+	if (summaryCacheLoaded) return;
+	summaryCacheLoaded = true;
+	try {
+		const parsed = JSON.parse(readFileSync(summaryCacheFile(), "utf8")) as {
+			version?: unknown;
+			entries?: Record<string, CachedSessionSummary>;
+		};
+		if (parsed.version !== SESSION_SUMMARY_CACHE_VERSION || !parsed.entries) return;
+		for (const [file, entry] of Object.entries(parsed.entries)) {
+			if (
+				typeof entry?.mtime === "number" &&
+				typeof entry.size === "number" &&
+				entry.summary &&
+				typeof entry.summary.id === "string" &&
+				typeof entry.summary.cwd === "string" &&
+				typeof entry.summary.createdAt === "string" &&
+				typeof entry.summary.modifiedAt === "string" &&
+				typeof entry.summary.title === "string" &&
+				typeof entry.summary.messageCount === "number"
+			) {
+				sessionFileCache.set(file, entry);
+			}
+		}
+	} catch {
+		// Missing/corrupt derived cache is harmless; JSONLs will rebuild it.
+	}
+}
+
+function schedulePersistentSummaryCacheWrite(): void {
+	summaryCacheDirty = true;
+	if (summaryCacheWriteTimer) return;
+	summaryCacheWriteTimer = setTimeout(() => {
+		summaryCacheWriteTimer = null;
+		if (!summaryCacheDirty) return;
+		summaryCacheDirty = false;
+		try {
+			const file = summaryCacheFile();
+			const entries = Object.fromEntries(sessionFileCache);
+			const temp = `${file}.${process.pid}.tmp`;
+			writeFileSync(temp, JSON.stringify({ version: SESSION_SUMMARY_CACHE_VERSION, entries }));
+			renameSync(temp, file);
+		} catch {
+			// It is a performance cache only; never make session listing fail.
+		}
+	}, 500);
+	summaryCacheWriteTimer.unref();
+}
 
 /**
  * Parse the JSONL files for a single cwd into raw (untagged) summaries.
@@ -175,6 +249,7 @@ const sessionFileCache = new Map<string, { mtime: number; summary: SessionSummar
  * re-implementing the parser. Returns newest-first within this cwd.
  */
 function listSessionsInCwd(cwd: string): SessionSummary[] {
+	loadPersistentSummaryCache();
 	const dir = sessionsDirFor(resolve(cwd));
 	if (!existsSync(dir)) return [];
 
@@ -193,7 +268,7 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 		// callers add the derived pinned/projectId fields by mutation).
 		const mtime = st.mtimeMs;
 		const cached = sessionFileCache.get(file);
-		if (cached && cached.mtime === mtime) {
+		if (cached && cached.mtime === mtime && cached.size === st.size) {
 			out.push({ ...cached.summary });
 			continue;
 		}
@@ -263,7 +338,8 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 			title: sessionName ?? (firstUserText ? truncate(firstUserText, 60) : "(empty session)"),
 			messageCount,
 		};
-		sessionFileCache.set(file, { mtime, summary });
+		sessionFileCache.set(file, { mtime, size: st.size, summary });
+		schedulePersistentSummaryCacheWrite();
 		out.push({ ...summary });
 	}
 	// NOTE: no sort here — every caller goes through finishSessions(),
