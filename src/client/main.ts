@@ -1117,7 +1117,6 @@ async function boot(): Promise<void> {
 		state.connectionStatus = s;
 		refreshStatus();
 	});
-	let awaitingInitialReady = true;
 	chatClient.onReady((info) => {
 		// A fresh `pi` child is up (new session, resume, or reconnect).
 		// Reset the live message ordinal — it gets re-seeded to the
@@ -1132,28 +1131,21 @@ async function boot(): Promise<void> {
 			// — every `ready` reflects the currently bound session.
 			writeSessionIdToUrl(info.sessionId);
 		}
-		// Adopt the server-reported model. The server reports the
-		// session's CURRENT model (chat.ts setModel/setThinking handlers
-		// update session.init on every change, so a reattach reports the
-		// truth, not the spawn-time default). We adopt it when:
-		//   1. we don't currently have one displayed (hard refresh —
-		//      state.currentModelId is null after a fresh page load), OR
-		//   2. the server is confirming the model the user just picked
-		//      (i.e. a setModel round-trip — server rebuilt the agent
-		//      and is reporting back the model we asked for).
-		// On a soft WS reconnect (no page reload) currentModelId is already
-		// set, so neither condition fires and we keep what's displayed —
-		// which matches the server anyway, so no fight.
-		// We detect (2) by tracking `pendingModelSet` — set when the user
-		// clicks a model in the picker, cleared on the matching `ready`.
-		const isConfirmingPending = state.pendingModelSet === info.modelId;
-		if (awaitingInitialReady || !state.currentModelId || isConfirmingPending) {
+		// Adopt pi's authoritative model unless the user picked another model
+		// while this child was still starting. In that race, the first ready
+		// frame describes the original spawn model; keep the optimistic pick
+		// and its pending marker until the later modelState frame confirms or
+		// rejects the set_model request. This is the targeted rollback of the
+		// old `awaitingInitialReady` behaviour, which snapped quick picks back
+		// to the default model.
+		const hasPendingPick = state.pendingModelSet !== null;
+		const readyConfirmsPending = state.pendingModelSet === info.modelId;
+		if (!hasPendingPick || readyConfirmsPending) {
 			state.currentModelId = info.modelId;
 			state.currentProvider = info.provider;
 			refreshCurrentModelLabel();
+			if (readyConfirmsPending) state.pendingModelSet = null;
 		}
-		state.pendingModelSet = null;
-		awaitingInitialReady = false;
 		state.currentThinking = info.thinkingLevel;
 		// Recover isStreaming from the server's ground truth. A hard refresh
 		// wipes the browser's local isStreaming (and the Stop button with
