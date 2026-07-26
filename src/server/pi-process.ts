@@ -16,6 +16,12 @@
  *   - a `kill()` method that SIGTERMs and escalates to SIGKILL after
  *     2s, giving the child a chance to flush its session JSONL.
  *
+ * Every child starts with `--offline`. This only disables pi's startup-time
+ * network work (remote model-catalog refreshes, version/package checks, and
+ * telemetry); normal provider and extension requests still use the network.
+ * ACB relies on pi's built-in + persisted model catalogs, which can be
+ * refreshed explicitly outside ACB with `pi update --models`.
+ *
  * The process model is one `pi` per WS connection. Resume = kill + respawn
  * with `--session <id>`. New session = kill + respawn without `--session`.
  * Model switch mid-conversation does NOT respawn — `pi` supports in-process
@@ -120,7 +126,18 @@ export class PiProcess extends EventEmitter {
 
 	constructor(opts: PiProcessOptions) {
 		super();
-		const args = ["--mode", "rpc", "--provider", opts.provider, "--model", opts.modelId];
+		// ACB is an always-on transport and must not block each fresh chat on
+		// pi.dev catalog/update probes. `--offline` affects startup maintenance
+		// only; model API calls and extension tools remain network-capable.
+		const args = [
+			"--mode",
+			"rpc",
+			"--offline",
+			"--provider",
+			opts.provider,
+			"--model",
+			opts.modelId,
+		];
 		// Thinking-level handling: explicit opts.thinkingLevel wins (the
 		// picker or a setThinking RPC told us what the user picked).
 		if (opts.thinkingLevel) {
