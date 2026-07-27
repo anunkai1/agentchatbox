@@ -241,6 +241,9 @@ body.sidebar-resizing iframe {
 	gap: 4px;
 	margin: 4px 8px 8px;
 }
+.sidebar-search-row[hidden] {
+	display: none;
+}
 .sidebar-search {
 	flex: 1;
 	padding: 8px 10px;
