@@ -1372,40 +1372,43 @@ export function renderShell(): void {
 		),
 	);
 
-	// Semantic search box — only rendered when the server advertises the
-	// optional search feature (state.searchEnabled, set from /api/health).
-	// Typing switches the sessions list to ranked-by-meaning results; clearing
-	// it restores the normal date-grouped list. See src/server/search/.
-	if (state.searchEnabled) {
-		const searchRow = el("div", { class: "sidebar-search-row" });
-		searchRow.append(
-			el("input", {
-				class: "sidebar-search",
-				id: "sidebar-search",
-				type: "search",
-				placeholder: "Search chats by meaning…",
-				autocomplete: "off",
-				on: {
-					input: (e: Event) => {
-						const q = (e.target as HTMLInputElement).value;
-						void onSidebarSearchInput(q);
-					},
+	// Semantic search box. /api/health resolves asynchronously after the shell
+	// is painted, so keep the row in the DOM and reveal it when that result
+	// arrives. Rendering it only when state.searchEnabled was already true made
+	// visibility depend on whether a later transcript happened to rebuild the
+	// shell — a startup race that made the box appear only sometimes.
+	const searchRow = el("div", {
+		class: "sidebar-search-row",
+		id: "sidebar-search-row",
+		hidden: !state.searchEnabled,
+	});
+	searchRow.append(
+		el("input", {
+			class: "sidebar-search",
+			id: "sidebar-search",
+			type: "search",
+			placeholder: "Search chats by meaning…",
+			autocomplete: "off",
+			on: {
+				input: (e: Event) => {
+					const q = (e.target as HTMLInputElement).value;
+					void onSidebarSearchInput(q);
 				},
-			}),
-			el(
-				"button",
-				{
-					class: "search-info-btn",
-					type: "button",
-					title: "How does this search work?",
-					"aria-label": "How does this search work?",
-					onclick: toggleSearchHelp,
-				},
-				"ⓘ",
-			),
-		);
-		sidebar.append(searchRow);
-	}
+			},
+		}),
+		el(
+			"button",
+			{
+				class: "search-info-btn",
+				type: "button",
+				title: "How does this search work?",
+				"aria-label": "How does this search work?",
+				onclick: toggleSearchHelp,
+			},
+			"ⓘ",
+		),
+	);
+	sidebar.append(searchRow);
 
 	// Session list area — split into two independently-scrolling panes
 	// (Projects on top, Global/Other on the bottom) divided by a draggable
@@ -1874,6 +1877,12 @@ function toggleSidebar(collapse: boolean): void {
 	} else {
 		dim?.remove();
 	}
+}
+
+/** Apply the asynchronous /api/health search capability to the live shell. */
+export function refreshSidebarSearchVisibility(): void {
+	const row = document.getElementById("sidebar-search-row");
+	if (row) row.hidden = !state.searchEnabled;
 }
 
 /**

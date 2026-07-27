@@ -38,6 +38,7 @@ import {
 	jumpToPrevUserMessage,
 	lastAssistantVoiceBox,
 	refreshStatus,
+	refreshSidebarSearchVisibility,
 	registerShellHandlers,
 	renderMessageNode,
 	renderShell,
@@ -1347,6 +1348,7 @@ async function boot(): Promise<void> {
 	void metadataPromise
 		.then(([h, models]) => {
 			state.searchEnabled = h.search ?? false;
+			refreshSidebarSearchVisibility();
 			state.ttsEngine = h.ttsEngine ?? null;
 			state.ttsDefaultVoice = h.ttsVoice ?? null;
 			state.voiceRewriteModel = h.voiceRewriteModel ?? null;
