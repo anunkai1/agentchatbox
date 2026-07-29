@@ -49,3 +49,19 @@ export function setRichText(container: HTMLElement, text: string): void {
 		container.textContent = src;
 	}
 }
+
+/**
+ * Render a user-authored message. Older ACB versions stored pasted images
+ * as ordinary `[image: name](url)` links; recognise that narrowly-defined
+ * legacy form so existing transcript entries render as pictures too. New
+ * attachments use standard `![image: name](url)` Markdown from the start.
+ */
+export function setUserRichText(container: HTMLElement, text: string): void {
+	setRichText(
+		container,
+		text.replace(
+			/(^|[\s])\[image: ([^\]]+)\]\((\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)\)/g,
+			"$1![$2]($3)",
+		),
+	);
+}

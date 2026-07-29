@@ -13,7 +13,14 @@
 import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
-import { appendError, autoSize, hideToast, refreshStatus, showTtsBanner } from "./render.js";
+import {
+	addImageAttachmentPreview,
+	appendError,
+	autoSize,
+	hideToast,
+	refreshStatus,
+	showTtsBanner,
+} from "./render.js";
 import { state } from "./state.js";
 
 /**
@@ -472,9 +479,10 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 /**
  * Shared core: take a list of File objects (from the file picker, a
  * paste, or a drag-and-drop) and upload each one, remembering image
- * bytes for multimodal models and inserting a markdown link into the
- * input. The file picker resets its own .value; callers that don't
- * come from an <input type=file> simply pass an empty Event-less path.
+ * bytes for multimodal models, inserting standard image Markdown into
+ * the input, and showing a removable thumbnail above the composer. The
+ * file picker resets its own .value; callers that don't come from an
+ * <input type=file> simply pass an empty Event-less path.
  */
 export async function attachFiles(files: File[]): Promise<void> {
 	if (files.length === 0) return;
@@ -495,10 +503,23 @@ export async function attachFiles(files: File[]): Promise<void> {
 					filename: res.filename,
 				});
 			}
-			const insertion = res.mimeType.startsWith("image/")
-				? `\n[image: ${res.filename}](${res.url})`
-				: `\n[file: ${res.filename}](${res.url})`;
-			ta.value = `${ta.value} ${insertion}`.trim();
+			const isImage = res.mimeType.startsWith("image/");
+			const insertion = isImage
+				? `![image: ${res.filename}](${res.url})`
+				: `[file: ${res.filename}](${res.url})`;
+			ta.value = `${ta.value}\n${insertion}`.trim();
+			if (isImage) {
+				addImageAttachmentPreview(res.url, res.filename, () => {
+					// The upload can remain on disk, but removing it from the draft
+					// must also prevent its base64 data reaching the model.
+					state.uploadedImages.delete(res.url);
+					ta.value = ta.value
+						.replace(`![image: ${res.filename}](${res.url})`, "")
+						.replace(`[image: ${res.filename}](${res.url})`, "")
+						.trim();
+					autoSize();
+				});
+			}
 			autoSize();
 		} catch (err) {
 			appendError(err instanceof Error ? err.message : String(err));

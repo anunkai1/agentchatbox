@@ -31,6 +31,7 @@ import {
 	appendAssistantPlaceholder,
 	appendError,
 	appendToolCall,
+	clearAttachmentPreviews,
 	autoSize,
 	finalizeToolCall,
 	hideToast,
@@ -126,13 +127,16 @@ function handleSend(): void {
 	const trimmed = text.trim();
 	if (!trimmed) return;
 	input.value = "";
+	clearAttachmentPreviews();
 	autoSize();
 	if (trimmed.startsWith("/")) {
 		handleSlash(trimmed.replace(/^\//, ""));
 		// If the slash was unknown, send it as a regular prompt.
 		// (handleSlash leaves the input empty on known commands.)
 		if ($<HTMLTextAreaElement>("#input").value === "" && isKnownSlash(trimmed)) {
-			// known slash — handled, do NOT also send as prompt
+			// known slash — handled, do NOT also send as prompt. Discard any
+			// draft attachments too: this command consumed the composer text.
+			state.uploadedImages.clear();
 			return;
 		} else {
 			// unknown slash — fall through and send as prompt
@@ -245,11 +249,11 @@ function consumeUploadedImages(text: string): Array<{ data: string; mimeType: st
 		if (seen.has(url)) continue;
 		seen.add(url);
 		const img = state.uploadedImages.get(url);
-		if (img) {
-			images.push({ data: img.data, mimeType: img.mimeType });
-			state.uploadedImages.delete(url);
-		}
+		if (img) images.push({ data: img.data, mimeType: img.mimeType });
 	}
+	// This map represents the current composer draft only. URLs manually
+	// removed from its Markdown should not retain multi-megabyte base64 data.
+	state.uploadedImages.clear();
 	return images;
 }
 
