@@ -18,7 +18,7 @@
 import type { PiCommand, ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, escapeHtml, type LiveAssistantDom } from "./dom.js";
-import { setRichText } from "./linkify.js";
+import { setRichText, setUserRichText } from "./linkify.js";
 import { services } from "./services.js";
 import { type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { formatAbsolute, formatRelative } from "./time.js";
@@ -130,7 +130,8 @@ function makeTimestampEl(ts: number): HTMLElement {
 export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	if (m.kind === "user") {
 		const row = el("div", { class: "row row-user" });
-		const bubble = el("div", { class: "bubble" }, m.text);
+		const bubble = el("div", { class: "bubble markdown" });
+		setUserRichText(bubble, m.text);
 		if (m.ts !== undefined) bubble.append(makeTimestampEl(m.ts));
 		row.append(bubble);
 		if (m.seq !== undefined) row.append(makeForkButton(() => m.seq, { align: "right" }));
@@ -141,7 +142,8 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		// right-aligned bubble as a user message, but with a badge so
 		// it's clear it's queued (not yet consumed by the agent) vs
 		// delivered (folded into the next turn).
-		const bubble = el("div", { class: "bubble steer-bubble" }, m.text);
+		const bubble = el("div", { class: "bubble markdown steer-bubble" });
+		setUserRichText(bubble, m.text);
 		bubble.append(
 			el(
 				"span",
@@ -1181,6 +1183,41 @@ function contextFillLabel(): string {
  * once at boot — renderShell just calls them. This indirection keeps
  * render.ts from importing slashes.ts and voice.ts at module top-level.
  */
+/** Add an image thumbnail above the composer while it is attached to the draft. */
+export function addImageAttachmentPreview(
+	url: string,
+	filename: string,
+	onRemove: () => void,
+): void {
+	const previews = document.getElementById("attachment-previews");
+	if (!previews || Array.from(previews.children).some((card) => card.getAttribute("data-url") === url)) return;
+	const card = el("div", { class: "attachment-preview" });
+	card.dataset.url = url;
+	card.append(
+		el("img", { src: url, alt: `Attached image: ${filename}` }),
+		el(
+			"button",
+			{
+				class: "attachment-preview-remove",
+				type: "button",
+				title: `Remove ${filename}`,
+				"aria-label": `Remove ${filename}`,
+				onclick: () => {
+					onRemove();
+					card.remove();
+				},
+			},
+			"×",
+		),
+	);
+	previews.append(card);
+}
+
+/** Remove composer-only attachment previews after the draft is submitted. */
+export function clearAttachmentPreviews(): void {
+	document.getElementById("attachment-previews")?.replaceChildren();
+}
+
 export interface ShellHandlers {
 	handleSend: () => void;
 	historyBack: () => void;
@@ -1638,6 +1675,9 @@ export function renderShell(): void {
 	// The old globe/reasoning buttons were removed because they had no
 	// direct effect (they opened other menus instead).
 	const composerWrap = el("div", { class: "composer-wrap" });
+	// A textarea cannot paint an inline image. Keep the model-visible Markdown
+	// in it, and show each attached image as a removable thumbnail just above.
+	composerWrap.append(el("div", { class: "attachment-previews", id: "attachment-previews" }));
 	const composer = el("div", { class: "composer" });
 	composer.append(
 		el(

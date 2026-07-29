@@ -911,6 +911,28 @@ body.sidebar-resizing iframe {
 	font-size: 15px;
 	line-height: 1.55;
 }
+/* User messages use the same sanitized Markdown pipeline as assistant
+ * replies, so pasted `![image: …](…)` attachments render as pictures. */
+.row-user .bubble.markdown {
+	white-space: normal;
+}
+.row-user .bubble.markdown > :first-child {
+	margin-top: 0;
+}
+.row-user .bubble.markdown > :last-child {
+	margin-bottom: 0;
+}
+.row-user .bubble.markdown p {
+	margin: 0 0 0.65em;
+}
+.row-user .bubble.markdown img {
+	display: block;
+	max-width: 100%;
+	max-height: 420px;
+	height: auto;
+	object-fit: contain;
+	border-radius: 8px;
+}
 
 /* Steering message — queued while the agent is running. Same shape as
    a user bubble but dashed/muted to signal it's not yet consumed. */
@@ -1461,6 +1483,49 @@ body.sidebar-resizing iframe {
 
 .composer-wrap {
 	padding: 10px 20px 8px;
+}
+/* Pasted/attached images remain standard Markdown in the textarea for pi,
+ * but a textarea cannot render them. Show a compact, removable preview just
+ * above the composer instead. */
+.attachment-previews {
+	max-width: var(--chat-max);
+	margin: 0 auto 7px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.attachment-preview {
+	position: relative;
+	width: 72px;
+	height: 72px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+	background: var(--surface);
+}
+.attachment-preview img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+}
+.attachment-preview-remove {
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	border: 1px solid var(--border-strong);
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.72);
+	color: var(--text);
+	font: 18px/16px var(--font-sans);
+	cursor: pointer;
+}
+.attachment-preview-remove:hover {
+	background: var(--accent);
+	border-color: var(--accent);
 }
 .composer {
 	max-width: var(--chat-max);
