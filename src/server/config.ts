@@ -69,12 +69,16 @@ export const config: ServerConfig = {
 /**
  * pi's auth store — the single source of truth for which LLM providers
  * the user has authenticated (via `pi auth login`/`logout`). ACB reads it
- * for BOTH the model-picker gate and the key injected into spawned `pi`
- * children, so logging a provider in or out of `pi` automatically adds or
- * removes it in ACB on the next request — no ACB restart, and no second
- * key store to keep in sync (the drift bug that motivated this:
- * `providers.env` had keys for providers the user had logged out of, so
- * the picker kept showing them).
+ * for BOTH the model-picker gate and the spawn gate (refuse to spawn a
+ * `pi` child for a provider with no key), so logging a provider in or out
+ * of `pi` automatically adds or removes it in ACB on the next request —
+ * no ACB restart, and no second key store to keep in sync (the drift
+ * bug that motivated this: `providers.env` had keys for providers the
+ * user had logged out of, so the picker kept showing them).
+ *
+ * The key is NOT injected into the spawned `pi` child — `pi` reads it
+ * from auth.json itself (see pi-process.ts). ACB only checks presence
+ * here to decide whether spawning is allowed.
  *
  * `~/.pi/agent/auth.json` is a symlink to `.secrets/llm/pi-auth.json`.
  * Read fresh each call (the file is tiny and `pi` rewrites it on every
@@ -127,8 +131,10 @@ export function readPiAuth(): Map<string, string> {
 
 /**
  * Returns the API key for a provider, sourced from `pi`'s auth.json. Used
- * both to gate the picker (presence of a key) and to inject the key into
- * spawned `pi` children. Not sourced from `providers.env` — that file is
+ * only to gate the picker (presence of a key) and to gate spawning
+ * (refuse to spawn a `pi` child for a provider with no key). The key is
+ * NOT injected into the child — `pi` reads it from auth.json itself (see
+ * pi-process.ts). Not sourced from `providers.env` — that file is
  * now transport-only (env vars for non-chat tools: VENICE_API_KEY for the
  * pi-venice-image extension, GEMINI_API_KEY for YouTube transcripts).
  */

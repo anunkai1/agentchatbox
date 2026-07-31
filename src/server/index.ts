@@ -320,7 +320,7 @@ function readVisionModel(): {
 // Health check. Reports configured provider keys, local Whisper, local TTS,
 // and the running commit hash (so an operator can verify the live process
 // is on the expected tree). Cross-check against
-// `git -C /home/architect/agentchatbox rev-parse HEAD` on the host.
+// `git -C /home/lepton/agentchatbox rev-parse HEAD` on the host.
 app.get(
 	"/api/health",
 	asyncHandler(async (_req, res) => {

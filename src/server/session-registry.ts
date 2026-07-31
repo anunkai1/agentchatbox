@@ -157,6 +157,19 @@ class SessionRegistry {
 	private readonly entries = new Map<string, LiveSession>();
 
 	/**
+	 * Sessions whose `pi` child has been spawned but hasn't yet reported a
+	 * session id via `get_state` (so it isn't in `entries`). Tracked
+	 * separately so `killAll()` on shutdown and the never-ready timeout in
+	 * `requestSessionId` can reach them — without this, a fresh child that
+	 * never became ready (and never exited on its own) was leaked forever:
+	 * not in `entries` (no id yet), skipped by the idle reaper (which
+	 * requires a session id), and missed by `killAll()` (which only walks
+	 * `entries`). A resume child is in `entries` from spawn, so it isn't
+	 * here.
+	 */
+	private readonly pending = new Set<LiveSession>();
+
+	/**
 	 * Snapshot of every live, ready session — id + cwd. Used by chat.ts
 	 * to inject brand-new sessions into the sidebar list BEFORE pi has
 	 * flushed their JSONL to disk (pi only writes the file once the
@@ -219,9 +232,13 @@ class SessionRegistry {
 		};
 		// For a resume we know the id up front; register immediately so a
 		// reconnect during the (<1s) spawn window can reattach. For a new
-		// session the id isn't known until `get_state` returns; we register
-		// there. The two paths converge in onGetStateResponse below.
+		// session the id isn't known until `get_state` returns; park it in
+		// `pending` instead so killAll() and the never-ready timeout can
+		// reach it. The two paths converge in the get_state handler below,
+		// which flips ready and moves the session from `pending` into
+		// `entries`.
 		if (init.sessionId) this.entries.set(init.sessionId, session);
+		else this.pending.add(session);
 
 		// One set of listeners for the whole lifetime of the child. They
 		// forward to `session.ws` — whatever it currently is — so attach /
@@ -238,6 +255,7 @@ class SessionRegistry {
 				session.idleTimer = null;
 			}
 			if (session.sessionId) this.entries.delete(session.sessionId);
+			this.pending.delete(session);
 			if (!session.ready) {
 				deliver(session.ws, {
 					type: "error",
@@ -325,6 +343,7 @@ class SessionRegistry {
 			session.idleTimer = null;
 		}
 		if (session.sessionId) this.entries.delete(session.sessionId);
+		this.pending.delete(session);
 		session.ws = null;
 		try {
 			session.pi.kill();
@@ -336,6 +355,8 @@ class SessionRegistry {
 	/** SIGTERM every live child — used on server shutdown. */
 	killAll(): void {
 		for (const s of this.entries.values()) this.kill(s);
+		// Snapshot pending: kill() mutates the set mid-iteration.
+		for (const s of [...this.pending]) this.kill(s);
 	}
 
 	// -----------------------------------------------------------------------
@@ -353,6 +374,7 @@ class SessionRegistry {
 			if (id) {
 				session.sessionId = id;
 				session.ready = true;
+				this.pending.delete(session);
 				this.entries.set(id, session); // idempotent for resume, first reg for new
 				this.sendReadyAndCatchup(session);
 			}
@@ -591,7 +613,26 @@ class SessionRegistry {
 		const maxAttempts = 50; // ~10s ceiling — pi startup is normally <1s
 		let attempts = 0;
 		const send = (): void => {
-			if (session.ready || attempts >= maxAttempts || session.pi.killed) return;
+			if (session.ready || session.pi.killed) return;
+			if (attempts >= maxAttempts) {
+				// pi never answered get_state within ~10s. It's wedged — kill
+				// it so it doesn't leak: a fresh child with no id yet is
+				// invisible to the idle reaper (needs a session id) and was
+				// previously missed by killAll() (only walked `entries`). The
+				// `pending` set now keeps it reachable. Deliver the error to
+				// the attached view BEFORE kill() nulls session.ws; the exit
+				// handler's own !ready error frame then no-ops (deliver(null))
+				// so the client gets exactly one message.
+				log.warn("pi never became ready; killing", { pid: session.pi.pid });
+				deliver(session.ws, {
+					type: "error",
+					message: `pi did not become ready within ~${Math.round(
+						(maxAttempts * intervalMs) / 1000,
+					)}s; try reconnecting`,
+				});
+				this.kill(session);
+				return;
+			}
 			attempts++;
 			session.pi.send({ type: "get_state" });
 			const t = setTimeout(send, intervalMs);
