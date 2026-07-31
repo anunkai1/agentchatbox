@@ -112,7 +112,7 @@ export function defaultSessionsRoot(): string {
  * The per-cwd subdirectory `pi` writes sessions into. The convention
  * in pi 0.79.x is to strip the leading "/" from the cwd, replace every
  * remaining "/" with "-", and wrap the result in "--" delimiters — so
- * `/home/architect/agentchatbox` becomes `--home-architect-agentchatbox--`
+ * `/home/lepton/agentchatbox` becomes `--home-lepton-agentchatbox--`
  * (NOT `--/home/...--`). Exported so the search indexer reuses the exact
  * same path derivation (no second copy to drift).
  */

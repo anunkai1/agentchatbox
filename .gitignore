@@ -53,6 +53,11 @@ AGENTS.md
 scripts/_archive/
 .venv/
 
+# Stray screenshots from browser harness runs (YouTube uploads etc.)
+youtube-*.png
+yt-*.png
+tmp_*.png
+
 # Search index (regeneratable from pi session JSONL)
 data/
 

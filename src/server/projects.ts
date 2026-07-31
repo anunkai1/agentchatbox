@@ -275,16 +275,13 @@ export function updateProject(
 		defaultThinkingLevel?: ThinkingLevel | null;
 	},
 ): ProjectRecord | undefined {
-	if (id === GLOBAL_PROJECT_ID) {
-		// Global's cwd is fixed; only allow metadata + instructions.
-	}
+	// Builtin projects (Global) can be renamed/re-iconed/updated but their
+	// cwd is fixed — enforced structurally, since `patch` carries no cwd
+	// field, so the spread below can't overwrite it.
 	const store = readStore();
 	const idx = store.projects.findIndex((p) => p.id === id);
 	if (idx < 0) return undefined;
 	const current = store.projects[idx];
-	if (current.builtin) {
-		// name/icon/defaults/instructions allowed; cwd stays.
-	}
 	const updated: ProjectRecord = {
 		...current,
 		...(patch.name !== undefined ? { name: patch.name.trim() || current.name } : {}),
