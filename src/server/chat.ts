@@ -218,7 +218,22 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 			deliverError(ws, "no active session");
 			return;
 		}
-		onClientMessage(ws, msg, current);
+		// A synchronous throw here (e.g. registry.acquire rejecting a
+		// logged-out provider, a disk error in a sidecar write) would
+		// otherwise propagate out of the ws "message" listener as an
+		// uncaughtException and crash the whole server — taking every
+		// active session and every pi child with it (the exact failure
+		// the registry exists to prevent). Surface it to the client as an
+		// error frame instead. The per-command guards below own their
+		// own, more specific, recovery (e.g. replaceSession clearing
+		// ws._session on a failed acquire); this is the catch-all backstop.
+		try {
+			onClientMessage(ws, msg, current);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			log.error("client message handler threw", { error: message });
+			deliverError(ws, `internal error: ${message}`);
+		}
 	});
 
 	// Detach on disconnect — the agent keeps running. The registry reaps
@@ -539,7 +554,22 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 function replaceSession(ws: PiSocket, old: LiveSession, init: InitMessage): void {
 	registry.detach(old, ws);
 	registry.kill(old);
-	const next = registry.acquire(init);
+	let next: LiveSession;
+	try {
+		next = registry.acquire(init);
+	} catch (err) {
+		// acquire can throw — most commonly `spawn()`'s "no API key for
+		// provider" when the project's default (or a resumed session's)
+		// provider was logged out of auth.json, but also any sidecar /
+		// spawn failure. The old child is already killed here, so unbind
+		// the ws: a later message then hits the "no active session" guard
+		// cleanly instead of silently dropping into the killed child's
+		// send() (which returns without doing anything — a stuck UI).
+		// The thrown error propagates to the try/catch in the message
+		// listener above, which delivers it as an error frame.
+		ws._session = null;
+		throw err;
+	}
 	registry.attach(next, ws);
 }
 

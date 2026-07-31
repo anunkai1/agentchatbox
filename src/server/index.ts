@@ -540,6 +540,25 @@ const server = app.listen(config.port, config.host, () => {
 // second port.
 mountChatWs(server);
 
+// Last-resort backstop. The per-connection try/catch in chat.ts is the
+// real fix for synchronous throws inside ws listeners (which would
+// otherwise crash the server and tear down every live pi child); this
+// catches anything that slips past a future regression or an unguarded
+// EventEmitter listener elsewhere. We log and continue rather than die —
+// a single buggy code path shouldn't take the whole server (and every
+// active session) down. systemd restart-on-crash is still the safety net
+// for a truly wedged process, but not the first resort.
+process.on("uncaughtException", (err) => {
+	log.error("uncaughtException (continuing)", {
+		error: err.message,
+		stack: err.stack,
+	});
+});
+process.on("unhandledRejection", (reason) => {
+	const message = reason instanceof Error ? reason.message : String(reason);
+	log.error("unhandledRejection (continuing)", { error: message });
+});
+
 // On server shutdown, SIGTERM every live `pi --mode rpc` child so each
 // gets a chance to flush its session JSONL before the process dies.
 // The `pi` process appends to its session file on every event, so a
