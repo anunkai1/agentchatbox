@@ -48,6 +48,10 @@
     "typescript": "^5.7.2",
     "vitest": "^4.1.9"
   },
+  "overrides": {
+    "adm-zip": "^0.6.0",
+    "sharp": "^0.35.3"
+  },
   "allowScripts": {
     "better-sqlite3@12.11.1": true,
     "onnxruntime-node@1.24.3": true
