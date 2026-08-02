@@ -116,6 +116,20 @@ sleep 0.1
 exit 1
 `;
 
+const EXIT_AFTER_READY_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that becomes ready, then exits naturally while its WebSocket is
+# still attached. Reproduces the frozen-working UI bug: the registry used
+# to delete the child silently and leave the browser bound to a dead pipe.
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  if [ "$type" = "get_state" ]; then
+    echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"exit-ready-session-001","messageCount":0}}'
+    sleep 0.1
+    exit 23
+  fi
+done
+`;
+
 const TRACK_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that records every spawn by appending its PID to the file
 # named in $AGENTCHATBOX_FAKE_PI_MARKER. Used by the detach/reattach
@@ -302,7 +316,7 @@ done
 
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
-	behavior: "echo" | "ack" | "exit-before-session" | "exit-after-read" | "exit-after-delay" | "steer-race" | "track" | "retry" | "running" | "set-model",
+	behavior: "echo" | "ack" | "exit-before-session" | "exit-after-read" | "exit-after-delay" | "exit-after-ready" | "steer-race" | "track" | "retry" | "running" | "set-model",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -325,7 +339,9 @@ function makeFakePi(
 										? EXIT_AFTER_FIRST_READ_SCRIPT
 										: behavior === "exit-after-delay"
 											? EXIT_AFTER_DELAY_SCRIPT
-											: EXIT_BEFORE_SESSION_SCRIPT;
+											: behavior === "exit-after-ready"
+												? EXIT_AFTER_READY_SCRIPT
+												: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -738,6 +754,49 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			const errMsg = msgs.find((m) => m.type === "error");
 			expect(errMsg).toBeTruthy();
 			expect((errMsg as { message?: string }).message ?? "").toMatch(/pi exited/);
+		} finally {
+			close();
+		}
+	});
+
+	it("reports and reconnects when a ready child exits unexpectedly", async () => {
+		fakePiPath = makeFakePi("exit-after-ready");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+			ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+		});
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+
+			const msgs = await inbox.waitFor(2, 3000);
+			expect(msgs.some((m) => m.type === "ready")).toBe(true);
+			const errMsg = msgs.find((m) => m.type === "error");
+			expect(errMsg).toBeTruthy();
+			expect((errMsg as { message?: string }).message ?? "").toMatch(
+				/pi exited unexpectedly.*reconnecting/i,
+			);
+
+			const closeInfo = await Promise.race([
+				closed,
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error("socket did not close after pi exit")), 3000),
+				),
+			]);
+			expect(closeInfo.code).toBe(1011);
+			expect(closeInfo.reason).toMatch(/pi subprocess exited unexpectedly/);
 		} finally {
 			close();
 		}

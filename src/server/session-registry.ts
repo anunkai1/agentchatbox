@@ -150,6 +150,12 @@ export interface LiveSession {
 	 */
 	pendingModel: { provider: string; modelId: string } | null;
 	pendingThinking: ThinkingLevel | null;
+	/**
+	 * True when the registry deliberately terminates this child (new/resume,
+	 * idle reap, or server shutdown). Natural exits leave this false, allowing
+	 * the exit handler to distinguish a broken transport from expected teardown.
+	 */
+	terminationExpected: boolean;
 }
 
 class SessionRegistry {
@@ -229,6 +235,7 @@ class SessionRegistry {
 			currentTurn: [],
 			pendingModel: null,
 			pendingThinking: null,
+			terminationExpected: false,
 		};
 		// For a resume we know the id up front; register immediately so a
 		// reconnect during the (<1s) spawn window can reattach. For a new
@@ -254,17 +261,48 @@ class SessionRegistry {
 				clearTimeout(session.idleTimer);
 				session.idleTimer = null;
 			}
-			if (session.sessionId) this.entries.delete(session.sessionId);
+			if (session.sessionId && this.entries.get(session.sessionId) === session) {
+				this.entries.delete(session.sessionId);
+			}
 			this.pending.delete(session);
+			session.busy = false;
+			session.streaming = false;
 			if (!session.ready) {
 				deliver(session.ws, {
 					type: "error",
 					message: `pi exited before ready (code=${info.code}, signal=${info.signal}): ${pi.getStderr().slice(-200)}`,
 				});
+				return;
 			}
-			// If ready already sent, the child died after running a while.
-			// Don't auto-close the ws — normal during respawn/reattach; the
-			// client will receive a new ready once the new child is up.
+
+			// A ready child disappearing naturally means the transport backing
+			// this view is gone. Previously we silently removed the registry
+			// entry and left the WebSocket open, so the browser stayed in its
+			// last streaming/working state forever and future prompts went to a
+			// dead pipe. Expected registry kills already unbind the view and set
+			// terminationExpected; only an unexpected exit reaches this path.
+			if (!session.terminationExpected) {
+				const attached = session.ws;
+				log.warn("pi exited unexpectedly after ready", {
+					sessionId: session.sessionId,
+					code: info.code,
+					signal: info.signal,
+				});
+				deliver(attached, {
+					type: "error",
+					message: `pi exited unexpectedly (code=${info.code}, signal=${info.signal}); reconnecting`,
+				});
+				if (attached?._session === session) attached._session = null;
+				session.ws = null;
+				try {
+					// Any close except the terminal 4001 takeover code triggers the
+					// browser's normal reconnect path. Its init includes sessionId,
+					// so the replacement child resumes the same transcript.
+					attached?.close(1011, "pi subprocess exited unexpectedly");
+				} catch {
+					/* socket may have closed concurrently */
+				}
+			}
 		});
 
 		this.requestSessionId(session);
@@ -342,8 +380,11 @@ class SessionRegistry {
 			clearTimeout(session.idleTimer);
 			session.idleTimer = null;
 		}
-		if (session.sessionId) this.entries.delete(session.sessionId);
+		if (session.sessionId && this.entries.get(session.sessionId) === session) {
+			this.entries.delete(session.sessionId);
+		}
 		this.pending.delete(session);
+		session.terminationExpected = true;
 		session.ws = null;
 		try {
 			session.pi.kill();
