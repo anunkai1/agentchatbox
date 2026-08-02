@@ -388,6 +388,46 @@ while IFS= read -r line; do
 done
 `;
 
+const THINKING_QUEUE_SCRIPT = `#!/usr/bin/env bash
+# Probe whether a second set_thinking_level command reaches stdin before the
+# first response. Real pi's response has no level/request id, so safe transport
+# must wait. The first (high) succeeds; the second (low) fails.
+marker="\${AGENTCHATBOX_FAKE_PI_MARKER:?missing marker}"
+sleep 0.05
+first_thinking=1
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"thinking-queue-session-001","messageCount":0}}'
+      ;;
+    "set_thinking_level")
+      level="$(echo "$line" | jq -r '.level // ""')"
+      echo "cmd:$level" >> "$marker"
+      if [ "$first_thinking" = "1" ]; then
+        first_thinking=0
+        early=""
+        if IFS= read -r -t 0.25 early; then
+          echo "early" >> "$marker"
+          early_level="$(echo "$early" | jq -r '.level // ""')"
+          echo "cmd:$early_level" >> "$marker"
+        else
+          echo "serialized" >> "$marker"
+        fi
+        echo '{"type":"response","command":"set_thinking_level","success":true}'
+        if [ -n "$early" ]; then
+          echo '{"type":"response","command":"set_thinking_level","success":false,"error":"thinking level rejected"}'
+        fi
+      elif [ "$level" = "low" ]; then
+        echo '{"type":"response","command":"set_thinking_level","success":false,"error":"thinking level rejected"}'
+      else
+        echo '{"type":"response","command":"set_thinking_level","success":true}'
+      fi
+      ;;
+  esac
+done
+`;
+
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
 	behavior:
@@ -404,7 +444,8 @@ function makeFakePi(
 		| "retry"
 		| "running"
 		| "between-turns"
-		| "set-model",
+		| "set-model"
+		| "thinking-queue",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -429,13 +470,15 @@ function makeFakePi(
 											? BETWEEN_TURNS_SCRIPT
 											: behavior === "set-model"
 												? SET_MODEL_SCRIPT
-												: behavior === "exit-after-read"
-													? EXIT_AFTER_FIRST_READ_SCRIPT
-													: behavior === "exit-after-delay"
-														? EXIT_AFTER_DELAY_SCRIPT
-														: behavior === "exit-after-ready"
-															? EXIT_AFTER_READY_SCRIPT
-															: EXIT_BEFORE_SESSION_SCRIPT;
+												: behavior === "thinking-queue"
+													? THINKING_QUEUE_SCRIPT
+													: behavior === "exit-after-read"
+														? EXIT_AFTER_FIRST_READ_SCRIPT
+														: behavior === "exit-after-delay"
+															? EXIT_AFTER_DELAY_SCRIPT
+															: behavior === "exit-after-ready"
+																? EXIT_AFTER_READY_SCRIPT
+																: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -707,6 +750,46 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			expect(last.thinkingLevel).toBe("high");
 		} finally {
 			close();
+		}
+	});
+
+	it("serializes rapid thinking changes and preserves the last confirmed level on failure", async () => {
+		const markerDir = mkdtempSync(join(tmpdir(), "thinking-queue-"));
+		const marker = join(markerDir, "commands");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		fakePiPath = makeFakePi("thinking-queue");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await inbox.waitFor(1);
+
+			// Send both clicks without waiting. The fake waits 250 ms before
+			// acknowledging high and detects whether low arrived too early.
+			ws.send(JSON.stringify({ type: "setThinking", level: "high" }));
+			ws.send(JSON.stringify({ type: "setThinking", level: "low" }));
+
+			const states = (await waitForType(inbox, "modelState", 2, 3000)) as Array<{
+				thinkingLevel?: string;
+			}>;
+			expect(states.map((state) => state.thinkingLevel)).toEqual(["high", "high"]);
+			const commands = readFileSync(marker, "utf8").trim().split(/\n+/);
+			expect(commands).toEqual(["cmd:high", "serialized", "cmd:low"]);
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(markerDir, { recursive: true, force: true });
 		}
 	});
 
