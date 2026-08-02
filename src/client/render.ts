@@ -1007,16 +1007,21 @@ export function toggleCapabilitiesPopover(): void {
 		for (const [source, cmds] of [...groups.entries()].sort((a, b) =>
 			packageDisplayName(a[0]).localeCompare(packageDisplayName(b[0])),
 		)) {
+			const pkg = el("div", { class: "caps-package" });
 			const row = el("div", { class: "caps-row caps-pkg-row" });
 			row.append(el("span", { class: "caps-name" }, packageDisplayName(source)));
-			row.append(el("span", { class: "caps-pkg" }, `${cmds.length}`));
-			box.append(row);
+			row.append(el("span", { class: "caps-pkg" }, `${cmds.length} command${cmds.length === 1 ? "" : "s"}`));
+			pkg.append(row);
+
+			const commandList = el("div", { class: "caps-command-list" });
 			for (const c of cmds) {
-				const cr = el("div", { class: "caps-row" });
+				const cr = el("div", { class: "caps-row caps-command-row" });
 				cr.append(el("span", { class: "caps-name" }, `/${c.name}`));
 				if (c.description) cr.append(el("span", { class: "caps-desc" }, c.description));
-				box.append(cr);
+				commandList.append(cr);
 			}
+			pkg.append(commandList);
+			box.append(pkg);
 		}
 	}
 
@@ -1026,24 +1031,28 @@ export function toggleCapabilitiesPopover(): void {
 	const skillCmds = caps.filter((c) => c.source === "skill");
 	if (skillCmds.length > 0) {
 		box.append(el("div", { class: "caps-section-header" }, "Skills"));
+		const list = el("div", { class: "caps-list" });
 		for (const s of skillCmds) {
-			const row = el("div", { class: "caps-row caps-pkg-row" });
+			const row = el("div", { class: "caps-row caps-simple-row" });
 			row.append(el("span", { class: "caps-name" }, s.name.replace(/^skill:/, "")));
 			if (s.description) row.append(el("span", { class: "caps-desc" }, s.description));
-			box.append(row);
+			list.append(row);
 		}
+		box.append(list);
 	}
 
 	// Prompts section — prompt templates (project/user `.md` files).
 	const promptCmds = caps.filter((c) => c.source === "prompt");
 	if (promptCmds.length > 0) {
 		box.append(el("div", { class: "caps-section-header" }, "Prompts"));
+		const list = el("div", { class: "caps-list" });
 		for (const p of promptCmds) {
-			const row = el("div", { class: "caps-row caps-pkg-row" });
+			const row = el("div", { class: "caps-row caps-simple-row" });
 			row.append(el("span", { class: "caps-name" }, `/${p.name}`));
 			if (p.description) row.append(el("span", { class: "caps-desc" }, p.description));
-			box.append(row);
+			list.append(row);
 		}
+		box.append(list);
 	}
 
 	box.append(
