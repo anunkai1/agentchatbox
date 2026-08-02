@@ -233,6 +233,34 @@ while IFS= read -r line; do
 done
 `;
 
+const BETWEEN_TURNS_SCRIPT = `#!/usr/bin/env bash
+# Complete one turn, pause while the overall agent run is still active, then
+# complete a second turn and end the run. The detached child must survive the
+# pause even though busy=false between the two turn boundaries.
+if [ -n "\${AGENTCHATBOX_FAKE_PI_MARKER}" ]; then
+  echo "$$" >> "\${AGENTCHATBOX_FAKE_PI_MARKER}"
+fi
+sleep 0.05
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"between-turns-session-001","messageCount":0}}'
+      ;;
+    "prompt")
+      echo '{"type":"response","command":"prompt","success":true}'
+      echo '{"type":"agent_start"}'
+      echo '{"type":"turn_start"}'
+      echo '{"type":"turn_end","message":{"role":"assistant","content":[],"timestamp":1},"toolResults":[]}'
+      sleep 0.8
+      echo '{"type":"turn_start"}'
+      echo '{"type":"turn_end","message":{"role":"assistant","content":[],"timestamp":2},"toolResults":[]}'
+      echo '{"type":"agent_end","messages":[],"willRetry":false}'
+      ;;
+  esac
+done
+`;
+
 const RETRY_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that emits the auto_retry lifecycle on \`prompt\` and records
 # every command type it receives to the marker file. Used to prove two
@@ -375,6 +403,7 @@ function makeFakePi(
 		| "track"
 		| "retry"
 		| "running"
+		| "between-turns"
 		| "set-model",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
@@ -396,15 +425,17 @@ function makeFakePi(
 									? RETRY_SCRIPT
 									: behavior === "running"
 										? RUNNING_SCRIPT
-										: behavior === "set-model"
-											? SET_MODEL_SCRIPT
-											: behavior === "exit-after-read"
-												? EXIT_AFTER_FIRST_READ_SCRIPT
-												: behavior === "exit-after-delay"
-													? EXIT_AFTER_DELAY_SCRIPT
-													: behavior === "exit-after-ready"
-														? EXIT_AFTER_READY_SCRIPT
-														: EXIT_BEFORE_SESSION_SCRIPT;
+										: behavior === "between-turns"
+											? BETWEEN_TURNS_SCRIPT
+											: behavior === "set-model"
+												? SET_MODEL_SCRIPT
+												: behavior === "exit-after-read"
+													? EXIT_AFTER_FIRST_READ_SCRIPT
+													: behavior === "exit-after-delay"
+														? EXIT_AFTER_DELAY_SCRIPT
+														: behavior === "exit-after-ready"
+															? EXIT_AFTER_READY_SCRIPT
+															: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -1217,6 +1248,58 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			}
 		}
 		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+	});
+
+	it("does not reap a detached agent during a between-turn gap", async () => {
+		fakePiPath = makeFakePi("between-turns");
+		process.env.PI_BIN = fakePiPath;
+		const markerDir = mkdtempSync(join(tmpdir(), "marker-"));
+		const marker = join(markerDir, "spawns");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		process.env.AGENTCHATBOX_IDLE_GRACE_MS = "250";
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const c1 = await connectClient();
+		try {
+			c1.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await c1.inbox.waitFor(1);
+			c1.ws.send(JSON.stringify({ type: "prompt", text: "two turns" }));
+			await waitForEventOfType(c1.inbox, "turn_end", 0, 3000);
+			c1.close();
+
+			// This is beyond the idle grace but still inside the fake agent's
+			// 800 ms between-turn pause. The broader streaming=true state must
+			// keep the detached child alive.
+			await new Promise((r) => setTimeout(r, 450));
+			const [pid] = readPids(marker);
+			expect(pid).toBeDefined();
+			expect(isAlive(pid!)).toBe(true);
+
+			// Once agent_end arrives, normal detached-idle cleanup resumes.
+			await new Promise((r) => setTimeout(r, 750));
+			expect(isAlive(pid!)).toBe(false);
+		} finally {
+			c1.close();
+			for (const pid of readPids(marker)) {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			delete process.env.AGENTCHATBOX_IDLE_GRACE_MS;
+			rmSync(markerDir, { recursive: true, force: true });
+		}
 	});
 
 	it("idle detached session is reaped after the grace period", async () => {

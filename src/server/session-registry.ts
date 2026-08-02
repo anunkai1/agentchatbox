@@ -17,11 +17,11 @@
  * owns every live `pi` child, keyed by session id. A WebSocket is just
  * a *view* that attaches and detaches:
  *
- *   - disconnect  → detach the view. The child keeps running. If it is
- *                   idle (not mid-turn) AND nothing reattaches within
- *                   IDLE_GRACE_MS, only THEN is it killed. A child
- *                   mid-turn is never killed — that would be the very
- *                   interruption we are fixing.
+ *   - disconnect  → detach the view. The child keeps running. If no turn
+ *                   or broader agent run is active AND nothing reattaches
+ *                   within IDLE_GRACE_MS, only THEN is it killed. Active
+ *                   and between-turn children are never killed — that
+ *                   would be the very interruption we are fixing.
  *   - reconnect   → reattach to the still-live child (same session id),
  *                   replay the on-disk transcript, and — if the agent
  *                   is mid-turn — replay the buffered current-turn
@@ -50,9 +50,10 @@ import { safeUnref } from "./util.js";
 
 /**
  * Grace period before an idle, detached session is reaped. An idle
- * session is one whose current turn has ended (`turn_end` seen) and
- * which has no WebSocket attached. A session that is mid-turn is
- * NEVER reaped, regardless of age — killing it would interrupt work,
+ * session has no active turn AND no active agent run (`busy=false` and
+ * `streaming=false`) and has no WebSocket attached. A session that is
+ * working or between turns in a multi-turn run is NEVER reaped,
+ * regardless of age — killing it would interrupt work,
  * which is the bug this module exists to prevent. Override via the
  * AGENTCHATBOX_IDLE_GRACE_MS env var.
  */
@@ -108,8 +109,9 @@ export interface PiSocket extends WebSocket {
  *   - `ready` flips true once `get_state` returned a session id (i.e.
  *     pi's AgentSession is constructed and the client can be told
  *     `ready`). Before this, a close should kill (nothing to preserve).
- *   - `busy` is true between `turn_start` and `turn_end`. A busy
- *     session is immune to idle reaping.
+ *   - `busy` is true between `turn_start` and `turn_end`; `streaming`
+ *     is true for the broader `agent_start` to `agent_end` run. Either
+ *     state makes the session immune to idle reaping.
  *   - `currentTurn` holds the raw events of the in-flight turn, replayed
  *     on reattach so a mid-stream reconnect reconstructs the partial
  *     assistant message (whose `message_start` the client otherwise
@@ -381,14 +383,14 @@ class SessionRegistry {
 
 	/**
 	 * Unbind a WebSocket from a session. Called on ws close. Does NOT
-	 * kill the child — that is the whole point. If the session is idle,
-	 * schedule a reap after IDLE_GRACE_MS; if mid-turn, leave it running
-	 * unconditionally (the turn_end handler will schedule the reap when
-	 * the work finishes).
+	 * kill the child — that is the whole point. If the session is fully
+	 * idle, schedule a reap after IDLE_GRACE_MS; if a turn or broader agent
+	 * run is active, leave it running unconditionally. The event handler
+	 * schedules cleanup after the whole run finishes.
 	 */
 	detach(session: LiveSession, ws: PiSocket): void {
 		if (session.ws === ws) session.ws = null;
-		if (!session.busy) this.scheduleIdleReap(session);
+		if (!session.busy && !session.streaming) this.scheduleIdleReap(session);
 	}
 
 	/** Force-kill a session and remove it from the registry. */
@@ -579,8 +581,15 @@ class SessionRegistry {
 			// client's isStreaming so a tab refresh can recover it from the
 			// server's `ready` (the browser's local copy is wiped on reload).
 			session.streaming = true;
+			// A run may start before its first turn_start. Cancel cleanup at
+			// the broadest work boundary so that window is protected too.
+			if (session.idleTimer) {
+				clearTimeout(session.idleTimer);
+				session.idleTimer = null;
+			}
 		} else if (line.type === "agent_end") {
 			session.streaming = false;
+			if (!session.ws && !session.busy) this.scheduleIdleReap(session);
 		}
 		if (line.type === "turn_start") {
 			session.busy = true;
@@ -599,11 +608,12 @@ class SessionRegistry {
 		} else if (line.type === "turn_end") {
 			// Keep the completed turn buffered until the next turn_start
 			// overwrites it — covers a reattach in the tiny window between
-			// turn_end and the JSONL flush. Then, if nobody is watching,
-			// schedule the idle reap.
+			// turn_end and the JSONL flush. In a multi-turn run, streaming
+			// remains true through the gap before the next turn; cleanup waits
+			// for agent_end rather than interrupting that gap.
 			session.currentTurn.push(line);
 			session.busy = false;
-			if (!session.ws) this.scheduleIdleReap(session);
+			if (!session.ws && !session.streaming) this.scheduleIdleReap(session);
 		}
 
 		deliver(session.ws, { type: "event", event: line });
@@ -651,8 +661,9 @@ class SessionRegistry {
 
 	/**
 	 * Schedule a reap of an idle, detached session. A session is only
-	 * reaped if, when the timer fires, it is STILL detached and STILL
-	 * idle — reattaching or a new turn_start cancels the timer. This is
+	 * reaped if, when the timer fires, it is STILL detached and neither a
+	 * turn nor an agent run is active. Reattaching, agent_start, or
+	 * turn_start cancels the timer. This is
 	 * just cleanup (free the memory of a finished, forgotten session);
 	 * it never interrupts active work.
 	 */
@@ -661,7 +672,7 @@ class SessionRegistry {
 		if (!session.sessionId) return; // not ready yet — nothing to reap
 		session.idleTimer = setTimeout(() => {
 			session.idleTimer = null;
-			if (!session.ws && !session.busy) {
+			if (!session.ws && !session.busy && !session.streaming) {
 				log.info("idle session grace expired; reaping", { sessionId: session.sessionId });
 				this.kill(session);
 			}
