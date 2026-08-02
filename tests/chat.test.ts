@@ -11,7 +11,7 @@
  * chat module is imported.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { Server as HttpServer } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -126,6 +126,24 @@ while IFS= read -r line; do
     echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"exit-ready-session-001","messageCount":0}}'
     sleep 0.1
     exit 23
+  fi
+done
+`;
+
+const DELETE_FLUSH_SCRIPT = `#!/usr/bin/env bash
+# Mimic pi's graceful-shutdown persistence: overwrite the session JSONL in a
+# SIGTERM trap. A server that unlinks before waiting for this process to exit
+# will see the supposedly deleted transcript recreated by this final flush.
+target="\${AGENTCHATBOX_FAKE_SESSION_FILE:?missing session file}"
+flush_session() {
+  printf '%s\n' '{"type":"session","version":3,"id":"delete-live-session-001","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}' > "$target"
+  exit 0
+}
+trap flush_session TERM
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  if [ "$type" = "get_state" ]; then
+    echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"delete-live-session-001","messageCount":0}}'
   fi
 done
 `;
@@ -351,6 +369,7 @@ function makeFakePi(
 		| "exit-after-read"
 		| "exit-after-delay"
 		| "exit-after-ready"
+		| "delete-flush"
 		| "switch-fail"
 		| "steer-race"
 		| "track"
@@ -369,21 +388,23 @@ function makeFakePi(
 					? STEER_RACE_SCRIPT
 					: behavior === "track"
 						? TRACK_SCRIPT
-						: behavior === "switch-fail"
-							? SWITCH_FAIL_SCRIPT
-							: behavior === "retry"
-								? RETRY_SCRIPT
-								: behavior === "running"
-									? RUNNING_SCRIPT
-									: behavior === "set-model"
-										? SET_MODEL_SCRIPT
-										: behavior === "exit-after-read"
-											? EXIT_AFTER_FIRST_READ_SCRIPT
-											: behavior === "exit-after-delay"
-												? EXIT_AFTER_DELAY_SCRIPT
-												: behavior === "exit-after-ready"
-													? EXIT_AFTER_READY_SCRIPT
-													: EXIT_BEFORE_SESSION_SCRIPT;
+						: behavior === "delete-flush"
+							? DELETE_FLUSH_SCRIPT
+							: behavior === "switch-fail"
+								? SWITCH_FAIL_SCRIPT
+								: behavior === "retry"
+									? RETRY_SCRIPT
+									: behavior === "running"
+										? RUNNING_SCRIPT
+										: behavior === "set-model"
+											? SET_MODEL_SCRIPT
+											: behavior === "exit-after-read"
+												? EXIT_AFTER_FIRST_READ_SCRIPT
+												: behavior === "exit-after-delay"
+													? EXIT_AFTER_DELAY_SCRIPT
+													: behavior === "exit-after-ready"
+														? EXIT_AFTER_READY_SCRIPT
+														: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -391,6 +412,7 @@ function makeFakePi(
 let fakePiPath: string | null = null;
 let authFile: string | null = null;
 let projectsFile: string | null = null;
+let sessionsRoot: string | null = null;
 let server: HttpServer | null = null;
 let port = 0;
 
@@ -418,6 +440,10 @@ beforeEach(async () => {
 	// resolveInitDefaults a no-op and restoring the pre-feature behavior.
 	projectsFile = join(tmpdir(), `acb-chat-projects-${process.pid}-${Date.now()}.json`);
 	process.env.AGENTCHATBOX_PROJECTS_FILE = projectsFile;
+	// Never let chat control tests inspect or mutate the operator's real pi
+	// transcripts. Individual tests can create exact JSONL fixtures here.
+	sessionsRoot = mkdtempSync(join(tmpdir(), "acb-chat-sessions-"));
+	process.env.PI_CODING_AGENT_SESSION_DIR = sessionsRoot;
 	// Reset the module cache so each test re-reads config (and sees the
 	// current PI_BIN / PI_CWD / AGENTCHATBOX_PI_AUTH_FILE env vars). Without
 	// this, vitest's default module cache makes every test after the first
@@ -461,8 +487,14 @@ afterEach(async () => {
 		}
 		projectsFile = null;
 	}
+	if (sessionsRoot) {
+		rmSync(sessionsRoot, { recursive: true, force: true });
+		sessionsRoot = null;
+	}
 	delete process.env.AGENTCHATBOX_PI_AUTH_FILE;
 	delete process.env.AGENTCHATBOX_PROJECTS_FILE;
+	delete process.env.PI_CODING_AGENT_SESSION_DIR;
+	delete process.env.AGENTCHATBOX_FAKE_SESSION_FILE;
 });
 
 /** Connect a WS, register the inbox listener before `open`, return helpers. */
@@ -1272,6 +1304,43 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			expect(events).toContainEqual(
 				expect.objectContaining({ type: "event", event: { type: "agent_start" } }),
 			);
+		} finally {
+			close();
+		}
+	});
+
+	it("waits for a live child's final flush before deleting its transcript", async () => {
+		expect(sessionsRoot).not.toBeNull();
+		const dir = join(sessionsRoot!, "--tmp--");
+		mkdirSync(dir, { recursive: true });
+		const transcript = join(dir, "2026-01-01T00-00-00_delete-live-session-001.jsonl");
+		writeFileSync(
+			transcript,
+			'{"type":"session","version":3,"id":"delete-live-session-001","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}\n',
+		);
+		process.env.AGENTCHATBOX_FAKE_SESSION_FILE = transcript;
+		fakePiPath = makeFakePi("delete-flush");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			expect(await waitForReadyCount(inbox, 1, 3000)).toBe(true);
+
+			ws.send(JSON.stringify({ type: "deleteSession", sessionId: "delete-live-session-001" }));
+			expect((await waitForType(inbox, "sessions", 1, 5000)).length).toBe(1);
+			expect(existsSync(transcript)).toBe(false);
+			expect(inbox.all().filter((m) => m.type === "error")).toHaveLength(0);
 		} finally {
 			close();
 		}
