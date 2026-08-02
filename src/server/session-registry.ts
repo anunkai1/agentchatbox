@@ -139,10 +139,11 @@ export interface LiveSession {
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	currentTurn: unknown[];
 	/**
-	 * The model+thinking the user just clicked via setModel/setThinking,
-	 * awaiting pi's confirmation. The chat.ts handler stashes the
-	 * request here and we apply it to `init` only when the matching
-	 * pi RPC response comes back with `success: true`. Pessimistic:
+	 * The model the user just clicked via setModel, awaiting pi's
+	 * confirmation. The chat.ts handler stashes the request here and we
+	 * apply it to `init` only when the matching pi RPC response comes back
+	 * with `success: true`. Thinking changes use the serialized fields below.
+	 * Pessimistic:
 	 * if pi rejects the switch (e.g. a model id advertised in
 	 * EXTRA_MODELS but not registered in pi's model-registry — see
 	 * providers.ts for the drift history), we leave `init` pointing
@@ -153,7 +154,10 @@ export interface LiveSession {
 	 * prompts kept going to the old one — silent-fail mode.
 	 */
 	pendingModel: { provider: string; modelId: string } | null;
+	/** The sole set_thinking_level RPC currently awaiting a response. */
 	pendingThinking: ThinkingLevel | null;
+	/** Later thinking clicks, sent FIFO only after the in-flight response. */
+	thinkingQueue: ThinkingLevel[];
 	/**
 	 * True when the registry deliberately terminates this child (new/resume,
 	 * idle reap, or server shutdown). Natural exits leave this false, allowing
@@ -241,6 +245,7 @@ class SessionRegistry {
 			currentTurn: [],
 			pendingModel: null,
 			pendingThinking: null,
+			thinkingQueue: [],
 			terminationExpected: false,
 			readyWaiters: [],
 		};
@@ -329,6 +334,16 @@ class SessionRegistry {
 	}
 
 	/**
+	 * Serialize thinking-level RPCs because pi's acknowledgement contains no
+	 * level or request id. With only one command in flight, pendingThinking is
+	 * always the level belonging to the response that arrives next.
+	 */
+	queueThinkingChange(session: LiveSession, level: ThinkingLevel): void {
+		session.thinkingQueue.push(level);
+		this.sendNextThinkingChange(session);
+	}
+
+	/**
 	 * Bind a WebSocket to a session (initial attach or reattach). Sends
 	 * `ready` + transcript + current-turn replay immediately if the
 	 * session is already ready (the reattach case). If not ready yet,
@@ -404,6 +419,8 @@ class SessionRegistry {
 		}
 		this.pending.delete(session);
 		session.terminationExpected = true;
+		session.pendingThinking = null;
+		session.thinkingQueue.length = 0;
 		for (const waiter of session.readyWaiters.splice(0)) {
 			waiter.reject(new Error("pi was terminated before becoming ready"));
 		}
@@ -496,11 +513,10 @@ class SessionRegistry {
 			});
 		}
 		if (line.type === "response" && line.command === "set_thinking_level") {
-			// pi's success response for set_thinking_level has no `data`
-			// (it just acks), so the level we want to apply is the
-			// pending one the user just clicked. Fall through to the
-			// init update on success, keep session.init untouched on
-			// failure (just clear the pending).
+			// pi's acknowledgement has neither the level nor a request id. The
+			// queue guarantees pendingThinking belongs to this exact response.
+			// Apply successes, preserve the prior confirmed value on failures,
+			// then release precisely one queued request.
 			if (line.success !== false && session.pendingThinking) {
 				session.init = { ...session.init, thinkingLevel: session.pendingThinking };
 			}
@@ -511,6 +527,7 @@ class SessionRegistry {
 				modelId: session.init.modelId,
 				thinkingLevel: session.init.thinkingLevel,
 			});
+			this.sendNextThinkingChange(session);
 		}
 
 		// pi's `get_commands` response — the authoritative list of slash
@@ -617,6 +634,14 @@ class SessionRegistry {
 		}
 
 		deliver(session.ws, { type: "event", event: line });
+	}
+
+	private sendNextThinkingChange(session: LiveSession): void {
+		if (session.pendingThinking || session.pi.killed) return;
+		const level = session.thinkingQueue.shift();
+		if (!level) return;
+		session.pendingThinking = level;
+		session.pi.send({ type: "set_thinking_level", level });
 	}
 
 	/**

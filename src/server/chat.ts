@@ -348,12 +348,10 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			break;
 		}
 		case "setThinking": {
-			// Same pessimistic pattern as setModel — see the comment
-			// there. The actual init update happens in
-			// session-registry.ts when pi's set_thinking_level response
-			// arrives with success:true.
-			session.pendingThinking = msg.level;
-			pi.send({ type: "set_thinking_level", level: msg.level });
+			// Unlike set_model, pi's acknowledgement carries no selected value
+			// or request id. The registry serializes rapid clicks so each response
+			// can be matched to the exact level it confirms.
+			registry.queueThinkingChange(session, msg.level);
 			break;
 		}
 		case "renameSession": {
