@@ -389,38 +389,11 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			break;
 		}
 		case "deleteSession": {
-			// Remove the session's JSONL from disk (pi's own persistence
-			// format) so it disappears from every sidebar after the
-			// rebroadcast. Resolve the actual cwd the same way
-			// renameSessionById does — a project session is NOT under
-			// config.piCwd, so hardcoding the global cwd would silently
-			// miss every non-global chat. We don't kill any live pi child
-			// bound to this id (the issuing client decides whether to start
-			// a fresh chat afterwards); a still-running child could in
-			// principle re-create the file on its next write, but that's
-			// only possible if the user keeps chatting in a session they
-			// just deleted, which the client prevents by starting a new
-			// chat when the active session is the one being deleted. Clear
-			// any pin too so data/pins.json doesn't keep a dead entry.
-			const delCwd = findSessionCwd(msg.sessionId, projectCwds()) ?? config.piCwd;
-			const deleted = deletePiSession(delCwd, msg.sessionId);
-			if (!deleted) {
-				deliverError(ws, "could not delete session (not found on disk)");
-				break;
-			}
-			setPinned(msg.sessionId, false);
-			// Also purge the session from the semantic-search index
-			// (data/search.db) so its messages stop surfacing in
-			// /api/sessions/search. The index is a DERIVED copy of the
-			// JSONL transcript — without this the deleted session's text
-			// would linger in search results forever. Search is a
-			// pluggable feature (the module may not even be installed),
-			// so the import is dynamic + try-guarded; a failure degrades
-			// to "index not purged" rather than failing the delete.
-			// Fire-and-forget: the purge is self-contained (errors are
-			// caught + logged inside) and onClientMessage is sync.
-			void purgeSessionFromSearchIndex(msg.sessionId);
-			broadcastSessions();
+			// Deletion is asynchronous because a live pi child must finish its
+			// graceful shutdown (and final JSONL flush) before the transcript is
+			// unlinked. Keep dispatch non-blocking; the helper catches and reports
+			// every failure itself.
+			void deleteSessionAndTranscript(ws, msg.sessionId);
 			break;
 		}
 		case "forkSession": {
@@ -595,6 +568,33 @@ async function replaceSession(ws: PiSocket, old: LiveSession, init: InitMessage)
 		}
 	} finally {
 		ws._switching = false;
+	}
+}
+
+/**
+ * Stop any live owner of a session before removing its persisted transcript.
+ * Pi intentionally flushes on SIGTERM, so the ordering here is the deletion
+ * guarantee: wait for exit first, unlink second. A live empty session may not
+ * have a JSONL yet; terminating it still counts as a successful deletion.
+ */
+async function deleteSessionAndTranscript(ws: PiSocket, sessionId: string): Promise<void> {
+	try {
+		const live = await registry.terminateById(sessionId);
+		const cwd = live?.init.cwd ?? findSessionCwd(sessionId, projectCwds()) ?? config.piCwd;
+		const deletedFromDisk = deletePiSession(cwd, sessionId);
+		if (!live && !deletedFromDisk) {
+			deliverError(ws, "could not delete session (not found on disk)");
+			return;
+		}
+		setPinned(sessionId, false);
+		// Search is a derived, pluggable index. Its helper catches failures so
+		// transcript deletion remains authoritative even without the module.
+		void purgeSessionFromSearchIndex(sessionId);
+		broadcastSessions();
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		log.error("session deletion failed", { sessionId, error: message });
+		deliverError(ws, `could not delete session: ${message}`);
 	}
 }
 

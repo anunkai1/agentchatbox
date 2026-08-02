@@ -413,6 +413,23 @@ class SessionRegistry {
 		}
 	}
 
+	/**
+	 * Terminate a live child by session id and wait for its OS process to
+	 * actually exit. Deletion must use this instead of kill(): pi flushes its
+	 * JSONL during graceful shutdown, so unlinking before the exit can let that
+	 * final flush recreate a transcript the user just deleted.
+	 */
+	async terminateById(sessionId: string): Promise<LiveSession | null> {
+		const session = this.entries.get(sessionId);
+		if (!session) return null;
+		const exited = new Promise<void>((resolve) => {
+			session.pi.once("exit", () => resolve());
+		});
+		this.kill(session);
+		await exited;
+		return session;
+	}
+
 	/** SIGTERM every live child — used on server shutdown. */
 	killAll(): void {
 		for (const s of this.entries.values()) this.kill(s);
