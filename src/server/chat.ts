@@ -42,6 +42,7 @@ import type {
 } from "../shared/protocol.js";
 import { config } from "./config.js";
 import { log } from "./logger.js";
+import type { ProjectRecord } from "./projects.js";
 import {
 	createProject,
 	deleteProject,
@@ -52,7 +53,6 @@ import {
 	reorderProjects,
 	updateProject,
 } from "./projects.js";
-import type { ProjectRecord } from "./projects.js";
 import {
 	deletePiSession,
 	findSessionCwd,
@@ -514,7 +514,7 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			// instead of silently inheriting the current session's model.
 			const project = msg.projectId ? getProject(msg.projectId) : getProject(GLOBAL_PROJECT_ID);
 			const cwd = project?.cwd ?? config.piCwd;
-			replaceSession(ws, session, {
+			void replaceSession(ws, session, {
 				provider: project?.defaultProvider ?? session.init.provider,
 				modelId: project?.defaultModelId ?? session.init.modelId,
 				thinkingLevel: project?.defaultThinkingLevel ?? session.init.thinkingLevel,
@@ -528,7 +528,7 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			// session's project is derived from its recorded cwd so pi runs
 			// in the folder whose AGENTS.md shaped that conversation.
 			const cwd = findSessionCwd(msg.sessionId, projectCwds());
-			replaceSession(ws, session, {
+			void replaceSession(ws, session, {
 				provider: session.init.provider,
 				modelId: session.init.modelId,
 				thinkingLevel: session.init.thinkingLevel,
@@ -546,31 +546,56 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 }
 
 /**
- * Swap the ws from one session to another (newSession / resumeSession).
- * Kills the old child (these are explicit user actions, not the
- * phone-lock case) and binds the new one, which may be a reattach to a
- * still-live session.
+ * Transactionally swap the ws from one session to another (newSession /
+ * resumeSession). The current child stays attached and usable while the
+ * candidate starts. Only after pi proves the candidate is ready by returning
+ * a real session id do we detach/kill the old child and bind the replacement.
+ * A missing provider key, spawn failure, or pre-ready child exit therefore
+ * leaves the current session untouched instead of stranding the browser.
  */
-function replaceSession(ws: PiSocket, old: LiveSession, init: InitMessage): void {
-	registry.detach(old, ws);
-	registry.kill(old);
-	let next: LiveSession;
+async function replaceSession(ws: PiSocket, old: LiveSession, init: InitMessage): Promise<void> {
+	if (ws._switching) {
+		deliverError(ws, "a session switch is already in progress");
+		return;
+	}
+	ws._switching = true;
+	let next: LiveSession | null = null;
 	try {
 		next = registry.acquire(init);
+		if (next === old) return;
+
+		await registry.waitUntilReady(next);
+
+		// The socket may have closed or been displaced by another tab while
+		// the candidate was starting. Never steal it back after that race.
+		if (ws._session !== old) return;
+
+		registry.detach(old, ws);
+		try {
+			registry.attach(next, ws);
+		} catch (err) {
+			// attach is synchronous, but preserve the old binding if a future
+			// transport check ever makes it throw.
+			registry.attach(old, ws);
+			throw err;
+		}
+		registry.kill(old);
 	} catch (err) {
-		// acquire can throw — most commonly `spawn()`'s "no API key for
-		// provider" when the project's default (or a resumed session's)
-		// provider was logged out of auth.json, but also any sidecar /
-		// spawn failure. The old child is already killed here, so unbind
-		// the ws: a later message then hits the "no active session" guard
-		// cleanly instead of silently dropping into the killed child's
-		// send() (which returns without doing anything — a stuck UI).
-		// The thrown error propagates to the try/catch in the message
-		// listener above, which delivers it as an error frame.
-		ws._session = null;
-		throw err;
+		// A failed candidate is unattached; terminate it so a never-ready
+		// process cannot linger in the registry. Natural exits are already
+		// marked killed, making this cleanup idempotent.
+		if (next && next !== old && !next.ready) registry.kill(next);
+		const message = err instanceof Error ? err.message : String(err);
+		log.warn("session replacement failed; keeping current session", {
+			sessionId: old.sessionId,
+			error: message,
+		});
+		if (ws._session === old) {
+			deliverError(ws, `could not switch session; current session is still active: ${message}`);
+		}
+	} finally {
+		ws._switching = false;
 	}
-	registry.attach(next, ws);
 }
 
 // ---------------------------------------------------------------------------
@@ -789,7 +814,11 @@ export function resolveInitDefaults(
 	const provider = global.defaultProvider ?? init.provider;
 	const modelId = global.defaultModelId ?? init.modelId;
 	const thinkingLevel = global.defaultThinkingLevel ?? init.thinkingLevel;
-	if (provider === init.provider && modelId === init.modelId && thinkingLevel === init.thinkingLevel) {
+	if (
+		provider === init.provider &&
+		modelId === init.modelId &&
+		thinkingLevel === init.thinkingLevel
+	) {
 		return init;
 	}
 	return { ...init, provider, modelId, thinkingLevel };

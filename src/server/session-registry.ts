@@ -96,6 +96,8 @@ export interface InitMessage {
  */
 export interface PiSocket extends WebSocket {
 	_session?: LiveSession | null;
+	/** True while a candidate child is starting for newSession/resumeSession. */
+	_switching?: boolean;
 }
 
 /**
@@ -156,6 +158,8 @@ export interface LiveSession {
 	 * the exit handler to distinguish a broken transport from expected teardown.
 	 */
 	terminationExpected: boolean;
+	/** Promises waiting for pi's first successful get_state readiness response. */
+	readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }>;
 }
 
 class SessionRegistry {
@@ -236,6 +240,7 @@ class SessionRegistry {
 			pendingModel: null,
 			pendingThinking: null,
 			terminationExpected: false,
+			readyWaiters: [],
 		};
 		// For a resume we know the id up front; register immediately so a
 		// reconnect during the (<1s) spawn window can reattach. For a new
@@ -268,10 +273,9 @@ class SessionRegistry {
 			session.busy = false;
 			session.streaming = false;
 			if (!session.ready) {
-				deliver(session.ws, {
-					type: "error",
-					message: `pi exited before ready (code=${info.code}, signal=${info.signal}): ${pi.getStderr().slice(-200)}`,
-				});
+				const message = `pi exited before ready (code=${info.code}, signal=${info.signal}): ${pi.getStderr().slice(-200)}`;
+				for (const waiter of session.readyWaiters.splice(0)) waiter.reject(new Error(message));
+				deliver(session.ws, { type: "error", message });
 				return;
 			}
 
@@ -307,6 +311,19 @@ class SessionRegistry {
 
 		this.requestSessionId(session);
 		return session;
+	}
+
+	/**
+	 * Resolve once a candidate child has proved it is usable by returning a
+	 * real session id from get_state. Session switching waits here before
+	 * detaching the current child, making replacement transactional.
+	 */
+	waitUntilReady(session: LiveSession): Promise<void> {
+		if (session.ready) return Promise.resolve();
+		if (session.pi.killed) return Promise.reject(new Error("pi exited before becoming ready"));
+		return new Promise<void>((resolve, reject) => {
+			session.readyWaiters.push({ resolve, reject });
+		});
 	}
 
 	/**
@@ -385,6 +402,9 @@ class SessionRegistry {
 		}
 		this.pending.delete(session);
 		session.terminationExpected = true;
+		for (const waiter of session.readyWaiters.splice(0)) {
+			waiter.reject(new Error("pi was terminated before becoming ready"));
+		}
 		session.ws = null;
 		try {
 			session.pi.kill();
@@ -417,6 +437,7 @@ class SessionRegistry {
 				session.ready = true;
 				this.pending.delete(session);
 				this.entries.set(id, session); // idempotent for resume, first reg for new
+				for (const waiter of session.readyWaiters.splice(0)) waiter.resolve();
 				this.sendReadyAndCatchup(session);
 			}
 		}
