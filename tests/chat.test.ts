@@ -130,6 +130,34 @@ while IFS= read -r line; do
 done
 `;
 
+const SWITCH_FAIL_SCRIPT = `#!/usr/bin/env bash
+# First spawn becomes a normal usable session. Every later spawn exits after
+# reading its first get_state, allowing a resumeSession candidate to fail while
+# the original child remains alive and able to answer a subsequent prompt.
+marker="\${AGENTCHATBOX_FAKE_PI_MARKER:?missing marker}"
+echo "spawn" >> "$marker"
+spawn_count="$(wc -l < "$marker")"
+if [ "$spawn_count" -gt 1 ]; then
+  read -r _line
+  exit 42
+fi
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"switch-safe-session-001","messageCount":0}}'
+      ;;
+    "prompt")
+      echo '{"type":"response","command":"prompt","success":true}'
+      echo '{"type":"agent_start"}'
+      echo '{"type":"turn_start"}'
+      echo '{"type":"turn_end","message":{"role":"assistant","content":[],"timestamp":1},"toolResults":[]}'
+      echo '{"type":"agent_end","messages":[],"willRetry":false}'
+      ;;
+  esac
+done
+`;
+
 const TRACK_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that records every spawn by appending its PID to the file
 # named in $AGENTCHATBOX_FAKE_PI_MARKER. Used by the detach/reattach
@@ -291,7 +319,7 @@ while IFS= read -r line; do
     "set_model")
       provider="$(echo "$line" | jq -r '.provider // ""')"
       modelId="$(echo "$line" | jq -r '.modelId // ""')"
-      if [ "\${modelId#fail-}" != "\$modelId" ]; then
+      if [ "\${modelId#fail-}" != "$modelId" ]; then
         echo '{"type":"response","command":"set_model","success":false,"error":"Model not found: '"$provider"'/'"$modelId"'"}'
       else
         echo '{"type":"response","command":"set_model","success":true,"data":{"provider":"'"$provider"'","id":"'"$modelId"'","name":"'"$modelId"'"}}'
@@ -299,7 +327,7 @@ while IFS= read -r line; do
       ;;
     "set_thinking_level")
       level="$(echo "$line" | jq -r '.level // ""')"
-      if [ "\${level#fail-}" != "\$level" ]; then
+      if [ "\${level#fail-}" != "$level" ]; then
         echo '{"type":"response","command":"set_thinking_level","success":false,"error":"Unknown thinking level"}'
       else
         echo '{"type":"response","command":"set_thinking_level","success":true}'
@@ -316,7 +344,19 @@ done
 
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
-	behavior: "echo" | "ack" | "exit-before-session" | "exit-after-read" | "exit-after-delay" | "exit-after-ready" | "steer-race" | "track" | "retry" | "running" | "set-model",
+	behavior:
+		| "echo"
+		| "ack"
+		| "exit-before-session"
+		| "exit-after-read"
+		| "exit-after-delay"
+		| "exit-after-ready"
+		| "switch-fail"
+		| "steer-race"
+		| "track"
+		| "retry"
+		| "running"
+		| "set-model",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -329,19 +369,21 @@ function makeFakePi(
 					? STEER_RACE_SCRIPT
 					: behavior === "track"
 						? TRACK_SCRIPT
-						: behavior === "retry"
-							? RETRY_SCRIPT
-							: behavior === "running"
-								? RUNNING_SCRIPT
-								: behavior === "set-model"
-									? SET_MODEL_SCRIPT
-									: behavior === "exit-after-read"
-										? EXIT_AFTER_FIRST_READ_SCRIPT
-										: behavior === "exit-after-delay"
-											? EXIT_AFTER_DELAY_SCRIPT
-											: behavior === "exit-after-ready"
-												? EXIT_AFTER_READY_SCRIPT
-												: EXIT_BEFORE_SESSION_SCRIPT;
+						: behavior === "switch-fail"
+							? SWITCH_FAIL_SCRIPT
+							: behavior === "retry"
+								? RETRY_SCRIPT
+								: behavior === "running"
+									? RUNNING_SCRIPT
+									: behavior === "set-model"
+										? SET_MODEL_SCRIPT
+										: behavior === "exit-after-read"
+											? EXIT_AFTER_FIRST_READ_SCRIPT
+											: behavior === "exit-after-delay"
+												? EXIT_AFTER_DELAY_SCRIPT
+												: behavior === "exit-after-ready"
+													? EXIT_AFTER_READY_SCRIPT
+													: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -586,12 +628,8 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			);
 			await inbox.waitFor(1);
 
-			ws.send(
-				JSON.stringify({ type: "setModel", modelId: "m2", provider: "p2" }),
-			);
-			ws.send(
-				JSON.stringify({ type: "setThinking", level: "high" }),
-			);
+			ws.send(JSON.stringify({ type: "setModel", modelId: "m2", provider: "p2" }));
+			ws.send(JSON.stringify({ type: "setThinking", level: "high" }));
 			// Wait for the two modelState frames (one per RPC).
 			const msgs = await waitForType(inbox, "modelState", 2, 3000);
 			const stateMsgs = msgs.filter((m) => m.type === "modelState");
@@ -1236,6 +1274,54 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			);
 		} finally {
 			close();
+		}
+	});
+
+	it("keeps the current session usable when a replacement exits before ready", async () => {
+		const marker = join(tmpdir(), `acb-switch-fail-${process.pid}-${Date.now()}.txt`);
+		writeFileSync(marker, "");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		fakePiPath = makeFakePi("switch-fail");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			expect(await waitForReadyCount(inbox, 1, 3000)).toBe(true);
+
+			ws.send(JSON.stringify({ type: "resumeSession", sessionId: "candidate-that-fails" }));
+			const errors = await waitForType(inbox, "error", 1, 3000);
+			expect(errors.length).toBe(1);
+			expect(String((errors[0] as { message?: string }).message ?? "")).toMatch(
+				/current session is still active/i,
+			);
+			expect(ws.readyState).toBe(WebSocket.OPEN);
+			expect(inbox.all().filter((m) => m.type === "ready").length).toBe(1);
+
+			// The decisive assertion: a prompt after the failed switch reaches
+			// the original child and produces a live event instead of vanishing
+			// into the failed candidate's dead stdin.
+			const before = inbox.all().length;
+			ws.send(JSON.stringify({ type: "prompt", text: "still here" }));
+			const events = await waitForEventOfType(inbox, "agent_start", before, 3000);
+			expect(events).toContainEqual(
+				expect.objectContaining({ type: "event", event: { type: "agent_start" } }),
+			);
+			expect(readFileSync(marker, "utf8").trim().split(/\n+/)).toHaveLength(2);
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(marker, { force: true });
 		}
 	});
 
