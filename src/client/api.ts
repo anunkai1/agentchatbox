@@ -95,6 +95,7 @@ export interface ModelInfo {
 	provider: string;
 	name: string;
 	reasoning: boolean;
+	thinkingLevels: import("../shared/thinking.js").ThinkingLevel[];
 }
 
 /**

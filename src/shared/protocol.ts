@@ -123,8 +123,9 @@ export interface VoicesResponse {
 //   { type: "renameSession", name }
 //       Translated to `pi` `set_session_name`.
 
-import type { ThinkingLevel as ThinkingLevelSdk } from "@earendil-works/pi-agent-core";
-export type ThinkingLevel = ThinkingLevelSdk;
+import type { ThinkingLevel } from "./thinking.js";
+
+export type { ThinkingLevel };
 
 /** Base64-encoded image attached to a user prompt. */
 export interface PromptImage {

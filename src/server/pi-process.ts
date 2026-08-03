@@ -60,7 +60,7 @@ export interface PiProcessOptions {
 	provider: string;
 	/** Model id (e.g. "claude-sonnet-4-5", "deepseek-chat"). */
 	modelId: string;
-	/** Thinking level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh". */
+	/** Thinking level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max". */
 	thinkingLevel?: string;
 	/** Optional session id to resume. Omit to start a fresh session. */
 	sessionId?: string;

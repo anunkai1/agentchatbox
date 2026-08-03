@@ -12,6 +12,7 @@
  */
 
 import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
+import { THINKING_LEVELS } from "../shared/thinking.js";
 import { listVoices } from "./api.js";
 import { $, el, escapeHtml } from "./dom.js";
 import { saveSessionPrefs } from "./prefs.js";
@@ -54,7 +55,8 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	imagemodel: "open the image-generation model picker (alias: /image)",
 	image: "open the image-generation model picker (alias: /imagemodel)",
 	imggen: "generate an image directly (no LLM): /imggen [-a ASPECT] [-m MODEL] \"prompt\"",
-	think: "set thinking level: /think off|minimal|low|medium|high",
+	think:
+		"set a model-supported thinking level: /think off|minimal|low|medium|high|xhigh|max",
 	clear: "start a new chat (alias: /new)",
 	new: "start a new chat (alias: /clear)",
 	sessions: "open the sessions list (alias: /resume)",
@@ -199,16 +201,20 @@ export function handleSlash(arg: string): void {
 			// the prompt + flags.
 			services.sendSlashCommand?.(`/imggen ${rest}`);
 			break;
-		case "think":
-			if (rest && ["off", "minimal", "low", "medium", "high"].includes(rest) && chatControls) {
-				chatControls.setThinking(rest as ThinkingLevel);
-				state.currentThinking = rest as ThinkingLevel;
+		case "think": {
+			const requested = (THINKING_LEVELS as readonly string[]).includes(rest)
+				? (rest as ThinkingLevel)
+				: null;
+			if (requested && currentModelThinkingLevels().includes(requested) && chatControls) {
+				chatControls.setThinking(requested);
+				state.currentThinking = requested;
 				$<HTMLTextAreaElement>("#input").value = "";
 				refreshStatus();
 			} else {
 				openThinkPicker();
 			}
 			break;
+		}
 		case "clear":
 			if (confirm("Start a new chat? Current conversation will be saved.")) {
 				// Server-side: `pi` already auto-saves on every event, so
@@ -768,8 +774,21 @@ function renderDefaultFooter(): HTMLElement {
 	return footer;
 }
 
+function currentModelThinkingLevels(): ThinkingLevel[] {
+	const model = state.availableModels.find(
+		(m) => m.id === state.currentModelId && m.provider === state.currentProvider,
+	);
+	if (model?.thinkingLevels?.length) return model.thinkingLevels;
+	if (model?.reasoning === false) return ["off"];
+
+	// Compatibility fallback for an older /api/models response that predates
+	// per-model level metadata. Preserve ACB's former five-level picker rather
+	// than guessing that extended xhigh/max support exists.
+	return ["off", "minimal", "low", "medium", "high"];
+}
+
 export function openThinkPicker(): void {
-	const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+	const levels = currentModelThinkingLevels();
 	const { overlay, box } = openModal("Thinking level");
 	for (const lvl of levels) {
 		const row = el("div", { class: "model-row" });

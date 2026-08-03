@@ -20,6 +20,7 @@ import type {
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import type { ProjectSummary, SessionSummary } from "../shared/protocol.js";
+import { THINKING_LEVELS } from "../shared/thinking.js";
 import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
@@ -901,11 +902,11 @@ function onEvent(event: Record<string, unknown>): void {
 			refreshCurrentModelLabel();
 			// Narrow at runtime — ThinkingLevel is a string union, and the
 			// wire format is just a string. Avoid an unsafe cast.
-			if (typeof e.thinkingLevel === "string") {
-				const valid = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-				if ((valid as readonly string[]).includes(e.thinkingLevel)) {
-					state.currentThinking = e.thinkingLevel as typeof state.currentThinking;
-				}
+			if (
+				typeof e.thinkingLevel === "string" &&
+				(THINKING_LEVELS as readonly string[]).includes(e.thinkingLevel)
+			) {
+				state.currentThinking = e.thinkingLevel as typeof state.currentThinking;
 			}
 			// Clear the pending marker — the server has answered.
 			state.pendingModelSet = null;
@@ -1371,6 +1372,7 @@ async function boot(): Promise<void> {
 				provider: m.provider,
 				name: m.name,
 				reasoning: m.reasoning,
+				thinkingLevels: m.thinkingLevels,
 			}));
 			// Fall back to the legacy single-provider shape if /api/models
 			// returns nothing (older server) — we still get *something* in

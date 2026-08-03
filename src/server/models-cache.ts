@@ -22,6 +22,11 @@
  */
 
 import { getModels } from "@earendil-works/pi-ai";
+import {
+	supportedThinkingLevels,
+	type ThinkingLevel,
+	type ThinkingLevelMap,
+} from "../shared/thinking.js";
 import { config, getServerApiKey } from "./config.js";
 import { log } from "./logger.js";
 import type { PiProcess } from "./pi-process.js";
@@ -36,6 +41,8 @@ export interface AvailableModel {
 	provider: string;
 	name: string;
 	reasoning: boolean;
+	/** Exact levels pi's metadata says this model supports. */
+	thinkingLevels: ThinkingLevel[];
 }
 
 /** Cached list, plus bookkeeping for the boot probe lifecycle. */
@@ -119,15 +126,22 @@ class ModelsCache {
 							id?: unknown;
 							name?: unknown;
 							reasoning?: unknown;
+							thinkingLevelMap?: unknown;
 						};
 						if (typeof m.provider !== "string" || typeof m.id !== "string") {
 							continue;
 						}
+						const reasoning = m.reasoning === true;
+						const thinkingLevelMap =
+							m.thinkingLevelMap && typeof m.thinkingLevelMap === "object"
+								? (m.thinkingLevelMap as ThinkingLevelMap)
+								: undefined;
 						out.push({
 							id: m.id,
 							provider: m.provider,
 							name: typeof m.name === "string" ? m.name : m.id,
-							reasoning: m.reasoning === true,
+							reasoning,
+							thinkingLevels: supportedThinkingLevels(reasoning, thinkingLevelMap),
 						});
 					}
 					resolve(out);

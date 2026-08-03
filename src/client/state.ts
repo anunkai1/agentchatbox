@@ -319,6 +319,8 @@ export interface ModelOption {
 	name?: string;
 	/** Whether this model supports extended thinking. */
 	reasoning?: boolean;
+	/** Exact thinking levels advertised by pi for this model. */
+	thinkingLevels?: import("../shared/thinking.js").ThinkingLevel[];
 }
 
 export const state: AppState = {
