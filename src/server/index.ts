@@ -387,11 +387,12 @@ app.get(
  * (provider, modelId). Only providers with a configured API key are
  * included.
  *
- * Shape: { models: Array<{ id, provider, name, reasoning }> }
- *   - id:        the model id (what /api/chat's setModel expects)
- *   - provider:  the provider key (e.g. "deepseek", "minimax")
- *   - name:      human-readable label
- *   - reasoning: true if the model supports thinking
+ * Shape: { models: Array<{ id, provider, name, reasoning, thinkingLevels }> }
+ *   - id:             the model id (what /api/chat's setModel expects)
+ *   - provider:       the provider key (e.g. "deepseek", "minimax")
+ *   - name:           human-readable label
+ *   - reasoning:      true if the model supports thinking
+ *   - thinkingLevels: exact levels derived from pi's model metadata
  *
  * Source: pi's `get_available_models`, cached at boot (see
  * models-cache.ts). Per AGENTS.md, ACB is a transport shell, so the
@@ -421,6 +422,7 @@ app.get(
 			provider: string;
 			name: string;
 			reasoning: boolean;
+			thinkingLevels: import("../shared/thinking.js").ThinkingLevel[];
 		}> = [];
 
 		// Mirror pi's response, gated on the provider being authenticated in
@@ -437,6 +439,7 @@ app.get(
 				provider: m.provider,
 				name: m.name,
 				reasoning: m.reasoning,
+				thinkingLevels: m.thinkingLevels,
 			});
 		}
 
