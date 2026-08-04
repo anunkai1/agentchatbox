@@ -1509,6 +1509,87 @@ body.sidebar-resizing iframe {
 	object-fit: cover;
 	display: block;
 }
+/* File/video uploads show actual transfer state — fetch does not expose
+ * request-body progress, so the client renders this from XHR progress events. */
+.attachment-file {
+	width: min(360px, 100%);
+	height: auto;
+	min-height: 72px;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 72px 10px 10px;
+}
+.attachment-file-icon {
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	background: var(--surface-hover);
+	display: grid;
+	place-items: center;
+	font-size: 22px;
+	flex: 0 0 auto;
+}
+.attachment-file-copy {
+	min-width: 0;
+	flex: 1;
+	display: grid;
+	gap: 2px;
+}
+.attachment-file-name,
+.attachment-file-state,
+.attachment-file-detail {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.attachment-file-name {
+	font-size: 13px;
+	font-weight: 600;
+}
+.attachment-file-state {
+	font-size: 12px;
+	color: var(--text-secondary);
+}
+.attachment-file-detail {
+	font-size: 11px;
+	color: var(--text-muted);
+}
+.attachment-file progress {
+	width: 100%;
+	height: 5px;
+	accent-color: var(--accent);
+}
+.attachment-upload-cancel {
+	position: absolute;
+	right: 8px;
+	top: 24px;
+	padding: 4px 7px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	background: var(--surface-hover);
+	color: var(--text-secondary);
+	font: 12px var(--font-sans);
+	cursor: pointer;
+}
+.attachment-upload-cancel:hover:not(:disabled) {
+	border-color: #d95c5c;
+	color: #ff8a8a;
+}
+.attachment-upload-cancel:disabled {
+	cursor: wait;
+	opacity: 0.65;
+}
+.attachment-uploaded .attachment-file-icon {
+	background: color-mix(in srgb, var(--accent) 24%, var(--surface));
+}
+.attachment-upload-failed {
+	border-color: #d95c5c;
+}
+.attachment-upload-failed .attachment-file-state,
+.attachment-upload-failed .attachment-file-detail {
+	color: #ff8a8a;
+}
 .attachment-preview-remove {
 	position: absolute;
 	top: 3px;

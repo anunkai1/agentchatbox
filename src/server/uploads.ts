@@ -13,8 +13,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { extname } from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
 import multer from "multer";
@@ -22,16 +22,22 @@ import type { UploadResponse } from "../shared/protocol.js";
 import { asyncHandler } from "./async-handler.js";
 import { config } from "./config.js";
 
-// Multer uses memory storage; we write to disk ourselves so we control
-// the stored filename (uuid + sanitized extension).
+// Stream uploads directly to disk: buffering an allowed 2 GiB video in the
+// Node process would make the upload limit an easy route to exhausting RAM.
 const upload = multer({
-	storage: multer.memoryStorage(),
+	storage: multer.diskStorage({
+		destination: (_req, _file, callback) => {
+			void mkdir(config.uploadsDir, { recursive: true }).then(
+				() => callback(null, config.uploadsDir),
+				(err: unknown) => callback(err as Error, config.uploadsDir),
+			);
+		},
+		filename: (_req, file, callback) => {
+			callback(null, `${randomUUID()}${safeExtension(file.originalname)}`);
+		},
+	}),
 	limits: { fileSize: config.maxUploadBytes },
 });
-
-async function ensureUploadsDir(): Promise<void> {
-	await mkdir(config.uploadsDir, { recursive: true });
-}
 
 /** Keep short, simple extensions only (defends against weird originals). */
 function safeExtension(name: string): string {
@@ -47,32 +53,20 @@ export function createUploadsRouter(): Router {
 		"/",
 		upload.single("file"),
 		asyncHandler(async (req: Request, res: Response) => {
-			await ensureUploadsDir();
 			const file = (req as Request & { file?: Express.Multer.File }).file;
 			if (!file) {
 				res.status(400).json({ error: "no file uploaded (field name: 'file')" });
 				return;
 			}
 
-			const id = randomUUID();
-			const ext = safeExtension(file.originalname);
-			const storedName = `${id}${ext}`;
-			const storedPath = join(config.uploadsDir, storedName);
-
-			try {
-				await writeFile(storedPath, file.buffer);
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				res.status(500).json({ error: `failed to write upload: ${message}` });
-				return;
-			}
-
+			const ext = extname(file.filename);
+			const id = file.filename.slice(0, file.filename.length - ext.length);
 			const response: UploadResponse = {
 				id,
 				filename: file.originalname,
 				mimeType: file.mimetype || "application/octet-stream",
 				size: file.size,
-				url: `/uploads/${id}${ext}`,
+				url: `/uploads/${file.filename}`,
 			};
 			res.json(response);
 		}),

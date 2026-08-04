@@ -14,6 +14,7 @@ import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile }
 import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
 import {
+	addFileUploadPreview,
 	addImageAttachmentPreview,
 	appendError,
 	autoSize,
@@ -31,6 +32,13 @@ import { state } from "./state.js";
  * absurd lengths and to keep the spoken cue inside the server's cap.
  */
 const TTS_MAX_CHARS = 29_000;
+
+/** Active transfers; the composer blocks sending a half-attached prompt. */
+let uploadCount = 0;
+
+export function isUploadInProgress(): boolean {
+	return uploadCount > 0;
+}
 
 /**
  * Identity (opaque token) of whatever source is currently driving
@@ -488,15 +496,25 @@ export async function attachFiles(files: File[]): Promise<void> {
 	if (files.length === 0) return;
 	const ta = $<HTMLTextAreaElement>("#input");
 	for (const file of files) {
+		const uploadController = new AbortController();
+		const uploadPreview = addFileUploadPreview(file.name, file.size, () => {
+			uploadController.abort();
+		});
+		uploadCount++;
 		try {
-			// Run the upload and the base64 conversion in parallel —
-			// they're independent. (Previously these were sequential,
-			// which created a race: the user could send the message
-			// during the uploadFile await, and the base64 wouldn't
-			// be in state.uploadedImages yet — so the model never
-			// saw the image bytes.)
-			const [res, data] = await Promise.all([uploadFile(file), blobToBase64(file)]);
+			// Only images need base64 copies for multimodal messages. Keep that
+			// conversion parallel with their upload, but never allocate a second
+			// multi-gigabyte in-browser copy of a video or other attachment.
+			const imageData = file.type.startsWith("image/") ? blobToBase64(file) : undefined;
+			const res = await uploadFile(
+				file,
+				({ loaded, total }) => {
+					uploadPreview.setProgress(loaded, total);
+				},
+				uploadController.signal,
+			);
 			if (res.mimeType.startsWith("image/")) {
+				const data = imageData ? await imageData : await blobToBase64(file);
 				state.uploadedImages.set(res.url, {
 					data,
 					mimeType: res.mimeType,
@@ -509,6 +527,7 @@ export async function attachFiles(files: File[]): Promise<void> {
 				: `[file: ${res.filename}](${res.url})`;
 			ta.value = `${ta.value}\n${insertion}`.trim();
 			if (isImage) {
+				uploadPreview.remove();
 				addImageAttachmentPreview(res.url, res.filename, () => {
 					// The upload can remain on disk, but removing it from the draft
 					// must also prevent its base64 data reaching the model.
@@ -519,10 +538,23 @@ export async function attachFiles(files: File[]): Promise<void> {
 						.trim();
 					autoSize();
 				});
+			} else {
+				uploadPreview.complete(() => {
+					ta.value = ta.value.replace(`[file: ${res.filename}](${res.url})`, "").trim();
+					autoSize();
+				});
 			}
 			autoSize();
 		} catch (err) {
-			appendError(err instanceof Error ? err.message : String(err));
+			const message = err instanceof Error ? err.message : String(err);
+			if (uploadController.signal.aborted) {
+				uploadPreview.cancelled();
+			} else {
+				uploadPreview.fail(message);
+				appendError(message);
+			}
+		} finally {
+			uploadCount--;
 		}
 	}
 }

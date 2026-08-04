@@ -15,15 +15,69 @@ import type { TranscribeResponse, UploadResponse, VoicesResponse } from "../shar
 
 const BASE = ""; // same origin
 
-export async function uploadFile(file: File): Promise<UploadResponse> {
+export interface UploadProgress {
+	loaded: number;
+	total: number;
+}
+
+/**
+ * Upload one attachment with browser-native upload progress. fetch() does not
+ * expose request-body progress, so this intentionally uses XMLHttpRequest.
+ */
+export function uploadFile(
+	file: File,
+	onProgress?: (progress: UploadProgress) => void,
+	signal?: AbortSignal,
+): Promise<UploadResponse> {
 	const form = new FormData();
 	form.append("file", file);
-	const res = await fetch(`${BASE}/api/upload`, { method: "POST", body: form });
-	if (!res.ok) {
-		const text = await res.text();
-		throw new Error(`upload failed: ${res.status} ${text}`);
-	}
-	return (await res.json()) as UploadResponse;
+
+	return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		const abort = () => xhr.abort();
+		const cleanupAbortListener = () => signal?.removeEventListener("abort", abort);
+		if (signal?.aborted) {
+			reject(new Error("upload cancelled"));
+			return;
+		}
+		signal?.addEventListener("abort", abort, { once: true });
+		xhr.open("POST", `${BASE}/api/upload`);
+		xhr.responseType = "text";
+		xhr.upload.onprogress = (event) => {
+			if (event.lengthComputable) {
+				onProgress?.({ loaded: event.loaded, total: event.total });
+			} else {
+				onProgress?.({ loaded: event.loaded, total: file.size });
+			}
+		};
+		xhr.onerror = () => {
+			cleanupAbortListener();
+			reject(new Error("upload failed: network error"));
+		};
+		xhr.onabort = () => {
+			cleanupAbortListener();
+			reject(new Error("upload cancelled"));
+		};
+		xhr.onload = () => {
+			cleanupAbortListener();
+			const text = xhr.responseText;
+			if (xhr.status < 200 || xhr.status >= 300) {
+				const detail = xhr.status === 413
+					? "file is larger than the server upload limit"
+					: text.trim().startsWith("<")
+						? "the server rejected the upload"
+						: text.trim().slice(0, 300) || "the server rejected the upload";
+				reject(new Error(`upload failed (${xhr.status}): ${detail}`));
+				return;
+			}
+			try {
+				resolve(JSON.parse(text) as UploadResponse);
+			} catch {
+				reject(new Error("upload failed: server returned an invalid response"));
+			}
+		};
+		xhr.send(form);
+	});
 }
 
 export async function transcribeAudio(blob: Blob, filename = "voice.webm"): Promise<string> {
