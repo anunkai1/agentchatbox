@@ -1222,6 +1222,139 @@ export function addImageAttachmentPreview(
 	previews.append(card);
 }
 
+export interface FileUploadPreview {
+	setProgress: (loaded: number, total: number) => void;
+	complete: (onRemove: () => void) => void;
+	fail: (message: string) => void;
+	cancelled: () => void;
+	remove: () => void;
+}
+
+function formatAttachmentBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	const units = ["KB", "MB", "GB", "TB"];
+	let value = bytes / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+/**
+ * Show a persistent progress card for any file while it is transferred. Files
+ * have no browser thumbnail, so leaving completed non-image cards in place
+ * makes it clear that the attachment is ready to send.
+ */
+export function addFileUploadPreview(
+	filename: string,
+	size: number,
+	onCancel: () => void,
+): FileUploadPreview {
+	const previews = document.getElementById("attachment-previews");
+	if (!previews) {
+		return {
+			setProgress: () => {},
+			complete: () => {},
+			fail: () => {},
+			cancelled: () => {},
+			remove: () => {},
+		};
+	}
+	const progress = el("progress", { max: Math.max(size, 1), value: 0 });
+	const stateText = el("span", { class: "attachment-file-state", text: "Uploading · 0%" });
+	const detailText = el("span", {
+		class: "attachment-file-detail",
+		text: `0 B of ${formatAttachmentBytes(size)}`,
+	});
+	const cancelButton = el(
+		"button",
+		{
+			class: "attachment-upload-cancel",
+			type: "button",
+			title: `Cancel upload of ${filename}`,
+			"aria-label": `Cancel upload of ${filename}`,
+			onclick: () => {
+				cancelButton.disabled = true;
+				stateText.textContent = "Cancelling…";
+				onCancel();
+			},
+		},
+		"Cancel",
+	);
+	const card = el(
+		"div",
+		{ class: "attachment-preview attachment-file attachment-uploading" },
+		el("span", { class: "attachment-file-icon", text: "↥", "aria-hidden": "true" }),
+		el("div", { class: "attachment-file-copy" },
+			el("span", { class: "attachment-file-name", text: filename, title: filename }),
+			stateText,
+			detailText,
+			progress,
+		),
+		cancelButton,
+	);
+	previews.append(card);
+
+	const addRemoveButton = (onRemove: () => void, label: string) => {
+		card.append(
+			el(
+				"button",
+				{
+					class: "attachment-preview-remove",
+					type: "button",
+					title: label,
+					"aria-label": label,
+					onclick: () => {
+						onRemove();
+						card.remove();
+					},
+				},
+				"×",
+			),
+		);
+	};
+
+	return {
+		setProgress: (loaded, total) => {
+			const safeTotal = Math.max(total, 1);
+			const safeLoaded = Math.min(loaded, safeTotal);
+			progress.max = safeTotal;
+			progress.value = safeLoaded;
+			const percent = Math.floor((safeLoaded / safeTotal) * 100);
+			stateText.textContent = `Uploading · ${percent}%`;
+			detailText.textContent = `${formatAttachmentBytes(safeLoaded)} of ${formatAttachmentBytes(safeTotal)}`;
+		},
+		complete: (onRemove) => {
+			cancelButton.remove();
+			progress.value = progress.max;
+			card.classList.remove("attachment-uploading");
+			card.classList.add("attachment-uploaded");
+			stateText.textContent = "Uploaded · ready to send";
+			detailText.textContent = formatAttachmentBytes(size);
+			addRemoveButton(onRemove, `Remove ${filename}`);
+		},
+		fail: (message) => {
+			cancelButton.remove();
+			card.classList.remove("attachment-uploading");
+			card.classList.add("attachment-upload-failed");
+			stateText.textContent = "Upload failed";
+			detailText.textContent = message;
+			addRemoveButton(() => {}, `Dismiss ${filename}`);
+		},
+		cancelled: () => {
+			cancelButton.remove();
+			card.classList.remove("attachment-uploading");
+			card.classList.add("attachment-upload-cancelled");
+			stateText.textContent = "Upload cancelled";
+			detailText.textContent = "This file was not attached";
+			addRemoveButton(() => {}, `Dismiss ${filename}`);
+		},
+		remove: () => card.remove(),
+	};
+}
+
 /** Remove composer-only attachment previews after the draft is submitted. */
 export function clearAttachmentPreviews(): void {
 	document.getElementById("attachment-previews")?.replaceChildren();

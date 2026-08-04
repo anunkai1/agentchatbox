@@ -83,6 +83,7 @@ import {
 	handleFileAttach,
 	handlePaste,
 	handleVoiceRecord,
+	isUploadInProgress,
 	pauseVoice,
 	resumeVoice,
 	speakText,
@@ -123,6 +124,10 @@ function historyForward(): void {
 // ---------------------------------------------------------------------------
 
 function handleSend(): void {
+	if (isUploadInProgress()) {
+		showToast("Upload in progress — wait for it to finish before sending.");
+		return;
+	}
 	const input = $<HTMLTextAreaElement>("#input");
 	const text = input.value;
 	const trimmed = text.trim();

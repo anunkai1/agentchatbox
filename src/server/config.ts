@@ -25,7 +25,7 @@ export interface ServerConfig {
 	host: string;
 	/** Folder for uploaded files. Created on boot. */
 	uploadsDir: string;
-	/** Max upload size in bytes. Default 50 MB. */
+	/** Max upload size in bytes. Default 2 GiB. */
 	maxUploadBytes: number;
 	/** OpenAI key, used for Whisper transcription of voice notes. */
 	openaiApiKey: string | undefined;
@@ -55,7 +55,7 @@ export const config: ServerConfig = {
 	uploadsDir: process.env.UPLOADS_DIR
 		? resolve(process.env.UPLOADS_DIR)
 		: resolve(projectRoot, "uploads"),
-	maxUploadBytes: Number.parseInt(process.env.MAX_UPLOAD_BYTES ?? `${50 * 1024 * 1024}`, 10),
+	maxUploadBytes: Number.parseInt(process.env.MAX_UPLOAD_BYTES ?? `${2 * 1024 * 1024 * 1024}`, 10),
 	openaiApiKey: readKey("OPENAI_API_KEY"),
 	// `piBin` and `piCwd` are read lazily — they need to reflect the
 	// process state at boot time, not at module-load time (which could
