@@ -32,13 +32,6 @@ const MAX_TEXT_CHARS = 30_000;
 
 type Engine = "kokoro";
 
-/** Always Kokoro now (the Piper fallback was removed). Kept as a function so
- *  the rest of the file reads `engine()` and a future second engine could be
- *  re-added without touching every call site. */
-function engine(): Engine {
-	return "kokoro";
-}
-
 /**
  * Validate the shared { text, voice? } body for POST / and POST /stream.
  * Extracted so both routes apply the identical checks (non-empty text,

@@ -195,7 +195,10 @@ app.get("/api/sessions/:id", (req, res) => {
 	// dumps the user into a brand-new global chat instead of resuming.
 	const cwd = req.query.cwd
 		? String(req.query.cwd)
-		: (findSessionCwd(id, listProjects().map((p) => p.cwd)) ?? config.piCwd);
+		: (findSessionCwd(
+				id,
+				listProjects().map((p) => p.cwd),
+			) ?? config.piCwd);
 	const all = listPiSessions(cwd);
 	const meta = all.find((s) => s.id === id);
 	if (!meta) {

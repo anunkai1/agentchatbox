@@ -1601,7 +1601,7 @@ body.sidebar-resizing iframe {
 	border-radius: 50%;
 	background: rgba(0, 0, 0, 0.72);
 	color: var(--text);
-	font: 18px/16px var(--font-sans);
+	font: 18px / 16px var(--font-sans);
 	cursor: pointer;
 }
 .attachment-preview-remove:hover {

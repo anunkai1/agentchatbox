@@ -1010,7 +1010,9 @@ export function toggleCapabilitiesPopover(): void {
 			const pkg = el("div", { class: "caps-package" });
 			const row = el("div", { class: "caps-row caps-pkg-row" });
 			row.append(el("span", { class: "caps-name" }, packageDisplayName(source)));
-			row.append(el("span", { class: "caps-pkg" }, `${cmds.length} command${cmds.length === 1 ? "" : "s"}`));
+			row.append(
+				el("span", { class: "caps-pkg" }, `${cmds.length} command${cmds.length === 1 ? "" : "s"}`),
+			);
 			pkg.append(row);
 
 			const commandList = el("div", { class: "caps-command-list" });
@@ -1199,7 +1201,11 @@ export function addImageAttachmentPreview(
 	onRemove: () => void,
 ): void {
 	const previews = document.getElementById("attachment-previews");
-	if (!previews || Array.from(previews.children).some((card) => card.getAttribute("data-url") === url)) return;
+	if (
+		!previews ||
+		Array.from(previews.children).some((card) => card.getAttribute("data-url") === url)
+	)
+		return;
 	const card = el("div", { class: "attachment-preview" });
 	card.dataset.url = url;
 	card.append(
@@ -1287,7 +1293,9 @@ export function addFileUploadPreview(
 		"div",
 		{ class: "attachment-preview attachment-file attachment-uploading" },
 		el("span", { class: "attachment-file-icon", text: "↥", "aria-hidden": "true" }),
-		el("div", { class: "attachment-file-copy" },
+		el(
+			"div",
+			{ class: "attachment-file-copy" },
 			el("span", { class: "attachment-file-name", text: filename, title: filename }),
 			stateText,
 			detailText,

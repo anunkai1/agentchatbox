@@ -11,12 +11,7 @@
  * to it as the conversation continues.
  */
 
-import type {
-	ContextUsage,
-	PiCommand,
-	ProjectSummary,
-	ThinkingLevel,
-} from "../shared/protocol.js";
+import type { ContextUsage, PiCommand, ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
 
 /**
  * The builtin Global project id — the workspace every brand-new chat
@@ -393,11 +388,13 @@ export function refreshCurrentModelLabel(): void {
  * to the first available model on the server). `thinking` is optional
  * because the user can set a default model without it being persisted.
  */
-export function defaultModelForNewChats():
-	| { id: string; provider: string; thinking?: ThinkingLevel }
-	| null {
+export function defaultModelForNewChats(): {
+	id: string;
+	provider: string;
+	thinking?: ThinkingLevel;
+} | null {
 	const g = state.projects.find((p) => p.id === GLOBAL_PROJECT_ID);
-	if (!g || !g.defaultModelId || !g.defaultProvider) return null;
+	if (!g?.defaultModelId || !g.defaultProvider) return null;
 	return {
 		id: g.defaultModelId,
 		provider: g.defaultProvider,

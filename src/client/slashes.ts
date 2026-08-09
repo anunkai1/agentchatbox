@@ -54,9 +54,8 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	models: "show all models & services in use (display-only overview)",
 	imagemodel: "open the image-generation model picker (alias: /image)",
 	image: "open the image-generation model picker (alias: /imagemodel)",
-	imggen: "generate an image directly (no LLM): /imggen [-a ASPECT] [-m MODEL] \"prompt\"",
-	think:
-		"set a model-supported thinking level: /think off|minimal|low|medium|high|xhigh|max",
+	imggen: 'generate an image directly (no LLM): /imggen [-a ASPECT] [-m MODEL] "prompt"',
+	think: "set a model-supported thinking level: /think off|minimal|low|medium|high|xhigh|max",
 	clear: "start a new chat (alias: /new)",
 	new: "start a new chat (alias: /clear)",
 	sessions: "open the sessions list (alias: /resume)",
@@ -570,7 +569,11 @@ export function openModelPicker(): void {
 				!!currentDefault && currentDefault.id === m.id && currentDefault.provider === m.provider;
 			if (isDefault) {
 				main.append(
-					el("span", { class: "model-badge model-badge-default", title: "Default for new chats" }, "default"),
+					el(
+						"span",
+						{ class: "model-badge model-badge-default", title: "Default for new chats" },
+						"default",
+					),
 				);
 			}
 			info.append(main);
@@ -744,7 +747,11 @@ function refreshDefaultStars(box: HTMLElement): void {
 		const badge = name?.querySelector<HTMLElement>(".model-badge-default");
 		if (isDefault && !badge && name) {
 			name.append(
-				el("span", { class: "model-badge model-badge-default", title: "Default for new chats" }, "default"),
+				el(
+					"span",
+					{ class: "model-badge model-badge-default", title: "Default for new chats" },
+					"default",
+				),
 			);
 		} else if (!isDefault && badge) {
 			badge.remove();
