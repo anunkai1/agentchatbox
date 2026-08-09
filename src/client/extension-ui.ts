@@ -167,7 +167,10 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 
 	let filtered = options;
 	// Start on the first selectable (non-separator) row.
-	let selectedIdx = Math.max(0, filtered.findIndex((o) => !isSeparatorRow(o)));
+	let selectedIdx = Math.max(
+		0,
+		filtered.findIndex((o) => !isSeparatorRow(o)),
+	);
 
 	function renderList(): void {
 		list.innerHTML = "";
@@ -213,7 +216,10 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 	function applyFilter(): void {
 		const q = search.value.toLowerCase().trim();
 		filtered = q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
-		selectedIdx = Math.max(0, filtered.findIndex((o) => !isSeparatorRow(o)));
+		selectedIdx = Math.max(
+			0,
+			filtered.findIndex((o) => !isSeparatorRow(o)),
+		);
 		renderList();
 	}
 

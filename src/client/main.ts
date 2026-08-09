@@ -32,15 +32,15 @@ import {
 	appendAssistantPlaceholder,
 	appendError,
 	appendToolCall,
-	clearAttachmentPreviews,
 	autoSize,
+	clearAttachmentPreviews,
 	finalizeToolCall,
 	hideToast,
 	isAtBottom,
 	jumpToPrevUserMessage,
 	lastAssistantVoiceBox,
-	refreshStatus,
 	refreshSidebarSearchVisibility,
+	refreshStatus,
 	registerShellHandlers,
 	renderMessageNode,
 	renderShell,
@@ -942,7 +942,9 @@ let sidebarSessionsForCache: SessionSummary[] = [];
 
 function readSidebarCache(): SidebarCache | null {
 	try {
-		const value = JSON.parse(localStorage.getItem(SIDEBAR_CACHE_KEY) ?? "null") as Partial<SidebarCache> | null;
+		const value = JSON.parse(
+			localStorage.getItem(SIDEBAR_CACHE_KEY) ?? "null",
+		) as Partial<SidebarCache> | null;
 		if (!value || !Array.isArray(value.sessions) || !Array.isArray(value.projects)) return null;
 		if (
 			!value.sessions.every(
