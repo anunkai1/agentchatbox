@@ -21,7 +21,7 @@
  * fix is to address the underlying issue and restart.
  */
 
-import { getModels } from "@earendil-works/pi-ai";
+import { getModels } from "@earendil-works/pi-ai/compat";
 import {
 	supportedThinkingLevels,
 	type ThinkingLevel,
