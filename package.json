@@ -20,8 +20,8 @@
     "clean": "rm -rf dist public/app.js public/app.js.map"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.75.3",
-    "@earendil-works/pi-ai": "^0.75.3",
+    "@earendil-works/pi-agent-core": "^0.83.0",
+    "@earendil-works/pi-ai": "^0.83.0",
     "@earendil-works/pi-web-ui": "^0.75.3",
     "cors": "^2.8.5",
     "dompurify": "^3.4.13",

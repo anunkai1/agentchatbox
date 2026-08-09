@@ -15,14 +15,12 @@
  * "kimi-coding") use hyphens — we use the raw string as the set member.
  */
 
-import type { KnownProvider } from "@earendil-works/pi-ai";
+import type { BuiltinProvider } from "@earendil-works/pi-ai/providers/all";
 
 /**
- * All providers the server can build an Agent for. This is the union of
- * providers shipped by @earendil-works/pi-ai. The cast on each member is
- * required for the keys (like "kimi-coding") that the SDK's narrower
- * `KnownProvider` union did historically exclude; harmless now that it
- * includes them.
+ * Provider identifiers ACB may advertise. pi remains the authority for the
+ * actual runtime catalog; this list is used only to select a built-in model
+ * for the one-shot boot probe.
  */
 export const PROVIDER_KEYS = [
 	"anthropic",
@@ -66,5 +64,5 @@ const SDK_PROVIDER_KEYS = PROVIDER_KEYS.filter((p) => !NON_SDK_PROVIDERS.has(p))
  * Array form (preserves order) for the /api/models endpoint, which
  * iterates the providers and calls `getModels(provider)` for each.
  */
-export const SDK_PROVIDERS: ReadonlyArray<KnownProvider> =
-	SDK_PROVIDER_KEYS as readonly KnownProvider[];
+export const SDK_PROVIDERS: ReadonlyArray<BuiltinProvider> =
+	SDK_PROVIDER_KEYS as readonly BuiltinProvider[];
