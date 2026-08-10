@@ -39,9 +39,11 @@ export function setStreaming(s: boolean): void {
 	const sendBtn = $<HTMLButtonElement>("#send-btn");
 	sendBtn.hidden = false;
 	sendBtn.classList.toggle("steer-mode", s);
+	sendBtn.textContent = s ? "⇢" : "↑";
+	sendBtn.setAttribute("aria-label", s ? "Queue instruction" : "Send message");
 	sendBtn.title = s
-		? "Steer — queue this for after the current turn (⌘/Ctrl+Enter)"
-		: "Send (⌘/Ctrl+Enter)";
+		? "Queue instruction — delivered after the current turn (⌘/Ctrl+Enter)"
+		: "Send message (⌘/Ctrl+Enter)";
 	const stopBtn = $<HTMLButtonElement>("#stop-btn");
 	stopBtn.hidden = !s;
 	// Context-aware label mirroring the CLI: while a retry backoff is
@@ -51,6 +53,33 @@ export function setStreaming(s: boolean): void {
 	if (!s) state.toolSpinner = null;
 	startOrStopWorkingTick(s);
 	refreshStatus();
+}
+
+/** Update the short, plain-language state line immediately above the composer. */
+function refreshComposerState(): void {
+	const line = document.getElementById("composer-state");
+	if (!line) return;
+	line.className = "composer-state";
+	if (state.isStreaming) {
+		const queued = state.pendingSteerCount;
+		line.textContent =
+			queued > 0
+				? `Agent is working · ${queued} instruction${queued === 1 ? "" : "s"} queued`
+				: "Agent is working · your next message will be queued";
+		line.classList.add("composer-state-working");
+		return;
+	}
+	if (state.connectionStatus === "closed" || state.connectionStatus === "stalled") {
+		line.textContent = "Connection lost · your draft will be kept";
+		line.classList.add("composer-state-warning");
+		return;
+	}
+	if (state.connectionStatus === "connecting") {
+		line.textContent = "Connecting…";
+		line.classList.add("composer-state-connecting");
+		return;
+	}
+	line.classList.add("hidden");
 }
 
 /**
@@ -144,11 +173,14 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		// delivered (folded into the next turn).
 		const bubble = el("div", { class: "bubble markdown steer-bubble" });
 		setUserRichText(bubble, m.text);
+		const queuedPosition = m.delivered
+			? 0
+			: state.messages.filter((candidate) => candidate.kind === "steer" && !candidate.delivered).indexOf(m) + 1;
 		bubble.append(
 			el(
 				"span",
 				{ class: `steer-badge${m.delivered ? " delivered" : ""}` },
-				m.delivered ? "✓ delivered" : "⏳ queued",
+				m.delivered ? "✓ delivered" : `⏳ queued #${Math.max(queuedPosition, 1)}`,
 			),
 		);
 		return el("div", { class: "row row-user row-steer" }, bubble);
@@ -246,11 +278,17 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 export function syncSteerBadges(): void {
 	const steered = state.messages.filter((m) => m.kind === "steer");
 	const nodes = document.querySelectorAll<HTMLElement>(".row-steer .steer-badge");
+	let queuedPosition = 0;
 	steered.forEach((m, i) => {
 		if (m.kind !== "steer") return;
 		const node = nodes[i];
 		if (!node) return;
-		node.textContent = m.delivered ? "✓ delivered" : "⏳ queued";
+		if (m.delivered) {
+			node.textContent = "✓ delivered";
+		} else {
+			queuedPosition += 1;
+			node.textContent = `⏳ queued #${queuedPosition}`;
+		}
 		node.classList.toggle("delivered", m.delivered);
 	});
 }
@@ -1168,6 +1206,7 @@ export function refreshStatus(): void {
 	vp.textContent = `voice: ${state.ttsVoice ?? "default"}`;
 	const sp = $<HTMLButtonElement>("#speed-picker");
 	sp.textContent = `speed: ${state.ttsSpeed}×`;
+	refreshComposerState();
 }
 
 /** Compact text label for the status-line token pill. Reads
@@ -1370,9 +1409,11 @@ export function clearAttachmentPreviews(): void {
 
 export interface ShellHandlers {
 	handleSend: () => void;
+	persistDraft: (text: string) => void;
 	historyBack: () => void;
 	historyForward: () => void;
 	showSlashMenu: () => void;
+	handleSlashMenuKeydown: (event: KeyboardEvent) => boolean;
 	handleSlash: (cmd: string) => void;
 	openModelPicker: () => void;
 	openThinkPicker: () => void;
@@ -1828,7 +1869,8 @@ export function renderShell(): void {
 	// A textarea cannot paint an inline image. Keep the model-visible Markdown
 	// in it, and show each attached image as a removable thumbnail just above.
 	composerWrap.append(el("div", { class: "attachment-previews", id: "attachment-previews" }));
-	const composer = el("div", { class: "composer" });
+	composerWrap.append(el("div", { class: "composer-state hidden", id: "composer-state" }));
+	const composer = el("div", { class: "composer", id: "composer" });
 	composer.append(
 		el(
 			"button",
@@ -1862,6 +1904,8 @@ export function renderShell(): void {
 			autocomplete: "off",
 			autocapitalize: "off",
 			spellcheck: false,
+			"aria-autocomplete": "list",
+			"aria-expanded": "false",
 		}),
 		el(
 			"div",
@@ -1959,6 +2003,7 @@ export function renderShell(): void {
 	// Input handlers
 	const input = $<HTMLTextAreaElement>("#input");
 	input.addEventListener("keydown", (e) => {
+		if (shellHandlers?.handleSlashMenuKeydown(e)) return;
 		// Enter always inserts a newline. Sending is via the send button
 		// (or Ctrl/Cmd+Enter for power users) — plain Enter on the soft
 		// Android keyboard doesn't have a Shift modifier, so the old
@@ -1977,12 +2022,13 @@ export function renderShell(): void {
 		} else if (e.key === "ArrowDown") {
 			e.preventDefault();
 			shellHandlers?.historyForward();
-		} else if (e.key === "/") {
-			// Slash menu opens on the next tick after the value updates.
-			setTimeout(() => shellHandlers?.showSlashMenu(), 0);
 		}
 	});
-	input.addEventListener("input", autoSize);
+	input.addEventListener("input", () => {
+		autoSize();
+		shellHandlers?.persistDraft(input.value);
+		shellHandlers?.showSlashMenu();
+	});
 	// Paste files (e.g. screenshots copied to clipboard) and drag-and-drop
 	// files route through the same attach pipeline as the file picker.
 	input.addEventListener("paste", (e) => {
