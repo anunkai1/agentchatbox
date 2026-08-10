@@ -79,7 +79,7 @@ import {
 	refreshCurrentModelLabel,
 	state,
 } from "./state.js";
-import { readSessionIdFromUrl, writeSessionIdToUrl } from "./url.js";
+import { readSessionIdFromUrl, shareableSessionUrl, writeSessionIdToUrl } from "./url.js";
 import {
 	handleDrop,
 	handleFileAttach,
@@ -124,8 +124,33 @@ function historyForward(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Composer drafts
+// Composer drafts and inline actions
 // ---------------------------------------------------------------------------
+
+async function copyText(text: string): Promise<boolean> {
+	try {
+		if (navigator.clipboard?.writeText) {
+			await navigator.clipboard.writeText(text);
+			return true;
+		}
+	} catch {
+		// Fall through to the legacy textarea path for LAN/http contexts.
+	}
+	try {
+		const ta = document.createElement("textarea");
+		ta.value = text;
+		ta.style.position = "fixed";
+		ta.style.opacity = "0";
+		document.body.appendChild(ta);
+		ta.focus();
+		ta.select();
+		const ok = document.execCommand("copy");
+		document.body.removeChild(ta);
+		return ok;
+	} catch {
+		return false;
+	}
+}
 
 const DRAFT_STORAGE_PREFIX = "acb-draft-v1:";
 
@@ -1386,7 +1411,21 @@ async function boot(): Promise<void> {
 		forkFromMessage: (count) => {
 			if (state.sessionId) chatClient.forkSession(state.sessionId, count);
 		},
-		sendSlashCommand: (text) => sendPromptHook(text),
+		sendSlashCommand: (text) => {
+			sendPromptHook(text);
+		},
+		sendPrompt: (text) => sendAsUser(text),
+		copyText,
+		copyShareLink: () => {
+			const link = shareableSessionUrl(state.sessionId);
+			if (!link) {
+				showToast("No session link yet — send a message first.", "warning");
+				return;
+			}
+			void copyText(link).then((ok) => {
+				showToast(ok ? "Chat link copied." : "Clipboard access denied.", ok ? "info" : "error");
+			});
+		},
 		toggleSpeak,
 	});
 	// When a fork completes server-side, switch this view to the new

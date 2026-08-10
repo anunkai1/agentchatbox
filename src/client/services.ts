@@ -20,6 +20,12 @@ export interface ClientServices {
 	forkFromMessage(messageCount: number): void;
 	/** Send a slash command / prompt with no local echo (voice-reply button). */
 	sendSlashCommand(text: string): void;
+	/** Send a normal user prompt from an inline response action. */
+	sendPrompt(text: string): boolean;
+	/** Copy text using the browser clipboard with the app fallback. */
+	copyText(text: string): Promise<boolean>;
+	/** Copy the current session's shareable URL. */
+	copyShareLink(): void;
 	/** Toggle speak/stop for a spoken-variant button on an assistant message. */
 	toggleSpeak(text: string, src: unknown): void;
 }
