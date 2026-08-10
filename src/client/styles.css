@@ -1426,6 +1426,41 @@ body.sidebar-resizing iframe {
 	line-height: 1.5;
 	color: var(--text);
 }
+/* Common actions below assistant answers. Keep them quiet until hover,
+   while remaining visible and tappable on mobile. */
+.assistant-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px;
+	margin-top: 8px;
+}
+.assistant-action {
+	padding: 4px 8px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--text-muted);
+	font: 12px var(--font-sans);
+	cursor: pointer;
+	transition:
+		background 0.12s,
+		border-color 0.12s,
+		color 0.12s;
+}
+.assistant-action:hover,
+.assistant-action:focus-visible {
+	background: var(--surface-hover);
+	border-color: var(--border);
+	color: var(--text);
+}
+.assistant-action:active {
+	transform: translateY(1px);
+}
+.assistant-action.is-success {
+	color: var(--c-ok);
+}
+
 /* fork-into-new-chat button. Shares the speak-btn base look. */
 .fork-btn {
 	background: transparent;

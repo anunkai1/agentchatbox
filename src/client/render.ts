@@ -224,7 +224,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const voiceBox = makeVoiceTextBox();
 		updateVoiceTextBox(voiceBox, m);
 		body.append(voiceBox);
-		if (m.seq !== undefined) body.append(makeForkButton(() => m.seq));
+		body.append(makeAssistantActionBar(() => m));
 		wrap.append(body);
 		return wrap;
 	}
@@ -456,6 +456,84 @@ function makeForkButton(
 		services.forkFromMessage?.(seq);
 	});
 	return btn;
+}
+
+function previousUserPrompt(message: PersistedMessage): string | null {
+	const index = state.messages.indexOf(message);
+	if (index < 0) return null;
+	for (let i = index - 1; i >= 0; i--) {
+		const candidate = state.messages[i];
+		if (candidate.kind === "user") return candidate.text;
+	}
+	return null;
+}
+
+function makeAssistantActionButton(
+	label: string,
+	title: string,
+	onClick: (button: HTMLButtonElement) => void,
+): HTMLButtonElement {
+	const button = el("button", {
+		class: "assistant-action",
+		type: "button",
+		"aria-label": title,
+		title,
+	}, label) as HTMLButtonElement;
+	button.addEventListener("click", () => onClick(button));
+	return button;
+}
+
+/**
+ * Common actions for an assistant response. Actions resolve the message
+ * lazily so the same bar can be attached to a streaming placeholder before
+ * its final text and sequence number exist.
+ */
+function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTMLElement {
+	const bar = el("div", { class: "assistant-actions", role: "toolbar", "aria-label": "Answer actions" });
+	const sendActionPrompt = (text: string) => {
+		if (state.isStreaming) {
+			showToast("Wait for the current response to finish first.", "warning");
+			return;
+		}
+		if (services.sendPrompt?.(text)) showToast("Message sent.");
+	};
+	bar.append(
+		makeAssistantActionButton("Copy", "Copy this answer", (button) => {
+			const message = getMessage();
+			if (!message || message.kind !== "assistant" || !message.text.trim()) return;
+			if (!services.copyText) return;
+			void services.copyText(message.text).then((ok) => {
+				button.classList.toggle("is-success", ok);
+				showToast(ok ? "Answer copied." : "Clipboard access denied.", ok ? "info" : "error");
+			});
+		}),
+		makeAssistantActionButton("Retry", "Retry the previous request", () => {
+			const message = getMessage();
+			if (message?.kind === "assistant") {
+				const prompt = previousUserPrompt(message);
+				if (prompt) sendActionPrompt(prompt);
+			}
+		}),
+		makeAssistantActionButton("Continue", "Ask the agent to continue", () => {
+			sendActionPrompt("Continue from your last answer.");
+		}),
+		makeAssistantActionButton("Fork", "Fork this conversation here", () => {
+			const message = getMessage();
+			if (message?.kind === "assistant" && message.seq !== undefined) {
+				services.forkFromMessage?.(message.seq);
+			}
+		}),
+		makeAssistantActionButton("Share", "Copy a shareable link to this chat", () => {
+			services.copyShareLink?.();
+		}),
+		makeAssistantActionButton("Listen", "Listen to this answer", (button) => {
+			const message = getMessage();
+			if (message?.kind === "assistant" && message.text.trim()) {
+				services.toggleSpeak?.(message.text, button);
+			}
+		}),
+	);
+	return bar;
 }
 
 export function summarizeArgs(args: unknown): string {
@@ -892,7 +970,15 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	// so the voice-reply handler can populate it live without a re-render.
 	const voiceBox = makeVoiceTextBox();
 	body.append(voiceBox);
-	body.append(makeForkButton(() => state.lastAssistantSeq ?? undefined));
+	body.append(
+		makeAssistantActionBar(() => {
+			for (let i = state.messages.length - 1; i >= 0; i--) {
+				const message = state.messages[i];
+				if (message.kind === "assistant") return message;
+			}
+			return null;
+		}),
+	);
 	wrap.append(body);
 	appendNode(wrap, { pin: true });
 	return { textPre: pre, thinkingWrap, thinkingPre, voiceTextBox: voiceBox };
