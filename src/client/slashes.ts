@@ -84,28 +84,222 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	project: "start a new chat in a project: /project <name|id>",
 };
 
-export function showSlashMenu(): void {
-	const value = $<HTMLTextAreaElement>("#input").value;
-	if (!value.startsWith("/")) return;
-	// (For brevity: we just show a static hint below the input. The full
-	// fuzzy-matching autocomplete from pi-tui is a follow-up.)
-	// Trigger slash-menu rendering inline: parse the command, show a hint.
-	const cmd = value.slice(1).split(/\s+/)[0] ?? "";
-	const hint = SLASH_COMMANDS[cmd];
-	if (hint) {
-		$("#status-bar").textContent = `/${cmd} — ${hint}`;
-	} else if (cmd) {
-		$("#status-bar").textContent = `/${cmd} (unknown — will be sent as a prompt)`;
-	} else {
-		$("#status-bar").textContent = Object.entries(SLASH_COMMANDS)
-			.map(([k, v]) => `/${k} — ${v}`)
-			.join("    ");
+interface CommandPaletteEntry {
+	name: string;
+	description: string;
+	category: string;
+	order: number;
+}
+
+const COMMAND_CATEGORIES = ["Core", "Sessions", "Tools", "Output", "Reference", "Extensions"];
+let commandPalette: HTMLElement | null = null;
+let commandPaletteInput: HTMLTextAreaElement | null = null;
+let commandPaletteOutsideClick: ((event: PointerEvent) => void) | null = null;
+let commandPaletteEntries: CommandPaletteEntry[] = [];
+let commandPaletteFiltered: CommandPaletteEntry[] = [];
+let commandPaletteSelected = 0;
+
+function commandCategory(name: string): string {
+	if (["model", "models", "imagemodel", "image", "imggen", "think", "abort"].includes(name))
+		return "Core";
+	if (["clear", "new", "sessions", "resume", "name", "session", "project"].includes(name))
+		return "Sessions";
+	if (["websearch", "fetch", "codesearch"].includes(name)) return "Tools";
+	if (["copy", "link", "share", "export"].includes(name)) return "Output";
+	return "Reference";
+}
+
+function getCommandPaletteEntries(): CommandPaletteEntry[] {
+	const entries: CommandPaletteEntry[] = Object.entries(SLASH_COMMANDS).map(
+		([name, description], order) => ({
+			name,
+			description,
+			category: commandCategory(name),
+			order,
+		}),
+	);
+	const names = new Set(entries.map((entry) => entry.name));
+	for (const command of state.capabilities ?? []) {
+		if (command.source === "skill" || names.has(command.name)) continue;
+		entries.push({
+			name: command.name,
+			description: command.description || "Extension command",
+			category: "Extensions",
+			order: entries.length,
+		});
+		names.add(command.name);
 	}
+	return entries.sort((a, b) => {
+		const categoryDelta =
+			COMMAND_CATEGORIES.indexOf(a.category) - COMMAND_CATEGORIES.indexOf(b.category);
+		return categoryDelta || a.order - b.order;
+	});
+}
+
+function closeCommandPalette(): void {
+	if (commandPaletteInput) {
+		commandPaletteInput.setAttribute("aria-expanded", "false");
+		commandPaletteInput.removeAttribute("aria-controls");
+	}
+	if (commandPaletteOutsideClick) {
+		document.removeEventListener("pointerdown", commandPaletteOutsideClick);
+	}
+	commandPalette?.remove();
+	commandPalette = null;
+	commandPaletteInput = null;
+	commandPaletteOutsideClick = null;
+	commandPaletteFiltered = [];
+	commandPaletteSelected = 0;
+}
+
+export function closeSlashMenu(): void {
+	closeCommandPalette();
+}
+
+function refreshCommandPaletteSelection(): void {
+	if (!commandPalette) return;
+	const rows = commandPalette.querySelectorAll<HTMLElement>("[data-command-index]");
+	rows.forEach((row) => {
+		const active = Number(row.dataset.commandIndex) === commandPaletteSelected;
+		row.classList.toggle("active", active);
+		row.setAttribute("aria-selected", String(active));
+	});
+	rows[commandPaletteSelected]?.scrollIntoView({ block: "nearest" });
+}
+
+function chooseCommand(entry: CommandPaletteEntry): void {
+	const input = commandPaletteInput;
+	if (!input) return;
+	const needsArgument = /<[^>]+>/.test(entry.description);
+	input.value = `/${entry.name}${needsArgument ? " " : ""}`;
+	input.focus();
+	input.setSelectionRange(input.value.length, input.value.length);
+	input.dispatchEvent(new Event("input", { bubbles: true }));
+	closeCommandPalette();
+}
+
+function renderCommandPalette(): void {
+	const input = commandPaletteInput;
+	if (!input) return;
+	const raw = input.value.slice(1);
+	const query = raw.toLowerCase();
+	commandPaletteEntries = getCommandPaletteEntries();
+	commandPaletteFiltered = commandPaletteEntries.filter(
+		(entry) =>
+			!query ||
+			entry.name.toLowerCase().includes(query) ||
+			entry.description.toLowerCase().includes(query),
+	);
+	commandPaletteSelected = Math.min(
+		commandPaletteSelected,
+		Math.max(0, commandPaletteFiltered.length - 1),
+	);
+
+	if (!commandPalette) {
+		const composer = document.getElementById("composer");
+		if (!composer) return;
+		commandPalette = el("div", {
+			class: "command-palette",
+			id: "command-palette",
+			role: "listbox",
+			"aria-label": "Slash commands",
+		});
+		composer.append(commandPalette);
+		input.setAttribute("aria-expanded", "true");
+		input.setAttribute("aria-controls", "command-palette");
+		commandPaletteOutsideClick = (event: PointerEvent) => {
+			const target = event.target as Node | null;
+			if (target && !commandPalette?.contains(target) && target !== commandPaletteInput) {
+				closeCommandPalette();
+			}
+		};
+		document.addEventListener("pointerdown", commandPaletteOutsideClick);
+	}
+
+	const palette = commandPalette;
+	if (!palette) return;
+	palette.replaceChildren();
+	if (commandPaletteFiltered.length === 0) {
+		palette.append(el("div", { class: "command-palette-empty" }, "No matching commands"));
+		return;
+	}
+
+	let lastCategory = "";
+	commandPaletteFiltered.forEach((entry, index) => {
+		if (entry.category !== lastCategory) {
+			lastCategory = entry.category;
+			palette.append(el("div", { class: "command-palette-category" }, entry.category));
+		}
+		const row = el("button", {
+			class: `command-palette-item${index === commandPaletteSelected ? " active" : ""}`,
+			type: "button",
+			role: "option",
+			"aria-selected": String(index === commandPaletteSelected),
+		});
+		row.dataset.commandIndex = String(index);
+		row.append(
+			el("span", { class: "command-palette-name" }, `/${entry.name}`),
+			el("span", { class: "command-palette-description" }, entry.description),
+		);
+		row.addEventListener("mouseenter", () => {
+			commandPaletteSelected = index;
+			refreshCommandPaletteSelection();
+		});
+		row.addEventListener("click", () => chooseCommand(entry));
+		palette.append(row);
+	});
+}
+
+export function handleSlashMenuKeydown(event: KeyboardEvent): boolean {
+	if (!commandPalette || commandPaletteInput !== event.currentTarget) return false;
+	if (event.key === "Escape") {
+		event.preventDefault();
+		closeCommandPalette();
+		return true;
+	}
+	if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+		event.preventDefault();
+		if (commandPaletteFiltered.length === 0) return true;
+		const direction = event.key === "ArrowDown" ? 1 : -1;
+		commandPaletteSelected =
+			(commandPaletteSelected + direction + commandPaletteFiltered.length) %
+			commandPaletteFiltered.length;
+		refreshCommandPaletteSelection();
+		return true;
+	}
+	if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
+		if (commandPaletteFiltered.length === 0) return false;
+		event.preventDefault();
+		chooseCommand(commandPaletteFiltered[commandPaletteSelected]);
+		return true;
+	}
+	return false;
+}
+
+export function showSlashMenu(): void {
+	const input = $<HTMLTextAreaElement>("#input");
+	const value = input.value;
+	// Arguments belong in the composer, not in the command picker. Keep the
+	// palette open while choosing a command name, then let it disappear once
+	// the user types a space and starts entering arguments.
+	if (!value.startsWith("/") || /\s/.test(value.slice(1))) {
+		closeCommandPalette();
+		return;
+	}
+	if (commandPaletteInput !== input) {
+		closeCommandPalette();
+		commandPaletteInput = input;
+		commandPaletteSelected = 0;
+	}
+	renderCommandPalette();
 }
 
 export function isKnownSlash(s: string): boolean {
 	const cmd = s.replace(/^\//, "").split(/\s+/)[0]?.toLowerCase() ?? "";
-	return cmd in SLASH_COMMANDS;
+	return (
+		cmd in SLASH_COMMANDS ||
+		(state.capabilities ?? []).some((entry) => entry.name.toLowerCase() === cmd && entry.source !== "skill")
+	);
 }
 
 /**
@@ -448,9 +642,21 @@ export function handleSlash(arg: string): void {
 			autoSize();
 			break;
 		}
-		default:
-			// Unknown. Leave the slash in the input and let it be sent as a regular prompt.
-			refreshStatus();
+		default: {
+			// Dynamically loaded extension/prompt commands are owned by pi.
+			// ACB only forwards the command; it does not interpret it.
+			const dynamic = (state.capabilities ?? []).some(
+				(entry) => entry.name.toLowerCase() === cmd && entry.source !== "skill",
+			);
+			if (dynamic) {
+				services.sendSlashCommand?.(`/${arg}`);
+				$<HTMLTextAreaElement>("#input").value = "";
+			} else {
+				// Unknown commands remain ordinary prompts.
+				refreshStatus();
+			}
+			break;
+		}
 	}
 }
 

@@ -60,12 +60,12 @@ export interface ChatClient {
 		sessionId?: string;
 	}): void;
 	/** Send a user prompt. Optionally attach images (base64 + mimeType). */
-	prompt(text: string, images?: PromptImage[]): void;
+	prompt(text: string, images?: PromptImage[]): boolean;
 	/**
 	 * Queue a steering message while the agent is running. Delivered
 	 * after the current assistant turn finishes its tool calls.
 	 */
-	steer(text: string, images?: PromptImage[]): void;
+	steer(text: string, images?: PromptImage[]): boolean;
 	/** Abort the current run, if any. */
 	abort(): void;
 	/** Abort an in-flight auto-retry backoff. */
@@ -322,12 +322,13 @@ export function createChatClient(): ChatClient {
 		});
 	}
 
-	function send(msg: Record<string, unknown>) {
+	function send(msg: Record<string, unknown>): boolean {
 		if (!ws || ws.readyState !== WebSocket.OPEN) {
 			for (const l of errorListeners) l("not connected to server");
-			return;
+			return false;
 		}
 		ws.send(JSON.stringify(msg));
+		return true;
 	}
 
 	connect();
@@ -373,9 +374,9 @@ export function createChatClient(): ChatClient {
 		prompt: (text, images) => {
 			if (!inited) {
 				for (const l of errorListeners) l("prompt sent before init");
-				return;
+				return false;
 			}
-			send({
+			return send({
 				type: "prompt",
 				text,
 				...(images && images.length > 0 ? { images } : {}),
@@ -384,9 +385,9 @@ export function createChatClient(): ChatClient {
 		steer: (text, images) => {
 			if (!inited) {
 				for (const l of errorListeners) l("steer sent before init");
-				return;
+				return false;
 			}
-			send({
+			return send({
 				type: "steer",
 				text,
 				...(images && images.length > 0 ? { images } : {}),

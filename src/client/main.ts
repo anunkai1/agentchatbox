@@ -59,7 +59,9 @@ import {
 import { setServices } from "./services.js";
 import {
 	handleSlash,
+	handleSlashMenuKeydown,
 	isKnownSlash,
+	closeSlashMenu,
 	openModelPicker,
 	openOverflowMenu,
 	openSpeedPicker,
@@ -103,6 +105,7 @@ function historyBack(): void {
 	state.historyIdx = idx;
 	const input = $<HTMLTextAreaElement>("#input");
 	input.value = state.history[idx];
+	persistDraft(input.value);
 	autoSize();
 }
 
@@ -116,47 +119,97 @@ function historyForward(): void {
 		state.historyIdx = idx;
 		$<HTMLTextAreaElement>("#input").value = state.history[idx];
 	}
+	persistDraft($<HTMLTextAreaElement>("#input").value);
 	autoSize();
+}
+
+// ---------------------------------------------------------------------------
+// Composer drafts
+// ---------------------------------------------------------------------------
+
+const DRAFT_STORAGE_PREFIX = "acb-draft-v1:";
+
+function draftStorageKey(sessionId = state.sessionId): string {
+	return `${DRAFT_STORAGE_PREFIX}${sessionId ?? "new"}`;
+}
+
+function persistDraft(text: string): void {
+	try {
+		const key = draftStorageKey();
+		if (text) localStorage.setItem(key, text);
+		else localStorage.removeItem(key);
+	} catch {
+		// Draft persistence is best-effort; the live composer remains usable
+		// when storage is disabled or full.
+	}
+}
+
+function clearSavedDraft(): void {
+	try {
+		localStorage.removeItem(draftStorageKey());
+	} catch {
+		/* ignore storage failures */
+	}
+}
+
+function restoreSavedDraft(): void {
+	const input = $<HTMLTextAreaElement>("#input");
+	if (input.value) return;
+	try {
+		let text = localStorage.getItem(draftStorageKey());
+		// Text typed before the first session id arrived is saved under "new".
+		// Migrate it to the real session when the server handshake completes.
+		if (!text && state.sessionId) {
+			text = localStorage.getItem(draftStorageKey(null));
+			if (text) {
+				localStorage.setItem(draftStorageKey(), text);
+				localStorage.removeItem(draftStorageKey(null));
+			}
+		}
+		if (text) {
+			input.value = text;
+			autoSize();
+		}
+	} catch {
+		/* ignore storage failures */
+	}
 }
 
 // ---------------------------------------------------------------------------
 // Send
 // ---------------------------------------------------------------------------
 
+function clearComposerDraft(): void {
+	$<HTMLTextAreaElement>("#input").value = "";
+	clearAttachmentPreviews();
+	clearSavedDraft();
+	autoSize();
+}
+
 function handleSend(): void {
+	closeSlashMenu();
 	if (isUploadInProgress()) {
 		showToast("Upload in progress — wait for it to finish before sending.");
 		return;
 	}
 	const input = $<HTMLTextAreaElement>("#input");
-	const text = input.value;
-	const trimmed = text.trim();
+	const trimmed = input.value.trim();
 	if (!trimmed) return;
-	input.value = "";
-	clearAttachmentPreviews();
-	autoSize();
-	if (trimmed.startsWith("/")) {
+
+	// Known slash commands consume the composer immediately. Normal prompts
+	// stay in the input until the WebSocket accepts them, so a disconnected
+	// or not-yet-ready session never loses the user's draft.
+	if (trimmed.startsWith("/") && isKnownSlash(trimmed)) {
+		clearComposerDraft();
 		handleSlash(trimmed.replace(/^\//, ""));
-		// If the slash was unknown, send it as a regular prompt.
-		// (handleSlash leaves the input empty on known commands.)
-		if ($<HTMLTextAreaElement>("#input").value === "" && isKnownSlash(trimmed)) {
-			// known slash — handled, do NOT also send as prompt. Discard any
-			// draft attachments too: this command consumed the composer text.
-			state.uploadedImages.clear();
-			return;
-		} else {
-			// unknown slash — fall through and send as prompt
-		}
-	}
-	// While the agent is streaming, a typed message is a steering
-	// comment: queued and delivered after the current turn's tool
-	// calls finish. This mirrors the CLI, where you can keep typing
-	// while the agent works.
-	if (state.isStreaming) {
-		sendSteer(trimmed);
+		state.uploadedImages.clear();
 		return;
 	}
-	sendAsUser(trimmed);
+
+	// While the agent is streaming, a typed message is a steering comment:
+	// queued and delivered after the current turn's tool calls finish.
+	const accepted = state.isStreaming ? sendSteer(trimmed) : sendAsUser(trimmed);
+	if (accepted) clearComposerDraft();
 }
 
 /**
@@ -164,9 +217,19 @@ function handleSend(): void {
  * from slash commands like /websearch, /fetch, /codesearch that need to inject
  * a pre-formatted prompt into the conversation.
  */
-function sendAsUser(trimmed: string): void {
-	if (!trimmed) return;
-	// Push to history.
+function sendAsUser(trimmed: string): boolean {
+	if (!trimmed) return false;
+	const images = collectUploadedImages(trimmed);
+	if (!sendPromptHook(trimmed, images.length > 0 ? images : undefined)) {
+		showToast("Not connected — your draft was kept.", "warning");
+		return false;
+	}
+	// Only clear the attachment byte cache after the WebSocket accepted the
+	// prompt. If the connection is unavailable, the draft and attachments
+	// remain resubmittable.
+	state.uploadedImages.clear();
+
+	// Push to history only after acceptance.
 	if (state.history[state.history.length - 1] !== trimmed) state.history.push(trimmed);
 	state.historyIdx = null;
 
@@ -186,23 +249,7 @@ function sendAsUser(trimmed: string): void {
 		state.title = trimmed.split(/[.\n!?]/)[0].slice(0, 50) || "New chat";
 		$<HTMLSpanElement>("#title").textContent = state.title;
 	}
-
-	// Find any /uploads/<id>... URLs in the prompt and pull the base64
-	// bytes for each one. The URLs are emitted by handleFileAttach as
-	// markdown image links, so the regex finds them. consumeUploadedImages
-	// dedupes by URL and removes them from the map after sending so we
-	// don't keep multi-megabase strings around forever.
-	const images = consumeUploadedImages(trimmed);
-
-	// Hand off the actual send to a hook wired up in boot(), so this
-	// function doesn't have to capture `chatClient` (which is local to
-	// boot()). The hook is `(text, images?) => void`.
-	sendPromptHook(trimmed, images.length > 0 ? images : undefined);
-	// Only pi's agent_start/agent_end events own the streaming state. A
-	// slash command can be handled entirely by an extension (including a
-	// picker or config update) and legitimately emits neither event; marking
-	// it streaming optimistically would leave the next real message stranded
-	// as a steer forever.
+	return true;
 }
 
 /**
@@ -211,14 +258,10 @@ function sendAsUser(trimmed: string): void {
  * outside the boot path (e.g. early slash-command triggers from the
  * `setSendAsUser` import — those are no-ops until boot completes).
  */
-type SendPromptHook = (text: string, images?: Array<{ data: string; mimeType: string }>) => void;
-let sendPromptHook: SendPromptHook = () => {
-	/* will be replaced by boot() */
-};
+type SendPromptHook = (text: string, images?: Array<{ data: string; mimeType: string }>) => boolean;
+let sendPromptHook: SendPromptHook = () => false;
 /** Closure over `chatClient.steer`, wired in boot(). */
-let steerHook: SendPromptHook = () => {
-	/* will be replaced by boot() */
-};
+let steerHook: SendPromptHook = () => false;
 /** Closure over `chatClient.getSessionStats`, wired in boot(). onEvent is
  *  module-scoped but `chatClient` is a boot()-local const, so the event
  *  handlers reach it through this hook (same pattern as steerHook). */
@@ -243,11 +286,11 @@ let liveMessageSeq = 0;
 
 /**
  * Pull the base64 bytes for every /uploads/<id> URL referenced in `text`
- * out of the in-memory image map, and drop them (multi-MB strings
- * shouldn't linger after they've been shipped). Shared by sendAsUser
- * and sendSteer, which previously each inlined this ~15-line scan.
+ * out of the in-memory image map without mutating the draft. The map is
+ * cleared only after the WebSocket accepts the prompt, so failed sends can
+ * be retried with their attachments intact.
  */
-function consumeUploadedImages(text: string): Array<{ data: string; mimeType: string }> {
+function collectUploadedImages(text: string): Array<{ data: string; mimeType: string }> {
 	const images: Array<{ data: string; mimeType: string }> = [];
 	const seen = new Set<string>();
 	for (const m of text.matchAll(/(\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)/g)) {
@@ -257,9 +300,6 @@ function consumeUploadedImages(text: string): Array<{ data: string; mimeType: st
 		const img = state.uploadedImages.get(url);
 		if (img) images.push({ data: img.data, mimeType: img.mimeType });
 	}
-	// This map represents the current composer draft only. URLs manually
-	// removed from its Markdown should not retain multi-megabyte base64 data.
-	state.uploadedImages.clear();
 	return images;
 }
 
@@ -336,16 +376,20 @@ function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
  * Steering text is NOT pushed into `state.history` — it's an inline
  * course-correction, not a standalone prompt you'd recall with ↑/↓.
  */
-function sendSteer(trimmed: string): void {
-	if (!trimmed) return;
+function sendSteer(trimmed: string): boolean {
+	if (!trimmed) return false;
+	const images = collectUploadedImages(trimmed);
+	if (!steerHook(trimmed, images.length > 0 ? images : undefined)) {
+		showToast("Not connected — your draft was kept.", "warning");
+		return false;
+	}
+	state.uploadedImages.clear();
 	const msg: PersistedMessage = { kind: "steer", text: trimmed, delivered: false };
 	state.messages.push(msg);
 	appendNode(renderMessageNode(msg), { pin: true });
 	state.pendingSteerCount += 1;
 	refreshStatus();
-	// Upload-URL rewriting mirrors sendAsUser so attached files resolve.
-	const images = consumeUploadedImages(trimmed);
-	steerHook(trimmed, images.length > 0 ? images : undefined);
+	return true;
 }
 
 /**
@@ -1038,9 +1082,11 @@ async function boot(): Promise<void> {
 	// can't be re-registered without throwing.
 	const shellHandlers: ShellHandlers = {
 		handleSend,
+		persistDraft,
 		historyBack,
 		historyForward,
 		showSlashMenu,
+		handleSlashMenuKeydown,
 		handleSlash,
 		openModelPicker,
 		openThinkPicker,
@@ -1144,6 +1190,7 @@ async function boot(): Promise<void> {
 			// — every `ready` reflects the currently bound session.
 			writeSessionIdToUrl(info.sessionId);
 		}
+		restoreSavedDraft();
 		// Adopt pi's authoritative model unless the user picked another model
 		// while this child was still starting. In that race, the first ready
 		// frame describes the original spawn model; keep the optimistic pick
@@ -1328,12 +1375,8 @@ async function boot(): Promise<void> {
 	// no-op until this runs, which is fine — the only way to call
 	// `sendAsUser` is via a user gesture (button/keypress) which
 	// can only fire after `renderShell` has wired the handlers.
-	sendPromptHook = (text, images) => {
-		chatClient.prompt(text, images);
-	};
-	steerHook = (text, images) => {
-		chatClient.steer(text, images);
-	};
+	sendPromptHook = (text, images) => chatClient.prompt(text, images);
+	steerHook = (text, images) => chatClient.steer(text, images);
 	getSessionStatsHook = () => chatClient.getSessionStats();
 	extensionUiResponder = (id, response) => chatClient.extensionUiResponse(id, response);
 	// Wire the render→main/render→voice callbacks through the services
