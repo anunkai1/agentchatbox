@@ -163,6 +163,15 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		setUserRichText(bubble, m.text);
 		if (m.ts !== undefined) bubble.append(makeTimestampEl(m.ts));
 		row.append(bubble);
+		row.append(
+			makeAssistantActionButton("Copy", "Copy your message", (button) => {
+				if (!services.copyText) return;
+				void services.copyText(m.text).then((ok) => {
+					button.classList.toggle("is-success", ok);
+					showToast(ok ? "Message copied." : "Clipboard access denied.", ok ? "info" : "error");
+				});
+			}),
+		);
 		if (m.seq !== undefined) row.append(makeForkButton(() => m.seq, { align: "right" }));
 		return row;
 	}
