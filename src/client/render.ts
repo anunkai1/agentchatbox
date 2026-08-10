@@ -163,8 +163,9 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		setUserRichText(bubble, m.text);
 		if (m.ts !== undefined) bubble.append(makeTimestampEl(m.ts));
 		row.append(bubble);
-		row.append(
-			makeAssistantActionButton("Copy", "Copy your message", (button) => {
+		const actions = el("div", { class: "message-actions user-message-actions" });
+		actions.append(
+			makeMessageActionButton("⧉", "Copy your message", (button) => {
 				if (!services.copyText) return;
 				void services.copyText(m.text).then((ok) => {
 					button.classList.toggle("is-success", ok);
@@ -172,7 +173,14 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 				});
 			}),
 		);
-		if (m.seq !== undefined) row.append(makeForkButton(() => m.seq, { align: "right" }));
+		if (m.seq !== undefined) {
+			actions.append(
+				makeMessageActionButton("⑂", "Fork this conversation here", () => {
+					services.forkFromMessage?.(m.seq as number);
+				}),
+			);
+		}
+		row.append(actions);
 		return row;
 	}
 	if (m.kind === "steer") {
@@ -439,34 +447,6 @@ export function makeVoiceVariantButton(
 	return btn;
 }
 
-/**
- * The fork button copies the conversation up to and including this
- * message into a brand-new chat and switches to it. `getSeq` returns
- * the message's JSONL ordinal (how many messages a fork copies); it is
- * undefined only in the brief window before the ordinal is stamped, in
- * which case the button is a no-op. `{ align: "right" }` renders the
- * button for right-aligned user bubbles (mirrored layout).
- */
-function makeForkButton(
-	getSeq: () => number | undefined,
-	opts?: { align?: "left" | "right" },
-): HTMLElement {
-	const btn = el(
-		"button",
-		{
-			class: `fork-btn${opts?.align === "right" ? " fork-btn-right" : ""}`,
-			title: "Fork into new chat",
-		},
-		"⑂",
-	);
-	btn.addEventListener("click", () => {
-		const seq = getSeq();
-		if (seq === undefined) return;
-		services.forkFromMessage?.(seq);
-	});
-	return btn;
-}
-
 function previousUserPrompt(message: PersistedMessage): string | null {
 	const index = state.messages.indexOf(message);
 	if (index < 0) return null;
@@ -477,17 +457,17 @@ function previousUserPrompt(message: PersistedMessage): string | null {
 	return null;
 }
 
-function makeAssistantActionButton(
-	label: string,
+function makeMessageActionButton(
+	icon: string,
 	title: string,
 	onClick: (button: HTMLButtonElement) => void,
 ): HTMLButtonElement {
 	const button = el("button", {
-		class: "assistant-action",
+		class: "message-action",
 		type: "button",
 		"aria-label": title,
 		title,
-	}, label) as HTMLButtonElement;
+	}, icon) as HTMLButtonElement;
 	button.addEventListener("click", () => onClick(button));
 	return button;
 }
@@ -498,7 +478,7 @@ function makeAssistantActionButton(
  * its final text and sequence number exist.
  */
 function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTMLElement {
-	const bar = el("div", { class: "assistant-actions", role: "toolbar", "aria-label": "Answer actions" });
+	const bar = el("div", { class: "message-actions assistant-actions", role: "toolbar", "aria-label": "Answer actions" });
 	const sendActionPrompt = (text: string) => {
 		if (state.isStreaming) {
 			showToast("Wait for the current response to finish first.", "warning");
@@ -507,7 +487,7 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 		if (services.sendPrompt?.(text)) showToast("Message sent.");
 	};
 	bar.append(
-		makeAssistantActionButton("Copy", "Copy this answer", (button) => {
+		makeMessageActionButton("⧉", "Copy this answer", (button) => {
 			const message = getMessage();
 			if (!message || message.kind !== "assistant" || !message.text.trim()) return;
 			if (!services.copyText) return;
@@ -516,26 +496,26 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 				showToast(ok ? "Answer copied." : "Clipboard access denied.", ok ? "info" : "error");
 			});
 		}),
-		makeAssistantActionButton("Retry", "Retry the previous request", () => {
+		makeMessageActionButton("↻", "Retry the previous request", () => {
 			const message = getMessage();
 			if (message?.kind === "assistant") {
 				const prompt = previousUserPrompt(message);
 				if (prompt) sendActionPrompt(prompt);
 			}
 		}),
-		makeAssistantActionButton("Continue", "Ask the agent to continue", () => {
+		makeMessageActionButton("→", "Ask the agent to continue", () => {
 			sendActionPrompt("Continue from your last answer.");
 		}),
-		makeAssistantActionButton("Fork", "Fork this conversation here", () => {
+		makeMessageActionButton("⑂", "Fork this conversation here", () => {
 			const message = getMessage();
 			if (message?.kind === "assistant" && message.seq !== undefined) {
 				services.forkFromMessage?.(message.seq);
 			}
 		}),
-		makeAssistantActionButton("Share", "Copy a shareable link to this chat", () => {
+		makeMessageActionButton("↗", "Copy a shareable link to this chat", () => {
 			services.copyShareLink?.();
 		}),
-		makeAssistantActionButton("Listen", "Listen to this answer", (button) => {
+		makeMessageActionButton("🔊", "Listen to this answer", (button) => {
 			const message = getMessage();
 			if (message?.kind === "assistant" && message.text.trim()) {
 				services.toggleSpeak?.(message.text, button);
