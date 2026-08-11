@@ -2482,6 +2482,11 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	const projectsPane = document.getElementById("sidebar-projects-pane");
 	const sessionsPane = document.getElementById("sidebar-sessions-pane");
 	if (!projectsPane || !sessionsPane) return;
+	// Rebuilding the folder headers is cheap, but don't make a sidebar refresh
+	// throw away the user's scroll position. The windowed lists below restore
+	// their visible rows against these offsets on the next microtask.
+	const projectsScrollTop = projectsPane.scrollTop;
+	const sessionsScrollTop = sessionsPane.scrollTop;
 	projectsPane.innerHTML = "";
 	sessionsPane.innerHTML = "";
 
@@ -2533,6 +2538,8 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 			renderProjectFolder({ id: "other", name: "Other", icon: "📦", cwd: "" }, other),
 		);
 	}
+	projectsPane.scrollTop = projectsScrollTop;
+	sessionsPane.scrollTop = sessionsScrollTop;
 }
 
 /** localStorage-backed collapse state per project id. */
@@ -2690,7 +2697,69 @@ function initSidebarSplitter(): void {
 }
 
 /**
- * Render a collapsible project folder with its sessions nested inside.
+ * The sidebar can contain hundreds of sessions. Keep the scrollable area at
+ * its full height, but only mount rows near the current viewport. Rows have a
+ * fixed pitch because their title is deliberately single-line ellipsized;
+ * that makes the window position deterministic without measuring hundreds of
+ * nodes on every scroll.
+ */
+const SIDEBAR_SESSION_ROW_PITCH = 59;
+const SIDEBAR_SESSION_ROW_HEIGHT = 57;
+const SIDEBAR_WINDOW_OVERSCAN = 6;
+
+type WindowedSessionList = HTMLDivElement & { refresh?: () => void };
+
+function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList {
+	const list = el("div", { class: "windowed-session-list" }) as WindowedSessionList;
+	list.style.height = `${items.length * SIDEBAR_SESSION_ROW_PITCH}px`;
+	let renderedStart = -1;
+	let renderedEnd = -1;
+
+	const refresh = () => {
+		const pane = list.closest<HTMLElement>(".sidebar-pane");
+		if (!pane) return;
+		const paneRect = pane.getBoundingClientRect();
+		const listRect = list.getBoundingClientRect();
+		const listTop = pane.scrollTop + listRect.top - paneRect.top;
+		const visibleTop = Math.max(0, pane.scrollTop - listTop);
+		const visibleBottom = Math.min(
+			items.length * SIDEBAR_SESSION_ROW_PITCH,
+			pane.scrollTop + pane.clientHeight - listTop,
+		);
+		const start = Math.max(
+			0,
+			Math.floor(visibleTop / SIDEBAR_SESSION_ROW_PITCH) - SIDEBAR_WINDOW_OVERSCAN,
+		);
+		const end = Math.min(
+			items.length,
+			Math.ceil(visibleBottom / SIDEBAR_SESSION_ROW_PITCH) + SIDEBAR_WINDOW_OVERSCAN,
+		);
+		if (start === renderedStart && end === renderedEnd) return;
+		renderedStart = start;
+		renderedEnd = end;
+
+		const fragment = document.createDocumentFragment();
+		for (let i = start; i < end; i++) {
+			const row = renderSessionItem(items[i]);
+			row.classList.add("windowed-session-item");
+			row.style.top = `${i * SIDEBAR_SESSION_ROW_PITCH}px`;
+			row.style.height = `${SIDEBAR_SESSION_ROW_HEIGHT}px`;
+			fragment.append(row);
+		}
+		list.replaceChildren(fragment);
+	};
+
+	list.refresh = refresh;
+	queueMicrotask(() => {
+		const pane = list.closest<HTMLElement>(".sidebar-pane");
+		pane?.addEventListener("scroll", refresh, { passive: true });
+		refresh();
+	});
+	return list;
+}
+
+/**
+ * Render a collapsible project folder with sessions nested inside.
  * The folder header shows icon + name + count, a "+" to start a new chat
  * in this project, and (for non-Global) an edit affordance. Clicking the
  * header toggles collapse.
@@ -2746,11 +2815,9 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	// Pinned float to the top within the folder.
 	const pinned = items.filter((s) => s.pinned);
 	const rest = items.filter((s) => !s.pinned);
-	if (pinned.length > 0) {
-		body.append(el("div", { class: "group-label" }, "Pinned"));
-		for (const s of pinned) body.append(renderSessionItem(s));
-	}
-	for (const s of rest) body.append(renderSessionItem(s));
+	if (pinned.length > 0) body.append(el("div", { class: "group-label" }, "Pinned"));
+	const windowed = renderWindowedSessionList([...pinned, ...rest]);
+	body.append(windowed);
 	if (items.length === 0 && isGlobal) {
 		body.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
 	}
@@ -2768,6 +2835,7 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 		chevron.textContent = set.has(p.id) ? "▸" : "▾";
 		body.style.display = set.has(p.id) ? "none" : "";
 		wrap.classList.toggle("collapsed", set.has(p.id));
+		windowed.refresh?.();
 	});
 	return wrap;
 }
