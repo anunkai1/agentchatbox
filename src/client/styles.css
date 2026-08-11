@@ -2595,8 +2595,17 @@ body.modal-open {
 		gap: 4px;
 		padding: 6px 10px;
 	}
-	.header .title {
-		max-width: 40vw;
+	/* Let the title give up space before the fixed header actions do. Without
+	 * an explicit flex minimum, a long thread title makes the Settings pill
+	 * overflow the viewport on phones. */
+	.header-brand {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.header-brand .title {
+		flex: 1 1 auto;
+		min-width: 0;
+		max-width: none;
 		font-size: 13.5px;
 	}
 	/* Preserve the header action in the tight mobile bar without letting
@@ -2609,6 +2618,18 @@ body.modal-open {
 		font-size: 18px;
 	}
 	.header-new-chat-label {
+		display: none;
+	}
+	/* Keep the settings action inside the viewport too. The text label is
+	 * useful on wide screens, but an icon-only target avoids a clipped pill
+	 * when a long thread title is open on a phone. */
+	.header-overflow {
+		width: 44px;
+		padding: 0;
+		justify-content: center;
+		flex-shrink: 0;
+	}
+	.header-overflow > span:last-child {
 		display: none;
 	}
 	/* On mobile, hide the inline model pill — it's still reachable via
