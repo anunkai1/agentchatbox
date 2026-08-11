@@ -479,8 +479,12 @@ function removeLiveAssistantRow(dom: LiveAssistantDom): void {
  */
 let pendingStreamDom: { dom: LiveAssistantDom; text: string; thinking: string } | null = null;
 let streamRafId: number | null = null;
+let streamThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+let lastStreamPaintAt = 0;
+const STREAM_PAINT_INTERVAL_MS = 75; // ~13 updates/sec; final output still flushes immediately
 
 function paintStreamDom(p: { dom: LiveAssistantDom; text: string; thinking: string }): void {
+	lastStreamPaintAt = performance.now();
 	// Capture pinning BEFORE the DOM mutation. The new tokens grow the
 	// message — and thinking blocks grow fast: reasoning streams in
 	// rapidly, and the very first thinking paint removes `hidden-thinking`
@@ -499,11 +503,25 @@ function paintStreamDom(p: { dom: LiveAssistantDom; text: string; thinking: stri
 	if (wasPinned) scrollToBottom();
 }
 
-/** Schedule a streaming-token repaint on the next frame, coalescing
- *  a burst of tokens into a single DOM update. */
+/** Schedule a streaming-token repaint, coalescing bursts and limiting the
+ * expensive full Markdown parse/sanitize pass to roughly 13 times/sec. */
 function scheduleStreamDom(dom: LiveAssistantDom, text: string, thinking: string): void {
 	pendingStreamDom = { dom, text, thinking };
-	if (streamRafId !== null) return; // one frame batches every pending token
+	if (streamRafId !== null || streamThrottleTimer !== null) return;
+	const wait = Math.max(0, STREAM_PAINT_INTERVAL_MS - (performance.now() - lastStreamPaintAt));
+	if (wait > 0) {
+		streamThrottleTimer = setTimeout(() => {
+			streamThrottleTimer = null;
+			if (streamRafId !== null) return;
+			streamRafId = requestAnimationFrame(() => {
+				streamRafId = null;
+				const p = pendingStreamDom;
+				pendingStreamDom = null;
+				if (p) paintStreamDom(p);
+			});
+		}, wait);
+		return;
+	}
 	streamRafId = requestAnimationFrame(() => {
 		streamRafId = null;
 		const p = pendingStreamDom;
@@ -516,6 +534,10 @@ function scheduleStreamDom(dom: LiveAssistantDom, text: string, thinking: string
  *  final tokens (which may have arrived after the last frame fired) are
  *  painted before the row is finalized or removed. */
 function flushStreamDom(): void {
+	if (streamThrottleTimer !== null) {
+		clearTimeout(streamThrottleTimer);
+		streamThrottleTimer = null;
+	}
 	if (streamRafId !== null) {
 		cancelAnimationFrame(streamRafId);
 		streamRafId = null;
