@@ -1389,127 +1389,136 @@ export function openModelsPanel(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Compact mobile menu — only shown on narrow screens (see styles.css).
- * Re-exposes model, thinking, voice, and TTS toggle in a single overlay.
+ * Grouped settings sheet. Common chat/media choices stay immediately visible;
+ * diagnostic detail is available under Advanced without competing for space.
  */
 export function openOverflowMenu(): void {
 	const { overlay, box } = openModal("Settings", "overflow-box");
+	overlay.classList.add("settings-overlay");
+	box.classList.add("settings-box");
 
-	const modelLine = el("div", { class: "overflow-row" });
-	modelLine.append(el("div", { class: "overflow-label" }, "model"));
-	modelLine.append(el("div", { class: "overflow-value" }, state.currentModelId ?? "—"));
-	makeKeyboardClickable(modelLine, () => {
-		overlay.remove();
-		openModelPicker();
-	});
-	box.append(modelLine);
-
-	// Image-generation model — owned by the pi-venice-image extension.
-	// Clicking sends `/imagemodel`, which the extension handles via
-	// ctx.ui.select() — ACB renders the picker through the extension_ui
-	// relay. ACB doesn't know the current image model (that state lives
-	// in the extension's override file), so the value is best-effort:
-	// the extension notifies on change, but we don't persist the label.
-	const imageLine = el("div", { class: "overflow-row" });
-	imageLine.append(el("div", { class: "overflow-label" }, "image"));
-	imageLine.append(
-		el("div", { class: "overflow-value" }, state.currentImageModelLabel ?? "default"),
-	);
-	imageLine.title = "Switch image-generation model";
-	makeKeyboardClickable(imageLine, () => {
-		overlay.remove();
-		// Lean send — see /imagemodel case in handleSlash: extension
-		// command, no agent run, must not set isStreaming.
-		services.sendSlashCommand?.("/imagemodel");
-	});
-	box.append(imageLine);
-
-	// All models & services overview — opens the display-only panel that
-	// lists every model driving the session (chat, image, web, voice…).
-	const allModelsLine = el("div", { class: "overflow-row" });
-	allModelsLine.append(el("div", { class: "overflow-label" }, "all models"));
-	allModelsLine.append(el("div", { class: "overflow-value" }, "overview"));
-	allModelsLine.title = "Show all models & services in use";
-	makeKeyboardClickable(allModelsLine, () => {
-		overlay.remove();
-		openModelsPanel();
-	});
-	box.append(allModelsLine);
-
-	// Copy a shareable link to the current chat (`/s/<id>`). Mirrors the
-	// `/link` slash command; surfaced here for discoverability on mobile
-	// where the input box is the only entry point to slash commands.
-	const linkUrl = shareableSessionUrl(state.sessionId);
-	if (linkUrl) {
-		const linkLine = el("div", { class: "overflow-row" });
-		linkLine.append(el("div", { class: "overflow-label" }, "chat link"));
-		linkLine.append(
-			el("div", { class: "overflow-value" }, `${linkUrl.replace(/^https?:\/\//, "")}`),
-		);
-		makeKeyboardClickable(linkLine, async () => {
-			const ok = await copyToClipboard(linkUrl);
-			const value = linkLine.querySelector(".overflow-value")!;
-			value.textContent = ok ? "✓ copied" : "✗ denied";
-			setTimeout(() => {
-				value.textContent = linkUrl.replace(/^https?:\/\//, "");
-			}, 1500);
+	const actionRow = (label: string, value: string, activate: () => void, title?: string) => {
+		const row = el("button", {
+			class: "overflow-row settings-row",
+			type: "button",
+			title: title ?? `Change ${label.toLowerCase()}`,
+			onclick: activate,
 		});
-		box.append(linkLine);
-	}
-
-	const thinkLine = el("div", { class: "overflow-row" });
-	thinkLine.append(el("div", { class: "overflow-label" }, "think"));
-	thinkLine.append(el("div", { class: "overflow-value" }, state.currentThinking));
-	makeKeyboardClickable(thinkLine, () => {
+		row.append(
+			el("span", { class: "overflow-label" }, label),
+			el(
+				"span",
+				{ class: "settings-row-end" },
+				el("span", { class: "overflow-value" }, value),
+				el("span", { class: "settings-chevron", "aria-hidden": "true" }, "›"),
+			),
+		);
+		return row;
+	};
+	const section = (title: string, ...rows: HTMLElement[]) => {
+		const sectionEl = el("section", { class: "settings-section" });
+		sectionEl.append(el("h4", { class: "settings-section-title" }, title));
+		sectionEl.append(el("div", { class: "settings-section-rows" }, ...rows));
+		return sectionEl;
+	};
+	const closeThen = (action: () => void) => () => {
 		overlay.remove();
-		openThinkPicker();
-	});
-	box.append(thinkLine);
+		action();
+	};
 
-	const voiceLine = el("div", { class: "overflow-row" });
-	voiceLine.append(el("div", { class: "overflow-label" }, "voice"));
-	voiceLine.append(el("div", { class: "overflow-value" }, state.ttsVoice ?? "default"));
-	makeKeyboardClickable(voiceLine, () => {
-		overlay.remove();
-		void openVoicePicker();
-	});
-	box.append(voiceLine);
+	box.append(
+		section(
+			"Chat",
+			actionRow(
+				"Model",
+				state.currentModelId ?? "—",
+				closeThen(openModelPicker),
+				"Choose chat model",
+			),
+			actionRow(
+				"Thinking",
+				state.currentThinking,
+				closeThen(openThinkPicker),
+				"Choose thinking level",
+			),
+		),
+	);
 
-	const speedLine = el("div", { class: "overflow-row" });
-	speedLine.append(el("div", { class: "overflow-label" }, "speed"));
-	speedLine.append(el("div", { class: "overflow-value" }, `${state.ttsSpeed}×`));
-	makeKeyboardClickable(speedLine, () => {
-		overlay.remove();
-		openSpeedPicker();
-	});
-	box.append(speedLine);
+	// Image model state remains extension-owned; the displayed value is the
+	// best label pi has reported during this browser session.
+	box.append(
+		section(
+			"Media",
+			actionRow(
+				"Image model",
+				state.currentImageModelLabel ?? "Default",
+				closeThen(() => services.sendSlashCommand?.("/imagemodel")),
+				"Choose image-generation model",
+			),
+			actionRow(
+				"Voice",
+				state.ttsVoice ?? "Default",
+				closeThen(() => void openVoicePicker()),
+				"Choose text-to-speech voice",
+			),
+			actionRow(
+				"Playback speed",
+				`${state.ttsSpeed}×`,
+				closeThen(openSpeedPicker),
+				"Choose text-to-speech playback speed",
+			),
+		),
+	);
 
-	// --- loaded capabilities (mobile: badge hidden, show in overflow) ---
+	const advancedRows = el("div", { class: "settings-section-rows settings-advanced-rows" });
+	advancedRows.append(
+		actionRow(
+			"Models & services",
+			"Overview",
+			closeThen(openModelsPanel),
+			"Show all models and services in use",
+		),
+	);
 	if (state.capabilities && state.capabilities.length > 0) {
-		const caps = state.capabilities;
-		const skills = caps.filter((c) => c.source === "skill");
-		const extPkgs = new Set(
-			caps.filter((c) => c.source === "extension").map((c) => c.sourceInfo?.source ?? c.name),
+		const skills = state.capabilities.filter((capability) => capability.source === "skill");
+		const extensionPackages = new Set(
+			state.capabilities
+				.filter((capability) => capability.source === "extension")
+				.map((capability) => capability.sourceInfo?.source ?? capability.name),
 		);
 		const parts: string[] = [];
-		if (skills.length) parts.push(`${skills.length} skill${skills.length !== 1 ? "s" : ""}`);
-		if (extPkgs.size) parts.push(`${extPkgs.size} extension${extPkgs.size !== 1 ? "s" : ""}`);
+		if (skills.length) parts.push(`${skills.length} skill${skills.length === 1 ? "" : "s"}`);
+		if (extensionPackages.size) {
+			parts.push(`${extensionPackages.size} extension${extensionPackages.size === 1 ? "" : "s"}`);
+		}
 		if (parts.length > 0) {
-			const capsLine = el("div", { class: "overflow-row" });
-			capsLine.append(el("div", { class: "overflow-label" }, "loaded"));
-			capsLine.append(el("div", { class: "overflow-value" }, parts.join(" · ")));
-			makeKeyboardClickable(capsLine, () => {
-				overlay.remove();
-				toggleCapabilitiesPopover();
-			});
-			box.append(capsLine);
+			advancedRows.append(
+				actionRow(
+					"Loaded capabilities",
+					parts.join(" · "),
+					closeThen(toggleCapabilitiesPopover),
+					"Show loaded skills and extensions",
+				),
+			);
 		}
 	}
+	const advanced = el("details", { class: "settings-advanced" });
+	advanced.append(
+		el(
+			"summary",
+			{ class: "settings-advanced-summary" },
+			el("span", {}, "Advanced"),
+			el("span", { class: "settings-advanced-hint" }, "Capabilities & diagnostics"),
+		),
+		advancedRows,
+	);
+	box.append(advanced);
 
 	box.append(
 		el("button", {
-			class: "btn",
-			text: "Close",
+			class: "btn settings-done",
+			type: "button",
+			text: "Done",
 			onclick: () => overlay.remove(),
 		}),
 	);

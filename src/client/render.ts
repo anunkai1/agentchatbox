@@ -1758,6 +1758,32 @@ export function renderShell(): void {
 		"aria-label": "Conversations and projects",
 	});
 	const sidebarHeader = el("div", { class: "sidebar-header" });
+	// Keep the two primary drawer actions on one compact line. New chat is an
+	// <a href="/"> so middle/modifier clicks retain native new-tab behavior;
+	// a plain click stays in the SPA and closes the drawer on touch layouts.
+	const sidebarNewChat = el(
+		"a",
+		{
+			class: "new-chat-btn",
+			href: "/",
+			rel: "noopener",
+			"aria-label": "Start a new chat",
+			title: "New chat — middle-click to open in a new tab",
+			onclick: (e: MouseEvent) => {
+				if (e.button !== 0) return;
+				if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+				e.preventDefault();
+				shellHandlers?.newGlobalSession();
+				toggleSidebar(true);
+			},
+		},
+		el("span", {
+			class: "new-chat-icon",
+			"aria-hidden": "true",
+			html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+		}),
+		el("span", {}, "New chat"),
+	);
 	sidebarHeader.append(
 		el(
 			"button",
@@ -1771,49 +1797,9 @@ export function renderShell(): void {
 			"✕",
 		),
 		el("span", { class: "spacer" }),
+		sidebarNewChat,
 	);
 	sidebar.append(sidebarHeader);
-
-	// New chat button. Rendered as an <a href="/"> so middle-click
-	// (and ⌘/Ctrl/Shift+click) open a fresh chat in a new tab/window via
-	// the browser's native link handling — same trick the session rows
-	// use. Plain left-click is intercepted below so the SPA keeps the
-	// live WS up and just runs the `clear` slash instead of a full nav.
-	sidebar.append(
-		el(
-			"a",
-			{
-				class: "new-chat-btn",
-				href: "/",
-				rel: "noopener",
-				"aria-label": "Start a new chat",
-				title: "New chat — middle-click to open in a new tab",
-				onclick: (e: MouseEvent) => {
-					if (e.button !== 0) return;
-					if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-					e.preventDefault();
-					shellHandlers?.newGlobalSession();
-					toggleSidebar(true); // auto-close on mobile
-				},
-			},
-			"✏️  New chat",
-		),
-	);
-
-	// New project button — sits under New chat. Opens the project editor
-	// modal to create a folder with its own AGENTS.md instructions.
-	sidebar.append(
-		el(
-			"button",
-			{
-				class: "new-project-btn",
-				type: "button",
-				title: "Create a project (its own folder + AGENTS.md instructions)",
-				onclick: () => openProjectEditor(),
-			},
-			"+ New project",
-		),
-	);
 
 	// Semantic search box. /api/health resolves asynchronously after the shell
 	// is painted, so keep the row in the DOM and reveal it when that result
@@ -1944,7 +1930,11 @@ export function renderShell(): void {
 					shellHandlers?.newGlobalSession();
 				},
 			},
-			el("span", { ariaHidden: "true" }, "+"),
+			el("span", {
+				class: "header-new-chat-icon",
+				"aria-hidden": "true",
+				html: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+			}),
 			el("span", { class: "header-new-chat-label" }, "New chat"),
 		),
 		el("div", { class: "spacer" }),
@@ -2022,7 +2012,7 @@ export function renderShell(): void {
 				onclick: () => shellHandlers?.openOverflowMenu(),
 			},
 			el("span", {
-				html: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 105.66 5.66l-1.42-1.42a2 2 0 11-2.82-2.82l-1.42-1.42zM3 21l3.5-1 9.9-9.9-2.5-2.5L4 17.5 3 21z"/></svg>`,
+				html: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94L14.7 6.3z"/></svg>`,
 			}),
 			el("span", { text: "Settings" }),
 		),
@@ -2566,15 +2556,13 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	const globalProject = projects.find((p) => p.id === "global");
 	const userProjects = projects.filter((p) => p.id !== "global");
 
-	// Toggle the splitter/pane visibility: with no user projects, Projects
-	// vanishes and the bottom pane fills the sidebar (single-scroll mode).
+	// Keep the Projects heading visible even when there are no projects: its
+	// compact + action is now the single discoverable way to create one. With
+	// no project rows, the pane shrinks to the heading and drops the splitter.
 	wrap.classList.toggle("no-projects", userProjects.length === 0);
 
-	// 1) Top pane — top-level "Projects" container holding every user
-	//    project. Only rendered when at least one user project exists.
-	if (userProjects.length > 0) {
-		projectsPane.append(renderProjectsContainer(userProjects, buckets));
-	}
+	// 1) Top pane — top-level "Projects" container holding every user project.
+	projectsPane.append(renderProjectsContainer(userProjects, buckets));
 
 	// 2) Bottom pane — Global as its own top-level folder (the default
 	//    home for new chats).
@@ -2639,7 +2627,7 @@ function renderProjectsContainer(
 		text: collapsed ? "▸" : "▾",
 		"aria-hidden": "true",
 	});
-	const icon = el("span", { class: "project-icon", text: "📂", "aria-hidden": "true" });
+	const icon = renderBrandFolderIcon();
 	const name = el("span", { class: "project-name", text: "Projects" });
 	const count = el("span", {
 		class: "project-count",
@@ -2654,7 +2642,18 @@ function renderProjectsContainer(
 		"aria-controls": bodyId,
 	});
 	toggle.append(chevron, icon, name, count);
-	header.append(toggle);
+	const addProject = el("button", {
+		class: "project-action projects-add-action",
+		type: "button",
+		title: "Create a project",
+		"aria-label": "Create a project",
+		text: "+",
+	});
+	addProject.addEventListener("click", (event) => {
+		event.stopPropagation();
+		openProjectEditor();
+	});
+	header.append(toggle, addProject);
 	wrap.append(header);
 
 	const body = el("div", { class: "projects-container-body", id: bodyId });
@@ -2861,6 +2860,14 @@ function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList
  * in this project, and (for non-Global) an edit affordance. Clicking the
  * header toggles collapse.
  */
+function renderBrandFolderIcon(): HTMLElement {
+	return el("span", {
+		class: "project-icon project-icon-folder",
+		"aria-hidden": "true",
+		html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M3 7a3 3 0 0 1 3-3h3l2 2h7a3 3 0 0 1 3 3v2H3z" fill="#234b8b"/><path d="M2.5 8.5h19v8A3.5 3.5 0 0 1 18 20H6a3.5 3.5 0 0 1-3.5-3.5z" fill="#27c4c8" stroke="#234b8b" stroke-width=".7"/></svg>`,
+	});
+}
+
 function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLElement {
 	const collapsed = readCollapseState().has(p.id);
 	const isOther = p.id === "other";
@@ -2874,7 +2881,9 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 		text: collapsed ? "▸" : "▾",
 		"aria-hidden": "true",
 	});
-	const icon = el("span", { class: "project-icon", text: p.icon || "📁", "aria-hidden": "true" });
+	const icon = p.icon === "📁" || p.icon === "📂" || !p.icon
+		? renderBrandFolderIcon()
+		: el("span", { class: "project-icon", text: p.icon, "aria-hidden": "true" });
 	const name = el("span", { class: "project-name", text: p.name });
 	const count = el("span", {
 		class: "project-count",
@@ -2953,10 +2962,8 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 		windowed?.dispose?.();
 		const start = page * SIDEBAR_PAGE_SIZE;
 		const pageItems = orderedItems.slice(start, start + SIDEBAR_PAGE_SIZE);
-		const pagePinned = pageItems.filter((s) => s.pinned);
 		body.replaceChildren();
 		if (totalPages > 1) body.append(pagination);
-		if (pagePinned.length > 0) body.append(el("div", { class: "group-label" }, "Pinned"));
 		windowed = renderWindowedSessionList(pageItems);
 		body.append(windowed);
 		if (items.length === 0 && isGlobal) {
