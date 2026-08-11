@@ -92,6 +92,10 @@ let userPaused = false;
  */
 function speakLabelFromSrc(src: unknown): string {
 	if (src instanceof HTMLElement) {
+		const variant = src.dataset.voiceVariant;
+		if (variant === "long") return "🗣️ LongTTS";
+		if (variant === "medium") return "📝 MedTTS";
+		if (variant === "short") return "💬 ShortTTS";
 		const lbl = src.dataset.idleLabel ?? src.textContent ?? "";
 		if (/LongTTS/.test(lbl)) return "🗣️ LongTTS";
 		if (/MedTTS/.test(lbl)) return "📝 MedTTS";
