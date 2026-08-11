@@ -535,6 +535,7 @@ function onEvent(event: Record<string, unknown>): void {
 		case "agent_start":
 			setStreaming(true);
 			state.streamingStartedAt = Date.now();
+			refreshStatus();
 			break;
 
 		case "agent_end":
@@ -550,8 +551,14 @@ function onEvent(event: Record<string, unknown>): void {
 			// it fires, so a non-null value here means generation failed.
 			if (state.pendingVoiceBtn) {
 				const b = state.pendingVoiceBtn;
+				const fallbackVoiceIcon =
+					state.pendingVoiceVariant === "medium"
+						? "📝"
+						: state.pendingVoiceVariant === "short"
+							? "💬"
+							: "🗣️";
 				b.classList.remove("is-loading");
-				b.textContent = b.dataset.idleLabel ?? "🗣️ LongTTS";
+				b.textContent = b.dataset.idleLabel ?? fallbackVoiceIcon;
 				state.pendingVoiceVariant = null;
 				state.pendingVoiceBtn = null;
 				// Generation produced no voice reply — clear the blue TTS banner
@@ -1125,6 +1132,7 @@ async function boot(): Promise<void> {
 		handleFileAttach,
 		handlePaste,
 		handleDrop,
+		reconnect: () => chatClient.reconnect(),
 		abort: () => {
 			// Mirror the CLI: while a retry backoff is counting down,
 			// Stop cancels the retry (the CLI binds the same key to

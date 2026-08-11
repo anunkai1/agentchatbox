@@ -1203,6 +1203,18 @@ body.sidebar-resizing iframe {
 .tool-head-expandable {
 	cursor: pointer;
 }
+.tool-head-expandable .tool-status {
+	margin-left: auto;
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--c-ok);
+}
+.tool-head-expandable .tool-status-error {
+	color: var(--c-err);
+}
+.tool-head-expandable.tool-head-open {
+	background: color-mix(in srgb, var(--surface) 82%, var(--border) 18%);
+}
 .tool-head-expandable:hover .tool-name {
 	color: color-mix(in srgb, var(--c-tool) 75%, white 25%);
 }
@@ -1310,6 +1322,9 @@ body.sidebar-resizing iframe {
 .tool-result.tool-error {
 	color: var(--c-err);
 }
+.tool-result-collapsed {
+	display: none;
+}
 /* A replayed tool call whose session was interrupted before a result
    was written. Distinct from the live "running…" spinner — nothing
    is executing the call, so we surface it as ended rather than pending. */
@@ -1321,8 +1336,47 @@ body.sidebar-resizing iframe {
 	opacity: 0.85;
 }
 
-/* shared base class for the Long/Short voice-variant buttons on
-   each assistant message (no standalone per-message speak button). */
+/* Compact voice strip: immediate speech plus the generated Long/Medium/Short
+   variants stay together and fit on one line, including on narrow screens. */
+.voice-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	max-width: 100%;
+	margin-top: 7px;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+	scrollbar-width: none;
+}
+.voice-actions::-webkit-scrollbar {
+	display: none;
+}
+.voice-actions .speak-btn {
+	width: auto;
+	height: 30px;
+	flex: 0 0 auto;
+	justify-content: center;
+	gap: 5px;
+	margin-top: 0;
+	padding: 0 9px;
+	font-size: 13px;
+	white-space: nowrap;
+}
+.voice-actions .voice-icon {
+	font-size: 15px;
+	line-height: 1;
+}
+.voice-actions .voice-label {
+	font-size: 12px;
+	font-weight: 600;
+}
+.voice-actions .immediate-voice {
+	color: var(--accent);
+	background: var(--accent-soft);
+	border-color: var(--accent-border);
+}
+
+/* shared base class for the voice buttons on each assistant message. */
 .speak-btn {
 	background: transparent;
 	border: 1px solid transparent;
@@ -1458,6 +1512,15 @@ body.sidebar-resizing iframe {
 		color 0.12s,
 		transform 0.1s;
 }
+.message-action-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+.message-action-icon svg {
+	width: 15px;
+	height: 15px;
+}
 .message-action:hover,
 .message-action:focus-visible {
 	background: var(--surface-hover);
@@ -1576,6 +1639,9 @@ body.sidebar-resizing iframe {
 	max-width: var(--chat-max);
 	margin: 0 auto 5px;
 	padding: 0 10px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
 	font-size: 12px;
 	line-height: 1.35;
 	color: var(--text-secondary);
@@ -1586,6 +1652,28 @@ body.sidebar-resizing iframe {
 }
 .composer-state-working {
 	color: var(--c-ok);
+}
+.composer-state-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.composer-latest-btn,
+.composer-reconnect-btn {
+	flex: 0 0 auto;
+	padding: 3px 8px;
+	border: 1px solid var(--border-strong);
+	border-radius: 999px;
+	background: var(--surface);
+	color: inherit;
+	font: 11px var(--font-sans);
+	cursor: pointer;
+}
+.composer-latest-btn:hover,
+.composer-reconnect-btn:hover {
+	background: var(--surface-hover);
+	border-color: currentColor;
 }
 .composer-state-warning {
 	color: var(--c-warn);

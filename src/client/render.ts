@@ -60,17 +60,37 @@ function refreshComposerState(): void {
 	const line = document.getElementById("composer-state");
 	if (!line) return;
 	line.className = "composer-state";
+	line.replaceChildren();
 	if (state.isStreaming) {
-		const queued = state.pendingSteerCount;
-		line.textContent =
-			queued > 0
-				? `Agent is working · ${queued} instruction${queued === 1 ? "" : "s"} queued`
-				: "Agent is working · your next message will be queued";
+		// The persistent streaming indicator below the composer already owns
+		// the working state. Keep this line quiet, except for a useful
+		// navigation control when the user has scrolled up for older output.
+		if (isAtBottom()) {
+			line.classList.add("hidden");
+			return;
+		}
+		const latest = el(
+			"button",
+			{ class: "composer-latest-btn", type: "button", title: "Jump to the latest output" },
+			"New output ↓",
+		) as HTMLButtonElement;
+		latest.addEventListener("click", () => {
+			scrollToBottom();
+			updateJumpToBottomFabState();
+		});
+		line.append(latest);
 		line.classList.add("composer-state-working");
 		return;
 	}
 	if (state.connectionStatus === "closed" || state.connectionStatus === "stalled") {
-		line.textContent = "Connection lost · your draft will be kept";
+		line.append(el("span", { class: "composer-state-label" }, "Connection lost · your draft will be kept"));
+		const reconnect = el(
+			"button",
+			{ class: "composer-reconnect-btn", type: "button", title: "Reconnect to agentchatbox" },
+			"Reconnect",
+		) as HTMLButtonElement;
+		reconnect.addEventListener("click", () => shellHandlers?.reconnect());
+		line.append(reconnect);
 		line.classList.add("composer-state-warning");
 		return;
 	}
@@ -165,7 +185,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		row.append(bubble);
 		const actions = el("div", { class: "message-actions user-message-actions" });
 		actions.append(
-			makeMessageActionButton("⧉", "Copy your message", (button) => {
+			makeMessageActionButton("copy", "Copy your message", (button) => {
 				if (!services.copyText) return;
 				void services.copyText(m.text).then((ok) => {
 					button.classList.toggle("is-success", ok);
@@ -175,7 +195,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		);
 		if (m.seq !== undefined) {
 			actions.append(
-				makeMessageActionButton("⑂", "Fork this conversation here", () => {
+				makeMessageActionButton("fork", "Fork this conversation here", () => {
 					services.forkFromMessage?.(m.seq as number);
 				}),
 			);
@@ -227,13 +247,12 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		body.append(text);
 		if (m.ts !== undefined) body.append(makeTimestampEl(m.ts));
 		body.append(
-			makeVoiceVariantButton("long", () => m.voiceLong ?? "", "Speak the detailed spoken version"),
-		);
-		body.append(
-			makeVoiceVariantButton("medium", () => m.voiceMedium ?? "", "Speak a ~250-word summary"),
-		);
-		body.append(
-			makeVoiceVariantButton("short", () => m.voiceShort ?? "", "Speak the concise summary"),
+			makeVoiceActions(
+				() => m.text,
+				() => m.voiceLong ?? "",
+				() => m.voiceMedium ?? "",
+				() => m.voiceShort ?? "",
+			),
 		);
 		// Read-along box for the medium/short spoken variants (long is
 		// TTS-only). Populated from state at render time; stays hidden
@@ -251,7 +270,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const toolPath = toolPathFromArgs(m.args);
 		mountToolHead(card, m.name, m.args, toolPath);
 		if (m.result !== undefined) {
-			card.append(el("pre", { class: `tool-result ${m.isError ? "tool-error" : ""}` }, m.result));
+			appendToolResult(card, m.result, m.isError ?? false);
 		} else if (m.interrupted) {
 			// A replayed tool call whose session died before a result was
 			// written. Nothing is executing it, so don't show the indefinite
@@ -357,6 +376,41 @@ function makeVoiceTextBox(): HTMLDivElement {
 	return el("div", { class: "voice-text hidden" });
 }
 
+function makeImmediateVoiceButton(getText: () => string): HTMLButtonElement {
+	const button = el("button", {
+		class: "speak-btn voice-action immediate-voice",
+		type: "button",
+		title: "Speak this answer immediately",
+	}) as HTMLButtonElement;
+	button.append(el("span", { class: "voice-icon", text: "🔊" }));
+	button.setAttribute("aria-label", "Speak this answer immediately");
+	button.addEventListener("click", () => {
+		const text = getText().trim();
+		if (text) services.toggleSpeak?.(text, button);
+	});
+	return button;
+}
+
+function makeVoiceActions(
+	getImmediateText: () => string,
+	getLongText: () => string,
+	getMediumText: () => string,
+	getShortText: () => string,
+): HTMLElement {
+	const actions = el("div", {
+		class: "voice-actions",
+		role: "toolbar",
+		"aria-label": "Voice actions",
+	});
+	actions.append(
+		makeImmediateVoiceButton(getImmediateText),
+		makeVoiceVariantButton("long", getLongText, "Speak the detailed spoken version"),
+		makeVoiceVariantButton("medium", getMediumText, "Speak a summary of the answer"),
+		makeVoiceVariantButton("short", getShortText, "Speak a brief summary of the answer"),
+	);
+	return actions;
+}
+
 function makeVoiceTextSection(label: string, text: string): HTMLElement {
 	const s = el("div", { class: "voice-text-section" });
 	s.append(el("div", { class: "voice-text-label" }, label));
@@ -421,9 +475,13 @@ export function makeVoiceVariantButton(
 	getText: () => string,
 	title: string,
 ): HTMLElement {
-	const label =
-		variant === "long" ? "🗣️ LongTTS" : variant === "medium" ? "📝 MedTTS" : "💬 ShortTTS";
-	const btn = el("button", { class: "speak-btn voice-variant-btn", title }, label);
+	const icon = variant === "long" ? "🗣️" : variant === "medium" ? "📝" : "💬";
+	const label = variant === "long" ? "Long" : variant === "medium" ? "Med" : "Short";
+	const variantName = variant === "long" ? "Long TTS" : variant === "medium" ? "Medium TTS" : "Short TTS";
+	const btn = el("button", { class: "speak-btn voice-variant-btn", title }) as HTMLButtonElement;
+	btn.append(el("span", { class: "voice-icon", text: icon }), el("span", { class: "voice-label" }, label));
+	btn.dataset.voiceVariant = variant;
+	btn.setAttribute("aria-label", title);
 	btn.addEventListener("click", () => {
 		const existing = getText().trim();
 		if (existing) {
@@ -441,7 +499,7 @@ export function makeVoiceVariantButton(
 		setBtnLoading(btn);
 		state.pendingVoiceVariant = variant;
 		state.pendingVoiceBtn = btn;
-		showTtsBanner(`${label} · generating spoken text via ${voiceRewriteLabel()}…`);
+		showTtsBanner(`${variantName} · generating spoken text via ${voiceRewriteLabel()}…`);
 		services.sendSlashCommand?.(`/voice-last ${variant}`);
 	});
 	return btn;
@@ -457,8 +515,26 @@ function previousUserPrompt(message: PersistedMessage): string | null {
 	return null;
 }
 
+type MessageIcon = "copy" | "retry" | "continue" | "fork" | "share" | "listen";
+
+function messageIcon(name: MessageIcon): HTMLElement {
+	const paths: Record<MessageIcon, string> = {
+		copy: '<rect x="8" y="8" width="10" height="10" rx="1.5"/><path d="M6 15H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1"/>',
+		retry: '<path d="M20 11a8 8 0 0 0-14.7-4L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L21 15"/><path d="M21 20v-5h-5"/>',
+		continue: '<path d="M4 12h15"/><path d="m13 6 6 6-6 6"/>',
+		fork: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v4a4 4 0 0 0 4 4h6"/><path d="M18 7v3"/>',
+		share: '<path d="M14 5h5v5"/><path d="m19 5-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>',
+		listen: '<path d="M4 10v4"/><path d="M8 8v8"/><path d="M12 6v12"/><path d="M16 9v6"/><path d="M20 11v2"/>',
+	};
+	return el("span", {
+		class: "message-action-icon",
+		"aria-hidden": "true",
+		html: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name]}</svg>`,
+	});
+}
+
 function makeMessageActionButton(
-	icon: string,
+	icon: MessageIcon,
 	title: string,
 	onClick: (button: HTMLButtonElement) => void,
 ): HTMLButtonElement {
@@ -467,9 +543,11 @@ function makeMessageActionButton(
 		type: "button",
 		"aria-label": title,
 		title,
-	}, icon) as HTMLButtonElement;
+	});
+	button.setAttribute("aria-label", title);
+	button.append(messageIcon(icon));
 	button.addEventListener("click", () => onClick(button));
-	return button;
+	return button as HTMLButtonElement;
 }
 
 /**
@@ -487,7 +565,7 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 		if (services.sendPrompt?.(text)) showToast("Message sent.");
 	};
 	bar.append(
-		makeMessageActionButton("⧉", "Copy this answer", (button) => {
+		makeMessageActionButton("copy", "Copy this answer", (button) => {
 			const message = getMessage();
 			if (!message || message.kind !== "assistant" || !message.text.trim()) return;
 			if (!services.copyText) return;
@@ -496,30 +574,24 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 				showToast(ok ? "Answer copied." : "Clipboard access denied.", ok ? "info" : "error");
 			});
 		}),
-		makeMessageActionButton("↻", "Retry the previous request", () => {
+		makeMessageActionButton("retry", "Retry the previous request", () => {
 			const message = getMessage();
 			if (message?.kind === "assistant") {
 				const prompt = previousUserPrompt(message);
 				if (prompt) sendActionPrompt(prompt);
 			}
 		}),
-		makeMessageActionButton("→", "Ask the agent to continue", () => {
+		makeMessageActionButton("continue", "Ask the agent to continue", () => {
 			sendActionPrompt("Continue from your last answer.");
 		}),
-		makeMessageActionButton("⑂", "Fork this conversation here", () => {
+		makeMessageActionButton("fork", "Fork this conversation here", () => {
 			const message = getMessage();
 			if (message?.kind === "assistant" && message.seq !== undefined) {
 				services.forkFromMessage?.(message.seq);
 			}
 		}),
-		makeMessageActionButton("↗", "Copy a shareable link to this chat", () => {
+		makeMessageActionButton("share", "Copy a shareable link to this chat", () => {
 			services.copyShareLink?.();
-		}),
-		makeMessageActionButton("🔊", "Listen to this answer", (button) => {
-			const message = getMessage();
-			if (message?.kind === "assistant" && message.text.trim()) {
-				services.toggleSpeak?.(message.text, button);
-			}
 		}),
 	);
 	return bar;
@@ -610,6 +682,39 @@ function mountToolHead(
 		return;
 	}
 	card.append(head);
+}
+
+/**
+ * Completed tool calls stay as compact one-line rows. The command/arguments
+ * and result remain available by clicking the row, but long tool output no
+ * longer pushes the conversation away from the assistant's answer.
+ */
+function appendToolResult(card: HTMLElement, result: string, isError: boolean): void {
+	const resultNode = el("pre", { class: `tool-result ${isError ? "tool-error" : ""}` }, result);
+	resultNode.classList.add("tool-result-collapsed");
+	card.append(resultNode);
+
+	const head = card.querySelector<HTMLElement>(".tool-head");
+	if (!head) return;
+	head.classList.add("tool-head-expandable");
+	let toggle = head.querySelector<HTMLButtonElement>(".tool-toggle");
+	if (!toggle) {
+		toggle = el(
+			"button",
+			{ class: "tool-toggle", type: "button", title: "Show tool details" },
+			"▸",
+		) as HTMLButtonElement;
+		head.append(toggle);
+	}
+	const status = el("span", { class: `tool-status${isError ? " tool-status-error" : ""}` }, isError ? "✕" : "✓");
+	const anchor = head.querySelector<HTMLElement>(".tool-download") ?? toggle;
+	head.insertBefore(status, anchor);
+	head.addEventListener("click", () => {
+		const expanded = resultNode.classList.toggle("tool-result-collapsed") === false;
+		toggle!.textContent = expanded ? "▾" : "▸";
+		toggle!.title = expanded ? "Hide tool details" : "Show tool details";
+		head.classList.toggle("tool-head-open", expanded);
+	});
 }
 
 function toolPathFromArgs(args: unknown): string | null {
@@ -939,21 +1044,12 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	// The getter resolves to the last assistant message's variant, which
 	// is what /voice-last voices anyway.
 	body.append(
-		makeVoiceVariantButton(
-			"long",
+		makeVoiceActions(
+			() => state.lastAssistantText,
 			() => lastAssistantVoice("long"),
-			"Speak the detailed spoken version",
-		),
-	);
-	body.append(
-		makeVoiceVariantButton(
-			"medium",
 			() => lastAssistantVoice("medium"),
-			"Speak a ~250-word summary",
+			() => lastAssistantVoice("short"),
 		),
-	);
-	body.append(
-		makeVoiceVariantButton("short", () => lastAssistantVoice("short"), "Speak the concise summary"),
 	);
 	// Read-along box (hidden until a medium/short variant lands). Returned
 	// so the voice-reply handler can populate it live without a re-render.
@@ -1023,11 +1119,11 @@ export function finalizeToolCall(
 	}
 	if (!row) return;
 	delete row.dataset.toolPending;
-	const card = row.querySelector(".tool-card");
+	const card = row.querySelector<HTMLElement>(".tool-card");
 	const pending = row.querySelector(".tool-pending");
 	if (pending) pending.remove();
 	if (card && result !== undefined) {
-		card.append(el("pre", { class: `tool-result ${isError ? "tool-error" : ""}` }, result));
+		appendToolResult(card, result, isError);
 	}
 	void name; // unused for now — the tool-name row was already set on append
 	// Polite scroll based on pre-mutation pinning state. Without this,
@@ -1506,6 +1602,7 @@ export interface ShellHandlers {
 	handlePaste: (e: ClipboardEvent) => Promise<void>;
 	handleDrop: (e: DragEvent) => Promise<void>;
 	abort: () => void;
+	reconnect: () => void;
 	abortRetry: () => void;
 	/** Pin/unpin any session by id (sidebar star). Server persists + rebroadcasts. */
 	setSessionPinned: (sessionId: string, pinned: boolean) => void;
