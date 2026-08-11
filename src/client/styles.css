@@ -3601,37 +3601,66 @@ select:focus-visible,
 }
 
 @media (hover: none), (pointer: coarse), (max-width: 720px) {
-	/* Hover-only row controls are unreliable on touch. One stable menu keeps
-	 * titles readable while exposing all actions in a labelled action sheet;
-	 * pinned rows retain their familiar visible star as a direct unpin target. */
-	.session-item .session-item-actions,
-	.session-item:hover .session-item-actions,
-	.session-item:focus-within .session-item-actions {
+	/* Keep the original compact row height. Titles occupy the first line;
+	 * the metadata line below contains directly clickable edit, star and
+	 * delete controls instead of hiding them behind the kebab menu. */
+	.session-item:not(.search-hit) {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto auto;
+		grid-template-rows: 22px 32px;
+		align-items: center;
+		padding: 1px 4px 1px 10px;
+	}
+	.session-item:not(.search-hit) .session-item-actions {
+		display: flex !important;
+		grid-column: 2 / -1;
+		grid-row: 2;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 0;
+	}
+	.session-item:not(.search-hit) .session-item-actions .session-action {
+		width: 32px;
+		height: 32px;
+		font-size: 14px;
+	}
+	/* Pinned rows keep the star as a separate direct-unpin button. The edit
+	 * and delete buttons sit immediately to its left. */
+	.session-item.pinned .session-item-actions {
+		grid-column: 2;
+	}
+	/* display: contents lets the title and metadata occupy separate grid
+	 * rows while the anchor remains the click target for both. */
+	.session-item:not(.search-hit) .session-item-link {
+		display: contents;
+	}
+	.session-item:not(.search-hit) .session-item-title-row {
+		grid-column: 1 / -1;
+		grid-row: 1;
+		min-width: 0;
+	}
+	.session-item:not(.search-hit) .session-item-meta {
+		grid-column: 1;
+		grid-row: 2;
+		min-width: 0;
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+	}
+	/* The action sheet remains available for any non-touch layout, but the
+	 * mobile kebab itself is no longer needed because actions are visible. */
+	.session-more {
 		display: none;
 	}
-	.session-more {
-		display: inline-flex;
-		width: 44px;
-		height: 44px;
-	}
 	.session-pin-indicator {
-		width: 44px;
-		height: 44px;
-	}
-	/* A pinned row has two adjacent secondary controls. Compact only that
-	 * pair so it reads as one tight action cluster and gives the title back
-	 * 24px; unpinned rows keep the full 44px menu target. */
-	.session-item.pinned .session-more,
-	.session-item.pinned .session-pin-indicator {
+		grid-column: 3;
+		grid-row: 2;
 		width: 32px;
-		height: 40px;
-	}
-	.session-item.pinned .session-pin-indicator {
-		margin-left: -2px;
+		height: 32px;
+		font-size: 13px;
 	}
 	.session-item {
 		align-items: center;
-		padding: 6px 4px 6px 10px;
 	}
 	.project-actions {
 		opacity: 1;

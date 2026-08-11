@@ -2792,6 +2792,11 @@ function initSidebarSplitter(): void {
  */
 const SIDEBAR_SESSION_ROW_PITCH = 59;
 const SIDEBAR_SESSION_ROW_HEIGHT = 57;
+// Mobile rows put the title on its own line and keep the action buttons beside
+// the metadata below it. Keep the original compact row pitch now that the
+// controls use smaller, directly clickable targets.
+const SIDEBAR_MOBILE_ROW_PITCH = 59;
+const SIDEBAR_MOBILE_ROW_HEIGHT = 57;
 const SIDEBAR_WINDOW_OVERSCAN = 6;
 const SIDEBAR_PAGE_SIZE = 100;
 
@@ -2801,8 +2806,13 @@ type WindowedSessionList = HTMLDivElement & {
 };
 
 function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList {
+	const compactLayout = window.matchMedia(
+		"(hover: none), (pointer: coarse), (max-width: 720px)",
+	).matches;
+	const rowPitch = compactLayout ? SIDEBAR_MOBILE_ROW_PITCH : SIDEBAR_SESSION_ROW_PITCH;
+	const rowHeight = compactLayout ? SIDEBAR_MOBILE_ROW_HEIGHT : SIDEBAR_SESSION_ROW_HEIGHT;
 	const list = el("div", { class: "windowed-session-list" }) as WindowedSessionList;
-	list.style.height = `${items.length * SIDEBAR_SESSION_ROW_PITCH}px`;
+	list.style.height = `${items.length * rowPitch}px`;
 	let renderedStart = -1;
 	let renderedEnd = -1;
 
@@ -2814,16 +2824,16 @@ function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList
 		const listTop = pane.scrollTop + listRect.top - paneRect.top;
 		const visibleTop = Math.max(0, pane.scrollTop - listTop);
 		const visibleBottom = Math.min(
-			items.length * SIDEBAR_SESSION_ROW_PITCH,
+			items.length * rowPitch,
 			pane.scrollTop + pane.clientHeight - listTop,
 		);
 		const start = Math.max(
 			0,
-			Math.floor(visibleTop / SIDEBAR_SESSION_ROW_PITCH) - SIDEBAR_WINDOW_OVERSCAN,
+			Math.floor(visibleTop / rowPitch) - SIDEBAR_WINDOW_OVERSCAN,
 		);
 		const end = Math.min(
 			items.length,
-			Math.ceil(visibleBottom / SIDEBAR_SESSION_ROW_PITCH) + SIDEBAR_WINDOW_OVERSCAN,
+			Math.ceil(visibleBottom / rowPitch) + SIDEBAR_WINDOW_OVERSCAN,
 		);
 		if (start === renderedStart && end === renderedEnd) return;
 		renderedStart = start;
@@ -2833,8 +2843,8 @@ function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList
 		for (let i = start; i < end; i++) {
 			const row = renderSessionItem(items[i]);
 			row.classList.add("windowed-session-item");
-			row.style.top = `${i * SIDEBAR_SESSION_ROW_PITCH}px`;
-			row.style.height = `${SIDEBAR_SESSION_ROW_HEIGHT}px`;
+			row.style.top = `${i * rowPitch}px`;
+			row.style.height = `${rowHeight}px`;
 			fragment.append(row);
 		}
 		list.replaceChildren(fragment);
