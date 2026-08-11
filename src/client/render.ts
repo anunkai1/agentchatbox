@@ -2706,8 +2706,12 @@ function initSidebarSplitter(): void {
 const SIDEBAR_SESSION_ROW_PITCH = 59;
 const SIDEBAR_SESSION_ROW_HEIGHT = 57;
 const SIDEBAR_WINDOW_OVERSCAN = 6;
+const SIDEBAR_PAGE_SIZE = 100;
 
-type WindowedSessionList = HTMLDivElement & { refresh?: () => void };
+type WindowedSessionList = HTMLDivElement & {
+	refresh?: () => void;
+	dispose?: () => void;
+};
 
 function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList {
 	const list = el("div", { class: "windowed-session-list" }) as WindowedSessionList;
@@ -2749,10 +2753,15 @@ function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList
 		list.replaceChildren(fragment);
 	};
 
+	let boundPane: HTMLElement | null = null;
 	list.refresh = refresh;
+	list.dispose = () => {
+		boundPane?.removeEventListener("scroll", refresh);
+		boundPane = null;
+	};
 	queueMicrotask(() => {
-		const pane = list.closest<HTMLElement>(".sidebar-pane");
-		pane?.addEventListener("scroll", refresh, { passive: true });
+		boundPane = list.closest<HTMLElement>(".sidebar-pane");
+		boundPane?.addEventListener("scroll", refresh, { passive: true });
 		refresh();
 	});
 	return list;
@@ -2812,18 +2821,65 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	wrap.append(header);
 
 	const body = el("div", { class: "project-folder-body" });
-	// Pinned float to the top within the folder.
+	// Pinned sessions stay first, then the remaining sessions are split into
+	// explicit pages. Pagination controls are kept above the rows so the user
+	// never has to scroll to the bottom of a page just to change pages.
 	const pinned = items.filter((s) => s.pinned);
 	const rest = items.filter((s) => !s.pinned);
-	if (pinned.length > 0) body.append(el("div", { class: "group-label" }, "Pinned"));
-	const windowed = renderWindowedSessionList([...pinned, ...rest]);
-	body.append(windowed);
-	if (items.length === 0 && isGlobal) {
-		body.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
-	}
-	if (items.length === 0 && !isGlobal && !isOther) {
-		body.append(el("div", { class: "sidebar-empty" }, "No chats yet — click + to start one"));
-	}
+	const orderedItems = [...pinned, ...rest];
+	const totalPages = Math.max(1, Math.ceil(orderedItems.length / SIDEBAR_PAGE_SIZE));
+	let page = 0;
+	let windowed: WindowedSessionList | null = null;
+	const pagination = el("div", { class: "sidebar-pagination" });
+	const previous = el(
+		"button",
+		{ type: "button", title: "Previous page", "aria-label": "Previous page" },
+		"‹",
+	) as HTMLButtonElement;
+	const pageLabel = el("span", { class: "sidebar-pagination-label" });
+	const next = el(
+		"button",
+		{ type: "button", title: "Next page", "aria-label": "Next page" },
+		"›",
+	) as HTMLButtonElement;
+	pagination.append(previous, pageLabel, next);
+
+	const renderPage = () => {
+		windowed?.dispose?.();
+		const start = page * SIDEBAR_PAGE_SIZE;
+		const pageItems = orderedItems.slice(start, start + SIDEBAR_PAGE_SIZE);
+		const pagePinned = pageItems.filter((s) => s.pinned);
+		body.replaceChildren();
+		if (totalPages > 1) body.append(pagination);
+		if (pagePinned.length > 0) body.append(el("div", { class: "group-label" }, "Pinned"));
+		windowed = renderWindowedSessionList(pageItems);
+		body.append(windowed);
+		if (items.length === 0 && isGlobal) {
+			body.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
+		}
+		if (items.length === 0 && !isGlobal && !isOther) {
+			body.append(el("div", { class: "sidebar-empty" }, "No chats yet — click + to start one"));
+		}
+		pageLabel.textContent = `Page ${page + 1} of ${totalPages}`;
+		previous.disabled = page === 0;
+		next.disabled = page === totalPages - 1;
+		pagination.hidden = totalPages <= 1;
+	};
+	previous.addEventListener("click", (e) => {
+		e.stopPropagation();
+		if (page > 0) {
+			page--;
+			renderPage();
+		}
+	});
+	next.addEventListener("click", (e) => {
+		e.stopPropagation();
+		if (page < totalPages - 1) {
+			page++;
+			renderPage();
+		}
+	});
+	renderPage();
 	if (collapsed) body.style.display = "none";
 	wrap.append(body);
 
@@ -2835,7 +2891,7 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 		chevron.textContent = set.has(p.id) ? "▸" : "▾";
 		body.style.display = set.has(p.id) ? "none" : "";
 		wrap.classList.toggle("collapsed", set.has(p.id));
-		windowed.refresh?.();
+		windowed?.refresh?.();
 	});
 	return wrap;
 }
