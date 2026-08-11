@@ -2277,8 +2277,9 @@ body.sidebar-resizing iframe {
 /* ---------- overflow menu rows ---------- */
 
 .overflow-box {
+	width: min(420px, calc(100vw - 32px));
 	min-width: 260px;
-	max-width: 90vw;
+	max-width: 420px;
 }
 .overflow-row {
 	display: flex;
@@ -2748,6 +2749,19 @@ body.sidebar-resizing iframe {
 	flex-direction: column;
 	gap: 2px;
 	padding-left: 14px;
+}
+/* Session rows are windowed by render.ts. The spacer retains the full
+   scroll height while only the rows near the viewport are mounted. */
+.windowed-session-list {
+	position: relative;
+	flex: 0 0 auto;
+	width: 100%;
+}
+.windowed-session-item {
+	position: absolute;
+	left: 0;
+	right: 0;
+	margin: 0;
 }
 .project-folder.collapsed .project-folder-body {
 	display: none;

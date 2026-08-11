@@ -668,12 +668,47 @@ function openModal(title: string, extraClass?: string): ModalRefs {
 	const overlay = el("div", { class: "modal-overlay" });
 	const box = el("div", { class: "modal-box" });
 	if (extraClass) box.classList.add(extraClass);
+	box.setAttribute("role", "dialog");
+	box.setAttribute("aria-modal", "true");
+	box.setAttribute("aria-label", title);
+	box.tabIndex = -1;
 	box.append(el("h3", { text: title }));
+
+	const previousFocus =
+		document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	let cleanedUp = false;
+	let observer: MutationObserver | null = null;
+	const cleanup = () => {
+		if (cleanedUp) return;
+		cleanedUp = true;
+		document.removeEventListener("keydown", onKeyDown);
+		observer?.disconnect();
+		if (previousFocus?.isConnected) previousFocus.focus();
+	};
+	const onKeyDown = (event: KeyboardEvent) => {
+		if (event.key !== "Escape") return;
+		event.preventDefault();
+		overlay.remove();
+	};
+	document.addEventListener("keydown", onKeyDown);
 	overlay.addEventListener("click", (e) => {
 		if (e.target === overlay) overlay.remove();
 	});
 	overlay.append(box);
 	document.body.append(overlay);
+	// Most callers close dialogs with `overlay.remove()` directly. Watch for
+	// that removal so Escape/focus handling is cleaned up consistently too.
+	observer = new MutationObserver(() => {
+		if (!overlay.isConnected) cleanup();
+	});
+	observer.observe(document.body, { childList: true, subtree: true });
+	setTimeout(() => {
+		if (!overlay.isConnected) return;
+		const firstControl = box.querySelector<HTMLElement>(
+			'input, button, textarea, select, a[href], [tabindex]:not([tabindex="-1"])',
+		);
+		(firstControl ?? box).focus();
+	}, 0);
 	return { overlay, box };
 }
 
