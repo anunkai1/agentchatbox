@@ -1197,6 +1197,7 @@ body.sidebar-resizing iframe {
 	text-overflow: ellipsis;
 	font-family: var(--font-mono);
 	min-width: 0;
+	flex: 1 1 auto;
 }
 /* When the head is expandable, let the icon+name grow and push the
    toggle/download to the right; make the whole row feel clickable. */
@@ -2544,11 +2545,58 @@ body.sidebar-resizing iframe {
 		padding: 4px 10px 2px;
 	}
 	.composer {
-		padding: 5px 5px 5px 5px;
+		gap: 2px;
+		padding: 4px;
+		border-radius: 22px;
 	}
 	.composer .input {
+		min-width: 0;
 		font-size: 16px; /* prevents iOS zoom-on-focus */
-		padding: 6px 4px;
+		padding: 6px 3px;
+	}
+	.composer .icon-btn,
+	.send-btn,
+	.stop-btn {
+		width: 34px;
+		height: 34px;
+	}
+	.composer-actions {
+		gap: 2px;
+	}
+	.composer-state {
+		padding-inline: 4px;
+	}
+	.voice-actions {
+		gap: 3px;
+		padding-bottom: 2px;
+	}
+	.voice-actions .speak-btn {
+		height: 32px;
+		padding-inline: 8px;
+	}
+	.tool-head {
+		gap: 6px;
+		padding: 7px 9px;
+	}
+	.tool-toggle {
+		padding-inline: 6px;
+	}
+	.tool-download {
+		padding-inline: 4px;
+		font-size: 11px;
+	}
+	.tool-args,
+	.tool-result {
+		padding-inline: 9px;
+		font-size: 11.5px;
+		max-height: 280px;
+	}
+	.message-actions {
+		gap: 2px;
+	}
+	.message-action {
+		width: 32px;
+		height: 30px;
 	}
 
 	.status-bar {
