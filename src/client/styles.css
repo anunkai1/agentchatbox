@@ -866,6 +866,25 @@ body.sidebar-resizing iframe {
 .row-error {
 	justify-content: flex-start;
 }
+.history-load-older {
+	display: flex;
+	justify-content: center;
+	padding: 12px 4px 4px;
+}
+.history-load-older button {
+	padding: 5px 10px;
+	border: 1px solid var(--border-strong);
+	border-radius: 999px;
+	background: var(--surface);
+	color: var(--text-secondary);
+	font: 12px var(--font-sans);
+	cursor: pointer;
+}
+.history-load-older button:hover {
+	background: var(--surface-hover);
+	border-color: var(--accent-border);
+	color: var(--text);
+}
 
 /* Timestamp chip on user + assistant bubbles: small, muted, relative
    label ("2m") with the full Brisbane-time date on hover (title).
