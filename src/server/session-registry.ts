@@ -185,6 +185,16 @@ class SessionRegistry {
 	 */
 	private readonly pending = new Set<LiveSession>();
 
+	/** Generic transport notification for pi session-name changes. Chat.ts
+	 * subscribes so every connected browser can refresh its session summaries;
+	 * the registry neither interprets nor generates the name. */
+	private readonly sessionInfoChangedListeners = new Set<() => void>();
+
+	onSessionInfoChanged(listener: () => void): () => void {
+		this.sessionInfoChangedListeners.add(listener);
+		return () => this.sessionInfoChangedListeners.delete(listener);
+	}
+
 	/**
 	 * Snapshot of every live, ready session — id + cwd. Used by chat.ts
 	 * to inject brand-new sessions into the sidebar list BEFORE pi has
@@ -631,6 +641,10 @@ class SessionRegistry {
 			session.currentTurn.push(line);
 			session.busy = false;
 			if (!session.ws && !session.streaming) this.scheduleIdleReap(session);
+		}
+
+		if (line.type === "session_info_changed") {
+			for (const listener of this.sessionInfoChangedListeners) listener();
 		}
 
 		deliver(session.ws, { type: "event", event: line });

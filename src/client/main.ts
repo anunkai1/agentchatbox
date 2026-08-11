@@ -41,6 +41,7 @@ import {
 	lastAssistantVoiceBox,
 	refreshSidebarSearchVisibility,
 	refreshStatus,
+	refreshWelcomeSuggestions,
 	registerShellHandlers,
 	renderMessageNode,
 	renderShell,
@@ -58,10 +59,10 @@ import {
 } from "./render.js";
 import { setServices } from "./services.js";
 import {
+	closeSlashMenu,
 	handleSlash,
 	handleSlashMenuKeydown,
 	isKnownSlash,
-	closeSlashMenu,
 	openModelPicker,
 	openOverflowMenu,
 	openSpeedPicker,
@@ -70,7 +71,6 @@ import {
 	renderSessionsIntoPicker,
 	resetChatState,
 	setChatControls,
-	setSendAsUser,
 	showSlashMenu,
 } from "./slashes.js";
 import {
@@ -238,9 +238,8 @@ function handleSend(): void {
 }
 
 /**
- * Send a message as the user. Called both from handleSend (typed input) and
- * from slash commands like /websearch, /fetch, /codesearch that need to inject
- * a pre-formatted prompt into the conversation.
+ * Send a typed message as the user. Agent workflow commands are owned by pi
+ * extensions and arrive through the normal RPC event stream instead.
  */
 function sendAsUser(trimmed: string): boolean {
 	if (!trimmed) return false;
@@ -278,10 +277,9 @@ function sendAsUser(trimmed: string): boolean {
 }
 
 /**
- * Wires the prompt-send half of `sendAsUser` to a closure over the
- * `chatClient` instance. Called once at the end of `boot()`; null
- * outside the boot path (e.g. early slash-command triggers from the
- * `setSendAsUser` import — those are no-ops until boot completes).
+ * Wires `sendAsUser` to the boot-local chat client. It remains a module-level
+ * hook because composer handlers are registered before the WebSocket client
+ * finishes booting.
  */
 type SendPromptHook = (text: string, images?: Array<{ data: string; mimeType: string }>) => boolean;
 let sendPromptHook: SendPromptHook = () => false;
@@ -1037,6 +1035,22 @@ function onEvent(event: Record<string, unknown>): void {
 const SIDEBAR_CACHE_KEY = "acb-sidebar-summaries-v1";
 type SidebarCache = { sessions: SessionSummary[]; projects: ProjectSummary[] };
 let sidebarSessionsForCache: SessionSummary[] = [];
+/** True once either localStorage or the server has supplied a real sidebar
+ * snapshot. This distinguishes an authoritative empty list from the initial
+ * "nothing has loaded yet" state when a transcript rebuilds the shell. */
+let hasSidebarSessionSnapshot = false;
+
+/** Keep the header title aligned with the server-owned session summary.
+ * Resumed/direct-link sessions do not pass through the optimistic first-send
+ * title path, so without this they remain labelled "New chat" forever. */
+function syncCurrentSessionTitle(sessions: SessionSummary[]): void {
+	if (!state.sessionId) return;
+	const current = sessions.find((session) => session.id === state.sessionId);
+	if (!current) return;
+	state.title = current.title.trim() || "New chat";
+	const title = document.querySelector<HTMLSpanElement>("#title");
+	if (title) title.textContent = state.title;
+}
 
 function readSidebarCache(): SidebarCache | null {
 	try {
@@ -1196,13 +1210,14 @@ async function boot(): Promise<void> {
 		reorderProjects: (order) => chatClient.reorderProjects(order),
 	};
 	registerShellHandlers(shellHandlers);
-	setSendAsUser(sendAsUser);
 
 	renderShell();
 	// Paint the previous display-only sidebar snapshot before pi finishes
 	// starting. The authoritative WS response below replaces it shortly after.
 	if (cachedSidebar) {
 		sidebarSessionsForCache = cachedSidebar.sessions;
+		hasSidebarSessionSnapshot = true;
+		syncCurrentSessionTitle(cachedSidebar.sessions);
 		renderSidebarSessions(cachedSidebar.sessions);
 	}
 
@@ -1240,6 +1255,9 @@ async function boot(): Promise<void> {
 		if (info.sessionId) {
 			state.sessionId = info.sessionId;
 			applySessionPrefs();
+			// A cached/server sidebar snapshot can name a resumed session before
+			// its transcript arrives. Fresh sessions simply have no match yet.
+			syncCurrentSessionTitle(sidebarSessionsForCache);
 			// Mirror the session into the URL so the chat is a bookmarkable,
 			// shareable link. Covers new sessions, resumes, and reconnects
 			// — every `ready` reflects the currently bound session.
@@ -1295,6 +1313,8 @@ async function boot(): Promise<void> {
 	// Also refresh the sidebar session list.
 	chatClient.onSessionsUpdated((sessions) => {
 		sidebarSessionsForCache = sessions;
+		hasSidebarSessionSnapshot = true;
+		syncCurrentSessionTitle(sessions);
 		saveSidebarCache();
 		renderSessionsIntoPicker(sessions);
 		// Derive which project the currently-viewed session belongs to, so
@@ -1315,6 +1335,7 @@ async function boot(): Promise<void> {
 	// pi actually has loaded for the current chat.
 	chatClient.onCapabilities((commands) => {
 		state.capabilities = commands;
+		refreshWelcomeSuggestions();
 		refreshStatus();
 	});
 	// Context-window fill from pi's get_session_stats RPC. Updates the
@@ -1359,6 +1380,7 @@ async function boot(): Promise<void> {
 					JSON.stringify(projected[projected.length - 1]));
 		state.sessionId = sessionId;
 		applySessionPrefs();
+		syncCurrentSessionTitle(sidebarSessionsForCache);
 		state.messages = projected;
 		// Seed the live message ordinal from the replayed transcript so
 		// subsequently streamed messages continue with correct JSONL
@@ -1371,7 +1393,19 @@ async function boot(): Promise<void> {
 		// On a background reconnect for the same session this is a no-op,
 		// preserving scroll position and avoiding a flicker.
 		if (sameSession && sameLength && lastMatches) return;
+		// The transcript renderer currently rebuilds the shell. Restore the
+		// authoritative sidebar snapshot immediately afterward; otherwise a
+		// fast listSessions response rendered before this transcript is wiped
+		// back to "Loading sessions…" with no later event to repaint it.
+		// A search query cannot survive a shell rebuild, so clear its matching
+		// state too or renderSidebarSessions would intentionally no-op.
+		state.searchActive = false;
 		renderShell();
+		if (hasSidebarSessionSnapshot) renderSidebarSessions(sidebarSessionsForCache);
+		// onReady restores the session draft before the transcript event, and
+		// renderShell replaces that textarea. Restore it once more into the new
+		// shell so resuming a chat does not silently discard its saved draft.
+		restoreSavedDraft();
 		// renderShell rebuilds the entire DOM, including a fresh
 		// #stop-btn created hidden. If we're mid-run (server reported
 		// isStreaming=true in the ready that preceded this transcript,
@@ -1424,12 +1458,9 @@ async function boot(): Promise<void> {
 	};
 	chatClient.onStatus(onWsOpen);
 
-	// Wire the prompt-send hook used by `sendAsUser` (defined above
-	// at module scope, so the `setSendAsUser` dep injection in
-	// slashes.ts works before/after boot completes). The hook is a
-	// no-op until this runs, which is fine — the only way to call
-	// `sendAsUser` is via a user gesture (button/keypress) which
-	// can only fire after `renderShell` has wired the handlers.
+	// Wire the prompt-send hook used by composer submissions. The hook is a
+	// no-op until this runs; user gestures can only reach it after renderShell
+	// has installed the handlers.
 	sendPromptHook = (text, images) => chatClient.prompt(text, images);
 	steerHook = (text, images) => chatClient.steer(text, images);
 	getSessionStatsHook = () => chatClient.getSessionStats();

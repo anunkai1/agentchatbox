@@ -1,0 +1,13 @@
+{
+	"name": "acb-auto-title",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Pi extension that gives new ACB sessions a concise model-generated name after their first successful answer.",
+	"type": "module",
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {}
+}

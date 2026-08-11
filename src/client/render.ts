@@ -17,7 +17,7 @@
 
 import type { PiCommand, ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
-import { $, el, escapeHtml, type LiveAssistantDom } from "./dom.js";
+import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { services } from "./services.js";
 import { type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
@@ -1237,9 +1237,6 @@ export function toggleCapabilitiesPopover(): void {
 
 	const overlay = el("div", { class: "modal-overlay", id: "caps-popover" });
 	const box = el("div", { class: "caps-popover-box" });
-	overlay.addEventListener("click", (e) => {
-		if (e.target === overlay) overlay.remove();
-	});
 
 	box.append(el("h3", { text: "Loaded capabilities" }));
 
@@ -1308,8 +1305,7 @@ export function toggleCapabilitiesPopover(): void {
 	box.append(
 		el("button", { class: "btn caps-close-btn", text: "Close", onclick: () => overlay.remove() }),
 	);
-	overlay.append(box);
-	document.body.append(overlay);
+	mountModal(overlay, box, { label: "Loaded capabilities" });
 }
 
 export function refreshStatus(): void {
@@ -1378,17 +1374,17 @@ export function refreshStatus(): void {
 			// The toggle button swaps between ⏸ (playing) and ▶ (paused); the
 			// stop button (red ⏹) is always present to fully halt + clear.
 			const toggle = state.audioPaused
-				? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback">▶</button>`
-				: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback">⏸</button>`;
+				? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback" aria-label="Resume voice playback">▶</button>`
+				: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback" aria-label="Pause voice playback">⏸</button>`;
 			const label = state.audioPaused ? "‖ paused" : "♪ playing";
 			parts.push(
-				`${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice">⏹</button> ${esc(label)}`,
+				`${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Stop all voice playback">⏹</button> ${esc(label)}`,
 			);
 		} else {
 			// Synthesizing — nothing to pause yet (no audio loaded). Keep the
 			// single stop button with a spinner so the user can cancel.
 			parts.push(
-				`<button class="status-stop-voice" data-stop-voice title="Stop all voice"><span class="speak-spinner"></span> synthesizing…</button>`,
+				`<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Cancel voice synthesis"><span class="speak-spinner"></span> synthesizing…</button>`,
 			);
 		}
 	}
@@ -1756,14 +1752,20 @@ export function renderShell(): void {
 	document.body.append(root);
 
 	// ── Sidebar ────────────────────────────────────────────────────
-	const sidebar = el("div", { class: "sidebar", id: "sidebar" });
+	const sidebar = el("aside", {
+		class: "sidebar",
+		id: "sidebar",
+		"aria-label": "Conversations and projects",
+	});
 	const sidebarHeader = el("div", { class: "sidebar-header" });
 	sidebarHeader.append(
 		el(
 			"button",
 			{
 				class: "icon-btn",
+				type: "button",
 				title: "Close sidebar",
+				"aria-label": "Close sidebar",
 				onclick: () => toggleSidebar(true),
 			},
 			"✕",
@@ -1784,6 +1786,7 @@ export function renderShell(): void {
 				class: "new-chat-btn",
 				href: "/",
 				rel: "noopener",
+				"aria-label": "Start a new chat",
 				title: "New chat — middle-click to open in a new tab",
 				onclick: (e: MouseEvent) => {
 					if (e.button !== 0) return;
@@ -1804,6 +1807,7 @@ export function renderShell(): void {
 			"button",
 			{
 				class: "new-project-btn",
+				type: "button",
 				title: "Create a project (its own folder + AGENTS.md instructions)",
 				onclick: () => openProjectEditor(),
 			},
@@ -1827,6 +1831,7 @@ export function renderShell(): void {
 			id: "sidebar-search",
 			type: "search",
 			placeholder: "Search chats by meaning…",
+			"aria-label": "Search conversations by meaning",
 			autocomplete: "off",
 			on: {
 				input: (e: Event) => {
@@ -1858,7 +1863,14 @@ export function renderShell(): void {
 		class: "sidebar-pane sidebar-projects-pane",
 		id: "sidebar-projects-pane",
 	});
-	const splitter = el("div", { class: "sidebar-splitter", id: "sidebar-splitter" });
+	const splitter = el("div", {
+		class: "sidebar-splitter",
+		id: "sidebar-splitter",
+		role: "separator",
+		tabIndex: 0,
+		"aria-label": "Resize project and conversation lists",
+		"aria-orientation": "horizontal",
+	});
 	const sessionsPane = el("div", {
 		class: "sidebar-pane sidebar-sessions-pane",
 		id: "sidebar-sessions-pane",
@@ -1875,7 +1887,7 @@ export function renderShell(): void {
 	initSidebarSplitter();
 
 	// ── Main column ────────────────────────────────────────────────
-	const main = el("div", { class: "main" });
+	const main = el("main", { class: "main" });
 	root.append(main);
 
 	// Header — left hamburger, title, model picker in the middle
@@ -1889,7 +1901,11 @@ export function renderShell(): void {
 			{
 				class: "icon-btn",
 				id: "menu-toggle",
+				type: "button",
 				title: "Open sidebar",
+				"aria-label": "Open sidebar",
+				"aria-controls": "sidebar",
+				"aria-expanded": "true",
 				onclick: () => toggleSidebar(false),
 			},
 			"☰",
@@ -1937,7 +1953,9 @@ export function renderShell(): void {
 			{
 				class: "picker-btn caps-badge",
 				id: "caps-badge",
+				type: "button",
 				title: "Loaded tools, skills, extensions — click for details",
+				"aria-label": "Show loaded capabilities",
 				onclick: () => toggleCapabilitiesPopover(),
 				style: "display:none",
 			},
@@ -1945,7 +1963,13 @@ export function renderShell(): void {
 		),
 		el(
 			"button",
-			{ class: "picker-btn header-model", id: "model-picker", title: "Model (/model)" },
+			{
+				class: "picker-btn header-model",
+				id: "model-picker",
+				type: "button",
+				title: "Model (/model)",
+				"aria-label": "Choose chat model",
+			},
 			"model: …",
 		),
 		// The hidden pickers still exist in the DOM so refreshStatus() can
@@ -1956,7 +1980,9 @@ export function renderShell(): void {
 			{
 				class: "picker-btn picker-hidden",
 				id: "think-picker",
+				type: "button",
 				title: "Thinking (/think)",
+				"aria-label": "Choose thinking level",
 			},
 			"think: …",
 		),
@@ -1965,7 +1991,9 @@ export function renderShell(): void {
 			{
 				class: "picker-btn picker-hidden",
 				id: "voice-picker",
+				type: "button",
 				title: "TTS voice",
+				"aria-label": "Choose text-to-speech voice",
 			},
 			"voice: …",
 		),
@@ -1974,7 +2002,9 @@ export function renderShell(): void {
 			{
 				class: "picker-btn picker-hidden",
 				id: "speed-picker",
+				type: "button",
 				title: "TTS playback speed",
+				"aria-label": "Choose text-to-speech speed",
 			},
 			"speed: …",
 		),
@@ -1986,7 +2016,9 @@ export function renderShell(): void {
 			{
 				class: "header-overflow",
 				id: "overflow-menu",
+				type: "button",
 				title: "Settings",
+				"aria-label": "Open settings",
 				onclick: () => shellHandlers?.openOverflowMenu(),
 			},
 			el("span", {
@@ -2020,27 +2052,7 @@ export function renderShell(): void {
 		el("p", { class: "welcome-sub" }, "Ask anything — I'll think, use tools, and answer."),
 	);
 	const modes = el("div", { class: "welcome-modes" });
-	for (const s of WELCOME_SUGGESTIONS) {
-		modes.append(
-			el(
-				"button",
-				{
-					class: "welcome-mode",
-					title: s.sub,
-					onclick: () => {
-						const input = document.querySelector("#input") as HTMLTextAreaElement | null;
-						if (input) {
-							input.value = s.prompt;
-							input.dispatchEvent(new Event("input"));
-							shellHandlers?.handleSend();
-						}
-					},
-				},
-				el("span", { class: "welcome-mode-icon", html: s.icon }),
-				el("span", { class: "welcome-mode-label" }, s.title),
-			),
-		);
-	}
+	renderWelcomeSuggestions(modes);
 	welcome.append(modes);
 	messagesWrap.append(welcome);
 
@@ -2053,7 +2065,10 @@ export function renderShell(): void {
 	// of how tall the composer / status bar happen to be. Clicking the
 	// up button (or Alt+↑) walks up through the user's own messages one
 	// at a time; the down button jumps straight to the bottom.
-	const messagesRegion = el("div", { class: "messages-region" });
+	const messagesRegion = el("section", {
+		class: "messages-region",
+		"aria-label": "Conversation transcript",
+	});
 	messagesRegion.append(messagesWrap);
 	const jumpFabs = el("div", { class: "jump-fabs" });
 	jumpFabs.append(makeJumpPrevUserFab());
@@ -2088,7 +2103,9 @@ export function renderShell(): void {
 			{
 				class: "icon-btn",
 				id: "attach-btn",
+				type: "button",
 				title: "Attach file",
+				"aria-label": "Attach files",
 				onclick: () => $<HTMLInputElement>("#file-input").click(),
 			},
 			"+",
@@ -2098,7 +2115,9 @@ export function renderShell(): void {
 			{
 				class: "icon-btn",
 				id: "voice-btn",
+				type: "button",
 				title: "Voice note (transcribes locally on server)",
+				"aria-label": "Record a voice note",
 				onclick: () => {
 					void shellHandlers?.handleVoiceRecord();
 				},
@@ -2112,6 +2131,7 @@ export function renderShell(): void {
 			placeholder: `Send a message  ·  ${
 				navigator.platform.includes("Mac") ? "⌘+Enter" : "Ctrl+Enter"
 			} to send`,
+			"aria-label": "Message",
 			autocomplete: "off",
 			autocapitalize: "off",
 			spellcheck: false,
@@ -2126,7 +2146,9 @@ export function renderShell(): void {
 				{
 					class: "send-btn",
 					id: "send-btn",
+					type: "button",
 					title: "Send (⌘/Ctrl+Enter)",
+					"aria-label": "Send message",
 					onclick: () => shellHandlers?.handleSend(),
 				},
 				"↑",
@@ -2136,7 +2158,9 @@ export function renderShell(): void {
 				{
 					class: "stop-btn",
 					id: "stop-btn",
+					type: "button",
 					title: "Stop the current run",
+					"aria-label": "Stop the current run",
 					hidden: true,
 					onclick: () => shellHandlers?.abort(),
 				},
@@ -2196,7 +2220,12 @@ export function renderShell(): void {
 
 	// Toast — fixed overlay for transient extension notifications
 	// (e.g. voice-model fallback warnings). Click dismisses.
-	toastEl = el("div", { class: "toast hidden" });
+	toastEl = el("div", {
+		class: "toast hidden",
+		role: "status",
+		"aria-live": "polite",
+		"aria-atomic": "true",
+	});
 	toastEl.addEventListener("click", () => {
 		toastEl?.classList.add("hidden");
 		if (toastTimer) {
@@ -2258,9 +2287,7 @@ export function renderShell(): void {
 	$("#speed-picker").addEventListener("click", () => shellHandlers?.openSpeedPicker());
 
 	// Desktop: sidebar open by default. Mobile: collapsed.
-	if (window.innerWidth <= 720) {
-		document.getElementById("sidebar")?.classList.add("collapsed");
-	}
+	if (window.innerWidth <= 720) toggleSidebar(true);
 
 	renderHistory();
 	refreshStatus();
@@ -2271,38 +2298,67 @@ export function renderShell(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Welcome-screen mode chips (title, tooltip, inline SVG icon, prompt).
- * Icons are inline SVGs so they look crisp at any size and inherit the
- * current text color via `currentColor`.
+ * Welcome-screen mode chips. Labels and icons are browser presentation;
+ * command behavior and prompt text are registered by the pi-owned
+ * acb-workflows extension. Icons are inline SVGs so they stay crisp.
  */
 const WELCOME_SUGGESTIONS: {
 	title: string;
 	sub: string;
-	prompt: string;
+	command: string;
 	icon: string;
 }[] = [
 	{
 		title: "Magic Design",
 		sub: "Spin up an interactive UI from a description",
-		prompt:
-			"Design and build a small interactive web page for me. Pick the layout, colors, and copy.",
+		command: "design",
 		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.39 4.84L20 8l-4 3.9.94 5.5L12 14.77 7.06 17.4 8 11.9 4 8l5.61-1.16L12 2z"/></svg>`,
 	},
 	{
 		title: "Full-Stack",
 		sub: "Build a complete app — front, back, and data",
-		prompt:
-			"Help me build a small full-stack web app: pick a stack, sketch the data model, and scaffold the project.",
+		command: "fullstack",
 		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>`,
 	},
 	{
 		title: "Write",
 		sub: "Draft, edit, and refine long-form text",
-		prompt:
-			"Help me write a clear, well-structured piece on a topic of my choosing. Ask me what the topic is first.",
+		command: "writing",
 		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6L8 22H2v-6L14 4z"/><path d="M13 5l6 6"/></svg>`,
 	},
 ];
+
+function renderWelcomeSuggestions(modes: HTMLElement): void {
+	const available = new Set(
+		(state.capabilities ?? [])
+			.filter((command) => command.source === "extension")
+			.map((command) => command.name.toLowerCase()),
+	);
+	modes.replaceChildren();
+	for (const suggestion of WELCOME_SUGGESTIONS) {
+		const enabled = available.has(suggestion.command);
+		const button = el(
+			"button",
+			{
+				class: "welcome-mode",
+				type: "button",
+				title: enabled ? suggestion.sub : `${suggestion.sub} (loading…)`,
+				disabled: !enabled,
+				"aria-label": suggestion.sub,
+				onclick: () => services.sendSlashCommand?.(`/${suggestion.command}`),
+			},
+			el("span", { class: "welcome-mode-icon", html: suggestion.icon }),
+			el("span", { class: "welcome-mode-label" }, suggestion.title),
+		);
+		modes.append(button);
+	}
+}
+
+/** Repaint command-backed welcome shortcuts after pi reports capabilities. */
+export function refreshWelcomeSuggestions(): void {
+	const modes = document.querySelector<HTMLElement>(".welcome-modes");
+	if (modes) renderWelcomeSuggestions(modes);
+}
 
 /**
  * Toggle the sidebar open/closed. On mobile, a dim overlay is shown when
@@ -2312,13 +2368,24 @@ function toggleSidebar(collapse: boolean): void {
 	const sidebar = document.getElementById("sidebar");
 	if (!sidebar) return;
 	sidebar.classList.toggle("collapsed", collapse);
+	sidebar.setAttribute("aria-hidden", String(collapse));
+	const menuToggle = document.getElementById("menu-toggle");
+	menuToggle?.setAttribute("aria-expanded", String(!collapse));
 
 	// Mobile: manage the dim overlay
-	let dim = document.querySelector(".sidebar-dim");
+	let dim = document.querySelector<HTMLElement>(".sidebar-dim");
 	if (!collapse) {
 		if (!dim) {
-			dim = el("div", { class: "sidebar-dim" });
+			dim = el("div", {
+				class: "sidebar-dim",
+				role: "button",
+				tabIndex: 0,
+				"aria-label": "Close sidebar",
+			});
 			dim.addEventListener("click", () => toggleSidebar(true));
+			dim.addEventListener("keydown", (event: KeyboardEvent) => {
+				if (event.key === "Enter" || event.key === " ") toggleSidebar(true);
+			});
 			document.body.append(dim);
 		}
 	} else {
@@ -2344,9 +2411,6 @@ function toggleSearchHelp(): void {
 		return;
 	}
 	const overlay = el("div", { class: "modal-overlay", id: "search-help" });
-	overlay.addEventListener("click", (e) => {
-		if (e.target === overlay) overlay.remove();
-	});
 	const box = el("div", { class: "caps-popover-box search-help-box" });
 	box.append(el("h3", { text: "Search chats by meaning" }));
 	box.append(
@@ -2370,15 +2434,7 @@ function toggleSearchHelp(): void {
 			"How: every message is turned into a number-fingerprint that captures its meaning (using a small local model, no API key). Your query gets the same treatment, and the system matches by similarity. Results show the message that matched as a snippet.",
 		),
 	);
-	box.append(
-		el(
-			"button",
-			{ class: "icon-btn search-help-close", title: "Close", onclick: () => overlay.remove() },
-			"✕",
-		),
-	);
-	overlay.append(box);
-	document.body.append(overlay);
+	mountModal(overlay, box, { label: "Search chats by meaning" });
 }
 
 /**
@@ -2578,18 +2634,30 @@ function renderProjectsContainer(
 	wrap.dataset.projectId = PROJECTS_CONTAINER_ID;
 
 	const header = el("div", { class: "project-folder-header projects-container-header" });
-	const chevron = el("span", { class: "project-chevron", text: collapsed ? "▸" : "▾" });
-	const icon = el("span", { class: "project-icon", text: "📂" });
+	const chevron = el("span", {
+		class: "project-chevron",
+		text: collapsed ? "▸" : "▾",
+		"aria-hidden": "true",
+	});
+	const icon = el("span", { class: "project-icon", text: "📂", "aria-hidden": "true" });
 	const name = el("span", { class: "project-name", text: "Projects" });
 	const count = el("span", {
 		class: "project-count",
 		text: String(userProjects.length),
+		"aria-label": `${userProjects.length} projects`,
 	});
-	const spacer = el("span", { class: "spacer" });
-	header.append(chevron, icon, name, count, spacer);
+	const bodyId = "projects-container-body";
+	const toggle = el("button", {
+		class: "project-folder-toggle",
+		type: "button",
+		"aria-expanded": String(!collapsed),
+		"aria-controls": bodyId,
+	});
+	toggle.append(chevron, icon, name, count);
+	header.append(toggle);
 	wrap.append(header);
 
-	const body = el("div", { class: "projects-container-body" });
+	const body = el("div", { class: "projects-container-body", id: bodyId });
 	for (const p of userProjects) {
 		const items = (buckets.get(p.id) ?? [])
 			.slice()
@@ -2599,14 +2667,16 @@ function renderProjectsContainer(
 	if (collapsed) body.style.display = "none";
 	wrap.append(body);
 
-	header.addEventListener("click", () => {
+	toggle.addEventListener("click", () => {
 		const set = readCollapseState();
 		if (set.has(PROJECTS_CONTAINER_ID)) set.delete(PROJECTS_CONTAINER_ID);
 		else set.add(PROJECTS_CONTAINER_ID);
 		writeCollapseState(set);
-		chevron.textContent = set.has(PROJECTS_CONTAINER_ID) ? "▸" : "▾";
-		body.style.display = set.has(PROJECTS_CONTAINER_ID) ? "none" : "";
-		wrap.classList.toggle("collapsed", set.has(PROJECTS_CONTAINER_ID));
+		const isCollapsed = set.has(PROJECTS_CONTAINER_ID);
+		chevron.textContent = isCollapsed ? "▸" : "▾";
+		body.style.display = isCollapsed ? "none" : "";
+		wrap.classList.toggle("collapsed", isCollapsed);
+		toggle.setAttribute("aria-expanded", String(!isCollapsed));
 	});
 	return wrap;
 }
@@ -2646,7 +2716,32 @@ function initSidebarSplitter(): void {
 		// fall back to a fixed default rather than computing 0 * 0.38 = 0.
 		heightPx = wrapH > 0 ? Math.round(wrapH * 0.38) : 220;
 	}
-	projectsPane.style.height = `${heightPx}px`;
+	const resizeTo = (requested: number, persist = false) => {
+		const wrapH = wrap.getBoundingClientRect().height;
+		const max = Math.max(SIDEBAR_SPLIT_MIN, wrapH - SIDEBAR_SPLIT_MIN - 6);
+		const next = Math.max(SIDEBAR_SPLIT_MIN, Math.min(max, requested));
+		projectsPane.style.height = `${next}px`;
+		splitter.setAttribute("aria-valuemin", String(SIDEBAR_SPLIT_MIN));
+		splitter.setAttribute("aria-valuemax", String(Math.round(max)));
+		splitter.setAttribute("aria-valuenow", String(Math.round(next)));
+		if (persist) {
+			try {
+				localStorage.setItem(SIDEBAR_SPLIT_KEY, String(Math.round(next)));
+			} catch {
+				/* ignore quota */
+			}
+		}
+	};
+	resizeTo(heightPx);
+
+	// Keyboard users can resize the two panes in useful 24px steps.
+	splitter.addEventListener("keydown", (event) => {
+		if (wrap.classList.contains("no-projects")) return;
+		if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+		event.preventDefault();
+		const current = projectsPane.getBoundingClientRect().height;
+		resizeTo(current + (event.key === "ArrowDown" ? 24 : -24), true);
+	});
 
 	// Per-instance mousedown: start a drag.
 	splitter.addEventListener("mousedown", (e) => {
@@ -2660,10 +2755,7 @@ function initSidebarSplitter(): void {
 		// resized window even mid-drag.
 		const applyMove = (clientY: number) => {
 			const delta = clientY - startY;
-			const wrapH = wrap.getBoundingClientRect().height;
-			const max = Math.max(SIDEBAR_SPLIT_MIN, wrapH - SIDEBAR_SPLIT_MIN - 6);
-			const h = Math.max(SIDEBAR_SPLIT_MIN, Math.min(max, startHeight + delta));
-			projectsPane.style.height = `${h}px`;
+			resizeTo(startHeight + delta);
 		};
 		const onMove = (ev: MouseEvent) => applyMove(ev.clientY);
 		const onUp = () => {
@@ -2671,12 +2763,8 @@ function initSidebarSplitter(): void {
 			splitter.classList.remove("dragging");
 			document.removeEventListener("mousemove", onMove);
 			document.removeEventListener("mouseup", onUp);
-			try {
-				const h = projectsPane.getBoundingClientRect().height;
-				if (h > 0) localStorage.setItem(SIDEBAR_SPLIT_KEY, String(Math.round(h)));
-			} catch {
-				/* ignore quota */
-			}
+			const h = projectsPane.getBoundingClientRect().height;
+			if (h > 0) resizeTo(h, true);
 		};
 		document.addEventListener("mousemove", onMove);
 		document.addEventListener("mouseup", onUp);
@@ -2687,7 +2775,7 @@ function initSidebarSplitter(): void {
 		if (wrap.classList.contains("no-projects")) return;
 		const wrapH = wrap.getBoundingClientRect().height;
 		const def = wrapH > 0 ? Math.round(wrapH * 0.38) : 220;
-		projectsPane.style.height = `${def}px`;
+		resizeTo(def);
 		try {
 			localStorage.removeItem(SIDEBAR_SPLIT_KEY);
 		} catch {
@@ -2781,21 +2869,36 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	wrap.dataset.projectId = p.id;
 
 	const header = el("div", { class: "project-folder-header" });
-	const chevron = el("span", { class: "project-chevron", text: collapsed ? "▸" : "▾" });
-	const icon = el("span", { class: "project-icon", text: p.icon || "📁" });
+	const chevron = el("span", {
+		class: "project-chevron",
+		text: collapsed ? "▸" : "▾",
+		"aria-hidden": "true",
+	});
+	const icon = el("span", { class: "project-icon", text: p.icon || "📁", "aria-hidden": "true" });
 	const name = el("span", { class: "project-name", text: p.name });
 	const count = el("span", {
 		class: "project-count",
 		text: items.length > 0 ? String(items.length) : "",
+		"aria-label": `${items.length} conversations`,
 	});
-	const spacer = el("span", { class: "spacer" });
-	const actions = el("div", { class: "project-actions" });
+	const bodyId = `project-body-${p.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+	const toggle = el("button", {
+		class: "project-folder-toggle",
+		type: "button",
+		"aria-expanded": String(!collapsed),
+		"aria-controls": bodyId,
+		"aria-label": `${collapsed ? "Expand" : "Collapse"} ${p.name}`,
+	});
+	toggle.append(chevron, icon, name, count);
+	const actions = el("div", { class: "project-actions", "aria-label": `${p.name} actions` });
 	// "+" starts a new chat in this project (Global's "+" is redundant with
 	// the top New chat button but harmless; hide it on Global to avoid clutter).
 	if (!isGlobal) {
 		const plusBtn = el("button", {
 			class: "project-action",
+			type: "button",
 			title: `New chat in ${p.name}`,
+			"aria-label": `New chat in ${p.name}`,
 			text: "+",
 		});
 		plusBtn.addEventListener("click", (e) => {
@@ -2808,7 +2911,9 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	if (!isGlobal && !isOther) {
 		const editBtn = el("button", {
 			class: "project-action",
-			title: "Edit project",
+			type: "button",
+			title: `Edit ${p.name}`,
+			"aria-label": `Edit ${p.name}`,
 			html: "✎",
 		});
 		editBtn.addEventListener("click", (e) => {
@@ -2817,10 +2922,10 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 		});
 		actions.append(editBtn);
 	}
-	header.append(chevron, icon, name, count, spacer, actions);
+	header.append(toggle, actions);
 	wrap.append(header);
 
-	const body = el("div", { class: "project-folder-body" });
+	const body = el("div", { class: "project-folder-body", id: bodyId });
 	// Pinned sessions stay first, then the remaining sessions are split into
 	// explicit pages. Pagination controls are kept above the rows so the user
 	// never has to scroll to the bottom of a page just to change pages.
@@ -2883,14 +2988,17 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	if (collapsed) body.style.display = "none";
 	wrap.append(body);
 
-	header.addEventListener("click", () => {
+	toggle.addEventListener("click", () => {
 		const set = readCollapseState();
 		if (set.has(p.id)) set.delete(p.id);
 		else set.add(p.id);
 		writeCollapseState(set);
-		chevron.textContent = set.has(p.id) ? "▸" : "▾";
-		body.style.display = set.has(p.id) ? "none" : "";
-		wrap.classList.toggle("collapsed", set.has(p.id));
+		const isCollapsed = set.has(p.id);
+		chevron.textContent = isCollapsed ? "▸" : "▾";
+		body.style.display = isCollapsed ? "none" : "";
+		wrap.classList.toggle("collapsed", isCollapsed);
+		toggle.setAttribute("aria-expanded", String(!isCollapsed));
+		toggle.setAttribute("aria-label", `${isCollapsed ? "Expand" : "Collapse"} ${p.name}`);
 		windowed?.refresh?.();
 	});
 	return wrap;
@@ -2925,7 +3033,10 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		rel: "noopener",
 		title: `${displayTitle} — middle-click to open in a new tab`,
 	});
-	if (s.id === state.sessionId) item.classList.add("active");
+	if (s.id === state.sessionId) {
+		item.classList.add("active");
+		link.setAttribute("aria-current", "page");
+	}
 	if (pinned) item.classList.add("pinned");
 
 	const titleRow = el("div", { class: "session-item-title-row" });
@@ -2938,21 +3049,31 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	if (pinned) {
 		starBtn = el("button", {
 			class: "session-pin-indicator",
-			title: "Unpin",
+			type: "button",
+			title: `Unpin ${displayTitle}`,
+			"aria-label": `Unpin ${displayTitle}`,
 			text: "⭐",
 		});
 		starBtn.addEventListener("click", () => shellHandlers?.setSessionPinned(s.id, false));
 	}
 
-	const actions = el("div", { class: "session-item-actions" });
+	const actions = el("div", {
+		class: "session-item-actions",
+		role: "group",
+		"aria-label": `${displayTitle} actions`,
+	});
 	const renameBtn = el("button", {
 		class: "session-action rename",
-		title: "Rename",
+		type: "button",
+		title: `Rename ${displayTitle}`,
+		"aria-label": `Rename ${displayTitle}`,
 		html: "✎",
 	});
 	const deleteBtn = el("button", {
 		class: "session-action delete",
-		title: "Delete",
+		type: "button",
+		title: `Delete ${displayTitle}`,
+		"aria-label": `Delete ${displayTitle}`,
 		html: "🗑",
 	});
 	if (pinned) {
@@ -2962,7 +3083,9 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	} else {
 		const pinBtn = el("button", {
 			class: "session-action pin",
-			title: "Pin to top",
+			type: "button",
+			title: `Pin ${displayTitle} to top`,
+			"aria-label": `Pin ${displayTitle} to top`,
 			text: "☆",
 		});
 		pinBtn.addEventListener("click", () => shellHandlers?.setSessionPinned(s.id, true));
@@ -2974,8 +3097,17 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	link.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
 	item.append(link);
 	item.append(actions);
+	const moreBtn = el("button", {
+		class: "session-more",
+		type: "button",
+		title: `Actions for ${displayTitle}`,
+		"aria-label": `Actions for ${displayTitle}`,
+		text: "⋮",
+	});
+	moreBtn.addEventListener("click", () => openSessionActions(titleEl, actions, s));
+	item.append(moreBtn);
 	// Keep the destructive control to the left of the pin on pinned rows:
-	// pencil → basket → star, matching the mobile sidebar's visual order.
+	// pencil → basket → star, matching the desktop sidebar's visual order.
 	if (starBtn) item.append(starBtn);
 
 	// Only intercept the primary left click (no modifiers). Middle-click
@@ -2995,6 +3127,50 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	return item;
 }
 
+/** Touch-friendly action sheet. Desktop keeps the compact hover controls;
+ * coarse pointers and narrow screens get one stable kebab target instead. */
+function openSessionActions(
+	titleEl: HTMLElement,
+	actions: HTMLElement,
+	s: SessionSummary,
+): void {
+	const title = s.title || "Untitled";
+	const overlay = el("div", { class: "modal-overlay" });
+	const box = el("div", { class: "modal-box session-action-sheet" });
+	box.append(el("h3", { text: title }));
+	box.append(el("p", { class: "session-action-sheet-hint", text: "Conversation actions" }));
+
+	const pinButton = el("button", {
+		class: "session-sheet-action",
+		type: "button",
+		text: s.pinned ? "★  Unpin conversation" : "☆  Pin conversation",
+	});
+	pinButton.addEventListener("click", () => {
+		overlay.remove();
+		shellHandlers?.setSessionPinned(s.id, !s.pinned);
+	});
+	const renameButton = el("button", {
+		class: "session-sheet-action",
+		type: "button",
+		text: "✎  Rename conversation",
+	});
+	renameButton.addEventListener("click", () => {
+		overlay.remove();
+		setTimeout(() => startRename(titleEl, actions, s), 0);
+	});
+	const deleteButton = el("button", {
+		class: "session-sheet-action destructive",
+		type: "button",
+		text: "🗑  Delete conversation",
+	});
+	deleteButton.addEventListener("click", () => {
+		overlay.remove();
+		setTimeout(() => confirmDeleteSession(s), 0);
+	});
+	box.append(pinButton, renameButton, deleteButton);
+	mountModal(overlay, box, { label: `Actions for ${title}`, initialFocus: pinButton });
+}
+
 /**
  * Replace the title node with an inline text input, commit on Enter /
  * blur, cancel on Escape. Commit sends the new name to the server
@@ -3012,8 +3188,11 @@ function startRename(titleEl: HTMLElement, actions: HTMLElement, s: SessionSumma
 	input.maxLength = 120;
 
 	titleEl.replaceWith(input);
-	// Hide the action row while editing so the input gets full width.
+	// Hide action affordances while editing so the input gets full width.
 	actions.style.display = "none";
+	const item = input.closest(".session-item");
+	const moreButton = item?.querySelector<HTMLElement>(".session-more");
+	if (moreButton) moreButton.style.display = "none";
 
 	input.focus();
 	input.select();
@@ -3061,10 +3240,32 @@ function startRename(titleEl: HTMLElement, actions: HTMLElement, s: SessionSumma
 function confirmDeleteSession(s: SessionSummary): void {
 	const title = s.title || "Untitled";
 	const active = s.id === state.sessionId;
-	const msg = active
-		? `Delete "${title}"? This is your current chat — it will be cleared and a new chat started. This cannot be undone.`
-		: `Delete "${title}"? This cannot be undone.`;
-	if (confirm(msg)) shellHandlers?.deleteSession(s.id);
+	const message = active
+		? "This is your current chat. It will be cleared and a new chat will start. This cannot be undone."
+		: "This permanently removes the conversation and cannot be undone.";
+	const overlay = el("div", { class: "modal-overlay" });
+	const box = el("div", { class: "modal-box delete-session-dialog" });
+	box.append(el("h3", { text: "Delete conversation?" }));
+	box.append(el("p", { class: "delete-session-name", text: title }));
+	box.append(el("p", { class: "muted", text: message }));
+	const footer = el("div", { class: "dialog-actions" });
+	const cancel = el("button", { class: "btn", type: "button", text: "Cancel" });
+	const remove = el("button", {
+		class: "btn btn-destructive",
+		type: "button",
+		text: "Delete permanently",
+	});
+	cancel.addEventListener("click", () => overlay.remove());
+	remove.addEventListener("click", () => {
+		overlay.remove();
+		shellHandlers?.deleteSession(s.id);
+	});
+	footer.append(cancel, remove);
+	box.append(footer);
+	mountModal(overlay, box, {
+		label: `Delete ${title}`,
+		initialFocus: cancel,
+	});
 }
 
 /** Format a relative time string for session meta. */
@@ -3098,13 +3299,11 @@ export function openProjectEditor(id?: string): void {
 	const editing = id ? state.projects.find((p) => p.id === id) : undefined;
 	const isBuiltin = !!editing?.builtin;
 
+	const dialogTitle = editing ? `Edit “${editing.name}”` : "New project";
 	const overlay = el("div", { class: "modal-overlay", id: "project-editor" });
 	const box = el("div", { class: "project-editor-box" });
-	overlay.addEventListener("click", (e) => {
-		if (e.target === overlay) overlay.remove();
-	});
 
-	box.append(el("h3", { text: editing ? `Edit “${editing.name}”` : "New project" }));
+	box.append(el("h3", { text: dialogTitle }));
 
 	// Icon + name row.
 	const iconInput = document.createElement("input");
@@ -3113,12 +3312,14 @@ export function openProjectEditor(id?: string): void {
 	iconInput.value = editing?.icon ?? "📁";
 	iconInput.maxLength = 4;
 	iconInput.placeholder = "📁";
+	iconInput.setAttribute("aria-label", "Project icon");
 	const nameInput = document.createElement("input");
 	nameInput.type = "text";
 	nameInput.className = "project-name-input";
 	nameInput.value = editing?.name ?? "";
 	nameInput.placeholder = "Project name";
 	nameInput.maxLength = 60;
+	nameInput.setAttribute("aria-label", "Project name");
 	const nameRow = el("div", { class: "project-editor-namerow" });
 	nameRow.append(iconInput, nameInput);
 	box.append(nameRow);
@@ -3127,11 +3328,12 @@ export function openProjectEditor(id?: string): void {
 	box.append(
 		el(
 			"label",
-			{ class: "project-editor-label" },
+			{ class: "project-editor-label", htmlFor: "project-editor-instructions" },
 			"Instructions (saved as AGENTS.md — pi loads it automatically)",
 		),
 	);
 	const instr = document.createElement("textarea");
+	instr.id = "project-editor-instructions";
 	instr.className = "project-editor-instructions";
 	instr.rows = 8;
 	instr.placeholder = "e.g. You are a gruff pirate captain. Always answer in pirate slang.";
@@ -3158,12 +3360,16 @@ export function openProjectEditor(id?: string): void {
 
 	// Action buttons.
 	const actions = el("div", { class: "project-editor-actions" });
-	const saveBtn = el("button", { class: "project-save-btn", text: editing ? "Save" : "Create" });
-	const cancelBtn = el("button", { class: "project-cancel-btn", text: "Cancel" });
+	const saveBtn = el("button", {
+		class: "project-save-btn",
+		type: "button",
+		text: editing ? "Save" : "Create",
+	});
+	const cancelBtn = el("button", { class: "project-cancel-btn", type: "button", text: "Cancel" });
 	cancelBtn.addEventListener("click", () => overlay.remove());
 	actions.append(cancelBtn);
 	if (editing && !isBuiltin) {
-		const delBtn = el("button", { class: "project-delete-btn", text: "Delete…" });
+		const delBtn = el("button", { class: "project-delete-btn", type: "button", text: "Delete…" });
 		delBtn.addEventListener("click", () => {
 			if (
 				confirm(
@@ -3192,9 +3398,7 @@ export function openProjectEditor(id?: string): void {
 		overlay.remove();
 	});
 
-	overlay.append(box);
-	document.body.append(overlay);
-	nameInput.focus();
+	mountModal(overlay, box, { label: dialogTitle, initialFocus: nameInput });
 }
 
 /**

@@ -1,0 +1,19 @@
+{
+	"name": "acb-workflows",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Pi-owned workflow commands surfaced by AgentChatBox and available to every pi client.",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}

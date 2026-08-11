@@ -25,7 +25,7 @@
 	/* Text */
 	--text: #f5f5f5;
 	--text-secondary: #b4b4b4;
-	--text-muted: #6e6e6e;
+	--text-muted: #858585;
 
 	/* Accent — warm orange/red like z.ai */
 	--accent: #eb5b3c;
@@ -145,19 +145,14 @@ body {
 	text-decoration: none;
 }
 /* Now an <a href="/">, neutralize link pseudo-states so it stays visually
- * identical to the old <button> (no underline, no visited-colour drift,
- * no focus ring). The link semantics exist only so middle-click /
- * modifier-click open a fresh chat in a new tab. */
+ * identical to the old <button>. The link semantics exist so middle-click /
+ * modifier-click can open a fresh chat in a new tab. */
 .new-chat-btn:link,
 .new-chat-btn:visited,
 .new-chat-btn:hover,
 .new-chat-btn:active {
 	text-decoration: none;
 	color: #fff;
-}
-.new-chat-btn:focus,
-.new-chat-btn:focus-visible {
-	outline: none;
 }
 .new-chat-btn:hover {
 	background: var(--accent-hover);
@@ -344,10 +339,6 @@ body.sidebar-resizing iframe {
 	text-decoration: none;
 	color: inherit;
 }
-.session-item-link:focus,
-.session-item-link:focus-visible {
-	outline: none;
-}
 .session-item:hover {
 	background: var(--surface-hover);
 	color: var(--text);
@@ -374,8 +365,8 @@ body.sidebar-resizing iframe {
 .session-item-title.renamed {
 	font-style: italic;
 }
-/* Hover-revealed pin/rename actions. Hidden by default, shown on row
- * hover (or focus-within for keyboard users). */
+/* Compact desktop actions appear on hover or keyboard focus. Touch layouts
+ * replace them with one stable, 44px kebab target below. */
 .session-item-actions {
 	display: none;
 	flex-shrink: 0;
@@ -415,7 +406,26 @@ body.sidebar-resizing iframe {
  * button's color). */
 .session-action.delete:hover {
 	background: rgba(224, 86, 86, 0.12);
-	color: #e05656;
+	color: #e56f6f;
+}
+.session-more {
+	display: none;
+	flex: 0 0 auto;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	align-items: center;
+	justify-content: center;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--text-secondary);
+	font: 22px / 1 var(--font-sans);
+	cursor: pointer;
+}
+.session-more:hover {
+	background: var(--surface-active);
+	color: var(--text);
 }
 /* Always-visible ⭐ shown next to the title of pinned sessions.
  * Click to unpin. Not hover-gated like the action buttons. */
@@ -834,6 +844,14 @@ body.sidebar-resizing iframe {
 	background: var(--surface-hover);
 	border-color: rgba(255, 255, 255, 0.28);
 	color: var(--text);
+}
+.welcome-mode:disabled {
+	cursor: wait;
+	opacity: 0.5;
+}
+.welcome-mode:disabled:hover {
+	background: transparent;
+	border-color: var(--border-strong);
 }
 .welcome-mode:active {
 	transform: scale(0.97);
@@ -2024,6 +2042,9 @@ body.sidebar-resizing iframe {
 /* Modals                                                              */
 /* ------------------------------------------------------------------ */
 
+body.modal-open {
+	overflow: hidden;
+}
 .modal-overlay {
 	position: fixed;
 	inset: 0;
@@ -2032,7 +2053,12 @@ body.sidebar-resizing iframe {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	z-index: 100;
+	/* Above the mobile sidebar drawer (z-index: 200), since session/project
+	 * actions can open dialogs from inside that drawer. */
+	z-index: 300;
+}
+.modal-dialog {
+	position: relative;
 }
 .modal-box {
 	background: var(--surface);
@@ -2046,10 +2072,31 @@ body.sidebar-resizing iframe {
 	box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
 }
 .modal-box h3 {
-	margin: 0 0 14px 0;
+	margin: 0 32px 14px 0;
 	color: var(--text);
 	font-size: 17px;
 	font-weight: 700;
+}
+.modal-close-btn {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	padding: 0;
+	border: 0;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--text-secondary);
+	font: 15px / 1 var(--font-sans);
+	cursor: pointer;
+}
+.modal-close-btn:hover {
+	background: var(--surface-active);
+	color: var(--text);
 }
 .modal-box .btn {
 	background: var(--surface-hover);
@@ -2065,6 +2112,55 @@ body.sidebar-resizing iframe {
 }
 .modal-box .btn:hover {
 	background: var(--surface-active);
+}
+.dialog-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+.modal-box .btn-destructive {
+	background: #b83f3f;
+	border-color: #cf5c5c;
+	color: #fff;
+}
+.modal-box .btn-destructive:hover {
+	background: #cc4b4b;
+}
+.delete-session-name {
+	margin: 6px 0;
+	font-weight: 650;
+	overflow-wrap: anywhere;
+}
+.session-action-sheet {
+	max-width: 380px;
+}
+.session-action-sheet-hint {
+	margin: -8px 0 12px;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+.session-sheet-action {
+	display: flex;
+	align-items: center;
+	width: 100%;
+	min-height: 46px;
+	margin-top: 6px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-hover);
+	color: var(--text);
+	font: 14px / 1.25 var(--font-sans);
+	text-align: left;
+	cursor: pointer;
+}
+.session-sheet-action:hover {
+	background: var(--surface-active);
+	border-color: var(--border-strong);
+}
+.session-sheet-action.destructive {
+	color: #ef8585;
 }
 .model-row,
 .session-row {
@@ -2682,21 +2778,32 @@ body.sidebar-resizing iframe {
 .project-folder-header {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 6px 8px;
+	gap: 2px;
+	padding: 0;
 	border-radius: var(--radius);
-	cursor: pointer;
 	user-select: none;
 	font-size: 13px;
 	font-weight: 600;
 	color: var(--text);
 	transition: background 0.12s;
 }
+.project-folder-toggle {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1 1 auto;
+	min-width: 0;
+	padding: 7px 8px;
+	border: 0;
+	border-radius: var(--radius);
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
 .project-folder-header:hover {
 	background: var(--surface-hover, rgba(255, 255, 255, 0.05));
-}
-.project-folder-header .spacer {
-	flex: 1;
 }
 .project-chevron {
 	width: 12px;
@@ -2722,23 +2829,31 @@ body.sidebar-resizing iframe {
 }
 .project-actions {
 	display: flex;
+	flex: 0 0 auto;
 	gap: 2px;
 	opacity: 0;
+	padding-right: 3px;
 	transition: opacity 0.12s;
 }
-.project-folder-header:hover .project-actions {
+.project-folder-header:hover .project-actions,
+.project-folder-header:focus-within .project-actions {
 	opacity: 1;
 }
 .project-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
 	background: transparent;
 	border: none;
 	color: var(--text);
 	cursor: pointer;
 	font-size: 14px;
-	padding: 0 4px;
 	border-radius: 4px;
 	line-height: 1;
-	opacity: 0.7;
+	opacity: 0.78;
 }
 .project-action:hover {
 	opacity: 1;
@@ -3285,5 +3400,119 @@ body.sidebar-resizing iframe {
 	}
 	.svc-section {
 		margin: 12px 0 4px 2px;
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Accessibility, keyboard, and coarse-pointer ergonomics              */
+/* ------------------------------------------------------------------ */
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+	outline: 2px solid var(--accent-hover);
+	outline-offset: 2px;
+}
+
+@media (hover: none), (pointer: coarse), (max-width: 720px) {
+	/* Hover-only row controls are unreliable on touch. One stable menu keeps
+	 * titles readable while exposing all actions in a labelled action sheet;
+	 * pinned rows retain their familiar visible star as a direct unpin target. */
+	.session-item .session-item-actions,
+	.session-item:hover .session-item-actions,
+	.session-item:focus-within .session-item-actions {
+		display: none;
+	}
+	.session-more {
+		display: inline-flex;
+		width: 44px;
+		height: 44px;
+	}
+	.session-pin-indicator {
+		width: 44px;
+		height: 44px;
+	}
+	/* A pinned row has two adjacent secondary controls. Compact only that
+	 * pair so it reads as one tight action cluster and gives the title back
+	 * 24px; unpinned rows keep the full 44px menu target. */
+	.session-item.pinned .session-more,
+	.session-item.pinned .session-pin-indicator {
+		width: 32px;
+		height: 40px;
+	}
+	.session-item.pinned .session-pin-indicator {
+		margin-left: -2px;
+	}
+	.session-item {
+		align-items: center;
+		padding: 6px 4px 6px 10px;
+	}
+	.project-actions {
+		opacity: 1;
+	}
+	.project-folder-toggle,
+	.project-action,
+	.sidebar-pagination button,
+	.sidebar-header .icon-btn,
+	.search-info-btn {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	.modal-close-btn {
+		width: 44px;
+		height: 44px;
+	}
+	.modal-box .btn,
+	.project-editor-actions button {
+		min-height: 44px;
+	}
+	.new-chat-btn,
+	.new-project-btn,
+	.composer .icon-btn,
+	.send-btn,
+	.stop-btn,
+	.header .icon-btn,
+	.header-new-chat,
+	.header-overflow {
+		min-width: 44px;
+		min-height: 44px;
+		height: 44px;
+	}
+}
+
+@media (max-width: 720px) {
+	.sidebar {
+		padding-top: env(safe-area-inset-top, 0px);
+		padding-bottom: env(safe-area-inset-bottom, 0px);
+	}
+	.header {
+		padding-top: max(6px, env(safe-area-inset-top, 0px));
+		padding-right: max(10px, env(safe-area-inset-right, 0px));
+	}
+	.composer-wrap {
+		padding-right: max(10px, env(safe-area-inset-right, 0px));
+		padding-bottom: max(4px, env(safe-area-inset-bottom, 0px));
+		padding-left: max(10px, env(safe-area-inset-left, 0px));
+	}
+	.status-bar {
+		font-size: 11px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion preference must override component-specific smooth scrolling. */
+		scroll-behavior: auto !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion preference must override component animation declarations. */
+		animation-duration: 0.01ms !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion preference must override looping loaders. */
+		animation-iteration-count: 1 !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion preference must override component transitions. */
+		transition-duration: 0.01ms !important;
 	}
 }

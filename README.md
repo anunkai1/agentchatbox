@@ -11,6 +11,9 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - File / image / voice attachments (image bytes go straight to multimodal models)
 - **Agent → you file delivery** — every tool call that touches a `path` (write / edit / read) gets a `⬇ download` link on its card, served from the project dir via `GET /api/file`
 - Persistent sessions on disk (`pi` manages JSONL files — survive page reloads and server restarts)
+- **Automatic session titles** — the bundled pi extension replaces the temporary first-message title with a concise model-generated name after the first successful answer; manual renames always win
+- **Pi-owned workflows** — welcome shortcuts plus `/research`, `/fetch`, and `/codesearch` are pi extension commands available across clients; ACB’s legacy `/websearch` is a transport-only alias for `/research`
+- **Keyboard, screen-reader, and touch friendly** — labelled controls, trapped/restored modal focus, keyboard-operable pickers and project folders, and 44px mobile action targets
 - **Shareable session links** — every chat lives at `/s/<session-id>`. Bookmark it, copy it (`/link` or the Settings menu), or open it on another device to resume the same conversation
 - Local TTS (Kokoro, 1.4× playback) and STT (faster-whisper) — no paid cloud APIs
 - Slash commands, model switching mid-conversation, session history / resume / rename
@@ -40,7 +43,7 @@ Node server (this repo) — TRANSPORT LAYER
   │     tab on Android no longer interrupts in-flight work
   ▼
 pi --mode rpc subprocess (the actual coding agent)
-  │  tools: bash, read, write, edit, ls, web_search, fetch_content, code_search
+  │  tools: bash, read, write, edit, ls, web_search, fetch_content, …
   │  writes session JSONL to ~/.pi/agent/sessions/
   │  model routing, system prompt, streaming — all inside pi
   ▼
@@ -83,7 +86,10 @@ src/
                           #   unchanged)
   shared/
     protocol.ts           # types shared by client and server
-tests/                    # vitest, server-side
+extensions/
+  auto-title/              # pi-owned first-turn session naming
+  acb-workflows/           # pi-owned welcome/web/code workflow commands
+tests/                    # vitest, server-side + pure extension helpers
 scripts/                  # build + dev helpers
   build-client.mjs        # esbuild bundler for the client
   _archive/               # throwaway test scripts (gitignored, see .gitignore)
@@ -125,6 +131,7 @@ Everything goes through `.env`. Keys for the providers you want to use; an empty
 | `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
 | `PYTHON_BIN`                   | `python3`                     | Python binary for faster-whisper (STT)           |
 | `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
+| `AUTO_TITLE_MODEL`             | active session model          | Optional `provider/modelId` used for automatic first-turn session titles |
 | `*_API_KEY`                    | (unset)                       | Optional: env keys for non-chat tools (e.g. `VENICE_API_KEY` for pi-venice-image, `GEMINI_API_KEY` for YouTube transcripts). Chat auth itself is NOT configured here — see below. |
 
 Chat-model providers are authenticated via `pi` itself: run `pi auth login <provider>` once and the key is stored in `~/.pi/agent/auth.json`. agentchatbox reads that file live (`getServerApiKey` in `src/server/config.ts`) both to gate the picker and to decide which providers it may spawn a `pi` child for — so logging a provider in or out of `pi` adds or removes it in the UI on the next request, with no ACB restart and no second key store to keep in sync. The spawned `pi` child reads the same `auth.json` directly; ACB does **not** re-inject the key (verified: `pi --mode rpc` authenticates from `auth.json` alone). The `*_API_KEY` env vars above are therefore only for extensions/tools that need a key ACB doesn't pass on, not for chat auth. Only providers present in `auth.json` are exposed via `/api/models`.
