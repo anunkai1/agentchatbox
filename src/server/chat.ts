@@ -101,6 +101,19 @@ export function shutdownChatWs(): void {
 export function mountChatWs(server: HttpServer): void {
 	const wss = new WebSocketServer({ server, path: "/api/chat" });
 	chatWss = wss;
+	// pi owns session naming. Whenever it reports a normal
+	// session_info_changed event (manual /name or an extension such as
+	// auto-title), rebroadcast the derived summaries to every browser. Defer
+	// briefly because pi emits the event immediately before its JSONL append is
+	// guaranteed visible; an eager scan can otherwise rebroadcast the old title.
+	let sessionInfoBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+	const unsubscribeSessionInfo = registry.onSessionInfoChanged(() => {
+		if (sessionInfoBroadcastTimer) clearTimeout(sessionInfoBroadcastTimer);
+		sessionInfoBroadcastTimer = setTimeout(() => {
+			sessionInfoBroadcastTimer = null;
+			broadcastSessions();
+		}, 50);
+	});
 
 	// Server-wide heartbeat. pings every client on a fixed cadence and
 	// terminates any that haven't ponged back within the timeout. Each
@@ -161,6 +174,8 @@ export function mountChatWs(server: HttpServer): void {
 
 	wss.on("close", () => {
 		clearInterval(heartbeatTimer);
+		if (sessionInfoBroadcastTimer) clearTimeout(sessionInfoBroadcastTimer);
+		unsubscribeSessionInfo();
 		chatWss = null;
 	});
 

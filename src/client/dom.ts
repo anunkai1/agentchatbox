@@ -44,6 +44,12 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 			for (const [event, handler] of Object.entries(v as Record<string, EventListener>)) {
 				node.addEventListener(event, handler);
 			}
+		} else if (k.startsWith("aria-") || k.startsWith("data-")) {
+			// Hyphenated ARIA/data names are attributes, not JavaScript
+			// properties. Assigning node["aria-label"] only creates an inert
+			// expando and leaves assistive technology with no accessible name.
+			if (v == null) node.removeAttribute(k);
+			else node.setAttribute(k, String(v));
 		} else (node as unknown as Record<string, unknown>)[k] = v;
 	}
 	for (const c of children) node.append(c);
@@ -52,6 +58,163 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 
 export function text(s: string): Text {
 	return document.createTextNode(s);
+}
+
+export interface ModalOptions {
+	/** Fallback accessible name when the dialog has no heading. */
+	label?: string;
+	/** Called only for dismissals (Escape, backdrop, or the close button). */
+	onDismiss?: () => void;
+	/** Preferred initial focus. Falls back to the first useful control. */
+	initialFocus?: HTMLElement | (() => HTMLElement | null);
+	/** Add the standard top-right close button. Defaults to true. */
+	showCloseButton?: boolean;
+}
+
+export interface MountedModal {
+	/** Remove without invoking onDismiss (use after a successful action). */
+	close(): void;
+	/** Dismiss and invoke onDismiss exactly once. */
+	dismiss(): void;
+}
+
+const FOCUSABLE_SELECTOR = [
+	"a[href]",
+	"button:not([disabled])",
+	'input:not([disabled]):not([type="hidden"])',
+	"select:not([disabled])",
+	"textarea:not([disabled])",
+	'[contenteditable="true"]',
+	'[tabindex]:not([tabindex="-1"])',
+].join(",");
+
+/**
+ * Mount an accessible modal while keeping ACB's callers lightweight.
+ * Provides dialog semantics, a close affordance, Escape/backdrop dismissal,
+ * a Tab focus trap, and focus restoration even when a caller removes the
+ * overlay directly after a successful action.
+ */
+export function mountModal(
+	overlay: HTMLDivElement,
+	box: HTMLElement,
+	options: ModalOptions = {},
+): MountedModal {
+	const previousFocus =
+		document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	let dismissed = false;
+	let cleanedUp = false;
+	let observer: MutationObserver | null = null;
+
+	overlay.classList.add("modal-overlay");
+	box.classList.add("modal-dialog");
+	box.setAttribute("role", "dialog");
+	box.setAttribute("aria-modal", "true");
+	box.tabIndex = -1;
+
+	const heading = box.querySelector<HTMLElement>("h1, h2, h3, h4, h5, h6");
+	if (heading) {
+		if (!heading.id) heading.id = `dialog-title-${uuid()}`;
+		box.setAttribute("aria-labelledby", heading.id);
+	} else {
+		box.setAttribute("aria-label", options.label || "Dialog");
+	}
+
+	const close = () => overlay.remove();
+	const dismiss = () => {
+		if (dismissed || !overlay.isConnected) return;
+		dismissed = true;
+		options.onDismiss?.();
+		close();
+	};
+
+	if (options.showCloseButton !== false) {
+		const closeButton = el(
+			"button",
+			{
+				class: "modal-close-btn",
+				type: "button",
+				title: "Close",
+				"aria-label": `Close ${options.label || heading?.textContent?.trim() || "dialog"}`,
+			},
+			"✕",
+		);
+		closeButton.addEventListener("click", dismiss);
+		box.append(closeButton);
+	}
+
+	const focusable = (): HTMLElement[] =>
+		[...box.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
+			(control) =>
+				!control.hidden &&
+				control.getAttribute("aria-hidden") !== "true" &&
+				control.getClientRects().length > 0,
+		);
+
+	const isTopmost = () => {
+		const modals = document.querySelectorAll<HTMLElement>(".modal-overlay");
+		return modals.length > 0 && modals.item(modals.length - 1) === overlay;
+	};
+	const onKeyDown = (event: KeyboardEvent) => {
+		if (!isTopmost()) return;
+		if (event.key === "Escape") {
+			event.preventDefault();
+			dismiss();
+			return;
+		}
+		if (event.key !== "Tab") return;
+		const controls = focusable();
+		if (controls.length === 0) {
+			event.preventDefault();
+			box.focus();
+			return;
+		}
+		const first = controls[0];
+		const last = controls[controls.length - 1];
+		if (
+			event.shiftKey &&
+			(document.activeElement === first || !box.contains(document.activeElement))
+		) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+			event.preventDefault();
+			first.focus();
+		}
+	};
+
+	const cleanup = () => {
+		if (cleanedUp) return;
+		cleanedUp = true;
+		document.removeEventListener("keydown", onKeyDown);
+		observer?.disconnect();
+		if (!document.querySelector(".modal-overlay")) document.body.classList.remove("modal-open");
+		if (previousFocus?.isConnected) previousFocus.focus();
+	};
+
+	document.addEventListener("keydown", onKeyDown);
+	overlay.addEventListener("click", (event) => {
+		if (event.target === overlay) dismiss();
+	});
+	if (!box.parentElement) overlay.append(box);
+	document.body.append(overlay);
+	document.body.classList.add("modal-open");
+
+	observer = new MutationObserver(() => {
+		if (!overlay.isConnected) cleanup();
+	});
+	observer.observe(document.body, { childList: true, subtree: true });
+
+	setTimeout(() => {
+		if (!overlay.isConnected) return;
+		const requested =
+			typeof options.initialFocus === "function" ? options.initialFocus() : options.initialFocus;
+		const firstUseful = focusable().find(
+			(control) => !control.classList.contains("modal-close-btn"),
+		);
+		(requested?.isConnected ? requested : (firstUseful ?? focusable()[0] ?? box)).focus();
+	}, 0);
+
+	return { close, dismiss };
 }
 
 /**

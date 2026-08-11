@@ -14,7 +14,7 @@
 import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
 import { listVoices } from "./api.js";
-import { $, el, escapeHtml } from "./dom.js";
+import { $, el, escapeHtml, mountModal } from "./dom.js";
 import { saveSessionPrefs } from "./prefs.js";
 import {
 	appendError,
@@ -77,10 +77,8 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	// Misc
 	reload: "reload the page (re-pick up any server-side changes)",
 	quit: "close the tab",
-	// Web access (pi-web-access tools)
+	// Transport-only alias. pi's acb-workflows input handler owns behavior.
 	websearch: "search the web and summarise: /websearch <query>",
-	fetch: "fetch and read a URL: /fetch <url>",
-	codesearch: "search for code examples: /codesearch <query>",
 	project: "start a new chat in a project: /project <name|id>",
 };
 
@@ -104,7 +102,7 @@ function commandCategory(name: string): string {
 		return "Core";
 	if (["clear", "new", "sessions", "resume", "name", "session", "project"].includes(name))
 		return "Sessions";
-	if (["websearch", "fetch", "codesearch"].includes(name)) return "Tools";
+	if (name === "websearch") return "Tools";
 	if (["copy", "link", "share", "export"].includes(name)) return "Output";
 	return "Reference";
 }
@@ -121,10 +119,15 @@ function getCommandPaletteEntries(): CommandPaletteEntry[] {
 	const names = new Set(entries.map((entry) => entry.name));
 	for (const command of state.capabilities ?? []) {
 		if (command.source === "skill" || names.has(command.name)) continue;
+		// ACB presents the familiar /websearch alias; /research is the
+		// collision-free pi command it transports to, not a second UI entry.
+		if (command.name === "research" && names.has("websearch")) continue;
 		entries.push({
 			name: command.name,
 			description: command.description || "Extension command",
-			category: "Extensions",
+			category: ["research", "fetch", "codesearch"].includes(command.name)
+				? "Tools"
+				: "Extensions",
 			order: entries.length,
 		});
 		names.add(command.name);
@@ -303,16 +306,6 @@ export function isKnownSlash(s: string): boolean {
 }
 
 /**
- * Dependency for slash commands that need to actually send a prompt
- * (websearch/fetch/codesearch). main.ts wires this at boot.
- */
-export type SendAsUserFn = (text: string) => void;
-let sendAsUserFn: SendAsUserFn = () => {};
-export function setSendAsUser(fn: SendAsUserFn): void {
-	sendAsUserFn = fn;
-}
-
-/**
  * Dependency for slash commands that need to ask the server to switch
  * model/thinking. main.ts wires this at boot.
  */
@@ -385,6 +378,12 @@ export function handleSlash(arg: string): void {
 			// Sent via the lean sendSlashCommand path, NOT sendAsUser, because
 			// this is an extension-owned picker rather than a user prompt.
 			services.sendSlashCommand?.(`/${cmd}`);
+			break;
+		case "websearch":
+			// Preserve the friendly legacy alias, but route it to the collision-free
+			// /research command. The acb-workflows pi extension owns validation,
+			// prompt construction, and delivery.
+			services.sendSlashCommand?.(`/research${rest ? ` ${rest}` : ""}`);
 			break;
 		case "imggen":
 			// Model-free image generation (pi-local-image extension). Same
@@ -603,45 +602,6 @@ export function handleSlash(arg: string): void {
 			}
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
-		case "websearch": {
-			const query = rest;
-			if (!query) {
-				appendError("Usage: /websearch <query>");
-			} else {
-				sendAsUserFn(
-					`Use web_search to look up: ${query}\nGive me a 3-sentence summary plus the top 3 source URLs.`,
-				);
-			}
-			$<HTMLTextAreaElement>("#input").value = "";
-			autoSize();
-			break;
-		}
-		case "fetch": {
-			const url = rest;
-			if (!url) {
-				appendError("Usage: /fetch <url>");
-			} else {
-				sendAsUserFn(
-					`Use fetch_content to grab ${url} and summarise the key points in 5 bullet points.`,
-				);
-			}
-			$<HTMLTextAreaElement>("#input").value = "";
-			autoSize();
-			break;
-		}
-		case "codesearch": {
-			const query = rest;
-			if (!query) {
-				appendError("Usage: /codesearch <query>");
-			} else {
-				sendAsUserFn(
-					`Use code_search to find: ${query}\nGive me 2 short code snippets with source URLs.`,
-				);
-			}
-			$<HTMLTextAreaElement>("#input").value = "";
-			autoSize();
-			break;
-		}
 		default: {
 			// Dynamically loaded extension/prompt commands are owned by pi.
 			// ACB only forwards the command; it does not interpret it.
@@ -668,48 +628,21 @@ function openModal(title: string, extraClass?: string): ModalRefs {
 	const overlay = el("div", { class: "modal-overlay" });
 	const box = el("div", { class: "modal-box" });
 	if (extraClass) box.classList.add(extraClass);
-	box.setAttribute("role", "dialog");
-	box.setAttribute("aria-modal", "true");
-	box.setAttribute("aria-label", title);
-	box.tabIndex = -1;
 	box.append(el("h3", { text: title }));
-
-	const previousFocus =
-		document.activeElement instanceof HTMLElement ? document.activeElement : null;
-	let cleanedUp = false;
-	let observer: MutationObserver | null = null;
-	const cleanup = () => {
-		if (cleanedUp) return;
-		cleanedUp = true;
-		document.removeEventListener("keydown", onKeyDown);
-		observer?.disconnect();
-		if (previousFocus?.isConnected) previousFocus.focus();
-	};
-	const onKeyDown = (event: KeyboardEvent) => {
-		if (event.key !== "Escape") return;
-		event.preventDefault();
-		overlay.remove();
-	};
-	document.addEventListener("keydown", onKeyDown);
-	overlay.addEventListener("click", (e) => {
-		if (e.target === overlay) overlay.remove();
-	});
-	overlay.append(box);
-	document.body.append(overlay);
-	// Most callers close dialogs with `overlay.remove()` directly. Watch for
-	// that removal so Escape/focus handling is cleaned up consistently too.
-	observer = new MutationObserver(() => {
-		if (!overlay.isConnected) cleanup();
-	});
-	observer.observe(document.body, { childList: true, subtree: true });
-	setTimeout(() => {
-		if (!overlay.isConnected) return;
-		const firstControl = box.querySelector<HTMLElement>(
-			'input, button, textarea, select, a[href], [tabindex]:not([tabindex="-1"])',
-		);
-		(firstControl ?? box).focus();
-	}, 0);
+	mountModal(overlay, box, { label: title });
 	return { overlay, box };
+}
+
+/** Give custom picker rows native-like keyboard activation. */
+function makeKeyboardClickable(element: HTMLElement, activate: () => void): void {
+	element.tabIndex = 0;
+	if (!element.hasAttribute("role")) element.setAttribute("role", "button");
+	element.addEventListener("click", activate);
+	element.addEventListener("keydown", (event) => {
+		if (event.target !== element || (event.key !== "Enter" && event.key !== " ")) return;
+		event.preventDefault();
+		activate();
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -745,6 +678,7 @@ export function openModelPicker(): void {
 		type: "search",
 		class: "model-filter-input",
 		placeholder: "Filter models…",
+		"aria-label": "Filter models",
 		autocomplete: "off",
 	}) as HTMLInputElement;
 	box.append(filterInput);
@@ -763,6 +697,7 @@ export function openModelPicker(): void {
 
 	const setExpanded = (g: GroupRefs, expanded: boolean) => {
 		g.header.classList.toggle("collapsed", !expanded);
+		g.header.setAttribute("aria-expanded", String(expanded));
 		g.rows.classList.toggle("hidden", !expanded);
 	};
 
@@ -782,7 +717,11 @@ export function openModelPicker(): void {
 				)
 			: null;
 
-		const header = el("div", { class: "model-group-header" });
+		const header = el("div", {
+			class: "model-group-header",
+			role: "button",
+			"aria-label": `${provider} models`,
+		});
 		header.append(el("span", { class: "model-group-twisty" }, "▾"));
 		header.append(headerLabel);
 		if (activeTag) header.append(activeTag);
@@ -832,6 +771,9 @@ export function openModelPicker(): void {
 					title: isDefault
 						? "Default for new chats — click to clear"
 						: "Set as default for new chats",
+					"aria-label": isDefault
+						? `Clear ${m.name ?? m.id} as the default model`
+						: `Set ${m.name ?? m.id} as the default model`,
 				},
 				isDefault ? "★" : "☆",
 			);
@@ -842,7 +784,7 @@ export function openModelPicker(): void {
 			row.append(star);
 
 			if (m.id === state.currentModelId) row.classList.add("active");
-			row.addEventListener("click", () => {
+			makeKeyboardClickable(row, () => {
 				// Update displayed model optimistically so the picker
 				// feels instant, but mark the model as "pending" so the
 				// server's next `ready` event confirms it (rather than
@@ -872,7 +814,7 @@ export function openModelPicker(): void {
 		// currently selected model so you can see what's active.
 		setExpanded(refs, activeInGroup);
 
-		header.addEventListener("click", () => {
+		makeKeyboardClickable(header, () => {
 			// When a filter is active, the filter handler drives
 			// expansion, so header clicks are a no-op to avoid
 			// fighting it.
@@ -983,6 +925,10 @@ function refreshDefaultStars(box: HTMLElement): void {
 			btn.title = isDefault
 				? "Default for new chats — click to clear"
 				: "Set as default for new chats";
+			btn.setAttribute(
+				"aria-label",
+				isDefault ? `Clear ${mid} as the default model` : `Set ${mid} as the default model`,
+			);
 		}
 		const name = row.querySelector<HTMLElement>(".model-name");
 		const badge = name?.querySelector<HTMLElement>(".model-badge-default");
@@ -1042,7 +988,7 @@ export function openThinkPicker(): void {
 		const row = el("div", { class: "model-row" });
 		row.append(el("div", { class: "model-name" }, lvl));
 		if (lvl === state.currentThinking) row.classList.add("active");
-		row.addEventListener("click", () => {
+		makeKeyboardClickable(row, () => {
 			chatControls?.setThinking(lvl);
 			state.currentThinking = lvl;
 			refreshStatus();
@@ -1067,7 +1013,7 @@ export function openSpeedPicker(): void {
 		row.append(el("div", { class: "model-name" }, `${rate}×`));
 		if (rate === 1) row.append(el("div", { class: "model-provider" }, "(normal)"));
 		if (rate === state.ttsSpeed) row.classList.add("active");
-		row.addEventListener("click", () => {
+		makeKeyboardClickable(row, () => {
 			state.ttsSpeed = rate;
 			saveSessionPrefs();
 			overlay.remove();
@@ -1092,14 +1038,17 @@ export async function openSessionsDialog(): Promise<void> {
 	// error so the user isn't staring at a forever-empty modal.
 	chatControls?.listSessions();
 	const { overlay, box } = openModal("Sessions");
-	box.append(el("p", { class: "muted", text: "Loading sessions…" }));
-	// Save the box in a closure-captured var so the listener can fill it.
-	pendingSessionsBox = box;
+	const content = el("div", { class: "sessions-dialog-content" });
+	content.append(el("p", { class: "muted", text: "Loading sessions…" }));
+	box.append(content);
+	// Save only the content region so an async refresh cannot erase the
+	// dialog heading, accessible label, or standard close button.
+	pendingSessionsBox = content;
 	pendingSessionsOverlay = overlay;
 	setTimeout(() => {
-		if (pendingSessionsBox === box) {
-			box.innerHTML = "";
-			box.append(
+		if (pendingSessionsBox === content) {
+			content.innerHTML = "";
+			content.append(
 				el("p", {
 					class: "muted",
 					text: "No saved sessions (or server didn't reply).",
@@ -1136,7 +1085,7 @@ export function renderSessionsIntoPicker(sessions: SessionSummary[]): void {
 			row.append(el("div", { class: "session-title" }, s.title));
 			const meta = `${s.messageCount} msgs · ${new Date(s.createdAt).toLocaleString()}`;
 			row.append(el("div", { class: "session-meta" }, meta));
-			row.addEventListener("click", () => {
+			makeKeyboardClickable(row, () => {
 				overlay.remove();
 				chatControls?.resumeSession(s.id);
 			});
@@ -1174,7 +1123,7 @@ export async function openVoicePicker(): Promise<void> {
 		row.append(el("div", { class: "model-name" }, v));
 		if (v === defaultVoice) row.append(el("div", { class: "model-provider" }, "(server default)"));
 		if (v === state.ttsVoice) row.classList.add("active");
-		row.addEventListener("click", () => {
+		makeKeyboardClickable(row, () => {
 			state.ttsVoice = v;
 			saveSessionPrefs();
 			overlay.remove();
@@ -1234,7 +1183,8 @@ function svcRow(
 	const row = el("div", { class: "svc-row" }, label, value);
 	if (onClick) {
 		row.classList.add("svc-clickable");
-		row.addEventListener("click", onClick);
+		row.setAttribute("aria-label", `${name}: open settings`);
+		makeKeyboardClickable(row, onClick);
 	}
 	return row;
 }
@@ -1448,7 +1398,7 @@ export function openOverflowMenu(): void {
 	const modelLine = el("div", { class: "overflow-row" });
 	modelLine.append(el("div", { class: "overflow-label" }, "model"));
 	modelLine.append(el("div", { class: "overflow-value" }, state.currentModelId ?? "—"));
-	modelLine.addEventListener("click", () => {
+	makeKeyboardClickable(modelLine, () => {
 		overlay.remove();
 		openModelPicker();
 	});
@@ -1466,7 +1416,7 @@ export function openOverflowMenu(): void {
 		el("div", { class: "overflow-value" }, state.currentImageModelLabel ?? "default"),
 	);
 	imageLine.title = "Switch image-generation model";
-	imageLine.addEventListener("click", () => {
+	makeKeyboardClickable(imageLine, () => {
 		overlay.remove();
 		// Lean send — see /imagemodel case in handleSlash: extension
 		// command, no agent run, must not set isStreaming.
@@ -1480,7 +1430,7 @@ export function openOverflowMenu(): void {
 	allModelsLine.append(el("div", { class: "overflow-label" }, "all models"));
 	allModelsLine.append(el("div", { class: "overflow-value" }, "overview"));
 	allModelsLine.title = "Show all models & services in use";
-	allModelsLine.addEventListener("click", () => {
+	makeKeyboardClickable(allModelsLine, () => {
 		overlay.remove();
 		openModelsPanel();
 	});
@@ -1496,7 +1446,7 @@ export function openOverflowMenu(): void {
 		linkLine.append(
 			el("div", { class: "overflow-value" }, `${linkUrl.replace(/^https?:\/\//, "")}`),
 		);
-		linkLine.addEventListener("click", async () => {
+		makeKeyboardClickable(linkLine, async () => {
 			const ok = await copyToClipboard(linkUrl);
 			const value = linkLine.querySelector(".overflow-value")!;
 			value.textContent = ok ? "✓ copied" : "✗ denied";
@@ -1510,7 +1460,7 @@ export function openOverflowMenu(): void {
 	const thinkLine = el("div", { class: "overflow-row" });
 	thinkLine.append(el("div", { class: "overflow-label" }, "think"));
 	thinkLine.append(el("div", { class: "overflow-value" }, state.currentThinking));
-	thinkLine.addEventListener("click", () => {
+	makeKeyboardClickable(thinkLine, () => {
 		overlay.remove();
 		openThinkPicker();
 	});
@@ -1519,7 +1469,7 @@ export function openOverflowMenu(): void {
 	const voiceLine = el("div", { class: "overflow-row" });
 	voiceLine.append(el("div", { class: "overflow-label" }, "voice"));
 	voiceLine.append(el("div", { class: "overflow-value" }, state.ttsVoice ?? "default"));
-	voiceLine.addEventListener("click", () => {
+	makeKeyboardClickable(voiceLine, () => {
 		overlay.remove();
 		void openVoicePicker();
 	});
@@ -1528,7 +1478,7 @@ export function openOverflowMenu(): void {
 	const speedLine = el("div", { class: "overflow-row" });
 	speedLine.append(el("div", { class: "overflow-label" }, "speed"));
 	speedLine.append(el("div", { class: "overflow-value" }, `${state.ttsSpeed}×`));
-	speedLine.addEventListener("click", () => {
+	makeKeyboardClickable(speedLine, () => {
 		overlay.remove();
 		openSpeedPicker();
 	});
@@ -1548,7 +1498,7 @@ export function openOverflowMenu(): void {
 			const capsLine = el("div", { class: "overflow-row" });
 			capsLine.append(el("div", { class: "overflow-label" }, "loaded"));
 			capsLine.append(el("div", { class: "overflow-value" }, parts.join(" · ")));
-			capsLine.addEventListener("click", () => {
+			makeKeyboardClickable(capsLine, () => {
 				overlay.remove();
 				toggleCapabilitiesPopover();
 			});

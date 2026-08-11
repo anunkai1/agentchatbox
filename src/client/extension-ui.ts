@@ -24,7 +24,7 @@
  * client doesn't need its own timer.
  */
 
-import { el } from "./dom.js";
+import { el, mountModal, uuid } from "./dom.js";
 
 /** Subset of the extension_ui_request event the relay renders. */
 interface ExtensionUiRequest {
@@ -70,23 +70,15 @@ export function handleExtensionUiRequest(
 // Dialogs
 // ---------------------------------------------------------------------------
 
-function createOverlay(title: string): { overlay: HTMLDivElement; box: HTMLDivElement } {
+function createOverlay(
+	title: string,
+	onDismiss: () => void,
+): { overlay: HTMLDivElement; box: HTMLDivElement } {
 	const overlay = el("div", { class: "modal-overlay" });
 	const box = el("div", { class: "modal-box ext-ui-box" });
 	box.append(el("h3", { text: title }));
-	overlay.append(box);
-	document.body.append(overlay);
+	mountModal(overlay, box, { label: title, onDismiss });
 	return { overlay, box };
-}
-
-/** Clicking outside the box cancels. */
-function onCancel(overlay: HTMLDivElement, id: string, respond: ExtensionUiResponder): void {
-	overlay.addEventListener("click", (ev) => {
-		if (ev.target === overlay) {
-			overlay.remove();
-			respond(id, { cancelled: true });
-		}
-	});
 }
 
 /**
@@ -151,32 +143,45 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 		return;
 	}
 
-	const { overlay, box } = createOverlay(e.title ?? "Select");
+	const title = e.title ?? "Select";
+	const { overlay, box } = createOverlay(title, () => respond(e.id, { cancelled: true }));
 
-	// Search filter — helpful for 17+ item lists.
+	// Search filter — helpful for 17+ item lists. Focus remains in this
+	// combobox while aria-activedescendant exposes the highlighted option.
+	const listId = `ext-ui-list-${uuid()}`;
 	const search = el("input", {
 		type: "text",
 		class: "ext-ui-search",
 		placeholder: "Filter…",
 		autocomplete: "off",
+		role: "combobox",
+		"aria-label": `Filter ${title}`,
+		"aria-autocomplete": "list",
+		"aria-expanded": "true",
+		"aria-controls": listId,
 	}) as HTMLInputElement;
 	box.append(search);
 
-	const list = el("div", { class: "ext-ui-list" });
+	const list = el("div", {
+		class: "ext-ui-list",
+		id: listId,
+		role: "listbox",
+		"aria-label": `${title} options`,
+	});
 	box.append(list);
 
 	let filtered = options;
 	// Start on the first selectable (non-separator) row.
-	let selectedIdx = Math.max(
-		0,
-		filtered.findIndex((o) => !isSeparatorRow(o)),
-	);
+	let selectedIdx = filtered.findIndex((o) => !isSeparatorRow(o));
 
 	function renderList(): void {
 		list.innerHTML = "";
 		filtered.forEach((opt, i) => {
 			const row = buildOptionRow(opt, i, i === selectedIdx);
 			if (!isSeparatorRow(opt)) {
+				row.id = `${listId}-option-${i}`;
+				row.setAttribute("role", "option");
+				row.setAttribute("aria-selected", String(i === selectedIdx));
 				row.addEventListener("click", () => {
 					overlay.remove();
 					respond(e.id, { value: opt });
@@ -185,9 +190,12 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 					selectedIdx = i;
 					renderActive();
 				});
+			} else {
+				row.setAttribute("role", "presentation");
 			}
 			list.append(row);
 		});
+		renderActive();
 	}
 
 	function renderActive(): void {
@@ -195,9 +203,15 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 		rows.forEach((r) => {
 			const on = Number(r.dataset.idx) === selectedIdx;
 			r.classList.toggle("active", on);
+			r.setAttribute("aria-selected", String(on));
 		});
-		const target = list.querySelector(`.model-row[data-idx="${selectedIdx}"]`);
-		target?.scrollIntoView({ block: "nearest" });
+		const target = list.querySelector<HTMLElement>(`.model-row[data-idx="${selectedIdx}"]`);
+		if (target) {
+			search.setAttribute("aria-activedescendant", target.id);
+			target.scrollIntoView({ block: "nearest" });
+		} else {
+			search.removeAttribute("aria-activedescendant");
+		}
 	}
 
 	/** Move selection by ±1, skipping separator rows. */
@@ -216,10 +230,7 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 	function applyFilter(): void {
 		const q = search.value.toLowerCase().trim();
 		filtered = q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
-		selectedIdx = Math.max(
-			0,
-			filtered.findIndex((o) => !isSeparatorRow(o)),
-		);
+		selectedIdx = filtered.findIndex((o) => !isSeparatorRow(o));
 		renderList();
 	}
 
@@ -251,13 +262,13 @@ function renderSelect(e: ExtensionUiRequest, respond: ExtensionUiResponder): voi
 	});
 
 	renderList();
-	onCancel(overlay, e.id, respond);
 	setTimeout(() => search.focus(), 0);
 }
 
 /** Confirm dialog — a message with Yes / No buttons. */
 function renderConfirm(e: ExtensionUiRequest, respond: ExtensionUiResponder): void {
-	const { overlay, box } = createOverlay(e.title ?? "Confirm");
+	const title = e.title ?? "Confirm";
+	const { overlay, box } = createOverlay(title, () => respond(e.id, { cancelled: true }));
 	box.append(el("p", { class: "ext-ui-message", text: e.message ?? "" }));
 
 	const actions = el("div", { class: "ext-ui-actions" });
@@ -274,19 +285,20 @@ function renderConfirm(e: ExtensionUiRequest, respond: ExtensionUiResponder): vo
 	actions.append(yes, no);
 	box.append(actions);
 
-	onCancel(overlay, e.id, respond);
 	setTimeout(() => yes.focus(), 0);
 }
 
 /** Input dialog — a text field with submit. */
 function renderInput(e: ExtensionUiRequest, respond: ExtensionUiResponder): void {
-	const { overlay, box } = createOverlay(e.title ?? "Input");
+	const title = e.title ?? "Input";
+	const { overlay, box } = createOverlay(title, () => respond(e.id, { cancelled: true }));
 
 	const input = el("input", {
 		type: "text",
 		class: "ext-ui-input",
 		placeholder: e.placeholder ?? "",
 		autocomplete: "off",
+		"aria-label": title,
 	}) as HTMLInputElement;
 	box.append(input);
 
@@ -316,6 +328,5 @@ function renderInput(e: ExtensionUiRequest, respond: ExtensionUiResponder): void
 		}
 	});
 
-	onCancel(overlay, e.id, respond);
 	setTimeout(() => input.focus(), 0);
 }
