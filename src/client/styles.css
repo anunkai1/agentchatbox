@@ -1409,9 +1409,9 @@ body.sidebar-resizing iframe {
 	font-weight: 600;
 }
 .voice-actions .immediate-voice {
-	color: var(--accent);
-	background: var(--accent-soft);
-	border-color: var(--accent-border);
+	color: var(--text-muted);
+	background: transparent;
+	border-color: transparent;
 }
 
 /* shared base class for the voice buttons on each assistant message. */
