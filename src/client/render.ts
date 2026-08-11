@@ -131,11 +131,50 @@ function startOrStopWorkingTick(streaming: boolean): void {
 	}
 }
 
+const HISTORY_RENDER_LIMIT = 100;
+let renderedHistoryStart = 0;
+
+function loadOlderHistory(): void {
+	const list = $("#messages");
+	const loadRow = list.querySelector<HTMLElement>(".history-load-older");
+	if (!loadRow || renderedHistoryStart === 0) return;
+	const previousHeight = getScrollContainer().scrollHeight;
+	const previousTop = getScrollContainer().scrollTop;
+	const nextStart = Math.max(0, renderedHistoryStart - HISTORY_RENDER_LIMIT);
+	const fragment = document.createDocumentFragment();
+	for (let i = nextStart; i < renderedHistoryStart; i++) {
+		fragment.append(renderMessageNode(state.messages[i]));
+	}
+	list.insertBefore(fragment, loadRow.nextSibling);
+	renderedHistoryStart = nextStart;
+	if (nextStart === 0) loadRow.remove();
+	else {
+		const remaining = nextStart;
+		loadRow.querySelector("button")!.textContent = `Load ${remaining} older messages`;
+	}
+	// Keep the same message anchored under the user's eyes after prepending.
+	const scroller = getScrollContainer();
+	scroller.scrollTop = previousTop + (scroller.scrollHeight - previousHeight);
+}
+
 export function renderHistory(): void {
 	const list = $("#messages");
 	list.innerHTML = "";
-	for (const m of state.messages) {
-		list.append(renderMessageNode(m));
+	renderedHistoryStart = Math.max(0, state.messages.length - HISTORY_RENDER_LIMIT);
+	if (renderedHistoryStart > 0) {
+		const loadRow = el("div", { class: "history-load-older" });
+		const remaining = renderedHistoryStart;
+		const button = el(
+			"button",
+			{ type: "button", title: "Load older messages" },
+			`Load ${remaining} older messages`,
+		) as HTMLButtonElement;
+		button.addEventListener("click", loadOlderHistory);
+		loadRow.append(button);
+		list.append(loadRow);
+	}
+	for (let i = renderedHistoryStart; i < state.messages.length; i++) {
+		list.append(renderMessageNode(state.messages[i]));
 	}
 	updateWelcomeVisibility();
 	scrollToBottom();

@@ -31,6 +31,13 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
 		node.setAttribute("rel", "noopener noreferrer");
 		node.classList.add("rich-link");
 	}
+	if (node.tagName === "IMG") {
+		// Images in older transcript rows should not compete with the current
+		// conversation for bandwidth or decode time. Browser-native lazy
+		// loading still fetches images as they approach the viewport.
+		node.setAttribute("loading", "lazy");
+		node.setAttribute("decoding", "async");
+	}
 });
 
 /**
