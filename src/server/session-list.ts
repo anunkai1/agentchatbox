@@ -622,13 +622,42 @@ export function deletePiSession(cwd: string, sessionId: string): boolean {
 	return true;
 }
 /**
- * Read the full message transcript for a session. Used by chat.ts to
- * send a `transcript` server message to the browser on resume, so the
- * user sees the past conversation before the live events arrive.
+ * Remove binary image blocks from persisted tool results before replaying a
+ * transcript to the browser. pi keeps those blocks in its JSONL so the model
+ * can resume with full context, but they are internal tool payloads rather
+ * than user-visible attachments. Re-sending them can turn a modest chat into
+ * a 20+ MiB WebSocket frame; once that frame crosses the socket high-water
+ * mark, the next UI response closes the connection and creates an endless
+ * reconnect/replay loop. User and assistant image blocks are intentionally
+ * preserved because those are part of the visible conversation.
+ */
+function browserReplayMessage(message: Message): Message {
+	const candidate = message as unknown as { role?: unknown; content?: unknown };
+	if (candidate.role !== "toolResult" || !Array.isArray(candidate.content)) return message;
+
+	const content = candidate.content.filter(
+		(block) =>
+			!block ||
+			typeof block !== "object" ||
+			(block as { type?: unknown }).type !== "image",
+	);
+	if (content.length === candidate.content.length) return message;
+
+	return {
+		...(message as unknown as Record<string, unknown>),
+		content,
+	} as unknown as Message;
+}
+
+/**
+ * Read the browser-safe message transcript for a session. Used by chat.ts to
+ * send a `transcript` server message on resume, so the user sees the prior
+ * conversation before live events arrive. pi itself resumes from the original
+ * JSONL; this projection affects transport/rendering only.
  *
  * Returns an array of SDK-shape messages (`UserMessage | AssistantMessage |
- * ToolResultMessage`). The renderer can hand these straight to its
- * existing message-node projection.
+ * ToolResultMessage`). The renderer can hand these straight to its existing
+ * message-node projection.
  */
 export function readPiSessionMessages(cwd: string, sessionId: string): Message[] {
 	// Locate the JSONL via the shared first-line header check, then read
@@ -644,7 +673,7 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 	const messages: Message[] = [];
 	for (const e of parseJsonl(raw)) {
 		if (e.type === "message" && e.message) {
-			messages.push(e.message as Message);
+			messages.push(browserReplayMessage(e.message as Message));
 		} else if (e.type === "custom_message") {
 			// Persisted custom message (e.g. pi-voice-reply's voice-reply
 			// entry, which carries the long/short spoken variants).
