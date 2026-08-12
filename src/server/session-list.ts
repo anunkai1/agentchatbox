@@ -622,31 +622,47 @@ export function deletePiSession(cwd: string, sessionId: string): boolean {
 	return true;
 }
 /**
- * Remove binary image blocks from persisted tool results before replaying a
- * transcript to the browser. pi keeps those blocks in its JSONL so the model
- * can resume with full context, but they are internal tool payloads rather
- * than user-visible attachments. Re-sending them can turn a modest chat into
- * a 20+ MiB WebSocket frame; once that frame crosses the socket high-water
- * mark, the next UI response closes the connection and creates an endless
- * reconnect/replay loop. User and assistant image blocks are intentionally
- * preserved because those are part of the visible conversation.
+ * Build the browser's lightweight rendering projection without changing pi's
+ * on-disk JSONL or the context pi resumes from.
+ *
+ * Binary image blocks are never consumed by projectTranscript() — visible
+ * attachments already have their filename/URL in the accompanying text — so
+ * replaying their base64 only makes the WebSocket frame enormous. Tool-result
+ * `details` are likewise agent-internal; image tools can persist the provider's
+ * complete response there, including another multi-megabyte base64 copy.
+ * Omitting both prevents large image-heavy sessions from crossing the socket
+ * high-water mark and entering a reconnect/replay loop.
  */
 function browserReplayMessage(message: Message): Message {
-	const candidate = message as unknown as { role?: unknown; content?: unknown };
-	if (candidate.role !== "toolResult" || !Array.isArray(candidate.content)) return message;
+	const candidate = message as unknown as {
+		role?: unknown;
+		content?: unknown;
+		details?: unknown;
+	};
+	const original = message as unknown as Record<string, unknown>;
+	let changed = false;
+	let replayContent: unknown = candidate.content;
 
-	const content = candidate.content.filter(
-		(block) =>
-			!block ||
-			typeof block !== "object" ||
-			(block as { type?: unknown }).type !== "image",
-	);
-	if (content.length === candidate.content.length) return message;
+	if (Array.isArray(candidate.content)) {
+		const filtered = candidate.content.filter(
+			(block) =>
+				!block ||
+				typeof block !== "object" ||
+				(block as { type?: unknown }).type !== "image",
+		);
+		replayContent = filtered;
+		changed = filtered.length !== candidate.content.length;
+	}
 
-	return {
-		...(message as unknown as Record<string, unknown>),
-		content,
-	} as unknown as Message;
+	const stripToolDetails = candidate.role === "toolResult" && "details" in original;
+	if (!changed && !stripToolDetails) return message;
+
+	const replay: Record<string, unknown> = {
+		...original,
+		...(changed ? { content: replayContent } : {}),
+	};
+	if (stripToolDetails) delete replay["details"];
+	return replay as unknown as Message;
 }
 
 /**

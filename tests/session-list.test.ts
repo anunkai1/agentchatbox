@@ -251,7 +251,7 @@ describe("readPiSessionMessages", () => {
 		expect((msgs[2] as { content: Array<{ text: string }> }).content[0].text).toBe("follow up");
 	});
 
-	it("omits binary images from tool results but preserves visible user images", async () => {
+	it("omits replay-only image bytes and tool details while preserving attachment labels", async () => {
 		const userImage = { type: "image", data: "visible-user-image", mimeType: "image/png" };
 		const toolImage = { type: "image", data: "large-internal-tool-image", mimeType: "image/png" };
 		writeSession(
@@ -276,6 +276,7 @@ describe("readPiSessionMessages", () => {
 						toolCallId: "read-1",
 						toolName: "read",
 						content: [{ type: "text", text: "Read image file" }, toolImage],
+						details: { response: { b64_json: "second-internal-copy" } },
 						isError: false,
 						timestamp: 2,
 					},
@@ -287,10 +288,13 @@ describe("readPiSessionMessages", () => {
 		const msgs = readPiSessionMessages(cwd, "images") as Array<{
 			role: string;
 			content: Array<{ type: string; data?: string; text?: string }>;
+			details?: unknown;
 		}>;
 		expect(msgs).toHaveLength(2);
-		expect(msgs[0].content).toEqual([{ type: "text", text: "look" }, userImage]);
+		// The filename/label remains renderable, but its duplicate base64 does not.
+		expect(msgs[0].content).toEqual([{ type: "text", text: "look" }]);
 		expect(msgs[1].content).toEqual([{ type: "text", text: "Read image file" }]);
+		expect(msgs[1].details).toBeUndefined();
 	});
 
 	it("finds the matching session among several files in the dir (cheap header check)", async () => {
