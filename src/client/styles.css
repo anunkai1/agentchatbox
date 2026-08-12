@@ -429,9 +429,17 @@ body.sidebar-resizing iframe {
 /* Trash button — same hit target as the other row actions, but tinted
  * red on hover so it reads as destructive (matches the project-delete
  * button's color). */
+.session-action.delete {
+	/* The emoji is naturally much brighter than the other row actions. Keep
+	 * it subdued until the user points at the destructive control. */
+	filter: grayscale(0.8);
+	opacity: 0.6;
+}
 .session-action.delete:hover {
 	background: rgba(224, 86, 86, 0.12);
 	color: #e56f6f;
+	filter: none;
+	opacity: 1;
 }
 .session-more {
 	display: none;
