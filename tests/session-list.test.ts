@@ -251,6 +251,48 @@ describe("readPiSessionMessages", () => {
 		expect((msgs[2] as { content: Array<{ text: string }> }).content[0].text).toBe("follow up");
 	});
 
+	it("omits binary images from tool results but preserves visible user images", async () => {
+		const userImage = { type: "image", data: "visible-user-image", mimeType: "image/png" };
+		const toolImage = { type: "image", data: "large-internal-tool-image", mimeType: "image/png" };
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-30-00_images.jsonl",
+			"images",
+			"2026-06-15T10:30:00.000Z",
+			[],
+			[
+				JSON.stringify({
+					type: "message",
+					message: {
+						role: "user",
+						content: [{ type: "text", text: "look" }, userImage],
+						timestamp: 1,
+					},
+				}),
+				JSON.stringify({
+					type: "message",
+					message: {
+						role: "toolResult",
+						toolCallId: "read-1",
+						toolName: "read",
+						content: [{ type: "text", text: "Read image file" }, toolImage],
+						isError: false,
+						timestamp: 2,
+					},
+				}),
+			],
+		);
+
+		const { readPiSessionMessages } = await import("../src/server/session-list.js");
+		const msgs = readPiSessionMessages(cwd, "images") as Array<{
+			role: string;
+			content: Array<{ type: string; data?: string; text?: string }>;
+		}>;
+		expect(msgs).toHaveLength(2);
+		expect(msgs[0].content).toEqual([{ type: "text", text: "look" }, userImage]);
+		expect(msgs[1].content).toEqual([{ type: "text", text: "Read image file" }]);
+	});
+
 	it("finds the matching session among several files in the dir (cheap header check)", async () => {
 		// Guards the readFirstLine optimization: the lookup must still find
 		// the right file when sibling JSONLs are present, and must not be
