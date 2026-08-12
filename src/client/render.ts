@@ -131,7 +131,7 @@ function startOrStopWorkingTick(streaming: boolean): void {
 	}
 }
 
-const HISTORY_RENDER_LIMIT = 100;
+const HISTORY_RENDER_LIMIT = 200;
 let renderedHistoryStart = 0;
 
 function loadOlderHistory(): void {
