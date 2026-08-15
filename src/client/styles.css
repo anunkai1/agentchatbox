@@ -621,6 +621,27 @@ body.sidebar-resizing iframe {
 	border-color: var(--accent-border);
 	color: var(--accent);
 }
+/* Codex Fast is a thin GUI trigger for the extension-owned picker. The
+ * browser neither stores nor infers the selected tier. */
+.header-fast {
+	align-items: center;
+	gap: 4px;
+	border-color: rgba(245, 185, 66, 0.42);
+	color: #f5c15d;
+}
+.header-fast:hover {
+	border-color: rgba(245, 185, 66, 0.7);
+	background: rgba(245, 185, 66, 0.1);
+	color: #ffd37a;
+}
+.header-fast::after {
+	content: "▾";
+	margin-left: 2px;
+	color: currentColor;
+	font-size: 10px;
+	opacity: 0.72;
+}
+
 /* Show a trailing chevron on the model picker to match z.ai's "GLM-4.7 ▾". */
 .header-model::after {
 	content: "▾";
@@ -2809,10 +2830,11 @@ body.modal-open {
 	.header-overflow > span:last-child {
 		display: none;
 	}
-	/* On mobile, hide the inline model pill — it's still reachable via
-	 * the overflow menu. */
-	.header-model {
-		/* biome-ignore lint/complexity/noImportantStyles: forced hide on mobile — overrides the wider-screen inline display so the pill only appears via the overflow menu on narrow viewports. */
+	/* On mobile, hide the inline model and Fast pills — both remain reachable
+	 * through Settings. */
+	.header-model,
+	.header-fast {
+		/* biome-ignore lint/complexity/noImportantStyles: forced hide on mobile — overrides the wider-screen inline display so these controls only appear via the overflow menu on narrow viewports. */
 		display: none !important;
 	}
 

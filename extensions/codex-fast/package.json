@@ -1,0 +1,19 @@
+{
+	"name": "acb-codex-fast",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Pi-owned OpenAI Codex fast service-tier toggle for AgentChatBox.",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}
