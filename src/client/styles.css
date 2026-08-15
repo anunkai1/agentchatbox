@@ -31,8 +31,8 @@
 	--accent: #eb5b3c;
 	--accent-hover: #ff6f4d;
 	--accent-soft: rgba(235, 91, 60, 0.12);
-	--brand-blue: #234b8b;
-	--brand-cyan: #27c4c8;
+	--brand-blue: #1d3970;
+	--brand-cyan: #1d9fa5;
 	--accent-border: rgba(235, 91, 60, 0.45);
 
 	/* User bubble — a desaturated dark grey */
@@ -2805,7 +2805,7 @@ body.modal-open {
 		justify-content: center;
 		padding: 0;
 		border-radius: 50%;
-		transform: scale(0.92);
+		transform: scale(0.88);
 	}
 	.header-new-chat-icon {
 		display: inline-flex;
@@ -2824,7 +2824,7 @@ body.modal-open {
 		padding: 0;
 		justify-content: center;
 		border-radius: 50%;
-		transform: scale(0.92);
+		transform: scale(0.88);
 		flex-shrink: 0;
 	}
 	.header-overflow > span:last-child {
