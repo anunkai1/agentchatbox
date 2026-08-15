@@ -100,6 +100,13 @@ export function registerCodexFast(
 	pi.registerCommand("fast", {
 		description: "toggle Codex fast mode (1.5x speed, increased usage)",
 		handler: async (rawArgs, ctx) => {
+			const command = rawArgs.trim().toLowerCase();
+			const current = store.read();
+			if (command === "report") {
+				ctx.ui.setStatus("codex-fast", current ? "Enabled" : "Standard");
+				return;
+			}
+
 			const modelId = currentCodexModel(ctx);
 			if (!modelId) {
 				ctx.ui.notify("/fast is available when an OpenAI Codex model is selected.", "warning");
@@ -110,8 +117,6 @@ export function registerCodexFast(
 				return;
 			}
 
-			const command = rawArgs.trim().toLowerCase();
-			const current = store.read();
 			if (command === "status") {
 				ctx.ui.notify(`Codex fast mode is ${current ? "enabled" : "disabled"}.`, "info");
 				return;
@@ -133,6 +138,7 @@ export function registerCodexFast(
 			}
 
 			store.write(enabled);
+			ctx.ui.setStatus("codex-fast", enabled ? "Enabled" : "Standard");
 			ctx.ui.notify(
 				enabled
 					? "Codex fast mode enabled — 1.5x speed, increased usage."
