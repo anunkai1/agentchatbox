@@ -6,7 +6,7 @@
  * access), refuses non-regular files, and sets attachment headers.
  */
 
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,6 +46,17 @@ describe("GET /api/file", () => {
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-disposition")).toContain("attachment");
 		expect(await res.text()).toBe("hi there");
+	});
+
+	it("resolves relative tool paths against the supplied session cwd", async () => {
+		const project = join(tmp, "project");
+		await writeFile(join(tmp, "AGENTS.md"), "global");
+		await mkdir(project, { recursive: true });
+		await writeFile(join(project, "AGENTS.md"), "project");
+		const query = new URLSearchParams({ path: "AGENTS.md", cwd: project });
+		const res = await fetch(`${base}/api/file?${query}`);
+		expect(res.status).toBe(200);
+		expect(await res.text()).toBe("project");
 	});
 
 	it("serves a file outside piCwd (remote-shell threat model)", async () => {

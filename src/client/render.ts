@@ -698,7 +698,7 @@ function mountToolHead(
 		el("span", { class: "tool-icon" }, "⚙"),
 		el("span", { class: "tool-name" }, `${name} ${summary}`),
 	);
-	if (downloadPath) head.append(makeFileDownloadLink(downloadPath));
+	if (downloadPath) head.append(makeFileDownloadLink(downloadPath, state.sessionCwd));
 	if (expandable && full !== null) {
 		const toggle = el(
 			"button",
@@ -767,8 +767,10 @@ function toolPathFromArgs(args: unknown): string | null {
  * at the server's /api/file route, which streams any file inside the
  * agent project directory. Returns null if the path is empty.
  */
-function makeFileDownloadLink(path: string): HTMLAnchorElement {
-	const url = `/api/file?path=${encodeURIComponent(path)}`;
+function makeFileDownloadLink(path: string, cwd: string | null): HTMLAnchorElement {
+	const params = new URLSearchParams({ path });
+	if (cwd && !path.startsWith("/")) params.set("cwd", cwd);
+	const url = `/api/file?${params.toString()}`;
 	return el(
 		"a",
 		{
@@ -1479,6 +1481,28 @@ export function addImageAttachmentPreview(
 		),
 	);
 	previews.append(card);
+}
+
+/**
+ * Rebuild image previews after renderShell() replaces the composer DOM.
+ * Uploaded image bytes live in state until the prompt is accepted, but the
+ * old composer node (and its thumbnails) does not. Without this restoration,
+ * a transcript refresh makes an attached image appear to vanish from the UI.
+ */
+export function restoreImageAttachmentPreviews(): void {
+	for (const [url, attachment] of state.uploadedImages) {
+		addImageAttachmentPreview(url, attachment.filename, () => {
+			state.uploadedImages.delete(url);
+			const ta = document.querySelector<HTMLTextAreaElement>("#input");
+			if (ta) {
+				ta.value = ta.value
+					.replace(`![image: ${attachment.filename}](${url})`, "")
+					.replace(`[image: ${attachment.filename}](${url})`, "")
+					.trim();
+				autoSize();
+			}
+		});
+	}
 }
 
 export interface FileUploadPreview {
@@ -2302,6 +2326,7 @@ export function renderShell(): void {
 	if (window.innerWidth <= 720) toggleSidebar(true);
 
 	renderHistory();
+	restoreImageAttachmentPreviews();
 	refreshStatus();
 }
 

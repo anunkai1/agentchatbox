@@ -1,5 +1,5 @@
 /**
- * File download route: GET /api/file?path=<absolute path>
+ * File download route: GET /api/file?path=<path>[&cwd=<session cwd>]
  *
  * Serves any regular file the agent can read — when a tool call carries
  * a `path` arg (write / edit / read), the renderer turns it into a
@@ -22,7 +22,7 @@
 
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
 import { asyncHandler } from "./async-handler.js";
@@ -35,14 +35,16 @@ export function createFilesRouter(): Router {
 		asyncHandler(async (req: Request, res: Response) => {
 			const raw = typeof req.query.path === "string" ? req.query.path : "";
 			if (!raw) {
-				res.status(400).json({ error: "missing ?path=<absolute path>" });
+				res.status(400).json({ error: "missing ?path=<path>" });
 				return;
 			}
+			const cwd = typeof req.query.cwd === "string" ? req.query.cwd : "";
 
-			// `resolve` collapses `..` segments so a traversal like
-			// "../../etc/passwd" still lands on a real absolute path; the
-			// only remaining gate is that it must be a regular file.
-			const target = resolve(raw);
+			// Tool paths are relative to the pi session's cwd, not the
+			// agentchatbox process cwd. Absolute paths remain unchanged.
+			// `resolve` also collapses `..` segments; the only remaining gate
+			// is that the result must be a regular file.
+			const target = isAbsolute(raw) ? resolve(raw) : resolve(cwd || process.cwd(), raw);
 
 			let s: Awaited<ReturnType<typeof stat>>;
 			try {

@@ -1048,6 +1048,7 @@ function syncCurrentSessionTitle(sessions: SessionSummary[]): void {
 	const current = sessions.find((session) => session.id === state.sessionId);
 	if (!current) return;
 	state.title = current.title.trim() || "New chat";
+	state.sessionCwd = current.cwd;
 	const title = document.querySelector<HTMLSpanElement>("#title");
 	if (title) title.textContent = state.title;
 }

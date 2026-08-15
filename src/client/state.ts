@@ -296,6 +296,8 @@ export interface AppState {
 	 * slow" visually distinct from "frozen".
 	 */
 	streamingStartedAt: number | null;
+	/** Absolute cwd of the active pi session; tool paths are relative to this. */
+	sessionCwd: string | null;
 	/** All known projects (folders with their own cwd + AGENTS.md). */
 	projects: ProjectSummary[];
 	/**
@@ -355,6 +357,7 @@ export const state: AppState = {
 	pendingSteerCount: 0,
 	retry: null,
 	streamingStartedAt: null,
+	sessionCwd: null,
 	projects: [],
 	activeProjectId: "global",
 	capabilities: null,
