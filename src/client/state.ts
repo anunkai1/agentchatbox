@@ -166,6 +166,8 @@ export interface AppState {
 	 * extension (selectable via `/imagemodel` → ctx.ui.select relay).
 	 */
 	currentImageModelLabel: string | null;
+	/** Display-only status labels reported by pi extensions via ctx.ui.setStatus(). */
+	extensionStatusLabels: Record<string, string>;
 	/**
 	 * The model id the user just clicked in the picker. The server will
 	 * confirm it on the next `ready` event. Set to the model id at click
@@ -334,6 +336,7 @@ export const state: AppState = {
 	currentModelLabel: "(no model)",
 	currentProvider: null,
 	currentImageModelLabel: null,
+	extensionStatusLabels: {},
 	currentThinking: "high",
 	pendingModelSet: null,
 	uploadedImages: new Map(),

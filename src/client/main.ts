@@ -57,7 +57,7 @@ import {
 	updateJumpToBottomFabState,
 	updateVoiceTextBox,
 } from "./render.js";
-import { setServices } from "./services.js";
+import { services, setServices } from "./services.js";
 import {
 	closeSlashMenu,
 	handleSlash,
@@ -957,7 +957,14 @@ function onEvent(event: Record<string, unknown>): void {
 			// `notify` is fire-and-forget (no response expected) — handled
 			// inline here. Dialog methods (select/confirm/input) are handled
 			// by the extension-ui module, which calls the responder.
-			if (e.method === "notify" && typeof e.message === "string") {
+			if (e.method === "setStatus" && typeof e.statusKey === "string") {
+				if (typeof e.statusText === "string") {
+					state.extensionStatusLabels[e.statusKey] = e.statusText;
+				} else {
+					delete state.extensionStatusLabels[e.statusKey];
+				}
+				refreshStatus();
+			} else if (e.method === "notify" && typeof e.message === "string") {
 				const notifyType =
 					e.notifyType === "error" ? "error" : e.notifyType === "warning" ? "warning" : "info";
 				showToast(e.message, notifyType);
@@ -1338,6 +1345,11 @@ async function boot(): Promise<void> {
 		state.capabilities = commands;
 		refreshWelcomeSuggestions();
 		refreshStatus();
+		// Status values stay extension-owned. Ask the Fast extension to publish
+		// its current display label through the generic setStatus relay.
+		if (commands.some((command) => command.name === "fast" && command.source !== "skill")) {
+			services.sendSlashCommand?.("/fast report");
+		}
 	});
 	// Context-window fill from pi's get_session_stats RPC. Updates the
 	// thin meter above the status bar. Fired after each run (agent_end),

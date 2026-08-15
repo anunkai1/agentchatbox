@@ -1453,7 +1453,7 @@ export function openOverflowMenu(): void {
 		chatRows.push(
 			actionRow(
 				"Codex Fast",
-				"Choose speed",
+				state.extensionStatusLabels["codex-fast"] ?? "Checking…",
 				closeThen(() => services.sendSlashCommand?.("/fast menu")),
 				"Choose Codex response speed",
 			),

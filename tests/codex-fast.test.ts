@@ -10,6 +10,7 @@ type Context = {
 	ui: {
 		notify(message: string, level: string): void;
 		select(title: string, options: string[]): Promise<string | undefined>;
+		setStatus(key: string, text: string | undefined): void;
 	};
 };
 type CommandHandler = (args: string, ctx: Context) => Promise<void>;
@@ -27,6 +28,7 @@ function harness(initial = false) {
 	let providerRequestHandler: ProviderRequestHandler | undefined;
 	const notify = vi.fn();
 	const select = vi.fn(async (_title: string, options: string[]) => options[0]);
+	const setStatus = vi.fn();
 	registerCodexFast(
 		{
 			registerCommand(_name: string, options: { handler: CommandHandler }) {
@@ -47,9 +49,10 @@ function harness(initial = false) {
 		providerRequest: providerRequestHandler!,
 		notify,
 		select,
+		setStatus,
 		codexCtx: {
 			model: { provider: "openai-codex", id: "gpt-5.6-terra" },
-			ui: { notify, select },
+			ui: { notify, select, setStatus },
 		},
 	};
 }
@@ -98,6 +101,16 @@ describe("Codex fast pi extension", () => {
 		expect(h.notify).toHaveBeenLastCalledWith("Codex fast mode is enabled.", "info");
 	});
 
+	it("publishes the current GUI label through the generic extension status relay", async () => {
+		const h = harness(true);
+		await h.command("report", {
+			...h.codexCtx,
+			model: { provider: "openrouter", id: "gpt-5.6-terra" },
+		});
+		expect(h.setStatus).toHaveBeenCalledWith("codex-fast", "Enabled");
+		expect(h.notify).not.toHaveBeenCalled();
+	});
+
 	it("opens an extension-owned GUI picker and applies the selected speed", async () => {
 		const h = harness(true);
 		h.select.mockImplementationOnce(async (_title, options) => options[1]);
@@ -108,6 +121,7 @@ describe("Codex fast pi extension", () => {
 			"Standard — normal speed and usage",
 		]);
 		expect(h.enabled).toBe(false);
+		expect(h.setStatus).toHaveBeenLastCalledWith("codex-fast", "Standard");
 		expect(h.notify).toHaveBeenLastCalledWith(
 			"Codex fast mode disabled — standard speed and usage.",
 			"info",
