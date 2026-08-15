@@ -1208,6 +1208,14 @@ function groupExtensionPackages(commands: PiCommand[]): Map<string, PiCommand[]>
 /** Update the capabilities badge in the header. */
 function refreshCapabilitiesBadge(): void {
 	const caps = state.capabilities;
+	const fastButton = document.getElementById("fast-mode");
+	if (fastButton) {
+		const fastAvailable = caps?.some(
+			(command) => command.name === "fast" && command.source !== "skill",
+		);
+		fastButton.style.display = fastAvailable ? "" : "none";
+	}
+
 	const badge = document.getElementById("caps-badge");
 	if (!badge) return;
 	if (!caps || caps.length === 0) {
@@ -1950,6 +1958,20 @@ export function renderShell(): void {
 				style: "display:none",
 			},
 			"",
+		),
+		el(
+			"button",
+			{
+				class: "picker-btn header-fast",
+				id: "fast-mode",
+				type: "button",
+				title: "Configure Codex Fast mode (/fast)",
+				"aria-label": "Configure Codex Fast mode",
+				onclick: () => shellHandlers?.handleSlash("fast menu"),
+				style: "display:none",
+			},
+			el("span", { "aria-hidden": "true" }, "⚡"),
+			el("span", {}, "Fast"),
 		),
 		el(
 			"button",

@@ -55,6 +55,7 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	imagemodel: "open the image-generation model picker (alias: /image)",
 	image: "open the image-generation model picker (alias: /imagemodel)",
 	imggen: 'generate an image directly (no LLM): /imggen [-a ASPECT] [-m MODEL] "prompt"',
+	fast: "toggle Codex fast mode (1.5x speed, increased usage)",
 	think: "set a model-supported thinking level: /think off|minimal|low|medium|high|xhigh|max",
 	clear: "start a new chat (alias: /new)",
 	new: "start a new chat (alias: /clear)",
@@ -98,7 +99,7 @@ let commandPaletteFiltered: CommandPaletteEntry[] = [];
 let commandPaletteSelected = 0;
 
 function commandCategory(name: string): string {
-	if (["model", "models", "imagemodel", "image", "imggen", "think", "abort"].includes(name))
+	if (["model", "models", "imagemodel", "image", "imggen", "fast", "think", "abort"].includes(name))
 		return "Core";
 	if (["clear", "new", "sessions", "resume", "name", "session", "project"].includes(name))
 		return "Sessions";
@@ -384,6 +385,12 @@ export function handleSlash(arg: string): void {
 			// /research command. The acb-workflows pi extension owns validation,
 			// prompt construction, and delivery.
 			services.sendSlashCommand?.(`/research${rest ? ` ${rest}` : ""}`);
+			break;
+		case "fast":
+			// Codex fast mode is owned by the pi extension; forward it without
+			// starting a normal agent turn.
+			services.sendSlashCommand?.(`/fast${rest ? ` ${rest}` : ""}`);
+			$<HTMLTextAreaElement>("#input").value = "";
 			break;
 		case "imggen":
 			// Model-free image generation (pi-local-image extension). Same
@@ -1426,23 +1433,33 @@ export function openOverflowMenu(): void {
 		action();
 	};
 
-	box.append(
-		section(
-			"Chat",
-			actionRow(
-				"Model",
-				state.currentModelId ?? "—",
-				closeThen(openModelPicker),
-				"Choose chat model",
-			),
-			actionRow(
-				"Thinking",
-				state.currentThinking,
-				closeThen(openThinkPicker),
-				"Choose thinking level",
-			),
+	const chatRows = [
+		actionRow(
+			"Model",
+			state.currentModelId ?? "—",
+			closeThen(openModelPicker),
+			"Choose chat model",
 		),
-	);
+		actionRow(
+			"Thinking",
+			state.currentThinking,
+			closeThen(openThinkPicker),
+			"Choose thinking level",
+		),
+	];
+	if (
+		state.capabilities?.some((command) => command.name === "fast" && command.source !== "skill")
+	) {
+		chatRows.push(
+			actionRow(
+				"Codex Fast",
+				"Choose speed",
+				closeThen(() => services.sendSlashCommand?.("/fast menu")),
+				"Choose Codex response speed",
+			),
+		);
+	}
+	box.append(section("Chat", ...chatRows));
 
 	// Image model state remains extension-owned; the displayed value is the
 	// best label pi has reported during this browser session.
