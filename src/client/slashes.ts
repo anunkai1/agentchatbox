@@ -1461,6 +1461,27 @@ export function openOverflowMenu(): void {
 	}
 	box.append(section("Chat", ...chatRows));
 
+	// Local AI lifecycle is extension-owned. This row is only a transport
+	// shortcut; the pi extension starts server4, waits for health, and selects
+	// the model. Keep it separate from the generic model picker because local
+	// Qwen shares the GPU with the image backend.
+	const hasLocalAi = (state.capabilities ?? []).some(
+		(command) => command.name === "localai" && command.source !== "skill",
+	);
+	if (hasLocalAi) {
+		box.append(
+			section(
+				"Local AI",
+				actionRow(
+					"Server4 GPU",
+					state.extensionStatusLabels["local-ai"] ?? "Checking…",
+					closeThen(() => services.sendSlashCommand?.("/localai menu")),
+					"Start, stop, or select the server4 local AI model",
+				),
+			),
+		);
+	}
+
 	// Image model state remains extension-owned; the displayed value is the
 	// best label pi has reported during this browser session.
 	box.append(

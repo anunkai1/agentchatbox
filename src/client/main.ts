@@ -1350,6 +1350,9 @@ async function boot(): Promise<void> {
 		if (commands.some((command) => command.name === "fast" && command.source !== "skill")) {
 			services.sendSlashCommand?.("/fast report");
 		}
+		if (commands.some((command) => command.name === "localai" && command.source !== "skill")) {
+			services.sendSlashCommand?.("/localai report");
+		}
 	});
 	// Context-window fill from pi's get_session_stats RPC. Updates the
 	// thin meter above the status bar. Fired after each run (agent_end),
