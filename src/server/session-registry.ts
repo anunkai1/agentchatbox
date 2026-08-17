@@ -488,6 +488,45 @@ class SessionRegistry {
 			}
 		}
 
+		// Extension commands can change pi's model internally with pi.setModel()
+		// without producing the normal set_model RPC acknowledgement. When an
+		// extension publishes a status update, take a fresh get_state snapshot so
+		// the detachable-session state and browser picker stay in sync too.
+		if (line.type === "extension_ui_request" && line.method === "setStatus" && session.ready) {
+			session.pi.send({ type: "get_state" });
+		}
+
+		// Keep the transport's model snapshot current after an extension-triggered
+		// get_state. The normal readiness get_state above only discovers the
+		// session id; later snapshots are the source of truth for model changes.
+		if (line.type === "response" && line.command === "get_state" && session.ready) {
+			const data = line.data as
+				| {
+						model?: { provider?: unknown; id?: unknown };
+						thinkingLevel?: unknown;
+				  }
+				| undefined;
+			const provider = data?.model?.provider;
+			const modelId = data?.model?.id;
+			const thinkingLevel = data?.thinkingLevel;
+			if (typeof provider === "string" && typeof modelId === "string") {
+				const thinking = typeof thinkingLevel === "string" ? (thinkingLevel as ThinkingLevel) : session.init.thinkingLevel;
+				const changed =
+					session.init.provider !== provider ||
+					session.init.modelId !== modelId ||
+					session.init.thinkingLevel !== thinking;
+				session.init = { ...session.init, provider, modelId, thinkingLevel: thinking };
+				if (changed) {
+					deliver(session.ws, {
+						type: "modelState",
+						provider,
+						modelId,
+						thinkingLevel: thinking,
+					});
+				}
+			}
+		}
+
 		// Resolve in-flight set_model / set_thinking_level requests.
 		// chat.ts stashes the requested model/thinking in
 		// session.pendingModel/pendingThinking and we apply it to
