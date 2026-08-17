@@ -262,6 +262,13 @@ export function createChatClient(): ChatClient {
 				case "capabilities":
 					for (const l of capabilitiesListeners) l((msg.commands as PiCommand[]) ?? []);
 					break;
+				case "modelState":
+					// Model changes made inside a pi extension arrive as a direct
+					// transport frame rather than a wrapped pi event. Route it
+					// through the same event channel as client-initiated switches;
+					// main.ts already owns the authoritative UI update path.
+					for (const l of eventListeners) l(msg as unknown as Record<string, unknown>);
+					break;
 				case "sessionStats":
 					for (const l of sessionStatsListeners)
 						l({
