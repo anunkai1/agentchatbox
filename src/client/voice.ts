@@ -20,6 +20,7 @@ import {
 	autoSize,
 	hideToast,
 	refreshStatus,
+	setStatusMessage,
 	showTtsBanner,
 } from "./render.js";
 import { state } from "./state.js";
@@ -653,7 +654,7 @@ export async function handleVoiceRecord(): Promise<void> {
 			});
 			const blob = new Blob(recordedChunks, { type: "audio/webm" });
 			const secs = (Date.now() - recordingStart) / 1000;
-			$("#status-bar").textContent = `transcribing ${secs.toFixed(1)}s of audio…`;
+			setStatusMessage(`transcribing ${secs.toFixed(1)}s of audio…`);
 			try {
 				const text = await transcribeAudio(blob);
 				// Insert the transcript at the cursor, preserving any text
@@ -673,7 +674,7 @@ export async function handleVoiceRecord(): Promise<void> {
 					ta.focus();
 				}
 				autoSize();
-				$("#status-bar").textContent = `transcribed (${text.length} chars). Press Enter to send.`;
+				setStatusMessage(`transcribed (${text.length} chars). Press Enter to send.`);
 			} catch (err) {
 				appendError(`transcription failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
@@ -681,7 +682,7 @@ export async function handleVoiceRecord(): Promise<void> {
 		recordingStart = Date.now();
 		mediaRecorder.start();
 		$<HTMLButtonElement>("#voice-btn").textContent = "🔴";
-		$("#status-bar").textContent = "recording… click 🔴 to stop";
+		setStatusMessage("recording… click 🔴 to stop");
 	} catch (err) {
 		appendError(`microphone access denied: ${err instanceof Error ? err.message : String(err)}`);
 	}
