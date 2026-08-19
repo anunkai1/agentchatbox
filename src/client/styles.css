@@ -2012,16 +2012,56 @@ body.sidebar-resizing iframe {
 /* ------------------------------------------------------------------ */
 
 .status-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 14px;
+	/* Hard-fixed height: the bar can never grow or shrink, so the composer
+	   above it can never be pushed around — no matter what appears or
+	   disappears in the slots (the old auto-height paragraph wrapped to a
+	   new line whenever a changing number crossed the width threshold,
+	   shoving the composer up and down every second). */
+	height: 33px;
 	padding: 4px 20px 8px;
 	color: var(--text-muted);
 	font-size: 11px;
-	text-align: center;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
 	max-width: var(--chat-max);
 	margin: 0 auto;
 	font-family: var(--font-mono);
 	letter-spacing: 0.01em;
+	line-height: 1.35;
+	/* Digits render at a constant width, so per-second ticks (elapsed time,
+	   retry countdown) never shift the text around. */
+	font-variant-numeric: tabular-nums;
+}
+/* One-line slots: content truncates with "…" instead of wrapping, so the
+   bar can never grow a second line. Hovering shows the full value via the
+   title set by refreshStatus(). */
+.status-slot {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+/* Stable info (model · think · tokens). Takes the leftover space and
+   truncates first, so the important part of the bar never forces the
+   transient stuff off-screen. */
+.status-core {
+	flex: 1 1 auto;
+}
+/* Voice transport controls: never truncated — the stop button must always
+   be reachable, so this slot refuses to shrink. */
+.status-voice {
+	flex: 0 0 auto;
+}
+/* Transient info (streaming timer, retry, cost, queued, connection): hugs
+   the right edge and truncates if the window is narrow. */
+.status-dynamic {
+	flex: 0 1 auto;
+}
+.status-voice:empty,
+.status-dynamic:empty {
+	display: none;
 }
 /* Flashing green dot shown next to "streaming" in the status bar.
    Pulses while the agent is actively generating, like a live LED. */
@@ -2935,9 +2975,32 @@ body.modal-open {
 		height: 30px;
 	}
 
+	/* Mobile: the full status text (model · think · tokens · cost) doesn't
+	   fit one line at phone widths, so we drop the one-line ellipsis and
+	   reserve a FIXED two-line box instead. The slots flow inline and wrap
+	   freely inside it, so everything is readable — while the height stays
+	   constant, so the composer above still never moves (only the text
+	   shuffles). Anything past two lines (a very long retry error) clips at
+	   overflow: hidden — transient and rare, fine to lose. */
 	.status-bar {
+		display: block;
+		height: 36px;
+		overflow: hidden;
 		padding: 2px 12px 4px;
-		font-size: 10px;
+		/* Smaller than the desktop 11px mono so it reads like the 11px sans
+		   message timestamps (“just now”) — mono glyphs run visibly larger
+		   than sans at the same pt size, and two lines of status + a voice
+		   button line must fit the fixed height below. */
+		font-size: 9px;
+		text-align: center;
+		overflow-wrap: anywhere;
+	}
+	.status-slot {
+		display: inline;
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+		min-width: 0;
 	}
 }
 
@@ -3744,9 +3807,6 @@ select:focus-visible,
 		padding-right: max(10px, env(safe-area-inset-right, 0px));
 		padding-bottom: max(4px, env(safe-area-inset-bottom, 0px));
 		padding-left: max(10px, env(safe-area-inset-left, 0px));
-	}
-	.status-bar {
-		font-size: 11px;
 	}
 }
 

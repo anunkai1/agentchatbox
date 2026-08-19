@@ -123,7 +123,10 @@ function startOrStopWorkingTick(streaming: boolean): void {
 					remainingMs: Math.max(0, state.retry.remainingMs - 1000),
 				};
 			}
-			refreshStatus();
+			// Only the dynamic slot changes per second (elapsed timer + retry
+			// countdown); the core and voice slots are untouched, so this is a
+			// tiny repaint of a few characters rather than a full bar rebuild.
+			paintStatusDynamic();
 		}, 1000);
 	} else if (workingTick) {
 		clearInterval(workingTick);
@@ -1321,93 +1324,68 @@ export function toggleCapabilitiesPopover(): void {
 export function refreshStatus(): void {
 	// The human-readable model label is resolved once per model change
 	// (see state.refreshCurrentModelLabel) instead of searching the model
-	// list here on every status tick (this fires each second while
-	// streaming). Falls back to the raw id when no friendly name is known.
+	// list here on every status tick. Falls back to the raw id when no
+	// friendly name is known.
 	const modelLabel = state.currentModelLabel || state.currentModelId || "(no model)";
 
 	// Escape the dynamic bits we interpolate into innerHTML below.
 	const esc = escapeHtml;
 
-	const parts: string[] = [];
-	parts.push(esc(modelLabel));
-	parts.push(`think: ${esc(state.currentThinking)}`);
-	// Context-window fill token count — the SAME number the fill bar above
-	// represents (state.contextUsage.tokens / contextWindow), NOT cumulative
-	// session usage. Cumulative input+output only ever grows and diverges
-	// from the bar after a compaction, which made the number and the bar
-	// disagree. Showing context fill here keeps them in lockstep: both reset
-	// together when pi compacts. `tokens` is null right after a compaction
-	// (pi can't size the context until the next reply) → show `?`.
-	parts.push(contextFillLabel());
-	const c = state.costTotal;
-	if (c.cost > 0) parts.push(`$${c.cost.toFixed(4)}`);
-	if (state.isStreaming) {
-		// Elapsed-time working indicator — the CLI shows a spinner +
-		// elapsed counter while a turn runs; agentchatbox used to show
-		// only a static "streaming" dot, which made a slow-but-working
-		// turn look identical to a hang. `streamingStartedAt` is set on
-		// agent_start and cleared on agent_end. The elapsed tick is driven
-		// by the retry-countdown interval below (1s cadence) so no extra
-		// timer is needed when not retrying — fall back to a one-shot.
-		const elapsed = state.streamingStartedAt
-			? Math.max(0, Math.floor((Date.now() - state.streamingStartedAt) / 1000))
-			: 0;
-		const mm = Math.floor(elapsed / 60);
-		const ss = elapsed % 60;
-		parts.push(
-			`<span class="streaming-dot"></span> streaming ${mm}:${ss.toString().padStart(2, "0")}`,
+	// The status bar is a fixed-height row of three one-line slots (see
+	// styles.css .status-bar): core (stable), voice (transport controls),
+	// dynamic (transient). Every slot is nowrap + ellipsis, so nothing can
+	// ever wrap to a second line — the bar's height is constant and the
+	// composer above it never moves, no matter what appears or disappears.
+	const coreEl = $<HTMLSpanElement>("#status-core");
+	if (coreEl) {
+		// Core slot — stable info: model · think level · context fill.
+		// Context-window fill is the SAME number the token pill represents
+		// (state.contextUsage.tokens / contextWindow), NOT cumulative session
+		// usage — cumulative input+output only ever grows and diverges from
+		// the bar after a compaction, which made the number and the bar
+		// disagree. They reset together when pi compacts. `tokens` is null
+		// right after a compaction (pi can't size the context until the next
+		// reply) → show `?`.
+		const core = [esc(modelLabel), `think: ${esc(state.currentThinking)}`, esc(contextFillLabel())].join(
+			" · ",
 		);
+		coreEl.innerHTML = core;
+		// Full value on hover when truncated.
+		coreEl.title = core;
 	}
-	if (state.retry) {
-		// Mirror the CLI's retry loader verbatim:
-		//   "Retrying (1/3) in 8s… (interrupt to cancel)"
-		// plus the error message (the bit the CLI folds into the spinner
-		// context but agentchatbox surfaces explicitly so you can see WHY
-		// it's retrying — a transient 429 reads very differently from a
-		// dead socket). Countdown is live-updated by startRetryCountdown.
-		const r = state.retry;
-		const secs = Math.max(0, Math.ceil(r.remainingMs / 1000));
-		parts.push(
-			`<span class="retry-banner">↻ Retrying (${r.attempt}/${r.maxAttempts}) in ${secs}s — ${esc(r.errorMessage)}</span>`,
-		);
-	}
-	if (state.pendingSteerCount > 0) parts.push(`⟳ ${state.pendingSteerCount} queued`);
-	// Voice activity — render as a single clickable stop button (not
-	// inert text) so it's always reachable in a long session without
-	// scrolling back to the message that started playback. The click is
-	// handled by a delegated listener on #status-bar (set up once in
-	// renderShell) so it survives this innerHTML rebuild, which fires on
-	// every status tick during streaming.
-	if (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0) {
-		if (state.audioPlaying || state.audioPaused) {
-			// Playback active or paused — show pause/resume + stop controls.
-			// The toggle button swaps between ⏸ (playing) and ▶ (paused); the
-			// stop button (red ⏹) is always present to fully halt + clear.
-			const toggle = state.audioPaused
-				? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback" aria-label="Resume voice playback">▶</button>`
-				: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback" aria-label="Pause voice playback">⏸</button>`;
-			const label = state.audioPaused ? "‖ paused" : "♪ playing";
-			parts.push(
-				`${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Stop all voice playback">⏹</button> ${esc(label)}`,
-			);
-		} else {
-			// Synthesizing — nothing to pause yet (no audio loaded). Keep the
-			// single stop button with a spinner so the user can cancel.
-			parts.push(
-				`<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Cancel voice synthesis"><span class="speak-spinner"></span> synthesizing…</button>`,
-			);
+
+	paintStatusDynamic();
+
+	// Voice slot — transport controls (pause/resume + stop, or the
+	// synthesizing stop). Rendered as clickable buttons (not inert text) so
+	// they're always reachable in a long session without scrolling back to
+	// the message that started playback — the status bar never scrolls away.
+	// The slot is flex-shrink: 0 and never truncates, so the stop button
+	// can't be cut off. Clicks are handled by the delegated listener on
+	// #status-bar (set up once in renderShell) so they survive this
+	// innerHTML rebuild.
+	const voiceEl = $<HTMLSpanElement>("#status-voice");
+	if (voiceEl) {
+		let html = "";
+		if (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0) {
+			if (state.audioPlaying || state.audioPaused) {
+				// Playback active or paused — show pause/resume + stop controls.
+				// The toggle button swaps between ⏸ (playing) and ▶ (paused); the
+				// stop button (red ⏹) is always present to fully halt + clear.
+				const toggle = state.audioPaused
+					? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback" aria-label="Resume voice playback">▶</button>`
+					: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback" aria-label="Pause voice playback">⏸</button>`;
+				const label = state.audioPaused ? "‖ paused" : "♪ playing";
+				html = `${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Stop all voice playback">⏹</button> ${esc(label)}`;
+			} else {
+				// Synthesizing — nothing to pause yet (no audio loaded). Keep the
+				// single stop button with a spinner so the user can cancel.
+				html = `<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Cancel voice synthesis"><span class="speak-spinner"></span> synthesizing…</button>`;
+			}
 		}
+		voiceEl.innerHTML = html;
 	}
-	if (state.connectionStatus !== "open") {
-		const tag =
-			state.connectionStatus === "stalled"
-				? "⚠ stalled — reconnecting"
-				: `[${state.connectionStatus}]`;
-		parts.push(esc(tag));
-	}
-	// innerHTML (not textContent) so the streaming dot can be a styled,
-	// flashing <span>. All interpolated bits are escaped above.
-	$("#status-bar").innerHTML = parts.join(" · ");
+
 	refreshCapabilitiesBadge();
 
 	const mp = $<HTMLButtonElement>("#model-picker");
@@ -1423,6 +1401,87 @@ export function refreshStatus(): void {
 	const sp = $<HTMLButtonElement>("#speed-picker");
 	sp.textContent = `speed: ${state.ttsSpeed}×`;
 	refreshComposerState();
+}
+
+/**
+ * Paint the dynamic slot — the transient, frequently-changing info:
+ * streaming timer, retry loader, cost, queued steers, connection status.
+ *
+ * This is the only slot the 1s working tick touches while streaming, so a
+ * new second of elapsed time (or a counting-down retry) repaints a few
+ * characters instead of rebuilding the whole bar. All values are escaped
+ * where they interpolate into innerHTML.
+ */
+function paintStatusDynamic(): void {
+	const dynEl = $<HTMLSpanElement>("#status-dynamic");
+	if (!dynEl) return;
+	const esc = escapeHtml;
+
+	const dyn: string[] = [];
+	const c = state.costTotal;
+	// Cost only at turn boundaries — rendering it live mid-run made the bar
+	// grow a new part on every message_update; it's a session total, not a
+	// live meter, so painting it when the run ends is enough.
+	if (c.cost > 0 && !state.isStreaming) dyn.push(`$${c.cost.toFixed(4)}`);
+	if (state.isStreaming) {
+		// Elapsed-time working indicator — the CLI shows a spinner +
+		// elapsed counter while a turn runs; agentchatbox used to show
+		// only a static "streaming" dot, which made a slow-but-working
+		// turn look identical to a hang. `streamingStartedAt` is set on
+		// agent_start and cleared on agent_end. The elapsed tick is driven
+		// by the retry-countdown interval below (1s cadence) so no extra
+		// timer is needed when not retrying. Padded mm:ss keeps the width
+		// constant as it ticks.
+		const elapsed = state.streamingStartedAt
+			? Math.max(0, Math.floor((Date.now() - state.streamingStartedAt) / 1000))
+			: 0;
+		const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
+		const ss = String(elapsed % 60).padStart(2, "0");
+		dyn.push(`<span class="streaming-dot"></span> streaming ${mm}:${ss}`);
+	}
+	if (state.retry) {
+		// Mirror the CLI's retry loader verbatim:
+		//   "Retrying (1/3) in 8s… (interrupt to cancel)"
+		// plus the error message (the bit the CLI folds into the spinner
+		// context but agentchatbox surfaces explicitly so you can see WHY
+		// it's retrying — a transient 429 reads very differently from a
+		// dead socket). Countdown is live-updated by startRetryCountdown.
+		const r = state.retry;
+		const secs = Math.max(0, Math.ceil(r.remainingMs / 1000));
+		dyn.push(
+			`<span class="retry-banner">↻ Retrying (${r.attempt}/${r.maxAttempts}) in ${secs}s — ${esc(r.errorMessage)}</span>`,
+		);
+	}
+	if (state.pendingSteerCount > 0) dyn.push(`⟳ ${state.pendingSteerCount} queued`);
+	if (state.connectionStatus !== "open") {
+		const tag =
+			state.connectionStatus === "stalled"
+				? "⚠ stalled — reconnecting"
+				: `[${state.connectionStatus}]`;
+		dyn.push(esc(tag));
+	}
+	const html = dyn.join(" · ");
+	// innerHTML (not textContent) so the streaming dot can be a styled,
+	// flashing <span>. All interpolated bits are escaped above. The title
+	// keeps the full value reachable on hover when the slot truncates.
+	dynEl.innerHTML = html;
+	dynEl.title = html;
+}
+
+/**
+ * Transient whole-bar message used by the voice recorder ("recording…",
+ * "transcribing…", "transcribed (N chars)…" states). Painted into the core
+ * slot and cleared by the next refreshStatus — the same lifecycle as the
+ * old `$("#status-bar").textContent = …` writes, but routed through a slot
+ * so the fixed-height bar layout is never replaced by a raw text node.
+ */
+export function setStatusMessage(text: string): void {
+	const coreEl = $<HTMLSpanElement>("#status-core");
+	if (coreEl) coreEl.textContent = text;
+	const voiceEl = $<HTMLSpanElement>("#status-voice");
+	if (voiceEl) voiceEl.textContent = "";
+	const dynEl = $<HTMLSpanElement>("#status-dynamic");
+	if (dynEl) dynEl.textContent = "";
 }
 
 /** Compact text label for the status-line token pill. Reads
@@ -2215,8 +2274,16 @@ export function renderShell(): void {
 		}),
 	);
 
-	// Status bar
-	const statusBar = el("div", { class: "status-bar", id: "status-bar" }, "connecting…");
+	// Status bar — a fixed-height row of three one-line slots so its height
+	// can never change (see styles.css .status-bar). Core = stable info
+	// (model · think · tokens), voice = transport controls (never truncated),
+	// dynamic = transient info (streaming timer, retry, cost, queued…).
+	const statusBar = el("div", { class: "status-bar", id: "status-bar" });
+	statusBar.append(
+		el("span", { class: "status-slot status-core", id: "status-core" }, "connecting…"),
+		el("span", { class: "status-slot status-voice", id: "status-voice" }),
+		el("span", { class: "status-slot status-dynamic", id: "status-dynamic" }),
+	);
 	// Delegated click handler for the stop-voice button that refreshStatus()
 	// injects into the status bar as innerHTML. Delegation (one listener on
 	// the container, surviving innerHTML rebuilds) beats re-binding on every
