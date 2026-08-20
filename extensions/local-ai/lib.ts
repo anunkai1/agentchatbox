@@ -9,7 +9,7 @@ export function parseLocalAiState(output: string, exitCode = 0): LocalAiState {
 	if (exitCode !== 0) return "offline";
 	if (/Qwen API\s*:\s*ready/i.test(output)) return "qwen";
 	if (/FLUX API\s*:\s*ready/i.test(output)) return "image";
-	if (/LTX-2\.5\s*:\s*ready/i.test(output)) return "video";
+	if (/LTX-2\.5\s*:\s*(?:ready|active|busy)/i.test(output)) return "video";
 	return "stopped";
 }
 
