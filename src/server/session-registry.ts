@@ -308,6 +308,10 @@ class SessionRegistry {
 			session.busy = false;
 			session.streaming = false;
 			if (!session.ready) {
+				// Intentional pre-ready teardown (shutdown, failed/superseded
+				// candidate cleanup) already rejected its waiters in kill(). It is
+				// expected lifecycle noise, not a subprocess failure.
+				if (session.terminationExpected) return;
 				const message = `pi exited before ready (code=${info.code}, signal=${info.signal})`;
 				log.error("pi exited before ready", {
 					code: info.code,
