@@ -20,6 +20,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
+// Keep the suite hermetic when invoked from inside the production service,
+// whose inherited environment correctly rejects Origin-less WebSockets.
+process.env.AGENTCHATBOX_ALLOW_MISSING_WS_ORIGIN = "1";
+
 type AnyMsg = { type: string; [k: string]: unknown };
 
 const ECHO_SCRIPT = `#!/usr/bin/env bash

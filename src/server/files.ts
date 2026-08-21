@@ -20,7 +20,7 @@
  * `path` pointing at `/dev/` or a mount point can't be streamed.
  */
 
-import { constants, createReadStream } from "node:fs";
+import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename, isAbsolute, resolve } from "node:path";
 import type { Request, Response, Router } from "express";
@@ -80,7 +80,8 @@ export function createFilesRouter(): Router {
 			// touches multi-GB logs; loading one into a Buffer to `res.send()`
 			// would spike memory and can OOM the server. Piping reads + sends
 			// in chunks so peak memory stays flat regardless of file size.
-			createReadStream(target, { fd: handle.fd, autoClose: true, start: 0 })
+			handle
+				.createReadStream({ autoClose: true, start: 0 })
 				.on("error", () => {
 					// Avoid reflecting filesystem details. Mid-stream failures cannot
 					// change status safely, so destroy the response.

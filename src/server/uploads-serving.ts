@@ -1,4 +1,4 @@
-import { constants, createReadStream } from "node:fs";
+import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { extname, join } from "node:path";
 import type { Request, Response, Router } from "express";
@@ -83,7 +83,8 @@ export function createUploadsServingRouter(): Router {
 					res.setHeader("Content-Type", "application/octet-stream");
 					res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
 				}
-				createReadStream(target, { fd: handle.fd, autoClose: true, start: 0 })
+				handle
+					.createReadStream({ autoClose: true, start: 0 })
 					.on("error", () => {
 						try {
 							res.destroy();
