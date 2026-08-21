@@ -42,6 +42,25 @@ describe("UploadStore", () => {
 		expect(store.reserve()).toBeTruthy();
 	});
 
+	it("counts an independent live writer's reservation before admitting HTTP", () => {
+		const dir = root();
+		const store = new UploadStore(dir, 60, 100);
+		writeFileSync(
+			join(dir, `${UPLOAD_RESERVATION_PREFIX}${process.pid}-extension`),
+			Buffer.alloc(50),
+		);
+		expect(store.usage()).toMatchObject({ bytes: 0, files: 0, reservedBytes: 50 });
+		expect(() => store.reserve()).toThrow(UploadQuotaError);
+	});
+
+	it("removes a dead writer's unique reservation without a shared lock", () => {
+		const dir = root();
+		const store = new UploadStore(dir, 60, 100);
+		writeFileSync(join(dir, `${UPLOAD_RESERVATION_PREFIX}2147483647-dead`), Buffer.alloc(60));
+		expect(store.reserve()).toBeTruthy();
+		expect(readdirSync(dir).some((name) => name.includes("2147483647-dead"))).toBe(false);
+	});
+
 	it("counts extension-created files and publishes private files atomically", () => {
 		const dir = root();
 		writeFileSync(join(dir, "extension-output.png"), Buffer.alloc(20));
