@@ -312,12 +312,24 @@ class SessionRegistry {
 				// candidate cleanup) already rejected its waiters in kill(). It is
 				// expected lifecycle noise, not a subprocess failure.
 				if (session.terminationExpected) return;
-				const message = `pi exited before ready (code=${info.code}, signal=${info.signal})`;
-				log.error("pi exited before ready", {
-					code: info.code,
-					signal: info.signal,
-					stderr: pi.getStderr().slice(-1000),
-				});
+				const stderr = pi.getStderr().slice(-1000);
+				const missingResume = info.code === 1 && /(?:^|\n)No session found matching\s/.test(stderr);
+				const message = missingResume
+					? "the requested session no longer exists; start a new chat"
+					: `pi exited before ready (code=${info.code}, signal=${info.signal})`;
+				if (missingResume) {
+					// Stale browser localStorage after a deleted/ephemeral session is a
+					// normal client condition, not a subprocess fault.
+					log.info("requested pi session no longer exists", {
+						sessionId: session.sessionId,
+					});
+				} else {
+					log.error("pi exited before ready", {
+						code: info.code,
+						signal: info.signal,
+						stderr,
+					});
+				}
 				for (const waiter of session.readyWaiters.splice(0)) waiter.reject(new Error(message));
 				deliver(session.ws, { type: "error", message });
 				return;

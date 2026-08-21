@@ -85,6 +85,11 @@ const EXIT_BEFORE_SESSION_SCRIPT = `#!/usr/bin/env bash
 exit 127
 `;
 
+const MISSING_SESSION_SCRIPT = `#!/usr/bin/env bash
+echo "No session found matching 'deleted-session-001'" >&2
+exit 1
+`;
+
 const EXIT_AFTER_FIRST_READ_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that READS stdin (so the parent's write end of the pipe is
 # open and the parent can keep writing) and then exits hard. This is
@@ -942,6 +947,37 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			const errMsg = msgs.find((m) => m.type === "error");
 			expect(errMsg).toBeTruthy();
 			expect((errMsg as { message?: string }).message ?? "").toMatch(/pi exited/);
+		} finally {
+			close();
+		}
+	});
+
+	it("reports a stale resume as a missing session rather than a subprocess fault", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "fake-pi-missing-session-"));
+		fakePiPath = join(dir, "pi");
+		writeFileSync(fakePiPath, MISSING_SESSION_SCRIPT, { mode: 0o755 });
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+					sessionId: "deleted-session-001",
+				}),
+			);
+			const msgs = await inbox.waitFor(2, 3000);
+			const errMsg = msgs.find((m) => m.type === "error");
+			expect((errMsg as { message?: string }).message ?? "").toMatch(
+				/requested session no longer exists/i,
+			);
 		} finally {
 			close();
 		}

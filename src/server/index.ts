@@ -567,7 +567,7 @@ function shutdown(reason: string, exitCode: number): void {
 	server.close(() => process.exit(exitCode));
 	setTimeout(() => {
 		log.warn("server.close timed out, forcing exit");
-		process.exit(exitCode || 1);
+		process.exit(exitCode);
 	}, 5000).unref();
 }
 
