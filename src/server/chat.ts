@@ -98,6 +98,13 @@ let chatWss: WebSocketServer | null = null;
 // module once per test file) and duplicated index.ts's handler.
 export function shutdownChatWs(): void {
 	registry.killAll();
+	if (!chatWss) return;
+	// Upgraded sockets are not closed by http.Server.close(). Terminate them
+	// explicitly so an intentional service restart does not sit on the forced
+	// shutdown timer; browsers reconnect normally after the listener returns.
+	for (const client of chatWss.clients) client.terminate();
+	chatWss.close();
+	chatWss = null;
 }
 
 export function mountChatWs(server: HttpServer): void {
