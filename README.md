@@ -136,6 +136,7 @@ Non-secret server settings go through `.env`; chat-provider availability comes f
 | `AGENTCHATBOX_MAX_WS_CONNECTIONS` | `16`                       | Browser connection ceiling                     |
 | `AGENTCHATBOX_MAX_LIVE_SESSIONS` | `8`                         | Live pi child ceiling                          |
 | `AGENTCHATBOX_WS_MAX_PAYLOAD_BYTES` | `41943040`                 | Maximum inbound WS frame (40 MiB)               |
+| `AGENTCHATBOX_PI_READY_TIMEOUT_MS` | `30000`                    | Cold/resumed pi readiness ceiling               |
 | `PI_BIN`                       | `pi`                          | Path to the `pi` CLI binary (overridable for tests) |
 | `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
 | `PYTHON_BIN`                   | `python3`                     | Python binary for faster-whisper (STT)           |

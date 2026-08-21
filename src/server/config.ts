@@ -25,7 +25,7 @@ export interface ServerConfig {
 	host: string;
 	/** Folder for uploaded files. Created on boot. */
 	uploadsDir: string;
-	/** Max size of one upload in bytes. Default 1 GiB. */
+	/** Max size of one upload in bytes. Default 2 GiB. */
 	maxUploadBytes: number;
 	/** Hard aggregate quota for completed uploads. Default 20 GiB. */
 	maxUploadStorageBytes: number;
@@ -38,6 +38,8 @@ export interface ServerConfig {
 	maxLiveSessions: number;
 	/** Maximum inbound WebSocket frame size. */
 	wsMaxPayloadBytes: number;
+	/** Maximum time for a cold/resumed pi child to answer get_state. */
+	piReadyTimeoutMs: number;
 	/** OpenAI key, used for Whisper transcription of voice notes. */
 	openaiApiKey: string | undefined;
 	/**
@@ -123,6 +125,7 @@ export const config: ServerConfig = {
 		40 * 1024 * 1024,
 		64 * 1024 * 1024,
 	),
+	piReadyTimeoutMs: positiveInt("AGENTCHATBOX_PI_READY_TIMEOUT_MS", 30_000, 120_000),
 	openaiApiKey: readKey("OPENAI_API_KEY"),
 	// `piBin` and `piCwd` are read lazily — they need to reflect the
 	// process state at boot time, not at module-load time (which could

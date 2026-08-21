@@ -1004,7 +1004,7 @@ describe("mountChatWs — pi subprocess pipe", () => {
 		//   (b) session-registry: requestSessionId's retry loop now
 		//       short-circuits on `session.pi.killed`, so it doesn't
 		//       waste get_state writes on a dead pipe for the full
-		//       ~10s retry budget (and in production, so the retry
+		//       configured retry budget (and in production, so the retry
 		//       doesn't pile onto a pipe that's about to be torn
 		//       down by the orphan-pi crash-loop).
 		//
@@ -1062,8 +1062,8 @@ describe("mountChatWs — pi subprocess pipe", () => {
 				}),
 			);
 			// The exit-after-read script reads get_state, exits 1.
-			// The retry timer fires every 200ms; maxAttempts = 50
-			// gives a ~10s ceiling. With the killed-check fix the
+			// The retry timer fires every 200ms up to the configured ceiling.
+			// With the killed-check fix the
 			// retry stops on the next tick after the child dies
 			// (sub-200ms after the exit), and the error frame
 			// propagates to the WS shortly after. We assert the

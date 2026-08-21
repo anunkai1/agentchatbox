@@ -807,7 +807,9 @@ class SessionRegistry {
 	 * Send `get_state` on a bounded retry schedule until the session is
 	 * ready. pi doesn't ack get_state until its AgentSession is
 	 * constructed, so a single send isn't enough. Bounded attempts
-	 * prevent an unbounded loop on a wedged child; the exit handler
+	 * prevent an unbounded loop on a wedged child; the configurable default is
+	 * 30s because cold restarts can resume multi-megabyte sessions while every
+	 * extension initialises. The exit handler
 	 * sends the error frame in that case.
 	 *
 	 * Also short-circuits when the child has died (`session.pi.killed`,
@@ -822,12 +824,12 @@ class SessionRegistry {
 	 */
 	private requestSessionId(session: LiveSession): void {
 		const intervalMs = 200;
-		const maxAttempts = 50; // ~10s ceiling — pi startup is normally <1s
+		const maxAttempts = Math.ceil(config.piReadyTimeoutMs / intervalMs);
 		let attempts = 0;
 		const send = (): void => {
 			if (session.ready || session.pi.killed) return;
 			if (attempts >= maxAttempts) {
-				// pi never answered get_state within ~10s. It's wedged — kill
+				// pi never answered get_state within the configured ceiling. Kill
 				// it so it doesn't leak: a fresh child with no id yet is
 				// invisible to the idle reaper (needs a session id) and was
 				// previously missed by killAll() (only walked `entries`). The
@@ -839,7 +841,7 @@ class SessionRegistry {
 				deliver(session.ws, {
 					type: "error",
 					message: `pi did not become ready within ~${Math.round(
-						(maxAttempts * intervalMs) / 1000,
+						config.piReadyTimeoutMs / 1000,
 					)}s; try reconnecting`,
 				});
 				this.kill(session);
