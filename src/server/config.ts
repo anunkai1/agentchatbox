@@ -94,7 +94,7 @@ function allowedOrigins(): ReadonlySet<string> {
 	return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
 }
 
-const maxUploadBytes = positiveInt("MAX_UPLOAD_BYTES", 1024 * 1024 * 1024);
+const maxUploadBytes = positiveInt("MAX_UPLOAD_BYTES", 2 * 1024 * 1024 * 1024);
 const maxUploadStorageBytes = positiveInt(
 	"AGENTCHATBOX_MAX_UPLOAD_STORAGE_BYTES",
 	20 * 1024 * 1024 * 1024,
