@@ -2,6 +2,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -10,7 +11,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { UploadQuotaError, UploadStore } from "../src/server/upload-store.js";
+import {
+	UPLOAD_RESERVATION_PREFIX,
+	UploadQuotaError,
+	UploadStore,
+} from "../src/server/upload-store.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -28,8 +33,12 @@ describe("UploadStore", () => {
 		const dir = root();
 		const store = new UploadStore(dir, 60, 100);
 		const first = store.reserve();
+		const reservation = readdirSync(dir).find((name) => name.startsWith(UPLOAD_RESERVATION_PREFIX));
+		expect(reservation).toBeTruthy();
+		expect(statSync(join(dir, reservation!)).size).toBe(60);
 		expect(() => store.reserve()).toThrow(UploadQuotaError);
 		store.cancel(first);
+		expect(readdirSync(dir).some((name) => name.startsWith(UPLOAD_RESERVATION_PREFIX))).toBe(false);
 		expect(store.reserve()).toBeTruthy();
 	});
 
@@ -46,12 +55,14 @@ describe("UploadStore", () => {
 		expect(statSync(join(dir, filename)).mode & 0o777).toBe(0o600);
 	});
 
-	it("removes abandoned staging files on startup", () => {
+	it("removes abandoned staging and sparse reservation files on startup", () => {
 		const dir = root();
 		const temp = join(dir, ".tmp");
 		mkdirSync(temp);
 		writeFileSync(join(temp, "abandoned.part"), "partial");
+		writeFileSync(join(dir, `${UPLOAD_RESERVATION_PREFIX}stale`), "reservation");
 		new UploadStore(dir, 50, 100);
 		expect(existsSync(join(temp, "abandoned.part"))).toBe(false);
+		expect(readdirSync(dir).some((name) => name.startsWith(UPLOAD_RESERVATION_PREFIX))).toBe(false);
 	});
 });
