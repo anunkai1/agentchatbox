@@ -1219,6 +1219,13 @@ function refreshCapabilitiesBadge(): void {
 			(command) => command.name === "fast" && command.source !== "skill",
 		);
 		fastButton.style.display = fastAvailable ? "" : "none";
+		if (fastAvailable) {
+			const status = state.extensionStatusLabels["codex-fast"];
+			const label = status === "Enabled" ? "Fast" : status === "Standard" ? "Standard" : "Checking…";
+			fastButton.textContent = `⚡ ${label}`;
+			fastButton.title = `Codex response speed: ${label} (/fast)`;
+			fastButton.setAttribute("aria-label", `Configure Codex response speed (currently ${label})`);
+		}
 	}
 
 	const badge = document.getElementById("caps-badge");
@@ -2048,13 +2055,12 @@ export function renderShell(): void {
 				class: "picker-btn header-fast",
 				id: "fast-mode",
 				type: "button",
-				title: "Configure Codex Fast mode (/fast)",
-				"aria-label": "Configure Codex Fast mode",
+				title: "Codex response speed: checking… (/fast)",
+				"aria-label": "Configure Codex response speed (currently checking)",
 				onclick: () => shellHandlers?.handleSlash("fast menu"),
 				style: "display:none",
 			},
-			el("span", { "aria-hidden": "true" }, "⚡"),
-			el("span", {}, "Fast"),
+			"⚡ Checking…",
 		),
 		el(
 			"button",
