@@ -31,7 +31,14 @@ function isMulterLimit(err: unknown): boolean {
 /** Resolve the HTTP status for a forwarded error (see file header). */
 export function statusForError(err: unknown): number {
 	const maybeStatus = (err as { status?: unknown } | null)?.status;
-	if (typeof maybeStatus === "number") return maybeStatus;
+	if (
+		typeof maybeStatus === "number" &&
+		Number.isInteger(maybeStatus) &&
+		maybeStatus >= 400 &&
+		maybeStatus <= 599
+	) {
+		return maybeStatus;
+	}
 	if (isMulterLimit(err)) return 413;
 	return 500;
 }
@@ -60,7 +67,13 @@ export function jsonErrorHandler(
 	}
 	const status = statusForError(err);
 	const internalMessage = messageForError(err);
-	if (status >= 500) log.error("unhandled route error", { message: internalMessage });
 	const expose = status < 500 || (err as { expose?: unknown } | null)?.expose === true;
+	if (status >= 500 && expose) {
+		// Deliberate operational rejections such as aggregate quota exhaustion
+		// are not unhandled server faults and should not trigger error alerts.
+		log.info("route request rejected", { status, message: internalMessage });
+	} else if (status >= 500) {
+		log.error("unhandled route error", { message: internalMessage });
+	}
 	res.status(status).json({ error: expose ? internalMessage : "internal server error" });
 }

@@ -43,6 +43,9 @@ describe("statusForError", () => {
 	});
 
 	it("falls back to 500 for anything else", () => {
+		expect(statusForError({ status: 200 })).toBe(500);
+		expect(statusForError({ status: 600 })).toBe(500);
+		expect(statusForError({ status: 400.5 })).toBe(500);
 		expect(statusForError(new Error("boom"))).toBe(500);
 		expect(statusForError("a string")).toBe(500);
 		expect(statusForError(null)).toBe(500);
@@ -75,6 +78,18 @@ describe("jsonErrorHandler middleware", () => {
 		);
 		expect(res.status).toBe(413);
 		expect(res.body).toEqual({ error: "File too large" });
+	});
+
+	it("exposes a deliberate operational 5xx rejection", () => {
+		const res = fakeRes();
+		jsonErrorHandler(
+			Object.assign(new Error("upload storage quota exceeded"), { status: 507, expose: true }),
+			{} as Request,
+			res,
+			vi.fn(),
+		);
+		expect(res.status).toBe(507);
+		expect(res.body).toEqual({ error: "upload storage quota exceeded" });
 	});
 
 	it("defers to next() when headers are already sent (mid-stream)", () => {
