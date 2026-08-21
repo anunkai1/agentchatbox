@@ -7,22 +7,9 @@ import type { NextFunction, Request, Response, Router } from "express";
 import express from "express";
 import multer from "multer";
 import type { UploadResponse } from "../shared/protocol.js";
-import { config } from "./config.js";
 import { uploadStore } from "./upload-store.js";
 
 type UploadRequest = Request & { file?: Express.Multer.File; _uploadTempPath?: string };
-
-const upload = multer({
-	storage: multer.diskStorage({
-		destination: (_req, _file, callback) => callback(null, uploadStore.tempDir),
-		filename: (req, _file, callback) => {
-			const name = `${randomUUID()}.part`;
-			(req as UploadRequest)._uploadTempPath = join(uploadStore.tempDir, name);
-			callback(null, name);
-		},
-	}),
-	limits: { fileSize: config.maxUploadBytes, files: 1, fields: 0, parts: 1 },
-});
 
 /** Keep short, simple extensions only (defends against weird originals). */
 export function safeExtension(name: string): string {
@@ -31,14 +18,28 @@ export function safeExtension(name: string): string {
 	return "";
 }
 
-export function createUploadsRouter(): Router {
+export function createUploadsRouter(store = uploadStore): Router {
 	const router = express.Router();
+	const upload = multer({
+		storage: multer.diskStorage({
+			destination: (_req, _file, callback) => callback(null, store.tempDir),
+			filename: (req, _file, callback) => {
+				const name = `${randomUUID()}.part`;
+				(req as UploadRequest)._uploadTempPath = join(store.tempDir, name);
+				callback(null, name);
+			},
+		}),
+		// Busboy emits its parts-limit event when the counter reaches the
+		// threshold. Two therefore permits exactly our one file part; `files: 1`
+		// and `fields: 0` still reject every additional file or form field.
+		limits: { fileSize: store.maxUploadBytes, files: 1, fields: 0, parts: 2 },
+	});
 
 	router.post("/", (req: Request, res: Response, next: NextFunction) => {
 		const uploadRequest = req as UploadRequest;
 		let reservation: string;
 		try {
-			reservation = uploadStore.reserve();
+			reservation = store.reserve();
 		} catch (error) {
 			next(error);
 			return;
@@ -48,7 +49,7 @@ export function createUploadsRouter(): Router {
 		const cancelAborted = () => {
 			if (settled) return;
 			settled = true;
-			uploadStore.cancel(reservation, uploadRequest._uploadTempPath);
+			store.cancel(reservation, uploadRequest._uploadTempPath);
 		};
 		req.once("aborted", cancelAborted);
 
@@ -57,17 +58,17 @@ export function createUploadsRouter(): Router {
 			const file = uploadRequest.file;
 			const tempPath = file?.path ?? uploadRequest._uploadTempPath;
 			if (settled) {
-				uploadStore.cancel(undefined, tempPath);
+				store.cancel(undefined, tempPath);
 				return;
 			}
 			settled = true;
 			if (error) {
-				uploadStore.cancel(reservation, tempPath);
+				store.cancel(reservation, tempPath);
 				next(error);
 				return;
 			}
 			if (!file) {
-				uploadStore.cancel(reservation);
+				store.cancel(reservation);
 				res.status(400).json({ error: "no file uploaded (field name: 'file')" });
 				return;
 			}
@@ -76,11 +77,7 @@ export function createUploadsRouter(): Router {
 				// Multer creates the staging file before the service umask is
 				// necessarily applied in tests; force private permissions explicitly.
 				chmodSync(file.path, 0o600);
-				const filename = uploadStore.publish(
-					reservation,
-					file.path,
-					safeExtension(file.originalname),
-				);
+				const filename = store.publish(reservation, file.path, safeExtension(file.originalname));
 				const ext = extname(filename);
 				const id = filename.slice(0, filename.length - ext.length);
 				const response: UploadResponse = {
@@ -92,7 +89,7 @@ export function createUploadsRouter(): Router {
 				};
 				res.json(response);
 			} catch (publishError) {
-				uploadStore.cancel(reservation, tempPath);
+				store.cancel(reservation, tempPath);
 				next(publishError);
 			}
 		});
