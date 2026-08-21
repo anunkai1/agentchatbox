@@ -130,7 +130,7 @@ Non-secret server settings go through `.env`; chat-provider availability comes f
 | `PORT`                         | `3000`                        | HTTP port                                      |
 | `HOST`                         | `127.0.0.1`                   | Bind address                                   |
 | `UPLOADS_DIR`                  | `<root>/uploads`              | Where multipart uploads land                   |
-| `MAX_UPLOAD_BYTES`             | `1073741824`                  | Per-file upload cap (1 GiB)                    |
+| `MAX_UPLOAD_BYTES`             | `2147483648`                  | Per-file upload cap (2 GiB)                    |
 | `AGENTCHATBOX_MAX_UPLOAD_STORAGE_BYTES` | `21474836480`       | Aggregate completed-upload quota (20 GiB)      |
 | `AGENTCHATBOX_ALLOWED_ORIGINS` | local HTTP origins            | Exact comma-separated WebSocket origins        |
 | `AGENTCHATBOX_MAX_WS_CONNECTIONS` | `16`                       | Browser connection ceiling                     |
