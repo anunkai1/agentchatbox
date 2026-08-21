@@ -73,6 +73,18 @@ describe("listProjects", () => {
 		const { listProjects } = await import("../src/server/projects.js");
 		expect(listProjects()).toHaveLength(1); // Global
 	});
+
+	it("drops a sidecar project whose cwd is outside its canonical project folder", async () => {
+		writeFileSync(
+			process.env.AGENTCHATBOX_PROJECTS_FILE!,
+			JSON.stringify({
+				projects: [{ id: "abcdef", name: "unsafe", icon: "x", cwd: "/tmp" }],
+				sidebarOrder: ["abcdef"],
+			}),
+		);
+		const { listProjects } = await import("../src/server/projects.js");
+		expect(listProjects().map((project) => project.id)).toEqual(["global"]);
+	});
 });
 
 describe("createProject", () => {

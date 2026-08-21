@@ -4,7 +4,7 @@
 	<img src="assets/brand/logo-square.png" alt="agentchatbox — ACB" width="160" />
 </p>
 
-A web chat interface for the [pi coding agent](https://pi.dev). The browser is a thin renderer — the server is a thin transport layer that spawns a `pi --mode rpc` subprocess per WebSocket connection, forwards its events to the browser, and translates client messages into pi RPC commands. The actual agent logic (tools, model routing, system prompt, streaming) lives entirely inside the `pi` subprocess.
+A web chat interface for the [pi coding agent](https://pi.dev). The browser is a thin renderer — the server is a thin transport layer that owns one detachable `pi --mode rpc` subprocess per live session, forwards its events to the attached browser, and translates validated client messages into pi RPC commands. The actual agent logic (tools, model routing, system prompt, streaming) lives entirely inside the `pi` subprocess.
 
 - Streaming responses, model picker, thinking levels
 - **Steering** — type while the agent is working and your message is queued for the next turn (mirrors the CLI; delivered after the current turn's tool calls finish)
@@ -26,7 +26,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 Browser (vanilla DOM, no framework)
   │  WS /api/chat       — bidirectional: init handshake, prompts ↔ pi events
   │  POST /api/upload   — multipart file upload
-  │  GET  /api/file    — download a file the agent created (path-contained to piCwd)
+  │  GET  /api/file    — download a regular file the owner-level agent can read
   │  POST /api/transcribe — audio → text (Whisper)
   │  POST /api/tts      — text → audio (Kokoro)
   │  GET  /api/models   — list of models with configured API keys
@@ -51,7 +51,7 @@ pi --mode rpc subprocess (the actual coding agent)
 LLM providers (Anthropic, OpenAI, Google, DeepSeek, MiniMax, …)
 ```
 
-The server is just a pipe. It owns the WebSocket framing, subprocess lifecycle, session listing/resume (reading pi's JSONL files), and the upload/transcribe/tts HTTP endpoints. The browser never touches provider APIs — API keys live in `.env` and are passed to each `pi` child via `--api-key`.
+The server is just a pipe. It owns bounded WebSocket framing, subprocess lifecycle, session listing/resume (reading pi's JSONL files), and the upload/transcribe/tts HTTP endpoints. The browser never touches provider APIs. Chat credentials are owned by pi's protected `~/.pi/agent/auth.json` and are never placed in child command lines; optional tool-extension credentials may be inherited from the protected service environment.
 
 ## Source layout
 
@@ -74,11 +74,13 @@ src/
                           #   WS disconnects, reattaches on reconnect, reaps idle
     pi-process.ts         # PiProcess: spawns pi, strict \n NDJSON splitter, kill with SIGTERM→SIGKILL
     session-list.ts       # listPiSessions / readPiSessionMessages (reads pi JSONL files)
-    config.ts             # .env → ServerConfig (piBin, piCwd, apiKeys)
+    config.ts             # validated environment → ServerConfig
     paths.ts              # projectRoot (cwd-independent)
-    providers.ts          # SDK_PROVIDERS + KNOWN_PROVIDERS (source of truth for provider list)
+    protocol-validation.ts # runtime validation/bounds for browser WS messages
+    upload-store.ts       # aggregate quota, reservations, private staging/publish
     uploads.ts            # /api/upload
-    files.ts              # /api/file (download agent-created files, piCwd-contained)
+    uploads-serving.ts    # safe raster preview / forced attachment delivery
+    files.ts              # /api/file (no-follow regular-file download)
     transcribe.ts         # /api/transcribe (faster-whisper)
     tts.ts                # /api/tts (Kokoro)
     search/               # OPTIONAL pluggable semantic session search
@@ -106,11 +108,11 @@ git clone https://github.com/anunkai1/agentchatbox
 cd agentchatbox
 npm install
 cp .env.example .env
-# edit .env to add at least one provider key
+pi auth login <provider>
 npm run dev
 ```
 
-`npm run dev` runs the server and the client bundler in watch mode — changes to `src/` reload automatically. By default the server listens on `http://0.0.0.0:3000`; set `PORT` in `.env` to change it. The client is served by the server itself (no separate Vite dev server).
+`npm run dev` runs the server and the client bundler in watch mode — changes to `src/` reload automatically. By default the server listens on `http://127.0.0.1:3000`; set `HOST`/`PORT` in `.env` to change it. The client is served by the server itself (no separate Vite dev server).
 
 ## Production build
 
@@ -121,14 +123,19 @@ npm start       # node dist/server/index.js
 
 ## Environment
 
-Everything goes through `.env`. Keys for the providers you want to use; an empty value means the provider simply isn't shown in the model picker.
+Non-secret server settings go through `.env`; chat-provider availability comes from pi's auth store.
 
 | Variable                       | Default                       | Purpose                                        |
 |--------------------------------|-------------------------------|------------------------------------------------|
 | `PORT`                         | `3000`                        | HTTP port                                      |
-| `HOST`                         | `0.0.0.0`                     | Bind address                                   |
+| `HOST`                         | `127.0.0.1`                   | Bind address                                   |
 | `UPLOADS_DIR`                  | `<root>/uploads`              | Where multipart uploads land                   |
-| `MAX_UPLOAD_BYTES`             | `52428800`                    | 50 MB upload cap                               |
+| `MAX_UPLOAD_BYTES`             | `1073741824`                  | Per-file upload cap (1 GiB)                    |
+| `AGENTCHATBOX_MAX_UPLOAD_STORAGE_BYTES` | `21474836480`       | Aggregate completed-upload quota (20 GiB)      |
+| `AGENTCHATBOX_ALLOWED_ORIGINS` | local HTTP origins            | Exact comma-separated WebSocket origins        |
+| `AGENTCHATBOX_MAX_WS_CONNECTIONS` | `16`                       | Browser connection ceiling                     |
+| `AGENTCHATBOX_MAX_LIVE_SESSIONS` | `8`                         | Live pi child ceiling                          |
+| `AGENTCHATBOX_WS_MAX_PAYLOAD_BYTES` | `41943040`                 | Maximum inbound WS frame (40 MiB)               |
 | `PI_BIN`                       | `pi`                          | Path to the `pi` CLI binary (overridable for tests) |
 | `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
 | `PYTHON_BIN`                   | `python3`                     | Python binary for faster-whisper (STT)           |
@@ -144,7 +151,6 @@ Chat-model providers are authenticated via `pi` itself: run `pi auth login <prov
 |--------|-----------------------|--------------------------------------------------------|
 | POST   | `/api/upload`         | Multipart file upload                                  |
 | GET    | `/uploads/:filename`  | Download a previously uploaded file                    |
-| DELETE | `/uploads/:filename`  | Remove an upload                                       |
 | POST   | `/api/transcribe`     | Audio → text (faster-whisper)                          |
 | POST   | `/api/tts`            | Text → audio (Kokoro)                                  |
 | GET    | `/api/health`         | `{ status, commit, providers, whisper, tts, ttsVoice }` |
@@ -176,7 +182,6 @@ One connection per session. The client must send `init` as its first message; th
 { type: "event", event: <piRpcLine> }      // every NDJSON line from pi stdout, verbatim
 { type: "sessions", sessions: SessionSummary[] }  // response to listSessions
 { type: "transcript", sessionId, messages: Message[] }  // prior transcript on resume
-{ type: "sessionResumed", sessionId, modelId, provider, thinkingLevel }
 { type: "error", message: string }
 ```
 
@@ -230,7 +235,7 @@ The original prototype ran the agent in-process (Node-side Agent factory with lo
 1. **Tool dependencies leaked into the server.** Every tool (bash, web access, file ops) was server code that had to be maintained, tested, and kept compatible with the agent SDK — duplicating what `pi` already does natively.
 2. **Agent crashes took down the server.** An unhandled error in the agent loop killed the whole process, including unrelated connections.
 
-The current model is simpler: the server spawns `pi --mode rpc` per connection, forwards its stdout to the browser, and translates client messages into pi RPC commands on stdin. The server is just a pipe — the actual agent logic (tools, model routing, streaming, system prompt) lives inside `pi`, where it belongs. If a child crashes, only that WS connection sees it; the server and other connections are unaffected.
+The current model is simpler: the server owns `pi --mode rpc` per live session, forwards its stdout to an attached browser, and translates validated client messages into pi RPC commands on stdin. The server is just a pipe — the actual agent logic (tools, model routing, streaming, system prompt) lives inside `pi`, where it belongs. If a child crashes, only that WS connection sees it; the server and other connections are unaffected.
 
 ## Semantic session search (optional)
 

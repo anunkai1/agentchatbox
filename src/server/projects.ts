@@ -28,8 +28,16 @@
  * there is zero drift between the sidecar and pi's session JSONLs.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { relative, resolve } from "node:path";
 import type { ThinkingLevel } from "../shared/protocol.js";
 import { config } from "./config.js";
 import { writeJsonAtomic } from "./json-store.js";
@@ -37,6 +45,7 @@ import { projectRoot } from "./paths.js";
 
 /** The builtin Global project id. */
 export const GLOBAL_PROJECT_ID = "global";
+const PROJECT_ID_RE = /^[a-z0-9]{6}$/;
 
 /**
  * On-disk project record. `cwd` is the working directory `pi` runs in;
@@ -121,9 +130,7 @@ function readStore(): ProjectsFile {
 				const o = obj as Partial<ProjectsFile>;
 				if (Array.isArray(o.projects)) {
 					parsed = {
-						projects: o.projects.filter(
-							(p): p is ProjectRecord => !!p && typeof p === "object" && typeof p.id === "string",
-						),
+						projects: o.projects.filter(isSafeProjectRecord),
 						sidebarOrder: Array.isArray(o.sidebarOrder)
 							? o.sidebarOrder.filter((x) => typeof x === "string")
 							: [],
@@ -240,7 +247,8 @@ export function createProject(input: {
 	const store = readStore();
 	const id = generateId(store);
 	const cwd = resolve(projectsRoot(), id);
-	mkdirSync(cwd, { recursive: true });
+	mkdirSync(cwd, { recursive: true, mode: 0o700 });
+	chmodSync(cwd, 0o700);
 	const record: ProjectRecord = {
 		id,
 		name: input.name.trim() || "New project",
@@ -307,7 +315,9 @@ export function writeProjectInstructions(id: string, text: string): void {
 	} catch {
 		/* may exist */
 	}
-	writeFileSync(agentsMdPath(project), text);
+	const file = agentsMdPath(project);
+	writeFileSync(file, text, { mode: 0o600 });
+	chmodSync(file, 0o600);
 }
 
 /**
@@ -325,10 +335,16 @@ export function deleteProject(id: string): boolean {
 	store.projects = store.projects.filter((p) => p.id !== id);
 	store.sidebarOrder = store.sidebarOrder.filter((sid) => sid !== id);
 	writeStore(store);
-	// Remove the project folder + its AGENTS.md. Best-effort — a missing
-	// or busy folder shouldn't fail the metadata delete above.
+	// A sidecar is untrusted input. Delete only the canonical directory
+	// derived from the validated id, never an arbitrary stored cwd.
+	const root = projectsRoot();
+	const expected = resolve(root, id);
+	const rel = relative(root, expected);
+	if (!PROJECT_ID_RE.test(id) || rel.startsWith("..") || resolve(project.cwd) !== expected) {
+		return false;
+	}
 	try {
-		rmSync(project.cwd, { recursive: true, force: true });
+		rmSync(expected, { recursive: true, force: true });
 	} catch {
 		/* ignore */
 	}
@@ -347,6 +363,17 @@ export function reorderProjects(order: string[]): void {
 	}
 	store.sidebarOrder = [GLOBAL_PROJECT_ID, ...withoutGlobal];
 	writeStore(store);
+}
+
+function isSafeProjectRecord(value: unknown): value is ProjectRecord {
+	if (!value || typeof value !== "object") return false;
+	const project = value as Partial<ProjectRecord>;
+	if (typeof project.id !== "string") return false;
+	if (project.id === GLOBAL_PROJECT_ID) return true;
+	if (!PROJECT_ID_RE.test(project.id) || typeof project.cwd !== "string") return false;
+	const expected = resolve(projectsRoot(), project.id);
+	const rel = relative(projectsRoot(), expected);
+	return !rel.startsWith("..") && resolve(project.cwd) === expected;
 }
 
 /** Generate a short unique id not already in the store. */

@@ -6,7 +6,7 @@
  * access), refuses non-regular files, and sets attachment headers.
  */
 
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +71,15 @@ describe("GET /api/file", () => {
 	it("refuses a directory (non-regular file)", async () => {
 		const res = await fetch(`${base}/api/file?path=${encodeURIComponent(tmp)}`);
 		expect(res.status).toBe(400);
+	});
+
+	it("refuses a final-component symlink so validation cannot race the stream", async () => {
+		const target = join(tmp, "target.txt");
+		const link = join(tmp, "link.txt");
+		await writeFile(target, "secret");
+		await symlink(target, link);
+		const res = await fetch(`${base}/api/file?path=${encodeURIComponent(link)}`);
+		expect(res.status).toBe(404);
 	});
 
 	it("returns 400 for a missing path query", async () => {

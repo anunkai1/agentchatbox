@@ -20,8 +20,8 @@
  * `path` pointing at `/dev/` or a mount point can't be streamed.
  */
 
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { constants, createReadStream } from "node:fs";
+import { open } from "node:fs/promises";
 import { basename, isAbsolute, resolve } from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
@@ -46,14 +46,19 @@ export function createFilesRouter(): Router {
 			// is that the result must be a regular file.
 			const target = isAbsolute(raw) ? resolve(raw) : resolve(cwd || process.cwd(), raw);
 
-			let s: Awaited<ReturnType<typeof stat>>;
+			// Open first with O_NOFOLLOW, then inspect and stream this same file
+			// descriptor. A path cannot be swapped to a symlink/device between
+			// validation and createReadStream (the prior stat(path) TOCTOU).
+			let handle: Awaited<ReturnType<typeof open>>;
 			try {
-				s = await stat(target);
+				handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
 			} catch {
 				res.status(404).json({ error: "file not found" });
 				return;
 			}
+			const s = await handle.stat();
 			if (!s.isFile()) {
+				await handle.close();
 				res.status(400).json({ error: "path is not a regular file" });
 				return;
 			}
@@ -75,19 +80,14 @@ export function createFilesRouter(): Router {
 			// touches multi-GB logs; loading one into a Buffer to `res.send()`
 			// would spike memory and can OOM the server. Piping reads + sends
 			// in chunks so peak memory stays flat regardless of file size.
-			createReadStream(target)
-				.on("error", (err: NodeJS.ErrnoException) => {
-					if (!res.headersSent) {
-						res.status(500).json({
-							error: `failed to read file: ${err.message}`,
-						});
-					} else {
-						// Headers already flushed (we're mid-stream) — just end.
-						try {
-							res.end();
-						} catch {
-							/* client may be gone */
-						}
+			createReadStream(target, { fd: handle.fd, autoClose: true, start: 0 })
+				.on("error", () => {
+					// Avoid reflecting filesystem details. Mid-stream failures cannot
+					// change status safely, so destroy the response.
+					try {
+						res.destroy();
+					} catch {
+						/* client may be gone */
 					}
 				})
 				.pipe(res);

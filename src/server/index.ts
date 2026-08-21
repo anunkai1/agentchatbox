@@ -19,7 +19,6 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import cors from "cors";
 import express from "express";
 import { asyncHandler } from "./async-handler.js";
 import { mountChatWs, shutdownChatWs } from "./chat.js";
@@ -30,23 +29,32 @@ import { log } from "./logger.js";
 import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
+import { securityHeaders } from "./security.js";
 import { findSessionCwd, listPiSessions, readPiSessionMessages } from "./session-list.js";
+import { registry } from "./session-registry.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
+import { uploadStore } from "./upload-store.js";
 import { createUploadsRouter } from "./uploads.js";
+import { createUploadsServingRouter } from "./uploads-serving.js";
 
-mkdirSync(config.uploadsDir, { recursive: true });
+mkdirSync(config.uploadsDir, { recursive: true, mode: 0o700 });
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.disable("x-powered-by");
+app.use(securityHeaders);
+// Deliberately no CORS middleware: every browser API is same-origin. Omitting
+// ACAO is the fail-closed policy for credentialed cross-origin requests.
+app.use(express.json({ limit: "2mb", strict: true }));
 
 // Lightweight access log so we can see what the browser is actually doing.
 app.use((req, _res, next) => {
 	if (req.url.startsWith("/api/")) {
 		log.info("http request", {
 			method: req.method,
-			path: req.url,
+			// Never log query strings: /api/file paths and semantic-search text
+			// can contain private filenames or conversation content.
+			path: req.path,
 			bytes: Number(req.headers["content-length"] ?? 0),
 		});
 	}
@@ -165,9 +173,10 @@ app.get(
 			const results = await loaded.searchSessions(q, { cwd, limit });
 			res.json({ results });
 		} catch (e) {
-			res
-				.status(500)
-				.json({ error: `search failed: ${e instanceof Error ? e.message : String(e)}` });
+			log.error("session search failed", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+			res.status(500).json({ error: "search failed" });
 		}
 	}),
 );
@@ -202,7 +211,7 @@ app.get("/api/sessions/:id", (req, res) => {
 	const all = listPiSessions(cwd);
 	const meta = all.find((s) => s.id === id);
 	if (!meta) {
-		res.status(404).json({ error: `session ${id} not found for cwd ${cwd}` });
+		res.status(404).json({ error: "session not found" });
 		return;
 	}
 	const messages = readPiSessionMessages(cwd, id);
@@ -228,7 +237,8 @@ app.get("/api/changelog", (req, res) => {
 		{ cwd: projectRoot, maxBuffer: 1024 * 1024 },
 		(err, stdout) => {
 			if (err) {
-				res.status(500).json({ error: `git log failed: ${err.message}` });
+				log.error("git log failed", { error: err.message });
+				res.status(500).json({ error: "git log failed" });
 				return;
 			}
 			const commits = stdout
@@ -379,6 +389,8 @@ app.get(
 			// extension, so we only report key presence — boolean, not a secret.
 			geminiKey: !!process.env.GEMINI_API_KEY,
 			search,
+			uploads: uploadStore.usage(),
+			sessions: registry.stats(),
 		});
 	}),
 );
@@ -470,21 +482,11 @@ if (existsSync(publicDir)) {
 			},
 		}),
 	);
-	// Serve uploaded files at /uploads/<id>.<ext>. We mount the whole
-	// uploads dir as static so the URLs returned by /api/upload are
-	// fetchable. The upload IDs are random UUIDs (unguessable), which
-	// is sufficient capability for this single-user local app. The SPA
-	// fallback below explicitly excludes /uploads/ so it doesn't try to
-	// serve index.html for missing files.
-	if (existsSync(config.uploadsDir)) {
-		app.use(
-			"/uploads",
-			express.static(config.uploadsDir, {
-				fallthrough: true,
-				maxAge: "1h",
-			}),
-		);
-	}
+	// Uploaded active content is never handled by express.static. The
+	// dedicated route verifies a regular no-follow file descriptor, permits
+	// inline display only for magic-validated raster images, and forces every
+	// other format (HTML/SVG/PDF/etc.) to download as an octet-stream.
+	app.use("/uploads", createUploadsServingRouter());
 	// SPA fallback: serve index.html for any non-API GET. Same no-store
 	// header as above so the fallback document is never cached either.
 	app.get(/^(?!\/api\/|\/uploads\/).*/, (_req, res) => {
@@ -510,14 +512,20 @@ app.use(jsonErrorHandler);
 
 const server = app.listen(config.port, config.host, () => {
 	const providers = [...readPiAuth().keys()];
+	const uploadUsage = uploadStore.usage();
 	log.info("agentchatbox listening", {
 		url: `http://${config.host}:${config.port}`,
 		commit: COMMIT_HASH,
 		uploadsDir: config.uploadsDir,
+		uploadBytes: uploadUsage.bytes,
+		uploadQuotaBytes: uploadUsage.quotaBytes,
 		providers: providers.length ? providers : [],
 		piBin: config.piBin,
 		piCwd: config.piCwd,
 	});
+	if (uploadUsage.warning) {
+		log.warn("upload storage is above the warning threshold", { ...uploadUsage });
+	}
 
 	// Warm the Whisper + TTS health caches in the background. The first
 	// /api/health call would otherwise block for seconds (faster-whisper
@@ -542,48 +550,38 @@ const server = app.listen(config.port, config.host, () => {
 	void modelsCache.ensureReady();
 });
 
+server.maxHeadersCount = 100;
+server.headersTimeout = 15_000;
+server.keepAliveTimeout = 5_000;
+
 // WebSocket endpoint. Mounted on the same HTTP server so we don't need a
 // second port.
 mountChatWs(server);
 
-// Last-resort backstop. The per-connection try/catch in chat.ts is the
-// real fix for synchronous throws inside ws listeners (which would
-// otherwise crash the server and tear down every live pi child); this
-// catches anything that slips past a future regression or an unguarded
-// EventEmitter listener elsewhere. We log and continue rather than die —
-// a single buggy code path shouldn't take the whole server (and every
-// active session) down. systemd restart-on-crash is still the safety net
-// for a truly wedged process, but not the first resort.
-process.on("uncaughtException", (err) => {
-	log.error("uncaughtException (continuing)", {
-		error: err.message,
-		stack: err.stack,
-	});
-});
-process.on("unhandledRejection", (reason) => {
-	const message = reason instanceof Error ? reason.message : String(reason);
-	log.error("unhandledRejection (continuing)", { error: message });
-});
-
-// On server shutdown, SIGTERM every live `pi --mode rpc` child so each
-// gets a chance to flush its session JSONL before the process dies.
-// The `pi` process appends to its session file on every event, so a
-// fast SIGKILL would lose the last few events of an active session.
-process.on("SIGTERM", () => {
-	log.info("SIGTERM received, shutting down");
-	// SIGTERM every live `pi --mode rpc` child FIRST so each gets the
-	// full shutdown window to flush its session JSONL before we exit.
-	// (PiProcess.kill escalates to SIGKILL after 2s.) The chat WS layer
-	// owns the child lifecycle; this is the single place it's wired into
-	// the process signal — chat.ts no longer registers its own listener.
+let shuttingDown = false;
+function shutdown(reason: string, exitCode: number): void {
+	if (shuttingDown) return;
+	shuttingDown = true;
+	log.info("shutting down", { reason, exitCode });
 	shutdownChatWs();
-	server.close(() => {
-		process.exit(0);
-	});
-	// Failsafe: if the server.close() callback never fires (e.g. a
-	// stuck keep-alive connection), force-exit after 3 seconds.
+	server.close(() => process.exit(exitCode));
 	setTimeout(() => {
 		log.warn("server.close timed out, forcing exit");
-		process.exit(1);
-	}, 3000).unref();
+		process.exit(exitCode || 1);
+	}, 5000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM", 0));
+process.on("SIGINT", () => shutdown("SIGINT", 0));
+
+// Unknown uncaught failures may leave session ownership inconsistent. Exit
+// cleanly and let systemd restart instead of continuing in an unknown state.
+process.once("uncaughtException", (err) => {
+	log.error("uncaughtException", { error: err.message, stack: err.stack });
+	shutdown("uncaughtException", 1);
+});
+process.once("unhandledRejection", (reason) => {
+	const message = reason instanceof Error ? reason.message : String(reason);
+	log.error("unhandledRejection", { error: message });
+	shutdown("unhandledRejection", 1);
 });

@@ -489,6 +489,11 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 // File attach
 // ---------------------------------------------------------------------------
 
+// Matches the server's bounded structured-image transport. Larger images can
+// still be uploaded as ordinary files without allocating a 4/3-size base64
+// copy in browser memory or creating an oversized WebSocket frame.
+const MAX_INLINE_IMAGE_BYTES = 25 * 1024 * 1024;
+
 /**
  * Shared core: take a list of File objects (from the file picker, a
  * paste, or a drag-and-drop) and upload each one, remembering image
@@ -510,7 +515,10 @@ export async function attachFiles(files: File[]): Promise<void> {
 			// Only images need base64 copies for multimodal messages. Keep that
 			// conversion parallel with their upload, but never allocate a second
 			// multi-gigabyte in-browser copy of a video or other attachment.
-			const imageData = file.type.startsWith("image/") ? blobToBase64(file) : undefined;
+			const imageData =
+				file.type.startsWith("image/") && file.size <= MAX_INLINE_IMAGE_BYTES
+					? blobToBase64(file)
+					: undefined;
 			const res = await uploadFile(
 				file,
 				({ loaded, total }) => {
@@ -518,15 +526,15 @@ export async function attachFiles(files: File[]): Promise<void> {
 				},
 				uploadController.signal,
 			);
-			if (res.mimeType.startsWith("image/")) {
-				const data = imageData ? await imageData : await blobToBase64(file);
+			if (res.mimeType.startsWith("image/") && imageData) {
+				const data = await imageData;
 				state.uploadedImages.set(res.url, {
 					data,
 					mimeType: res.mimeType,
 					filename: res.filename,
 				});
 			}
-			const isImage = res.mimeType.startsWith("image/");
+			const isImage = res.mimeType.startsWith("image/") && !!imageData;
 			const insertion = isImage
 				? `![image: ${res.filename}](${res.url})`
 				: `[file: ${res.filename}](${res.url})`;
