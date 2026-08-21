@@ -373,7 +373,7 @@ while IFS= read -r line; do
       ;;
     "set_thinking_level")
       level="$(echo "$line" | jq -r '.level // ""')"
-      if [ "\${level#fail-}" != "$level" ]; then
+      if [ "\${level#fail-}" != "$level" ] || [ "$level" = "max" ]; then
         echo '{"type":"response","command":"set_thinking_level","success":false,"error":"Unknown thinking level"}'
       else
         echo '{"type":"response","command":"set_thinking_level","success":true}'
@@ -870,7 +870,7 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			);
 			await inbox.waitFor(1);
 
-			ws.send(JSON.stringify({ type: "setThinking", level: "fail-xhigh" }));
+			ws.send(JSON.stringify({ type: "setThinking", level: "max" }));
 			const state = (await waitForType(inbox, "modelState", 1, 2000))[0] as {
 				provider: string;
 				modelId: string;

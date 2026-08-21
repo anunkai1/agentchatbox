@@ -59,7 +59,8 @@ export function jsonErrorHandler(
 		return;
 	}
 	const status = statusForError(err);
-	const message = messageForError(err);
-	if (status >= 500) log.error("unhandled route error", { message });
-	res.status(status).json({ error: message });
+	const internalMessage = messageForError(err);
+	if (status >= 500) log.error("unhandled route error", { message: internalMessage });
+	const expose = status < 500 || (err as { expose?: unknown } | null)?.expose === true;
+	res.status(status).json({ error: expose ? internalMessage : "internal server error" });
 }

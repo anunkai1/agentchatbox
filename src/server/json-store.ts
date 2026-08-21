@@ -22,7 +22,16 @@
  * be imported anywhere without pulling in app state.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 
 /**
@@ -52,11 +61,17 @@ export function readJson<T>(file: string, fallback: T): T {
 export function writeJsonAtomic(file: string, value: unknown): void {
 	const abs = resolve(file);
 	try {
-		mkdirSync(dirname(abs), { recursive: true });
+		mkdirSync(dirname(abs), { recursive: true, mode: 0o700 });
 	} catch {
 		/* dir may already exist */
 	}
-	const tmp = `${abs}.tmp`;
-	writeFileSync(tmp, JSON.stringify(value, null, 2));
-	renameSync(tmp, abs);
+	const tmp = `${abs}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600, flag: "wx" });
+		renameSync(tmp, abs);
+		chmodSync(abs, 0o600);
+	} catch (error) {
+		rmSync(tmp, { force: true });
+		throw error;
+	}
 }

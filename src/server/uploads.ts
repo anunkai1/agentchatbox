@@ -1,46 +1,31 @@
-/**
- * File upload handling.
- *
- * Multipart uploads land in `uploads/<uuid><ext>` and are served back at
- * `/uploads/<uuid><ext>` by the express.static mount in index.ts (which
- * guesses a sane Content-Type from the preserved extension). That static
- * mount is the sole serving path, so this router is POST-only: it writes
- * the body and returns the URL.
- *
- * Files are treated as capability tokens — the unguessable UUID in the
- * URL is the only access control (sufficient for this single-user,
- * Authelia-gated app).
- */
+/** Quota-aware streaming multipart upload route. */
 
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { extname } from "node:path";
-import type { Request, Response, Router } from "express";
+import { chmodSync } from "node:fs";
+import { extname, join } from "node:path";
+import type { NextFunction, Request, Response, Router } from "express";
 import express from "express";
 import multer from "multer";
 import type { UploadResponse } from "../shared/protocol.js";
-import { asyncHandler } from "./async-handler.js";
 import { config } from "./config.js";
+import { uploadStore } from "./upload-store.js";
 
-// Stream uploads directly to disk: buffering an allowed 2 GiB video in the
-// Node process would make the upload limit an easy route to exhausting RAM.
+type UploadRequest = Request & { file?: Express.Multer.File; _uploadTempPath?: string };
+
 const upload = multer({
 	storage: multer.diskStorage({
-		destination: (_req, _file, callback) => {
-			void mkdir(config.uploadsDir, { recursive: true }).then(
-				() => callback(null, config.uploadsDir),
-				(err: unknown) => callback(err as Error, config.uploadsDir),
-			);
-		},
-		filename: (_req, file, callback) => {
-			callback(null, `${randomUUID()}${safeExtension(file.originalname)}`);
+		destination: (_req, _file, callback) => callback(null, uploadStore.tempDir),
+		filename: (req, _file, callback) => {
+			const name = `${randomUUID()}.part`;
+			(req as UploadRequest)._uploadTempPath = join(uploadStore.tempDir, name);
+			callback(null, name);
 		},
 	}),
-	limits: { fileSize: config.maxUploadBytes },
+	limits: { fileSize: config.maxUploadBytes, files: 1, fields: 0, parts: 1 },
 });
 
 /** Keep short, simple extensions only (defends against weird originals). */
-function safeExtension(name: string): string {
+export function safeExtension(name: string): string {
 	const ext = extname(name).toLowerCase();
 	if (/^\.[a-z0-9]{1,8}$/.test(ext)) return ext;
 	return "";
@@ -49,28 +34,69 @@ function safeExtension(name: string): string {
 export function createUploadsRouter(): Router {
 	const router = express.Router();
 
-	router.post(
-		"/",
-		upload.single("file"),
-		asyncHandler(async (req: Request, res: Response) => {
-			const file = (req as Request & { file?: Express.Multer.File }).file;
+	router.post("/", (req: Request, res: Response, next: NextFunction) => {
+		const uploadRequest = req as UploadRequest;
+		let reservation: string;
+		try {
+			reservation = uploadStore.reserve();
+		} catch (error) {
+			next(error);
+			return;
+		}
+
+		let settled = false;
+		const cancelAborted = () => {
+			if (settled) return;
+			settled = true;
+			uploadStore.cancel(reservation, uploadRequest._uploadTempPath);
+		};
+		req.once("aborted", cancelAborted);
+
+		upload.single("file")(req, res, (error: unknown) => {
+			req.off("aborted", cancelAborted);
+			const file = uploadRequest.file;
+			const tempPath = file?.path ?? uploadRequest._uploadTempPath;
+			if (settled) {
+				uploadStore.cancel(undefined, tempPath);
+				return;
+			}
+			settled = true;
+			if (error) {
+				uploadStore.cancel(reservation, tempPath);
+				next(error);
+				return;
+			}
 			if (!file) {
+				uploadStore.cancel(reservation);
 				res.status(400).json({ error: "no file uploaded (field name: 'file')" });
 				return;
 			}
 
-			const ext = extname(file.filename);
-			const id = file.filename.slice(0, file.filename.length - ext.length);
-			const response: UploadResponse = {
-				id,
-				filename: file.originalname,
-				mimeType: file.mimetype || "application/octet-stream",
-				size: file.size,
-				url: `/uploads/${file.filename}`,
-			};
-			res.json(response);
-		}),
-	);
+			try {
+				// Multer creates the staging file before the service umask is
+				// necessarily applied in tests; force private permissions explicitly.
+				chmodSync(file.path, 0o600);
+				const filename = uploadStore.publish(
+					reservation,
+					file.path,
+					safeExtension(file.originalname),
+				);
+				const ext = extname(filename);
+				const id = filename.slice(0, filename.length - ext.length);
+				const response: UploadResponse = {
+					id,
+					filename: file.originalname.slice(0, 1024),
+					mimeType: file.mimetype || "application/octet-stream",
+					size: file.size,
+					url: `/uploads/${filename}`,
+				};
+				res.json(response);
+			} catch (publishError) {
+				uploadStore.cancel(reservation, tempPath);
+				next(publishError);
+			}
+		});
+	});
 
 	return router;
 }

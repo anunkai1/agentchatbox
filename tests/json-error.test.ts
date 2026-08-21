@@ -99,7 +99,7 @@ describe("jsonErrorHandler middleware", () => {
 		const r5 = fakeRes();
 		jsonErrorHandler(new Error("kaboom"), {} as Request, r5, vi.fn());
 		expect(r5.status).toBe(500);
-		expect(r5.body).toEqual({ error: "kaboom" });
+		expect(r5.body).toEqual({ error: "internal server error" });
 		errSpy.mockRestore();
 	});
 });

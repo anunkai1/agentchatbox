@@ -53,6 +53,8 @@ import {
 	reorderProjects,
 	updateProject,
 } from "./projects.js";
+import { ProtocolError, parseClientMessage } from "./protocol-validation.js";
+import { isAllowedWsOrigin } from "./security.js";
 import {
 	deletePiSession,
 	findSessionCwd,
@@ -99,7 +101,13 @@ export function shutdownChatWs(): void {
 }
 
 export function mountChatWs(server: HttpServer): void {
-	const wss = new WebSocketServer({ server, path: "/api/chat" });
+	const wss = new WebSocketServer({
+		server,
+		path: "/api/chat",
+		maxPayload: config.wsMaxPayloadBytes,
+		perMessageDeflate: false,
+		verifyClient: (info: { origin: string }) => isAllowedWsOrigin(info.origin),
+	});
 	chatWss = wss;
 	// pi owns session naming. Whenever it reports a normal
 	// session_info_changed event (manual /name or an extension such as
@@ -147,6 +155,10 @@ export function mountChatWs(server: HttpServer): void {
 
 	wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
 		const s = ws as PiSocket & { isAlive?: boolean };
+		if (wss.clients.size > config.maxWsConnections) {
+			ws.close(1013, "too many connections");
+			return;
+		}
 		s.isAlive = true;
 		// Browser automatically replies to ping frames with pong. Flip
 		// isAlive back so the next heartbeat cycle doesn't terminate us.
@@ -190,9 +202,16 @@ export function mountChatWs(server: HttpServer): void {
 // (PiSocket._session is declared in session-registry.ts.)
 
 async function handleConnection(ws: PiSocket): Promise<void> {
-	// The first message from the client must be an `init` (the protocol
-	// requires it; we don't have a sensible default to fall back to).
-	const init = await waitForMessage<InitMessage>(ws, "init");
+	// The first message from the client must be a validated `init`. Client
+	// input never supplies cwd; that trust decision is derived server-side
+	// from a known project/session below.
+	const first = await waitForMessage(ws, "init");
+	const init: InitMessage = {
+		provider: first.provider,
+		modelId: first.modelId,
+		thinkingLevel: first.thinkingLevel,
+		...(first.sessionId ? { sessionId: first.sessionId } : {}),
+	};
 
 	// Reattach to a still-live session if the client named one (the
 	// normal reconnect path), otherwise spawn a fresh child. Binding the
@@ -217,9 +236,9 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 	ws.on("message", (raw) => {
 		let msg: ClientMessage;
 		try {
-			msg = JSON.parse(raw.toString()) as ClientMessage;
-		} catch {
-			deliverError(ws, "malformed JSON");
+			msg = parseClientMessage(JSON.parse(raw.toString()) as unknown);
+		} catch (error) {
+			protocolViolation(ws, error);
 			return;
 		}
 		// Read the CURRENTLY bound session off the socket — NOT the
@@ -247,7 +266,7 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			log.error("client message handler threw", { error: message });
-			deliverError(ws, `internal error: ${message}`);
+			deliverError(ws, "internal server error");
 		}
 	});
 
@@ -650,18 +669,25 @@ export function rewriteUploadUrls(text: string, hasStructuredImages: boolean): s
 	);
 }
 
-/** Wait for the first message from the WS that matches the given type. */
-function waitForMessage<T>(ws: WebSocket, type: ClientMessage["type"]): Promise<T> {
+/** Wait at most ten seconds for a validated init message. */
+function waitForMessage(
+	ws: WebSocket,
+	type: "init",
+): Promise<Extract<ClientMessage, { type: "init" }>> {
 	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			cleanup();
+			reject(new ProtocolError("timed out waiting for init"));
+		}, 10_000);
 		const onMessage = (raw: WebSocket.RawData) => {
 			cleanup();
 			try {
-				const parsed = JSON.parse(raw.toString()) as ClientMessage;
+				const parsed = parseClientMessage(JSON.parse(raw.toString()) as unknown);
 				if (parsed.type !== type) {
-					reject(new Error(`expected first message to be "${type}", got "${parsed.type}"`));
+					reject(new ProtocolError(`expected first message to be "${type}"`));
 					return;
 				}
-				resolve(parsed as unknown as T);
+				resolve(parsed);
 			} catch (err) {
 				reject(err instanceof Error ? err : new Error(String(err)));
 			}
@@ -675,6 +701,7 @@ function waitForMessage<T>(ws: WebSocket, type: ClientMessage["type"]): Promise<
 			reject(err);
 		};
 		const cleanup = () => {
+			clearTimeout(timer);
 			ws.off("message", onMessage);
 			ws.off("close", onClose);
 			ws.off("error", onError);
@@ -683,6 +710,14 @@ function waitForMessage<T>(ws: WebSocket, type: ClientMessage["type"]): Promise<
 		ws.on("close", onClose);
 		ws.on("error", onError);
 	});
+}
+
+function protocolViolation(ws: PiSocket, error: unknown): void {
+	const socket = ws as PiSocket & { _protocolViolations?: number };
+	socket._protocolViolations = (socket._protocolViolations ?? 0) + 1;
+	const message = error instanceof ProtocolError ? error.message : "malformed JSON";
+	deliverError(ws, `protocol error: ${message}`);
+	if (socket._protocolViolations >= 3) ws.close(1008, "too many protocol violations");
 }
 
 /**

@@ -60,7 +60,7 @@ describe("asyncHandler", () => {
 		const r = await fetch(app.base);
 		// Default status for an unannotated error is 500.
 		expect(r.status).toBe(500);
-		expect(await r.json()).toEqual({ error: "boom" });
+		expect(await r.json()).toEqual({ error: "internal server error" });
 	});
 
 	it("forwards a rejected promise (await-ed failure) too", async () => {
@@ -72,7 +72,7 @@ describe("asyncHandler", () => {
 		);
 		const r = await fetch(app.base);
 		expect(r.status).toBe(500);
-		expect(await r.json()).toEqual({ error: "async fail" });
+		expect(await r.json()).toEqual({ error: "internal server error" });
 	});
 
 	it("respects an error-supplied status (e.g. 400)", async () => {

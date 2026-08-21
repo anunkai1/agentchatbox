@@ -27,11 +27,11 @@
  * Model switch mid-conversation does NOT respawn — `pi` supports in-process
  * model switching via the `set_model` RPC command.
  *
- * On `--api-key` vs env: the provider key is NOT passed on the command
- * line (which is world-readable), and is also NOT injected into the
- * child's env. `pi` reads it directly from its own `~/.pi/agent/auth.json`
- * (the same file ACB gates spawning on via `getServerApiKey()` in
- * config.ts). See the header comment below for the verification.
+ * The selected chat credential is never passed as a command-line argument.
+ * pi resolves it from ~/.pi/agent/auth.json. The child does inherit the
+ * service environment because loaded extensions need tool credentials such
+ * as VENICE_API_KEY/GEMINI_API_KEY; ACB does not add the selected auth.json
+ * value separately.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
@@ -48,9 +48,9 @@ import { safeUnref } from "./util.js";
  * the same auth.json it always does. Verified for every authed provider
  * (deepseek/zai/venice): `pi --mode rpc` with the `*_API_KEY` env var
  * blanked still authenticates and streams real replies from auth.json alone.
- * This also removes a redundant copy of the secret from the child's env
- * (`/proc/<pid>/environ`) and retired the drift-prone hand-maintained
- * provider→env-var map that used to live in providers.ts.
+ * This retired the drift-prone hand-maintained provider→env-var map that used
+ * to live in providers.ts. Tool-extension variables already present in the
+ * service environment remain inherited intentionally.
  */
 
 export interface PiProcessOptions {
@@ -66,8 +66,7 @@ export interface PiProcessOptions {
 	sessionId?: string;
 	/** API key for the provider. Used ONLY by the registry's spawn gate
 	 * (it reads auth.json via `getServerApiKey` and refuses to spawn if
-	 * absent). NOT injected into the child — `pi` resolves it from
-	 * auth.json itself. Kept on this struct so the registry can gate. */
+	 * absent). This value is not explicitly added to argv or env. */
 	apiKey: string;
 	/** Working directory — the project root `pi` treats as the session scope. */
 	cwd: string;
@@ -111,6 +110,8 @@ export class PiProcess extends EventEmitter {
 	private readonly child: ChildProcessWithoutNullStreams;
 	private stdoutBuf = "";
 	private stderrBuf = "";
+	private killTimer: ReturnType<typeof setTimeout> | null = null;
+	private static readonly MAX_STDOUT_LINE_CHARS = 32 * 1024 * 1024;
 	/**
 	 * True once the child has either been killed (`kill()` called) OR
 	 * exited on its own (exit handler flips this). Read by callers
@@ -150,11 +151,10 @@ export class PiProcess extends EventEmitter {
 			args.push(...opts.extraArgs);
 		}
 
-		// Detached: false (default) — when the server dies, we want the
-		// child to die too, not become an orphan writing to a JSONL
-		// the server isn't reading. The `process.on("SIGTERM", ...)`
-		// handler at server boot sends SIGTERM to every child first,
-		// giving each a 2-second window to flush before SIGKILL.
+		// Each child leads a process group. Session teardown signals the whole
+		// group, so extension/helper grandchildren cannot survive a switch or
+		// idle reap. systemd's KillMode=control-group remains the final safety
+		// net if the server itself is killed before graceful shutdown.
 		//
 		// `ACB_UPLOADS_DIR` exposes the server's web-servable uploads
 		// directory to extensions running inside the pi child. The
@@ -167,13 +167,12 @@ export class PiProcess extends EventEmitter {
 		// them. Unlike the API key (which pi reads from auth.json itself —
 		// see the header comment), this path is genuinely needed here:
 		// the venice-image extension has no other way to learn it.
-		// The provider API key is intentionally NOT injected here. `pi`
-		// reads it from `~/.pi/agent/auth.json` itself (ACB already gated
-		// the spawn on that key existing via getServerApiKey). See the
-		// header comment for the verification.
+		// The selected auth.json value is intentionally not added here. The
+		// inherited environment remains necessary for tool extensions.
 		const child = spawn(opts.bin, args, {
 			cwd: opts.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
+			detached: process.platform !== "win32",
 			env: {
 				...process.env,
 				ACB_UPLOADS_DIR: config.uploadsDir,
@@ -235,6 +234,10 @@ export class PiProcess extends EventEmitter {
 		});
 
 		child.on("exit", (code, signal) => {
+			if (this.killTimer) {
+				clearTimeout(this.killTimer);
+				this.killTimer = null;
+			}
 			// Mark dead so callers checking `pi.killed` (e.g.
 			// session-registry's requestSessionId retry loop) stop
 			// writing to the closed pipe. Without this, natural
@@ -279,21 +282,14 @@ export class PiProcess extends EventEmitter {
 		} catch {
 			/* ignore — stdin may already be closed */
 		}
-		try {
-			this.child.kill("SIGTERM");
-		} catch {
-			/* ignore — already dead */
-		}
-		const escalate = setTimeout(() => {
-			try {
-				this.child.kill("SIGKILL");
-			} catch {
-				/* ignore */
-			}
+		this.signalGroup("SIGTERM");
+		this.killTimer = setTimeout(() => {
+			this.signalGroup("SIGKILL");
+			this.killTimer = null;
 		}, 2000);
 		// Don't keep the event loop alive just for the escalation — if the
 		// process is exiting, the SIGTERM (and the exit handler) suffice.
-		safeUnref(escalate);
+		safeUnref(this.killTimer);
 	}
 
 	/**
@@ -304,8 +300,22 @@ export class PiProcess extends EventEmitter {
 		return this.stderrBuf;
 	}
 
+	private signalGroup(signal: NodeJS.Signals): void {
+		try {
+			if (process.platform !== "win32" && this.pid > 0) process.kill(-this.pid, signal);
+			else this.child.kill(signal);
+		} catch {
+			/* already exited */
+		}
+	}
+
 	private handleStdout(chunk: string): void {
 		this.stdoutBuf += chunk;
+		if (this.stdoutBuf.length > PiProcess.MAX_STDOUT_LINE_CHARS && !this.stdoutBuf.includes("\n")) {
+			this.emit("error", new Error("pi emitted an oversized RPC line"));
+			this.kill();
+			return;
+		}
 		for (;;) {
 			const idx = this.stdoutBuf.indexOf("\n");
 			if (idx < 0) break;
@@ -315,6 +325,11 @@ export class PiProcess extends EventEmitter {
 			// Strip a trailing \r defensively — pi doesn't emit
 			// \r\n, but a buggy version might.
 			const clean = line.endsWith("\r") ? line.slice(0, -1) : line;
+			if (clean.length > PiProcess.MAX_STDOUT_LINE_CHARS) {
+				this.emit("error", new Error("pi emitted an oversized RPC line"));
+				this.kill();
+				return;
+			}
 			let parsed: Record<string, unknown>;
 			try {
 				parsed = JSON.parse(clean) as Record<string, unknown>;

@@ -25,8 +25,19 @@ export interface ServerConfig {
 	host: string;
 	/** Folder for uploaded files. Created on boot. */
 	uploadsDir: string;
-	/** Max upload size in bytes. Default 2 GiB. */
+	/** Max size of one upload in bytes. Default 1 GiB. */
 	maxUploadBytes: number;
+	/** Hard aggregate quota for completed uploads. Default 20 GiB. */
+	maxUploadStorageBytes: number;
+	/** Exact browser origins allowed to open the chat WebSocket. */
+	allowedOrigins: ReadonlySet<string>;
+	/** Whether non-browser WebSocket clients may omit Origin. */
+	allowMissingWsOrigin: boolean;
+	/** Bounds authenticated browser connections and live pi children. */
+	maxWsConnections: number;
+	maxLiveSessions: number;
+	/** Maximum inbound WebSocket frame size. */
+	wsMaxPayloadBytes: number;
 	/** OpenAI key, used for Whisper transcription of voice notes. */
 	openaiApiKey: string | undefined;
 	/**
@@ -49,13 +60,69 @@ function readKey(name: string): string | undefined {
 	return v && v.trim().length > 0 ? v.trim() : undefined;
 }
 
+function positiveInt(name: string, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
+	const raw = process.env[name];
+	const value = raw === undefined ? fallback : Number(raw);
+	if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+		throw new Error(`${name} must be a positive integer no greater than ${maximum}`);
+	}
+	return value;
+}
+
+function booleanEnv(name: string, fallback: boolean): boolean {
+	const raw = process.env[name]?.trim().toLowerCase();
+	if (!raw) return fallback;
+	if (["1", "true", "yes"].includes(raw)) return true;
+	if (["0", "false", "no"].includes(raw)) return false;
+	throw new Error(`${name} must be one of: 1, 0, true, false, yes, no`);
+}
+
+function allowedOrigins(): ReadonlySet<string> {
+	const configured = process.env.AGENTCHATBOX_ALLOWED_ORIGINS?.split(",")
+		.map((value) => value.trim())
+		.filter(Boolean);
+	if (configured && configured.length > 0) {
+		for (const origin of configured) {
+			const parsed = new URL(origin);
+			if (parsed.origin !== origin || !["http:", "https:"].includes(parsed.protocol)) {
+				throw new Error(`invalid origin in AGENTCHATBOX_ALLOWED_ORIGINS: ${origin}`);
+			}
+		}
+		return new Set(configured);
+	}
+	const port = positiveInt("PORT", 3000, 65_535);
+	return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
+}
+
+const maxUploadBytes = positiveInt("MAX_UPLOAD_BYTES", 1024 * 1024 * 1024);
+const maxUploadStorageBytes = positiveInt(
+	"AGENTCHATBOX_MAX_UPLOAD_STORAGE_BYTES",
+	20 * 1024 * 1024 * 1024,
+);
+if (maxUploadStorageBytes < maxUploadBytes) {
+	throw new Error("AGENTCHATBOX_MAX_UPLOAD_STORAGE_BYTES must be at least MAX_UPLOAD_BYTES");
+}
+
 export const config: ServerConfig = {
-	port: Number.parseInt(process.env.PORT ?? "3000", 10),
-	host: process.env.HOST ?? "0.0.0.0",
+	port: positiveInt("PORT", 3000, 65_535),
+	host: process.env.HOST ?? "127.0.0.1",
 	uploadsDir: process.env.UPLOADS_DIR
 		? resolve(process.env.UPLOADS_DIR)
 		: resolve(projectRoot, "uploads"),
-	maxUploadBytes: Number.parseInt(process.env.MAX_UPLOAD_BYTES ?? `${2 * 1024 * 1024 * 1024}`, 10),
+	maxUploadBytes,
+	maxUploadStorageBytes,
+	allowedOrigins: allowedOrigins(),
+	allowMissingWsOrigin: booleanEnv(
+		"AGENTCHATBOX_ALLOW_MISSING_WS_ORIGIN",
+		process.env.NODE_ENV !== "production",
+	),
+	maxWsConnections: positiveInt("AGENTCHATBOX_MAX_WS_CONNECTIONS", 16, 256),
+	maxLiveSessions: positiveInt("AGENTCHATBOX_MAX_LIVE_SESSIONS", 8, 64),
+	wsMaxPayloadBytes: positiveInt(
+		"AGENTCHATBOX_WS_MAX_PAYLOAD_BYTES",
+		40 * 1024 * 1024,
+		64 * 1024 * 1024,
+	),
 	openaiApiKey: readKey("OPENAI_API_KEY"),
 	// `piBin` and `piCwd` are read lazily — they need to reflect the
 	// process state at boot time, not at module-load time (which could

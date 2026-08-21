@@ -66,6 +66,7 @@ const IDLE_GRACE_MS = Number(process.env.AGENTCHATBOX_IDLE_GRACE_MS ?? 5 * 60_00
  * streaming state on reattach) are always kept.
  */
 const CURRENT_TURN_BUFFER_MAX = 2000;
+const CURRENT_TURN_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * Per-send WS output backpressure guard. `ws.bufferedAmount` is the
@@ -76,6 +77,7 @@ const CURRENT_TURN_BUFFER_MAX = 2000;
  * gets fresh state via transcript replay). Standard ws-library pattern.
  */
 const WS_BACKPRESSURE_HIGH_WATER = 16 * 1024 * 1024; // 16 MiB
+const WS_SINGLE_MESSAGE_MAX = 16 * 1024 * 1024; // 16 MiB
 
 export interface InitMessage {
 	provider: string;
@@ -138,6 +140,7 @@ export interface LiveSession {
 	streaming: boolean;
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	currentTurn: unknown[];
+	currentTurnBytes: number;
 	/**
 	 * The model the user just clicked via setModel, awaiting pi's
 	 * confirmation. The chat.ts handler stashes the request here and we
@@ -210,6 +213,10 @@ class SessionRegistry {
 		return out;
 	}
 
+	stats(): { live: number; pending: number; limit: number } {
+		return { live: this.entries.size, pending: this.pending.size, limit: config.maxLiveSessions };
+	}
+
 	/**
 	 * Get an existing live session by id, or spawn a fresh one. This is
 	 * the single entry point for both initial connect and reconnect — a
@@ -228,6 +235,15 @@ class SessionRegistry {
 	}
 
 	private spawn(init: InitMessage): LiveSession {
+		// Reap forgotten idle sessions before rejecting a new connection. Active,
+		// attached, or between-turn sessions are never sacrificed for capacity.
+		for (const candidate of this.entries.values()) {
+			if (this.entries.size + this.pending.size < config.maxLiveSessions) break;
+			if (!candidate.ws && !candidate.busy && !candidate.streaming) this.kill(candidate);
+		}
+		if (this.entries.size + this.pending.size >= config.maxLiveSessions) {
+			throw new Error(`live session limit reached (${config.maxLiveSessions})`);
+		}
 		const apiKey = getServerApiKey(init.provider);
 		if (!apiKey) {
 			throw new Error(
@@ -253,6 +269,7 @@ class SessionRegistry {
 			streaming: false,
 			idleTimer: null,
 			currentTurn: [],
+			currentTurnBytes: 0,
 			pendingModel: null,
 			pendingThinking: null,
 			thinkingQueue: [],
@@ -274,9 +291,10 @@ class SessionRegistry {
 		// detach is just swapping that reference.
 		pi.on("event", (line) => this.onEvent(session, line));
 		pi.on("error", (err) => {
-			// The child will die on its own after this. Tell the attached
-			// view (if any) but do NOT close its ws — it may be mid-respawn.
-			deliver(session.ws, { type: "error", message: `pi subprocess error: ${err.message}` });
+			// Keep process/path details in the server log rather than reflecting
+			// arbitrary child errors into the browser transcript.
+			log.error("pi subprocess error", { sessionId: session.sessionId, error: err.message });
+			deliver(session.ws, { type: "error", message: "pi subprocess error" });
 		});
 		pi.on("exit", (info) => {
 			if (session.idleTimer) {
@@ -290,7 +308,12 @@ class SessionRegistry {
 			session.busy = false;
 			session.streaming = false;
 			if (!session.ready) {
-				const message = `pi exited before ready (code=${info.code}, signal=${info.signal}): ${pi.getStderr().slice(-200)}`;
+				const message = `pi exited before ready (code=${info.code}, signal=${info.signal})`;
+				log.error("pi exited before ready", {
+					code: info.code,
+					signal: info.signal,
+					stderr: pi.getStderr().slice(-1000),
+				});
 				for (const waiter of session.readyWaiters.splice(0)) waiter.reject(new Error(message));
 				deliver(session.ws, { type: "error", message });
 				return;
@@ -510,7 +533,10 @@ class SessionRegistry {
 			const modelId = data?.model?.id;
 			const thinkingLevel = data?.thinkingLevel;
 			if (typeof provider === "string" && typeof modelId === "string") {
-				const thinking = typeof thinkingLevel === "string" ? (thinkingLevel as ThinkingLevel) : session.init.thinkingLevel;
+				const thinking =
+					typeof thinkingLevel === "string"
+						? (thinkingLevel as ThinkingLevel)
+						: session.init.thinkingLevel;
 				const changed =
 					session.init.provider !== provider ||
 					session.init.modelId !== modelId ||
@@ -660,6 +686,7 @@ class SessionRegistry {
 		if (line.type === "turn_start") {
 			session.busy = true;
 			session.currentTurn = [line];
+			session.currentTurnBytes = eventBytes(line);
 			// Work started — cancel any pending reap. A busy session is
 			// never reaped, even if detached.
 			if (session.idleTimer) {
@@ -668,8 +695,13 @@ class SessionRegistry {
 			}
 		} else if (session.busy && line.type !== "turn_end") {
 			session.currentTurn.push(line);
-			if (session.currentTurn.length > CURRENT_TURN_BUFFER_MAX) {
-				session.currentTurn.shift();
+			session.currentTurnBytes += eventBytes(line);
+			while (
+				session.currentTurn.length > CURRENT_TURN_BUFFER_MAX ||
+				session.currentTurnBytes > CURRENT_TURN_BUFFER_MAX_BYTES
+			) {
+				const removed = session.currentTurn.shift();
+				if (removed) session.currentTurnBytes -= eventBytes(removed);
 			}
 		} else if (line.type === "turn_end") {
 			// Keep the completed turn buffered until the next turn_start
@@ -678,6 +710,14 @@ class SessionRegistry {
 			// remains true through the gap before the next turn; cleanup waits
 			// for agent_end rather than interrupting that gap.
 			session.currentTurn.push(line);
+			session.currentTurnBytes += eventBytes(line);
+			while (
+				session.currentTurn.length > CURRENT_TURN_BUFFER_MAX ||
+				session.currentTurnBytes > CURRENT_TURN_BUFFER_MAX_BYTES
+			) {
+				const removed = session.currentTurn.shift();
+				if (removed) session.currentTurnBytes -= eventBytes(removed);
+			}
 			session.busy = false;
 			if (!session.ws && !session.streaming) this.scheduleIdleReap(session);
 		}
@@ -823,7 +863,27 @@ export const registry = new SessionRegistry();
  */
 export function deliver(ws: PiSocket | null, msg: ServerMessage): void {
 	if (!ws || ws.readyState !== ws.OPEN) return;
-	if (ws.bufferedAmount > WS_BACKPRESSURE_HIGH_WATER) {
+	let encoded: string;
+	try {
+		encoded = JSON.stringify(msg);
+	} catch {
+		return;
+	}
+	const bytes = Buffer.byteLength(encoded);
+	if (bytes > WS_SINGLE_MESSAGE_MAX) {
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "error",
+					message: "server event omitted because it exceeded the transport limit",
+				}),
+			);
+		} catch {
+			/* socket may already be gone */
+		}
+		return;
+	}
+	if (ws.bufferedAmount + bytes > WS_BACKPRESSURE_HIGH_WATER) {
 		try {
 			ws.close(1011, "backpressure: client not draining");
 		} catch {
@@ -832,9 +892,17 @@ export function deliver(ws: PiSocket | null, msg: ServerMessage): void {
 		return;
 	}
 	try {
-		ws.send(JSON.stringify(msg));
+		ws.send(encoded);
 	} catch {
 		/* socket may have closed between the check and the send */
+	}
+}
+
+function eventBytes(event: unknown): number {
+	try {
+		return Buffer.byteLength(JSON.stringify(event));
+	} catch {
+		return 0;
 	}
 }
 

@@ -18,13 +18,37 @@
 
 type Fields = Record<string, unknown>;
 
+export function redactSensitive(value: string): string {
+	return value
+		.replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[REDACTED]")
+		.replace(/\b(sk-[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{12,})\b/g, "[REDACTED]")
+		.replace(
+			/(\b(?:api[_-]?key|token|secret|password|access|refresh)\b\s*[=:]\s*["']?)[^\s,"'}]+/gi,
+			"$1[REDACTED]",
+		)
+		.slice(0, 16_384);
+}
+
+function sanitise(value: unknown, depth = 0): unknown {
+	if (typeof value === "string") return redactSensitive(value);
+	if (depth >= 4 || value === null || typeof value !== "object") return value;
+	if (Array.isArray(value)) return value.slice(0, 100).map((entry) => sanitise(entry, depth + 1));
+	const out: Fields = {};
+	for (const [key, entry] of Object.entries(value as Fields).slice(0, 100)) {
+		out[key] = /key|token|secret|password|authorization/i.test(key)
+			? "[REDACTED]"
+			: sanitise(entry, depth + 1);
+	}
+	return out;
+}
+
 function line(level: string, msg: string, fields?: Fields): string {
 	const obj: Fields = {
 		ts: new Date().toISOString(),
 		level,
-		msg,
+		msg: redactSensitive(msg),
 	};
-	if (fields) Object.assign(obj, fields);
+	if (fields) Object.assign(obj, sanitise(fields));
 	return JSON.stringify(obj);
 }
 
