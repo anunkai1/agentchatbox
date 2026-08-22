@@ -15,9 +15,9 @@
  * from process.cwd() — see paths.ts.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { projectRoot } from "./paths.js";
 
 export interface ServerConfig {
@@ -55,6 +55,12 @@ export interface ServerConfig {
 	 * Overridable via PI_CWD.
 	 */
 	piCwd: string;
+	/**
+	 * Explicit operator trust anchors for independently owned project repos.
+	 * These projects may run pi from their exact canonical cwd but ACB never
+	 * owns or recursively deletes their directories.
+	 */
+	trustedExternalProjects: ReadonlyMap<string, string>;
 }
 
 function readKey(name: string): string | undefined {
@@ -79,6 +85,62 @@ function booleanEnv(name: string, fallback: boolean): boolean {
 	throw new Error(`${name} must be one of: 1, 0, true, false, yes, no`);
 }
 
+const EXTERNAL_PROJECT_ID_RE = /^[a-z0-9][a-z0-9_-]{1,63}$/;
+
+/**
+ * Parse `id:/absolute/path,id2:/absolute/path2` trust anchors. Unlike the
+ * mutable projects sidecar, this operator-controlled setting authorises exact
+ * external repositories. Paths must already exist, be canonical directories,
+ * and sit outside both Global and ACB's managed `.projects/` tree.
+ */
+export function parseTrustedExternalProjects(
+	raw: string | undefined,
+	piCwd: string,
+): ReadonlyMap<string, string> {
+	const projects = new Map<string, string>();
+	const usedPaths = new Set<string>();
+	if (!raw?.trim()) return projects;
+	const managedRoot = resolve(piCwd, ".projects");
+	for (const item of raw.split(",")) {
+		const entry = item.trim();
+		if (!entry) continue;
+		const separator = entry.indexOf(":");
+		if (separator < 1) throw new Error(`invalid trusted external project entry: ${entry}`);
+		const id = entry.slice(0, separator).trim();
+		const configuredPath = entry.slice(separator + 1).trim();
+		if (!EXTERNAL_PROJECT_ID_RE.test(id) || id === "global") {
+			throw new Error(`invalid trusted external project id: ${id}`);
+		}
+		if (!isAbsolute(configuredPath)) {
+			throw new Error(`trusted external project ${id} must use an absolute path`);
+		}
+		let canonicalPath: string;
+		try {
+			canonicalPath = realpathSync(configuredPath);
+		} catch {
+			throw new Error(`trusted external project ${id} does not exist or cannot be resolved`);
+		}
+		if (resolve(configuredPath) !== canonicalPath || !statSync(canonicalPath).isDirectory()) {
+			throw new Error(`trusted external project ${id} must name a canonical directory`);
+		}
+		const managedRelative = relative(managedRoot, canonicalPath);
+		if (
+			canonicalPath === resolve(piCwd) ||
+			managedRelative === "" ||
+			(!managedRelative.startsWith("..") && !isAbsolute(managedRelative))
+		) {
+			throw new Error(`trusted external project ${id} must be outside Global and .projects`);
+		}
+		if (projects.has(id)) throw new Error(`duplicate trusted external project id: ${id}`);
+		if (usedPaths.has(canonicalPath)) {
+			throw new Error(`duplicate trusted external project path: ${canonicalPath}`);
+		}
+		projects.set(id, canonicalPath);
+		usedPaths.add(canonicalPath);
+	}
+	return projects;
+}
+
 function allowedOrigins(): ReadonlySet<string> {
 	const configured = process.env.AGENTCHATBOX_ALLOWED_ORIGINS?.split(",")
 		.map((value) => value.trim())
@@ -96,6 +158,7 @@ function allowedOrigins(): ReadonlySet<string> {
 	return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
 }
 
+const piCwd = resolve(process.env.PI_CWD ?? process.cwd());
 const maxUploadBytes = positiveInt("MAX_UPLOAD_BYTES", 2 * 1024 * 1024 * 1024);
 const maxUploadStorageBytes = positiveInt(
 	"AGENTCHATBOX_MAX_UPLOAD_STORAGE_BYTES",
@@ -133,7 +196,11 @@ export const config: ServerConfig = {
 	// getter on the config object would be ideal but a frozen literal
 	// is what the rest of the file uses; resolve them here.
 	piBin: process.env.PI_BIN ?? "pi",
-	piCwd: process.env.PI_CWD ?? process.cwd(),
+	piCwd,
+	trustedExternalProjects: parseTrustedExternalProjects(
+		process.env.AGENTCHATBOX_TRUSTED_EXTERNAL_PROJECTS,
+		piCwd,
+	),
 };
 
 /**

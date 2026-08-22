@@ -139,6 +139,7 @@ Non-secret server settings go through `.env`; chat-provider availability comes f
 | `AGENTCHATBOX_PI_READY_TIMEOUT_MS` | `30000`                    | Cold/resumed pi readiness ceiling               |
 | `PI_BIN`                       | `pi`                          | Path to the `pi` CLI binary (overridable for tests) |
 | `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
+| `AGENTCHATBOX_TRUSTED_EXTERNAL_PROJECTS` | (unset)             | Exact `id:/canonical/path` external repos; non-deletable by ACB |
 | `PYTHON_BIN`                   | `python3`                     | Python binary for faster-whisper (STT)           |
 | `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
 | `AUTO_TITLE_MODEL`             | active session model          | Optional `provider/modelId` used for automatic first-turn session titles |
