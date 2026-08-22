@@ -16,7 +16,8 @@
  * Storage layout:
  *   data/projects.json            — metadata (id, name, icon, cwd, defaults)
  *   <cwd>/AGENTS.md               — per-project instructions (pi loads it)
- *   <config.piCwd>/.projects/<id>/ — non-global project folders
+ *   <config.piCwd>/.projects/<id>/ — ACB-managed project folders
+ *   trusted external cwd          — exact operator-allowlisted repos; never deleted
  *
  * The "Global" project is builtin: its cwd is `config.piCwd` itself, so
  * it preserves today's behavior for anyone who doesn't want projects,
@@ -28,11 +29,18 @@
  * there is zero drift between the sidecar and pi's session JSONLs.
  */
 
+import { randomUUID } from "node:crypto";
 import {
 	chmodSync,
+	closeSync,
+	constants,
 	existsSync,
+	fstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
+	realpathSync,
+	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -46,6 +54,7 @@ import { projectRoot } from "./paths.js";
 /** The builtin Global project id. */
 export const GLOBAL_PROJECT_ID = "global";
 const PROJECT_ID_RE = /^[a-z0-9]{6}$/;
+const MAX_INSTRUCTIONS_BYTES = 1024 * 1024;
 
 /**
  * On-disk project record. `cwd` is the working directory `pi` runs in;
@@ -58,7 +67,7 @@ export interface ProjectRecord {
 	icon: string;
 	/** Absolute working directory passed to `pi`. */
 	cwd: string;
-	/** Builtin projects (Global) cannot be deleted. */
+	/** Builtin/trusted external projects cannot be deleted by ACB. */
 	builtin?: boolean;
 	/** Optional default model for new chats started in this project. */
 	defaultModelId?: string | null;
@@ -165,6 +174,32 @@ function readStore(): ProjectsFile {
 	parsed.projects.unshift(mergedGlobal);
 	parsed.sidebarOrder = parsed.sidebarOrder.filter((id) => id !== GLOBAL_PROJECT_ID);
 	parsed.sidebarOrder.unshift(GLOBAL_PROJECT_ID);
+
+	// Trusted external repos are operator-configured trust anchors, not folders
+	// owned by the projects sidecar. Preserve safe UI/default metadata from disk,
+	// but force the configured canonical cwd and builtin deletion protection.
+	// Inject a conservative default record if the sidecar was lost or corrupt.
+	for (const [id, cwd] of config.trustedExternalProjects) {
+		const disk = parsed.projects.find((project) => project.id === id);
+		const external: ProjectRecord = {
+			id,
+			name: disk?.name || id,
+			icon: disk?.icon || "📁",
+			cwd,
+			builtin: true,
+			...(disk?.defaultModelId !== undefined
+				? { defaultModelId: disk.defaultModelId }
+				: {}),
+			...(disk?.defaultProvider !== undefined
+				? { defaultProvider: disk.defaultProvider }
+				: {}),
+			...(disk?.defaultThinkingLevel !== undefined
+				? { defaultThinkingLevel: disk.defaultThinkingLevel }
+				: {}),
+		};
+		parsed.projects = parsed.projects.filter((project) => project.id !== id);
+		parsed.projects.push(external);
+	}
 	// Drop any sidebarOrder ids that no longer have a project, and append
 	// any projects not yet in the order.
 	const known = new Set(parsed.projects.map((p) => p.id));
@@ -218,16 +253,21 @@ export function agentsMdPath(project: ProjectRecord): string {
 	return resolve(project.cwd, "AGENTS.md");
 }
 
-/** Read a project's instructions (its AGENTS.md). Empty string if absent. */
+/** Read a project's instructions without following a substituted AGENTS.md symlink. */
 export function readProjectInstructions(id: string): string {
 	const project = getProject(id);
-	if (!project) return "";
+	if (!project || !isCurrentProjectDirectory(project)) return "";
 	const file = agentsMdPath(project);
-	if (!existsSync(file)) return "";
+	let fd: number | undefined;
 	try {
-		return readFileSync(file, "utf8");
+		fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+		const info = fstatSync(fd);
+		if (!info.isFile() || info.size > MAX_INSTRUCTIONS_BYTES) return "";
+		return readFileSync(fd, "utf8");
 	} catch {
 		return "";
+	} finally {
+		if (fd !== undefined) closeSync(fd);
 	}
 }
 
@@ -306,45 +346,54 @@ export function updateProject(
 	return updated;
 }
 
-/** Write a project's AGENTS.md (creates the folder if needed). */
+/**
+ * Write AGENTS.md atomically. Renaming a private sibling file over the target
+ * replaces a hostile symlink rather than following it to an arbitrary file.
+ */
 export function writeProjectInstructions(id: string, text: string): void {
 	const project = getProject(id);
-	if (!project) return;
-	try {
-		mkdirSync(project.cwd, { recursive: true });
-	} catch {
-		/* may exist */
+	if (!project || Buffer.byteLength(text, "utf8") > MAX_INSTRUCTIONS_BYTES) return;
+	if (isManagedProject(project)) {
+		try {
+			mkdirSync(project.cwd, { recursive: true, mode: 0o700 });
+			chmodSync(project.cwd, 0o700);
+		} catch {
+			return;
+		}
 	}
+	if (!isCurrentProjectDirectory(project)) return;
 	const file = agentsMdPath(project);
-	writeFileSync(file, text, { mode: 0o600 });
-	chmodSync(file, 0o600);
+	const tmp = resolve(project.cwd, `.AGENTS.md.${process.pid}.${randomUUID()}.tmp`);
+	try {
+		writeFileSync(tmp, text, { mode: 0o600, flag: "wx" });
+		renameSync(tmp, file);
+		chmodSync(file, 0o600);
+	} catch (error) {
+		rmSync(tmp, { force: true });
+		throw error;
+	}
 }
 
 /**
- * Delete a project. Refuses builtin (Global). Removes the metadata, the
+ * Delete an ACB-managed project. Refuses builtin Global and trusted external
+ * repositories. Removes the metadata, the
  * sidebar entry, and the project folder (including its AGENTS.md).
  * Sessions' JSONLs are NOT touched — they live in pi's session dir keyed
  * by the old cwd and will re-appear under an "Other" bucket in the
  * sidebar until that cwd is re-used. Returns true if deleted.
  */
 export function deleteProject(id: string): boolean {
-	if (id === GLOBAL_PROJECT_ID) return false;
 	const store = readStore();
 	const project = store.projects.find((p) => p.id === id);
-	if (!project) return false;
+	// Global and trusted external repositories are operator-owned. They cannot
+	// be removed from metadata or recursively deleted through the ACB UI.
+	if (!project || project.builtin || !isManagedProject(project)) return false;
+
 	store.projects = store.projects.filter((p) => p.id !== id);
 	store.sidebarOrder = store.sidebarOrder.filter((sid) => sid !== id);
 	writeStore(store);
-	// A sidecar is untrusted input. Delete only the canonical directory
-	// derived from the validated id, never an arbitrary stored cwd.
-	const root = projectsRoot();
-	const expected = resolve(root, id);
-	const rel = relative(root, expected);
-	if (!PROJECT_ID_RE.test(id) || rel.startsWith("..") || resolve(project.cwd) !== expected) {
-		return false;
-	}
 	try {
-		rmSync(expected, { recursive: true, force: true });
+		rmSync(project.cwd, { recursive: true, force: true });
 	} catch {
 		/* ignore */
 	}
@@ -365,15 +414,69 @@ export function reorderProjects(order: string[]): void {
 	writeStore(store);
 }
 
+function safeProjectMetadata(project: Partial<ProjectRecord>): boolean {
+	if (typeof project.name !== "string" || project.name.length === 0 || project.name.length > 200) {
+		return false;
+	}
+	if (typeof project.icon !== "string" || project.icon.length > 32) return false;
+	if (project.builtin !== undefined && typeof project.builtin !== "boolean") return false;
+	if (
+		project.defaultModelId !== undefined &&
+		project.defaultModelId !== null &&
+		(typeof project.defaultModelId !== "string" || project.defaultModelId.length > 256)
+	) {
+		return false;
+	}
+	if (
+		project.defaultProvider !== undefined &&
+		project.defaultProvider !== null &&
+		(typeof project.defaultProvider !== "string" || project.defaultProvider.length > 64)
+	) {
+		return false;
+	}
+	if (
+		project.defaultThinkingLevel !== undefined &&
+		project.defaultThinkingLevel !== null &&
+		!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+			project.defaultThinkingLevel,
+		)
+	) {
+		return false;
+	}
+	return true;
+}
+
+function isManagedProject(project: Pick<ProjectRecord, "id" | "cwd">): boolean {
+	if (!PROJECT_ID_RE.test(project.id)) return false;
+	const root = projectsRoot();
+	const expected = resolve(root, project.id);
+	const rel = relative(root, expected);
+	return !rel.startsWith("..") && resolve(project.cwd) === expected;
+}
+
+function isTrustedExternalProject(project: Pick<ProjectRecord, "id" | "cwd">): boolean {
+	const trustedCwd = config.trustedExternalProjects.get(project.id);
+	return trustedCwd !== undefined && resolve(project.cwd) === trustedCwd;
+}
+
+function isCurrentProjectDirectory(project: Pick<ProjectRecord, "id" | "cwd">): boolean {
+	if (!isManagedProject(project) && !isTrustedExternalProject(project) && project.id !== GLOBAL_PROJECT_ID) {
+		return false;
+	}
+	try {
+		return realpathSync(project.cwd) === resolve(project.cwd) && statSync(project.cwd).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 function isSafeProjectRecord(value: unknown): value is ProjectRecord {
 	if (!value || typeof value !== "object") return false;
 	const project = value as Partial<ProjectRecord>;
-	if (typeof project.id !== "string") return false;
+	if (typeof project.id !== "string" || typeof project.cwd !== "string") return false;
+	if (!safeProjectMetadata(project)) return false;
 	if (project.id === GLOBAL_PROJECT_ID) return true;
-	if (!PROJECT_ID_RE.test(project.id) || typeof project.cwd !== "string") return false;
-	const expected = resolve(projectsRoot(), project.id);
-	const rel = relative(projectsRoot(), expected);
-	return !rel.startsWith("..") && resolve(project.cwd) === expected;
+	return isManagedProject(project as ProjectRecord) || isTrustedExternalProject(project as ProjectRecord);
 }
 
 /** Generate a short unique id not already in the store. */
