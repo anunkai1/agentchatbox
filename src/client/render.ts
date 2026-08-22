@@ -2002,7 +2002,7 @@ export function renderShell(): void {
 			// and light contexts, so one raster asset serves everywhere.
 			el("img", {
 				class: "header-mark",
-				src: "/logo-mark.png",
+				src: "/logo-mark.webp?v=ebfe29502536",
 				alt: "ACB",
 				width: 24,
 				height: 24,
@@ -2141,7 +2141,7 @@ export function renderShell(): void {
 	welcome.append(
 		el("img", {
 			class: "welcome-mark",
-			src: "/logo-mark.png",
+			src: "/logo-mark.webp?v=ebfe29502536",
 			alt: "agentchatbox",
 			width: 72,
 			height: 72,

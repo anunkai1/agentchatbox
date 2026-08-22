@@ -1298,10 +1298,12 @@ async function boot(): Promise<void> {
 		// since it connected).
 		if (typeof info.isStreaming === "boolean") setStreaming(info.isStreaming);
 		refreshStatus();
-		// Request the session list for the sidebar on the first ready event.
-		// Subsequent ready events (reconnects, new sessions) also refresh.
-		chatClient.listSessions();
-		chatClient.listProjects();
+		// Session/project metadata was requested as soon as this WebSocket
+		// opened. Do not request the full list again here: with 1,000+ sessions
+		// that duplicated roughly 260 KiB of uncompressed WS traffic plus a
+		// complete cache write/sidebar repaint on every load. A brand-new empty
+		// pi session is intentionally absent until its first persisted message;
+		// the normal session-info broadcast then adds it authoritatively.
 		// Refresh the loaded-commands badge for this session's project. A
 		// different project loads a different extension set, so every ready
 		// (new session, resume, fork, reconnect) re-asks pi — the server

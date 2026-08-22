@@ -973,11 +973,13 @@ describe("mountChatWs — pi subprocess pipe", () => {
 					sessionId: "deleted-session-001",
 				}),
 			);
-			const msgs = await inbox.waitFor(2, 3000);
+			const started = Date.now();
+			const msgs = await inbox.waitFor(1, 1000);
 			const errMsg = msgs.find((m) => m.type === "error");
 			expect((errMsg as { message?: string }).message ?? "").toMatch(
 				/requested session no longer exists/i,
 			);
+			expect(Date.now() - started).toBeLessThan(1000);
 		} finally {
 			close();
 		}

@@ -251,6 +251,39 @@ describe("readPiSessionMessages", () => {
 		expect((msgs[2] as { content: Array<{ text: string }> }).content[0].text).toBe("follow up");
 	});
 
+	it("streams JSONL lines larger than the read chunk without corrupting UTF-8", async () => {
+		const header = JSON.stringify({
+			type: "session",
+			version: 3,
+			id: "large-line",
+			timestamp: "2026-06-15T10:00:00.000Z",
+			cwd,
+		});
+		const marker = "__UNICODE_MARKER__";
+		const template = JSON.stringify({
+			type: "message",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: marker }],
+				timestamp: 2,
+			},
+		});
+		const markerOffset = Buffer.byteLength(template.slice(0, template.indexOf(marker)));
+		const text = `${"a".repeat(1024 * 1024 - markerOffset - 1)}😀 tail`;
+		const line = template.replace(marker, text);
+		writeFileSync(
+			join(root!, "--home-test-project--", "2026-06-15T10-00-00_large.jsonl"),
+			`${header}\n${line}\n`,
+		);
+
+		const { readPiSessionMessages } = await import("../src/server/session-list.js");
+		const messages = readPiSessionMessages(cwd, "large-line") as Array<{
+			content: Array<{ text?: string }>;
+		}>;
+		expect(messages).toHaveLength(1);
+		expect(messages[0].content[0].text).toBe(text);
+	});
+
 	it("omits replay-only image bytes and tool details while preserving attachment labels", async () => {
 		const userImage = { type: "image", data: "visible-user-image", mimeType: "image/png" };
 		const toolImage = { type: "image", data: "large-internal-tool-image", mimeType: "image/png" };

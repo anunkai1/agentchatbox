@@ -38,8 +38,9 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { Message } from "@earendil-works/pi-ai";
-import { extractText, truncate } from "../shared/content.js";
+import { truncate } from "../shared/content.js";
 import { GLOBAL_PROJECT_ID, projectIdForCwd } from "./projects.js";
 import { readPinnedSessions } from "./session-pins.js";
 
@@ -96,6 +97,60 @@ export function parseJsonl(raw: string): Record<string, unknown>[] {
 		}
 	}
 	return out;
+}
+
+/** Visit a JSONL file one line at a time with bounded read memory. Session
+ * files can exceed 150 MiB because image blocks are persisted in pi's context;
+ * readFileSync + split + JSON.parse previously pushed a single replay above
+ * 500 MiB RSS. StringDecoder preserves UTF-8 characters split across chunks. */
+function forEachJsonlLine(path: string, visitor: (line: string) => void): void {
+	const fd = openSync(path, "r");
+	const buffer = Buffer.allocUnsafe(1024 * 1024);
+	const decoder = new StringDecoder("utf8");
+	let pending = "";
+	try {
+		for (;;) {
+			const bytes = readSync(fd, buffer, 0, buffer.length, null);
+			if (bytes === 0) break;
+			pending += decoder.write(buffer.subarray(0, bytes));
+			let start = 0;
+			for (;;) {
+				const newline = pending.indexOf("\n", start);
+				if (newline < 0) break;
+				visitor(pending.slice(start, newline));
+				start = newline + 1;
+			}
+			pending = pending.slice(start);
+		}
+		pending += decoder.end();
+		if (pending.length > 0) visitor(pending);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/** Pi writes top-level `type` first. Reading it without parsing the rest lets
+ * summary scans count giant image messages without materialising their data. */
+function jsonlLineType(line: string): string | null {
+	return line.match(/^\s*\{\s*"type"\s*:\s*"([^"]+)"/)?.[1] ?? null;
+}
+
+/** Extract only the first user-visible text JSON string from a message line.
+ * Avoids JSON.parse of multi-megabyte image arrays merely to derive a 60-char
+ * sidebar title. Pi serialises role before content and text-block type before
+ * text; fall back to later user messages when an image-only message has none. */
+function firstUserTextFromLine(line: string): string | null {
+	if (!/"role"\s*:\s*"user"/.test(line)) return null;
+	const encoded =
+		line.match(/"type"\s*:\s*"text"\s*,\s*"text"\s*:\s*("(?:\\.|[^"\\])*")/)?.[1] ??
+		line.match(/"content"\s*:\s*("(?:\\.|[^"\\])*")/)?.[1];
+	if (!encoded) return null;
+	try {
+		const text = JSON.parse(encoded) as unknown;
+		return typeof text === "string" && text.length > 0 ? text : null;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -273,67 +328,52 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 			continue;
 		}
 
-		const raw = readFileSync(file, "utf8");
-		const lines = raw.split("\n");
-
-		// First non-empty line is the `session` entry.
+		// Scan incrementally. Counting a message only needs its top-level type;
+		// after finding the fallback title, giant image-bearing messages never
+		// need JSON.parse during a sidebar refresh.
 		let firstLine: Record<string, unknown> | null = null;
-		for (const l of lines) {
-			const t = l.trim();
-			if (!t) continue;
-			try {
-				firstLine = JSON.parse(t) as Record<string, unknown>;
-			} catch {
-				/* skip */
+		let messageCount = 0;
+		let firstUserText: string | null = null;
+		let sessionName: string | null = null;
+		forEachJsonlLine(file, (line) => {
+			const trimmed = line.trim();
+			if (!trimmed) return;
+			const type = jsonlLineType(trimmed);
+			if (firstLine === null) {
+				try {
+					firstLine = JSON.parse(trimmed) as Record<string, unknown>;
+				} catch {
+					return;
+				}
 			}
-			break;
-		}
-		if (firstLine?.type !== "session") continue;
+			if (type === "message") {
+				messageCount++;
+				if (firstUserText === null) firstUserText = firstUserTextFromLine(trimmed);
+			} else if (type === "session_info") {
+				try {
+					const e = JSON.parse(trimmed) as Record<string, unknown>;
+					const n = e.name;
+					if (typeof n === "string") sessionName = n.trim() ? n : null;
+				} catch {
+					/* skip malformed metadata */
+				}
+			}
+		});
+		// TypeScript does not model assignments performed inside the synchronous
+		// visitor callback, so re-establish the post-scan union explicitly.
+		const header = firstLine as Record<string, unknown> | null;
+		if (header?.type !== "session") continue;
 
-		const sessionCwd = String(firstLine.cwd ?? "");
+		const sessionCwd = String(header.cwd ?? "");
 		// Filter to only this cwd — sessions from a different project
 		// might live in a sibling directory but we also defensively
 		// check the cwd field on the session line.
 		if (sessionCwd !== resolve(cwd)) continue;
 
-		// Count `type: "message"` entries (skip `model_change`,
-		// `thinking_level_change`, etc.). These are the entries the
-		// browser will render.
-		let messageCount = 0;
-		// First user message text becomes the fallback title.
-		let firstUserText: string | null = null;
-		// pi persists a user-set session name as a `session_info` line:
-		//   {"type":"session_info","id":"...","name":"my-feature-work"}
-		// The LAST such line wins (a rename overwrites the prior name),
-		// and an empty/whitespace name clears it. This is the same field
-		// `get_state` reports as `sessionName` and the TUI session picker
-		// shows — reading it back here makes a rename done on any device
-		// (CLI, another browser) appear in the sidebar everywhere.
-		let sessionName: string | null = null;
-		for (const e of parseJsonl(raw)) {
-			if (e.type === "message") {
-				messageCount++;
-				if (firstUserText === null) {
-					const m = e.message as { role?: string; content?: unknown } | undefined;
-					if (m?.role === "user" && m.content) {
-						firstUserText = extractText(m.content);
-					}
-				}
-			} else if (e.type === "session_info") {
-				const n = e.name;
-				// Empty string or whitespace clears the name (matches
-				// pi's semantics). undefined = line had no name field,
-				// leave whatever we had.
-				if (typeof n === "string") {
-					sessionName = n.trim() ? n : null;
-				}
-			}
-		}
-
 		const summary: SessionSummary = {
-			id: String(firstLine.id ?? name.replace(/\.jsonl$/, "")),
+			id: String(header.id ?? name.replace(/\.jsonl$/, "")),
 			cwd: sessionCwd,
-			createdAt: String(firstLine.timestamp ?? st.mtime.toISOString()),
+			createdAt: String(header.timestamp ?? st.mtime.toISOString()),
 			modifiedAt: st.mtime.toISOString(),
 			title: sessionName ?? (firstUserText ? truncate(firstUserText, 60) : "(empty session)"),
 			messageCount,
@@ -645,10 +685,7 @@ function browserReplayMessage(message: Message): Message {
 
 	if (Array.isArray(candidate.content)) {
 		const filtered = candidate.content.filter(
-			(block) =>
-				!block ||
-				typeof block !== "object" ||
-				(block as { type?: unknown }).type !== "image",
+			(block) => !block || typeof block !== "object" || (block as { type?: unknown }).type !== "image",
 		);
 		replayContent = filtered;
 		changed = filtered.length !== candidate.content.length;
@@ -661,7 +698,7 @@ function browserReplayMessage(message: Message): Message {
 		...original,
 		...(changed ? { content: replayContent } : {}),
 	};
-	if (stripToolDetails) delete replay["details"];
+	if (stripToolDetails) delete replay.details;
 	return replay as unknown as Message;
 }
 
@@ -681,27 +718,24 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 	const file = findPiSessionFile(cwd, sessionId);
 	if (!file) return [];
 
-	// This is the file — now read the full transcript.
-	const raw = readFileSync(file, "utf8");
-	// Walk every line, collect `type: "message"` entries' `.message` field.
-	// pi writes SDK-shape `Message` objects here; cast through unknown
-	// since JSON.parse returns unknown and we trust the writer.
+	// Walk incrementally and parse only the two line types the browser uses.
+	// This bounds peak memory to the largest individual message rather than the
+	// complete image-heavy JSONL plus a second split-string copy.
 	const messages: Message[] = [];
-	for (const e of parseJsonl(raw)) {
-		if (e.type === "message" && e.message) {
+	forEachJsonlLine(file, (line) => {
+		const type = jsonlLineType(line);
+		if (type !== "message" && type !== "custom_message") return;
+		let e: Record<string, unknown>;
+		try {
+			e = JSON.parse(line) as Record<string, unknown>;
+		} catch {
+			return;
+		}
+		if (type === "message" && e.message) {
 			messages.push(browserReplayMessage(e.message as Message));
-		} else if (e.type === "custom_message") {
-			// Persisted custom message (e.g. pi-voice-reply's voice-reply
-			// entry, which carries the long/short spoken variants).
-			// pi writes these as top-level `custom_message` JSONL lines,
-			// NOT nested under `.message`, so the `type==="message"`
-			// branch above skips them. Reconstruct the live event's
-			// message shape (role:"custom" + customType + details) so the
-			// transcript projection re-attaches the variants to their
-			// assistant message on reconnect. Without this, a page refresh
-			// / WS reconnect drops the in-memory variants and the
-			// Long/Short buttons regenerate (a full LLM round-trip) on
-			// every press.
+		} else if (type === "custom_message") {
+			// Reconstruct the live custom-message shape so persisted voice
+			// variants remain attached after a refresh/reconnect.
 			messages.push({
 				role: "custom",
 				customType: e.customType,
@@ -709,7 +743,7 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 				details: e.details,
 			} as unknown as Message);
 		}
-	}
+	});
 	return messages;
 }
 
