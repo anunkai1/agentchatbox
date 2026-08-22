@@ -2138,6 +2138,7 @@ export function renderShell(): void {
 	// centered above the heading so the empty state reads as a brand
 	// surface rather than a wall of text.
 	const welcome = el("div", { class: "welcome", id: "welcome" });
+	welcome.append(el("div", { class: "welcome-brand" }, "Agent Chat Box"));
 	welcome.append(
 		el("img", {
 			class: "welcome-mark",

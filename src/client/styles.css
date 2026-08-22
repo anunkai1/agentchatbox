@@ -848,6 +848,16 @@ body.sidebar-resizing iframe {
 .welcome.hidden {
 	display: none;
 }
+/* Product name sits above the mark to make the welcome surface feel
+ * like a branded startup screen. */
+.welcome-brand {
+	margin: 0 0 -8px;
+	font-size: 16px;
+	font-weight: 600;
+	letter-spacing: 0.03em;
+	color: var(--text);
+	text-shadow: 0 0 14px rgba(29, 159, 165, 0.28);
+}
 /* ACB mark on the welcome / empty state. Sized for ~72px display,
  * capped so it never gets visually heavy on wide screens. */
 .welcome-mark {
