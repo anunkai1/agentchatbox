@@ -843,8 +843,9 @@ function projectCwds(): string[] {
 /**
  * If the client's `init` names a sessionId but no cwd, resolve the cwd
  * from the session JSONL so a reconnect/resume spawns `pi` in the right
- * project folder (and loads that project's AGENTS.md). Falls back to
- * config.piCwd when the session can't be found (e.g. a stale link).
+ * project folder (and loads that project's AGENTS.md). A missing session
+ * remains cwd-less so registry.acquire can reject the stale resume without
+ * paying to initialise a doomed pi child.
  */
 function resolveInitCwd(init: InitMessage): InitMessage {
 	if (init.cwd) return init;

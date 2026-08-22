@@ -277,7 +277,9 @@ export async function* streamSynthesizeSpeech(
  */
 export async function sessionExists(sessionId: string): Promise<boolean> {
 	try {
-		const res = await fetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}`);
+		const res = await fetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}`, {
+			method: "HEAD",
+		});
 		return res.ok;
 	} catch {
 		return false;

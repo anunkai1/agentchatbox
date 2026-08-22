@@ -141,6 +141,11 @@ export interface LiveSession {
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	currentTurn: unknown[];
 	currentTurnBytes: number;
+	/** Browser-safe on-disk replay cached for this live child. Reconnects are
+	 * common on mobile and the JSONL may contain hundreds of megabytes of image
+	 * blocks; invalidate on every completed message rather than reparsing an
+	 * unchanged transcript for each transient socket. */
+	replayMessages: TranscriptPayload["messages"] | null;
 	/**
 	 * The model the user just clicked via setModel, awaiting pi's
 	 * confirmation. The chat.ts handler stashes the request here and we
@@ -230,6 +235,11 @@ class SessionRegistry {
 				log.info("session reattach", { sessionId: init.sessionId });
 				return existing;
 			}
+			// Browser input cannot provide cwd; chat.ts only adds it after
+			// resolving an on-disk session. Absence here therefore means a stale
+			// tab/link. Fail in milliseconds instead of spawning pi, loading every
+			// extension, and waiting for pi's eventual "No session found" exit.
+			if (!init.cwd) throw new Error("the requested session no longer exists; start a new chat");
 		}
 		return this.spawn(init);
 	}
@@ -270,6 +280,7 @@ class SessionRegistry {
 			idleTimer: null,
 			currentTurn: [],
 			currentTurnBytes: 0,
+			replayMessages: null,
 			pendingModel: null,
 			pendingThinking: null,
 			thinkingQueue: [],
@@ -679,6 +690,12 @@ class SessionRegistry {
 		// is what makes this a transparent pipe rather than a silent dropper.
 		if (line.type === "response" && line.success !== false) return;
 
+		if (line.type === "message_end") {
+			// The JSONL changed. The next reconnect rebuilds the projection once;
+			// later reconnects reuse that bounded live-session cache.
+			session.replayMessages = null;
+		}
+
 		// Busy tracking + current-turn buffering. turn_start/turn_end are
 		// the clean boundaries of an agent turn; between them the session
 		// is immune to idle reaping. The current-turn buffer is replayed on
@@ -777,7 +794,10 @@ class SessionRegistry {
 			sessionId: session.sessionId,
 			isStreaming: session.streaming,
 		});
-		const messages = readPiSessionMessages(session.init.cwd ?? config.piCwd, session.sessionId);
+		const messages =
+			session.replayMessages ??
+			readPiSessionMessages(session.init.cwd ?? config.piCwd, session.sessionId);
+		session.replayMessages = messages;
 		if (messages.length > 0) {
 			const payload: TranscriptPayload = { sessionId: session.sessionId, messages };
 			deliver(ws, { type: "transcript", ...payload });

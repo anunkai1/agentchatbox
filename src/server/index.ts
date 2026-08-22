@@ -30,8 +30,14 @@ import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
 import { securityHeaders } from "./security.js";
-import { findSessionCwd, listPiSessions, readPiSessionMessages } from "./session-list.js";
+import {
+	findPiSessionFile,
+	findSessionCwd,
+	listPiSessions,
+	readPiSessionMessages,
+} from "./session-list.js";
 import { registry } from "./session-registry.js";
+import { staticCacheControl } from "./static-cache.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
 import { uploadStore } from "./upload-store.js";
@@ -182,6 +188,29 @@ app.get(
 );
 
 /**
+ * HEAD /api/sessions/:id — cheap existence probe for shareable links.
+ *
+ * Express otherwise implements HEAD by executing the GET handler and merely
+ * suppressing its body. That still parsed an image-heavy 150 MiB transcript
+ * before the browser could open its WebSocket. Resolve only the session header
+ * here; the subsequent pi resume owns the actual transcript load.
+ */
+app.head("/api/sessions/:id", (req, res) => {
+	const id = req.params.id;
+	const cwd = req.query.cwd
+		? String(req.query.cwd)
+		: findSessionCwd(
+				id,
+				listProjects().map((project) => project.cwd),
+			);
+	if (!cwd || !findPiSessionFile(cwd, id)) {
+		res.status(404).end();
+		return;
+	}
+	res.status(204).end();
+});
+
+/**
  * GET /api/sessions/:id
  *
  * Returns the full message transcript for a session. The browser
@@ -194,9 +223,8 @@ app.get(
 app.get("/api/sessions/:id", (req, res) => {
 	const id = req.params.id;
 	// An explicit ?cwd= is a STRICT per-cwd lookup (e.g. a future tool
-	// scoping a query to one project). When omitted — the common case,
-	// used by the client's sessionExists check on a shareable /s/<id>
-	// link — resolve the cwd across ALL known project folders + orphaned
+	// scoping a query to one project). When omitted, resolve the cwd across
+	// ALL known project folders + orphaned
 	// session dirs, exactly like the WS resume path (chat.ts
 	// resolveInitCwd / resumeSession). Without this, a refresh of a
 	// PROJECT chat 404s here: the session lives under the project's cwd,
@@ -476,9 +504,8 @@ if (existsSync(publicDir)) {
 	app.use(
 		express.static(publicDir, {
 			setHeaders: (res, path) => {
-				if (path.endsWith(".html")) {
-					res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-				}
+				const requestUrl = (res as typeof res & { req?: { url?: string } }).req?.url ?? "";
+				res.setHeader("Cache-Control", staticCacheControl(path, requestUrl));
 			},
 		}),
 	);
