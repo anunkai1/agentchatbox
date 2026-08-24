@@ -76,8 +76,8 @@ const CURRENT_TURN_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
  * the client as wedged and close the socket (the browser reconnects and
  * gets fresh state via transcript replay). Standard ws-library pattern.
  */
-const WS_BACKPRESSURE_HIGH_WATER = 16 * 1024 * 1024; // 16 MiB
-const WS_SINGLE_MESSAGE_MAX = 16 * 1024 * 1024; // 16 MiB
+const WS_BACKPRESSURE_HIGH_WATER = 32 * 1024 * 1024; // 32 MiB
+const WS_SINGLE_MESSAGE_MAX = 32 * 1024 * 1024; // 32 MiB
 
 export interface InitMessage {
 	provider: string;
