@@ -775,6 +775,12 @@ function onEvent(event: Record<string, unknown>): void {
 				state.costTotal.cacheWrite += m.usage.cacheWrite;
 				state.costTotal.cost += m.usage.cost?.total ?? 0;
 			}
+			// Don't repaint the status bar for every token. The model, thinking
+			// level and context fill are unchanged during a message, while
+			// replacing the status DOM on each update needlessly forces Android
+			// to reflow the focused composer/status area. The streaming timer is
+			// updated by the dedicated one-second tick, and the final usage/cost
+			// is refreshed at message_end.
 			// Don't yank the user back to the bottom on every token — if they've
 			// scrolled up to re-read, leave them there. The actual scroll is
 			// performed in paintStreamDom (inside the rAF repaint) using the
@@ -782,7 +788,6 @@ function onEvent(event: Record<string, unknown>): void {
 			// scrolling here would be one frame behind the content and let a
 			// fast-growing thinking block slip past the isAtBottom() slack,
 			// silently disabling autoscroll for the rest of the turn.
-			refreshStatus();
 			break;
 		}
 
