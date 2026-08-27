@@ -2026,12 +2026,20 @@ body.sidebar-resizing iframe {
 	align-items: center;
 	justify-content: space-between;
 	gap: 14px;
+	/* This is a flex item in the column layout. `height` alone still lets
+	   flexbox shrink it, and auto side-margins make its width intrinsic to
+	   its changing text. On mobile that reflows the status lines while the
+	   IME is open, which makes the composer appear to jump. Keep both axes
+	   stable while the status contents are repainted. */
+	flex: 0 0 33px;
+	width: min(100%, var(--chat-max));
 	/* Hard-fixed height: the bar can never grow or shrink, so the composer
 	   above it can never be pushed around — no matter what appears or
 	   disappears in the slots (the old auto-height paragraph wrapped to a
 	   new line whenever a changing number crossed the width threshold,
 	   shoving the composer up and down every second). */
 	height: 33px;
+	min-height: 33px;
 	padding: 4px 20px 8px;
 	color: var(--text-muted);
 	font-size: 11px;
@@ -2994,7 +3002,9 @@ body.modal-open {
 	   overflow: hidden — transient and rare, fine to lose. */
 	.status-bar {
 		display: block;
+		flex-basis: 36px;
 		height: 36px;
+		min-height: 36px;
 		overflow: hidden;
 		padding: 2px 12px 4px;
 		/* Smaller than the desktop 11px mono so it reads like the 11px sans
