@@ -68,6 +68,12 @@ export interface ChatClient {
 	steer(text: string, images?: PromptImage[]): boolean;
 	/** Abort the current run, if any. */
 	abort(): void;
+	/**
+	 * Compact the context now (summarize older turns into a checkpoint).
+	 * pi aborts any in-flight run first; progress streams back as
+	 * compaction_start/end events, which the client renders.
+	 */
+	compact(customInstructions?: string): void;
 	/** Abort an in-flight auto-retry backoff. */
 	abortRetry(): void;
 	/** Switch to a different model mid-session. */
@@ -403,6 +409,10 @@ export function createChatClient(): ChatClient {
 		abort: () => {
 			if (!inited) return; // can't abort before init — server rejects non-init first messages
 			send({ type: "abort" });
+		},
+		compact: (customInstructions) => {
+			if (!inited) return;
+			send({ type: "compact", ...(customInstructions ? { customInstructions } : {}) });
 		},
 		abortRetry: () => {
 			if (!inited) return;

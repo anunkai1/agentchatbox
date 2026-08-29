@@ -18,6 +18,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 let dataDir: string;
 let piCwd: string;
+let savedTrustedExternal: string | undefined;
 
 beforeAll(() => {
 	// config.piCwd is captured at module-load time, so PI_CWD must be set
@@ -27,6 +28,13 @@ beforeAll(() => {
 	piCwd = mkdtempSync(join(tmpdir(), "acb-projects-picwd-"));
 	process.env.AGENTCHATBOX_PROJECTS_FILE = join(dataDir, "projects.json");
 	process.env.PI_CWD = piCwd;
+	// Operator shells may export a trusted-external-project list (the
+	// production service does). config captures it at module load, and this
+	// file's first import happens inside the tests — so masking it here
+	// keeps listProjects() deterministic on any machine. The dedicated
+	// config-external-projects.test.ts covers that feature directly.
+	savedTrustedExternal = process.env.AGENTCHATBOX_TRUSTED_EXTERNAL_PROJECTS;
+	delete process.env.AGENTCHATBOX_TRUSTED_EXTERNAL_PROJECTS;
 });
 
 afterAll(() => {
@@ -39,6 +47,9 @@ afterAll(() => {
 	}
 	delete process.env.AGENTCHATBOX_PROJECTS_FILE;
 	delete process.env.PI_CWD;
+	if (savedTrustedExternal !== undefined) {
+		process.env.AGENTCHATBOX_TRUSTED_EXTERNAL_PROJECTS = savedTrustedExternal;
+	}
 });
 
 beforeEach(() => {

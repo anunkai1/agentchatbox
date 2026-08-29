@@ -349,6 +349,17 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			pi.send({ type: "abort" });
 			break;
 		}
+		case "compact": {
+			// Manual compaction. pi aborts any in-flight run first, then
+			// streams compaction_start/end events (which the client already
+			// renders) — the RPC's own success ack is dropped as noise by
+			// the registry, so no special response handling is needed.
+			pi.send({
+				type: "compact",
+				...(msg.customInstructions ? { customInstructions: msg.customInstructions } : {}),
+			});
+			break;
+		}
 		case "abortRetry": {
 			// Cancel an in-flight auto-retry backoff (the CLI's "interrupt to
 			// cancel" during a retry countdown). Mirrors pi rpc's
