@@ -253,6 +253,16 @@ async function computeTtsAvailable(): Promise<{
 	return checkKokoroHealth();
 }
 
+export function kokoroHealthIsAvailable(data: {
+	modelAvailable?: boolean;
+	modelLoaded?: boolean;
+}): boolean {
+	// New lazy servers expose capability separately from warm residency. Fall
+	// back to modelLoaded for older pi-voice-server releases.
+	return data.modelAvailable === true ||
+		(data.modelAvailable === undefined && data.modelLoaded === true);
+}
+
 async function checkKokoroHealth(): Promise<{
 	available: boolean;
 	reason?: string;
@@ -267,12 +277,14 @@ async function checkKokoroHealth(): Promise<{
 			return { engine: "kokoro", available: false, reason: `upstream ${res.status}` };
 		}
 		const data = (await res.json()) as {
+			modelAvailable?: boolean;
 			modelLoaded?: boolean;
+			modelResident?: boolean;
 			voice?: string;
 			voiceCount?: number;
 		};
-		if (!data.modelLoaded) {
-			return { engine: "kokoro", available: false, reason: "model not loaded" };
+		if (!kokoroHealthIsAvailable(data)) {
+			return { engine: "kokoro", available: false, reason: "model unavailable" };
 		}
 		return {
 			engine: "kokoro",

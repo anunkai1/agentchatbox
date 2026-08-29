@@ -9,12 +9,27 @@
 
 import type { Request } from "express";
 import { describe, expect, it } from "vitest";
-import { parseTtsBody } from "../src/server/tts.js";
+import { kokoroHealthIsAvailable, parseTtsBody } from "../src/server/tts.js";
 
 /** Build a minimal Request whose only field parseTtsBody touches is `.body`. */
 function req(body: unknown): Request {
 	return { body } as Request;
 }
+
+describe("kokoroHealthIsAvailable", () => {
+	it("treats a cold lazy model as available when capability is advertised", () => {
+		expect(kokoroHealthIsAvailable({ modelAvailable: true, modelLoaded: false })).toBe(true);
+	});
+
+	it("supports the legacy modelLoaded-only health contract", () => {
+		expect(kokoroHealthIsAvailable({ modelLoaded: true })).toBe(true);
+		expect(kokoroHealthIsAvailable({ modelLoaded: false })).toBe(false);
+	});
+
+	it("honours an explicit unavailable capability", () => {
+		expect(kokoroHealthIsAvailable({ modelAvailable: false, modelLoaded: true })).toBe(false);
+	});
+});
 
 describe("parseTtsBody", () => {
 	it("rejects a missing/empty text field with 400", () => {
