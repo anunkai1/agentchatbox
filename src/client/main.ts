@@ -24,6 +24,11 @@ import { THINKING_LEVELS } from "../shared/thinking.js";
 import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
 import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
+import {
+	noteAssistantMessageEnd,
+	noteContextMessage,
+	resetContextEstimate,
+} from "./context-estimate.js";
 import { type ExtensionUiResponder, handleExtensionUiRequest } from "./extension-ui.js";
 import { setRichText } from "./linkify.js";
 import { applySessionPrefs } from "./prefs.js";
@@ -709,6 +714,9 @@ function onEvent(event: Record<string, unknown>): void {
 				// need to: (1) MERGE the arriving variant onto the last
 				// assistant message (without clearing the others), (2) refresh
 				// its read-along box, and (3) auto-play the requested variant.
+				// Its content grows the context, so count it (pi's estimator does too).
+				noteContextMessage(e.message);
+				refreshStatus();
 				if (e.message.customType === "voice-reply") {
 					const details =
 						(e.message as { details?: { long?: string; medium?: string; short?: string } })
@@ -780,10 +788,16 @@ function onEvent(event: Record<string, unknown>): void {
 				// optimistically at send time). Stamp the matching block now
 				// that we know its JSONL ordinal.
 				stampLastUserBlock(liveMessageSeq);
+				noteContextMessage(e.message);
+				refreshStatus();
 			} else if (e.message.role === "toolResult") {
 				// Tool result from a tool the model called. Render as a tool
 				// block in our transcript.
 				const tr = e.message as ToolResultMessage;
+				// Tick the context-fill estimate: tool results are what grow
+				// the context between assistant turns in an agentic run.
+				noteContextMessage(tr);
+				refreshStatus();
 				const text = tr.content
 					.filter((c) => c.type === "text")
 					.map((c) => (c as TextContent).text)
@@ -954,6 +968,10 @@ function onEvent(event: Record<string, unknown>): void {
 				state.costTotal.cacheWrite += m.usage.cacheWrite;
 				state.costTotal.cost += m.usage.cost?.total ?? 0;
 			}
+			// Tick the context-fill estimate from this message's usage (the
+			// refreshStatus() at the end of this case repaints it). pi's
+			// ground truth from getSessionStats overwrites it at agent_end.
+			if (m.role === "assistant") noteAssistantMessageEnd(m);
 			if (lastAssistantDom) {
 				lastAssistantDom.textPre.classList.remove("streaming");
 				// If the model never emitted any thinking content, remove
@@ -1006,6 +1024,10 @@ function onEvent(event: Record<string, unknown>): void {
 				| { tokensBefore?: number; estimatedTokensAfter?: number }
 				| null;
 			state.compaction = null;
+			// The local per-message estimate's base is now pre-compaction —
+			// drop it so pi's seed below holds until the next valid assistant
+			// usage re-bases it (mirrors pi's own post-compaction distrust).
+			resetContextEstimate();
 			if (!e.willRetry) {
 				setStreaming(false);
 				state.streamingStartedAt = null;
@@ -1435,6 +1457,10 @@ async function boot(): Promise<void> {
 		// session stands on resume/reconnect (a long resumed chat may already
 		// be near its limit). Different models have different windows, so
 		// we re-fetch on every model change too (see modelState below).
+		// Drop the local per-message estimate first: it belongs to whatever
+		// context this page was showing before, and the stats that arrive
+		// hold the meter until the next valid assistant usage re-bases it.
+		resetContextEstimate();
 		chatClient.getSessionStats();
 	});
 	chatClient.onEvent(onEvent);
