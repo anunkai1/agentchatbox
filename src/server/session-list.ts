@@ -685,7 +685,8 @@ function browserReplayMessage(message: Message): Message {
 
 	if (Array.isArray(candidate.content)) {
 		const filtered = candidate.content.filter(
-			(block) => !block || typeof block !== "object" || (block as { type?: unknown }).type !== "image",
+			(block) =>
+				!block || typeof block !== "object" || (block as { type?: unknown }).type !== "image",
 		);
 		replayContent = filtered;
 		changed = filtered.length !== candidate.content.length;

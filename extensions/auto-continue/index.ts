@@ -41,7 +41,7 @@ export default function registerAutoContinue(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("agent_settled", (event, ctx) => {
+	pi.on("agent_settled", (_event, ctx) => {
 		const decision = decideOnSettle(state);
 		if (decision.action === "none") {
 			applyDecision(state, decision);

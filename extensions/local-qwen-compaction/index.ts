@@ -1,5 +1,5 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { generateSummaryWithUsage } from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const LOCAL_PROVIDER = "local";
 const LOCAL_MODEL_ID = "qwen3.8-27b-ud-q3";
@@ -11,7 +11,10 @@ const LOCAL_MODEL_ID = "qwen3.8-27b-ud-q3";
 // context cleanup look like a stuck chat.
 const SUMMARY_RESERVE_TOKENS = 2_560;
 
-function appendFileLists(summary: string, fileOps: { read: Set<string>; written: Set<string>; edited: Set<string> }): {
+function appendFileLists(
+	summary: string,
+	fileOps: { read: Set<string>; written: Set<string>; edited: Set<string> },
+): {
 	summary: string;
 	details: { readFiles: string[]; modifiedFiles: string[] };
 } {
@@ -20,7 +23,8 @@ function appendFileLists(summary: string, fileOps: { read: Set<string>; written:
 	const modifiedFiles = [...modified].sort();
 	let suffix = "";
 	if (readFiles.length > 0) suffix += `\n\n<read-files>\n${readFiles.join("\n")}\n</read-files>`;
-	if (modifiedFiles.length > 0) suffix += `\n\n<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`;
+	if (modifiedFiles.length > 0)
+		suffix += `\n\n<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`;
 	return { summary: `${summary.trimEnd()}${suffix}`, details: { readFiles, modifiedFiles } };
 }
 
@@ -44,10 +48,22 @@ export default function registerLocalQwenCompaction(pi: ExtensionAPI): void {
 		// A split turn otherwise makes pi issue two summaries. One bounded
 		// checkpoint covers both its history and prefix while retaining the same
 		// first-kept boundary, so the current suffix remains untouched.
-		const messages = [...event.preparation.messagesToSummarize, ...event.preparation.turnPrefixMessages];
+		const messages = [
+			...event.preparation.messagesToSummarize,
+			...event.preparation.turnPrefixMessages,
+		];
 		if (messages.length === 0) return;
 
 		try {
+			// Newer pi releases allow null provider headers to mean "remove this
+			// header", while the summarizer accepts only concrete outbound values.
+			const headers = auth.headers
+				? Object.fromEntries(
+						Object.entries(auth.headers).filter(
+							(entry): entry is [string, string] => typeof entry[1] === "string",
+						),
+					)
+				: undefined;
 			const instructions = [
 				event.customInstructions,
 				"Be concise: fit the entire checkpoint in 2,048 tokens or fewer. Preserve exact paths, commands, decisions, blockers, and next steps.",
@@ -59,7 +75,7 @@ export default function registerLocalQwenCompaction(pi: ExtensionAPI): void {
 				model,
 				SUMMARY_RESERVE_TOKENS,
 				auth.apiKey,
-				auth.headers,
+				headers,
 				event.signal,
 				instructions,
 				event.preparation.previousSummary,

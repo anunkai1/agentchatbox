@@ -21,12 +21,8 @@
  * agent and drives no behavior — pi remains the single source of truth.
  */
 
-import type {
-	AssistantMessage,
-	ImageContent,
-	TextContent,
-	Usage,
-} from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, TextContent, Usage } from "@earendil-works/pi-ai";
+import type { ContextUsage } from "../shared/protocol.js";
 import { state } from "./state.js";
 
 /** pi's compaction.js `calculateContextTokens` — same fallback order. */
@@ -65,6 +61,10 @@ function assistantChars(m: AssistantMessage): number {
 let baseTokens: number | null = null;
 /** Σ ceil(chars/4) of every context-visible message appended after the base. */
 let trailingTokens = 0;
+/** Pi deliberately reports an unknown count immediately after compaction.
+ * Retain its compaction result estimate until a later, exact usage snapshot
+ * replaces it. */
+let postCompactionSeed: ContextUsage | null = null;
 
 /** Re-derive state.contextUsage from the local estimate (no repaint — the
  *  caller refreshes status, which happens unconditionally on the same event). */
@@ -95,14 +95,44 @@ export function noteAssistantMessageEnd(m: AssistantMessage): void {
 
 /** Call on `message_start` for user / toolResult / custom messages — the
  *  content that grows the context between assistant turns. */
-export function noteContextMessage(
-	m: { content?: string | (TextContent | ImageContent)[] },
-): void {
+export function noteContextMessage(m: { content?: string | (TextContent | ImageContent)[] }): void {
 	const content = m.content;
 	if (typeof content === "string" || Array.isArray(content)) {
 		trailingTokens += Math.ceil(contentChars(content) / 4);
 		apply();
 	}
+}
+
+/** Seed the meter from pi's compaction result while its ordinary context
+ * usage remains deliberately unknown. */
+export function seedPostCompactionEstimate(
+	tokens: number,
+	contextWindow: number | null | undefined,
+): ContextUsage | null {
+	if (!Number.isFinite(tokens) || tokens < 0 || !contextWindow || contextWindow <= 0) {
+		postCompactionSeed = null;
+		return null;
+	}
+	postCompactionSeed = {
+		tokens,
+		contextWindow,
+		percent: (tokens / contextWindow) * 100,
+	};
+	return postCompactionSeed;
+}
+
+/** Adopt pi's ground truth, except for its expected post-compaction unknown
+ * snapshot. The first numeric snapshot always replaces the temporary seed. */
+export function reconcileContextUsage(incoming: ContextUsage | null): ContextUsage | null {
+	if (
+		postCompactionSeed &&
+		incoming?.tokens === null &&
+		incoming.contextWindow === postCompactionSeed.contextWindow
+	) {
+		return postCompactionSeed;
+	}
+	postCompactionSeed = null;
+	return incoming;
 }
 
 /**
@@ -115,4 +145,5 @@ export function noteContextMessage(
 export function resetContextEstimate(): void {
 	baseTokens = null;
 	trailingTokens = 0;
+	postCompactionSeed = null;
 }

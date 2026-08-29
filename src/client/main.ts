@@ -22,13 +22,15 @@ import type {
 import type { ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
 import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
-import type { LiveAssistantDom } from "./dom.js";
-import { $ } from "./dom.js";
 import {
 	noteAssistantMessageEnd,
 	noteContextMessage,
+	reconcileContextUsage,
 	resetContextEstimate,
+	seedPostCompactionEstimate,
 } from "./context-estimate.js";
+import type { LiveAssistantDom } from "./dom.js";
+import { $ } from "./dom.js";
 import { type ExtensionUiResponder, handleExtensionUiRequest } from "./extension-ui.js";
 import { setRichText } from "./linkify.js";
 import { applySessionPrefs } from "./prefs.js";
@@ -1020,9 +1022,10 @@ function onEvent(event: Record<string, unknown>): void {
 
 		case "compaction_end": {
 			const failed = typeof e.errorMessage === "string" ? e.errorMessage : null;
-			const result = (e.result ?? null) as
-				| { tokensBefore?: number; estimatedTokensAfter?: number }
-				| null;
+			const result = (e.result ?? null) as {
+				tokensBefore?: number;
+				estimatedTokensAfter?: number;
+			} | null;
 			state.compaction = null;
 			// The local per-message estimate's base is now pre-compaction —
 			// drop it so pi's seed below holds until the next valid assistant
@@ -1048,14 +1051,12 @@ function onEvent(event: Record<string, unknown>): void {
 				// Seed the meter from pi's own estimate so the pill doesn't sit
 				// at "? tok" until the next reply settles exact usage.
 				const est = result.estimatedTokensAfter;
-				if (typeof est === "number" && state.contextUsage?.contextWindow) {
-					const win = state.contextUsage.contextWindow;
-					state.contextUsage = {
-						...state.contextUsage,
-						tokens: est,
-						percent: Math.round((est / win) * 100),
-					};
-					refreshStatus();
+				if (typeof est === "number") {
+					const seeded = seedPostCompactionEstimate(est, state.contextUsage?.contextWindow);
+					if (seeded) {
+						state.contextUsage = seeded;
+						refreshStatus();
+					}
 				}
 			}
 			// A completed compaction invalidates pi's last usage snapshot. Ask
@@ -1509,19 +1510,22 @@ async function boot(): Promise<void> {
 	// context window size can change with the model, so the percent would
 	// otherwise be stale).
 	chatClient.onSessionStats((stats) => {
-		state.contextUsage = stats.contextUsage;
+		// Pi deliberately reports an unknown count immediately after compaction.
+		// Preserve the compaction result estimate through that one expected gap;
+		// the first numeric snapshot replaces it.
+		state.contextUsage = reconcileContextUsage(stats.contextUsage);
 		// Proactive nudge (B): the meter alone is easy to miss in a long
 		// session, and the failure mode — output truncation, agent idling
 		// at 98%+ context — is exactly the kind of thing to warn about
 		// BEFORE it happens. Warn once per fill-up; the flag resets when
 		// the meter drops back under 70% (compaction's job), so each new
 		// fill of the window earns at most one nudge.
-		const pct = stats.contextUsage?.percent;
+		const pct = state.contextUsage?.percent;
 		if (typeof pct === "number") {
 			if (pct >= 85 && !state.contextWarned) {
 				state.contextWarned = true;
 				showToast(
-					`Context is ${pct}% full (${stats.contextUsage?.tokens?.toLocaleString() ?? "?"} tok). /compact will summarize older turns before you run out.`,
+					`Context is ${pct}% full (${state.contextUsage?.tokens?.toLocaleString() ?? "?"} tok). /compact will summarize older turns before you run out.`,
 					"warning",
 				);
 			} else if (pct < 70) {

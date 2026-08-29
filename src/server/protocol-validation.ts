@@ -153,7 +153,9 @@ export function parseClientMessage(value: unknown): ClientMessage {
 				type,
 				...(msg.customInstructions === undefined
 					? {}
-					: { customInstructions: string(msg.customInstructions, "customInstructions", 2000, true) }),
+					: {
+							customInstructions: string(msg.customInstructions, "customInstructions", 2000, true),
+						}),
 			};
 		case "setThinking":
 			return { type, level: thinking(msg.level) };

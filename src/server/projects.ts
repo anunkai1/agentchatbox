@@ -187,12 +187,8 @@ function readStore(): ProjectsFile {
 			icon: disk?.icon || "📁",
 			cwd,
 			builtin: true,
-			...(disk?.defaultModelId !== undefined
-				? { defaultModelId: disk.defaultModelId }
-				: {}),
-			...(disk?.defaultProvider !== undefined
-				? { defaultProvider: disk.defaultProvider }
-				: {}),
+			...(disk?.defaultModelId !== undefined ? { defaultModelId: disk.defaultModelId } : {}),
+			...(disk?.defaultProvider !== undefined ? { defaultProvider: disk.defaultProvider } : {}),
 			...(disk?.defaultThinkingLevel !== undefined
 				? { defaultThinkingLevel: disk.defaultThinkingLevel }
 				: {}),
@@ -460,11 +456,17 @@ function isTrustedExternalProject(project: Pick<ProjectRecord, "id" | "cwd">): b
 }
 
 function isCurrentProjectDirectory(project: Pick<ProjectRecord, "id" | "cwd">): boolean {
-	if (!isManagedProject(project) && !isTrustedExternalProject(project) && project.id !== GLOBAL_PROJECT_ID) {
+	if (
+		!isManagedProject(project) &&
+		!isTrustedExternalProject(project) &&
+		project.id !== GLOBAL_PROJECT_ID
+	) {
 		return false;
 	}
 	try {
-		return realpathSync(project.cwd) === resolve(project.cwd) && statSync(project.cwd).isDirectory();
+		return (
+			realpathSync(project.cwd) === resolve(project.cwd) && statSync(project.cwd).isDirectory()
+		);
 	} catch {
 		return false;
 	}
@@ -476,7 +478,9 @@ function isSafeProjectRecord(value: unknown): value is ProjectRecord {
 	if (typeof project.id !== "string" || typeof project.cwd !== "string") return false;
 	if (!safeProjectMetadata(project)) return false;
 	if (project.id === GLOBAL_PROJECT_ID) return true;
-	return isManagedProject(project as ProjectRecord) || isTrustedExternalProject(project as ProjectRecord);
+	return (
+		isManagedProject(project as ProjectRecord) || isTrustedExternalProject(project as ProjectRecord)
+	);
 }
 
 /** Generate a short unique id not already in the store. */
