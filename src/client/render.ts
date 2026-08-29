@@ -47,9 +47,13 @@ export function setStreaming(s: boolean): void {
 	const stopBtn = $<HTMLButtonElement>("#stop-btn");
 	stopBtn.hidden = !s;
 	// Context-aware label mirroring the CLI: while a retry backoff is
-	// counting down, Stop cancels the retry ("interrupt to cancel");
-	// otherwise it aborts the whole run.
-	stopBtn.title = state.retry ? "Cancel retry backoff" : "Stop the current run";
+	// counting down, Stop cancels the retry ("interrupt to cancel"); a
+	// compaction is likewise abortable through pi's normal abort path.
+	stopBtn.title = state.retry
+		? "Cancel retry backoff"
+		: state.compaction
+			? "Stop context cleanup"
+			: "Stop the current run";
 	if (!s) state.toolSpinner = null;
 	startOrStopWorkingTick(s);
 	refreshStatus();
@@ -1419,6 +1423,36 @@ export function refreshStatus(): void {
  * characters instead of rebuilding the whole bar. All values are escaped
  * where they interpolate into innerHTML.
  */
+/** Format a model output rate compactly enough for the single-line status bar. */
+function formatTokenRate(tokensPerSecond: number): string {
+	if (tokensPerSecond >= 100) return tokensPerSecond.toFixed(0);
+	if (tokensPerSecond >= 10) return tokensPerSecond.toFixed(1);
+	return tokensPerSecond.toFixed(2);
+}
+
+function tokenSpeedLabel(): string | null {
+	const speed = state.streamingTokenSpeed;
+	if (!speed) return null;
+	if (speed.active) {
+		if (speed.startedAt === null) return null;
+		const elapsedSeconds = (Date.now() - speed.startedAt) / 1000;
+		const tokens = speed.reportedOutputTokens ?? Math.ceil(speed.estimatedCharacters / 4);
+		if (elapsedSeconds < 0.25 || tokens <= 0) return null;
+		// Pi's usage snapshots are exact when a provider supplies them during
+		// streaming. Most providers only return usage at completion, so mark
+		// the character-derived live value clearly as an estimate.
+		const prefix = speed.reportedOutputTokens === null ? "≈ " : "";
+		return `${prefix}${formatTokenRate(tokens / elapsedSeconds)} tok/s`;
+	}
+	// Keep the completed-turn average visible once the agent is idle. Final
+	// provider usage, when supplied, replaces the live character estimate.
+	if (!state.isStreaming && speed.finalTokensPerSecond !== null) {
+		const prefix = speed.reportedOutputTokens === null ? "≈ " : "";
+		return `${prefix}${formatTokenRate(speed.finalTokensPerSecond)} tok/s`;
+	}
+	return null;
+}
+
 function paintStatusDynamic(): void {
 	const dynEl = $<HTMLSpanElement>("#status-dynamic");
 	if (!dynEl) return;
@@ -1434,18 +1468,27 @@ function paintStatusDynamic(): void {
 		// Elapsed-time working indicator — the CLI shows a spinner +
 		// elapsed counter while a turn runs; agentchatbox used to show
 		// only a static "streaming" dot, which made a slow-but-working
-		// turn look identical to a hang. `streamingStartedAt` is set on
-		// agent_start and cleared on agent_end. The elapsed tick is driven
-		// by the retry-countdown interval below (1s cadence) so no extra
-		// timer is needed when not retrying. Padded mm:ss keeps the width
-		// constant as it ticks.
-		const elapsed = state.streamingStartedAt
-			? Math.max(0, Math.floor((Date.now() - state.streamingStartedAt) / 1000))
-			: 0;
+		// turn look identical to a hang. Pi separately emits compaction
+		// events, so name that slower local-Qwen checkpoint step explicitly
+		// rather than incorrectly labelling it as a stalled response.
+		const startedAt = state.compaction?.startedAt ?? state.streamingStartedAt;
+		const elapsed = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
 		const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
 		const ss = String(elapsed % 60).padStart(2, "0");
-		dyn.push(`<span class="streaming-dot"></span> streaming ${mm}:${ss}`);
+		if (state.compaction) {
+			const label =
+				state.compaction.reason === "manual"
+					? "Saving chat summary"
+					: state.compaction.reason === "overflow"
+						? "Chat is too large for this model — condensing history"
+						: "Preparing chat to fit this model's context";
+			dyn.push(`<span class="streaming-dot"></span> ${label} ${mm}:${ss}`);
+		} else {
+			dyn.push(`<span class="streaming-dot"></span> streaming ${mm}:${ss}`);
+		}
 	}
+	const tokenSpeed = tokenSpeedLabel();
+	if (tokenSpeed) dyn.push(esc(tokenSpeed));
 	if (state.retry) {
 		// Mirror the CLI's retry loader verbatim:
 		//   "Retrying (1/3) in 8s… (interrupt to cancel)"

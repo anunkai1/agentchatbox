@@ -38,6 +38,9 @@ npm-debug.log*
 uploads/*
 !uploads/.gitkeep
 
+# Scratch experiments
+public/experiments/
+
 # Playwright browsers used for the check-page script
 .playwright/
 
