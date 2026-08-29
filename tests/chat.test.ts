@@ -323,6 +323,38 @@ while IFS= read -r line; do
 done
 `;
 
+const COMPACT_SCRIPT = `#!/usr/bin/env bash
+# Fake pi that records the \`compact\` RPC it receives. The server's
+# /compact transport alias must reach pi as {type:"compact"} carrying
+# any custom instructions; the marker log captures the exact instructions
+# so the test can assert the payload survived the round trip (not just
+# that some command arrived).
+if [ -n "\${AGENTCHATBOX_FAKE_PI_MARKER}" ]; then
+  echo "$$" >> "\${AGENTCHATBOX_FAKE_PI_MARKER}"
+fi
+sleep 0.05
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"compact-session-001","messageCount":0}}'
+      ;;
+    "compact")
+      instr="$(echo "$line" | jq -r '.customInstructions // ""')"
+      if [ -n "\${AGENTCHATBOX_FAKE_PI_MARKER}" ]; then
+        echo "compact:\${instr}" >> "\${AGENTCHATBOX_FAKE_PI_MARKER}"
+      fi
+      echo '{"type":"response","command":"compact","success":true}'
+      ;;
+    "")
+      ;;
+    *)
+      echo '{"type":"response","command":"'"$type"'","success":true}'
+      ;;
+  esac
+done
+`;
+
 const STEER_RACE_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that REFUSES steers (success:false, simulating the agent
 # having just gone idle). Used to verify the server forwards
@@ -454,7 +486,8 @@ function makeFakePi(
 		| "running"
 		| "between-turns"
 		| "set-model"
-		| "thinking-queue",
+		| "thinking-queue"
+		| "compact",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
 	const script = join(dir, "pi");
@@ -473,7 +506,9 @@ function makeFakePi(
 								? SWITCH_FAIL_SCRIPT
 								: behavior === "retry"
 									? RETRY_SCRIPT
-									: behavior === "running"
+									: behavior === "compact"
+										? COMPACT_SCRIPT
+										: behavior === "running"
 										? RUNNING_SCRIPT
 										: behavior === "between-turns"
 											? BETWEEN_TURNS_SCRIPT
@@ -1759,6 +1794,50 @@ describe("mountChatWs — pi subprocess pipe", () => {
 			while (Date.now() < deadline) {
 				const log = readMarkerLog(marker);
 				if (log.includes("cmd:abort_retry")) {
+					saw = true;
+					break;
+				}
+				await new Promise((r) => setTimeout(r, 30));
+			}
+			expect(saw).toBe(true);
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+		}
+	});
+
+	it("client compact reaches pi as the compact rpc with custom instructions", async () => {
+		// /compact is a thin transport alias for pi's native compact RPC:
+		// the server must forward {type:"compact"} (abort-in-flight is pi's
+		// job) and carry customInstructions through. The fake-pi logs the
+		// exact instructions it received to the marker file.
+		fakePiPath = makeFakePi("compact");
+		process.env.PI_BIN = fakePiPath;
+		const marker = join(mkdtempSync(join(tmpdir(), "marker-")), "log");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await inbox.waitFor(1); // ready
+
+			ws.send(JSON.stringify({ type: "compact", customInstructions: "keep error details" }));
+
+			const deadline = Date.now() + 3000;
+			let saw = false;
+			while (Date.now() < deadline) {
+				if (readMarkerLog(marker).includes("compact:keep error details")) {
 					saw = true;
 					break;
 				}

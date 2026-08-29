@@ -18,39 +18,38 @@
  * the over-threshold and under-threshold cases. No races: everything that
  * could continue the run has already run before settled fires.
  *
- * Safety: a cap on consecutive auto-resumes prevents an infinite loop if a
- * task genuinely cannot finish (each resumed run can itself end in "length").
- * The counter resets whenever a run settles on a clean stop.
+ * All policy (stop-reason tracking, resume budget, cap) lives in lib.ts as a
+ * pure, unit-tested state machine; this file is only the event adapter.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-/** Max consecutive auto-resumes before we stop and ask the user. */
-const MAX_CONSECUTIVE_RESUMES = 3;
-
-const CONTINUE_PROMPT =
-	"Your previous response was cut off at the output token limit, mid-task. " +
-	"Continue from exactly where you left off. Do not repeat work already completed, " +
-	"and do not re-read files or re-run commands whose results are already in context.";
+import {
+	applyDecision,
+	CONTINUE_PROMPT,
+	createAutoContinueState,
+	decideOnSettle,
+	MAX_CONSECUTIVE_RESUMES,
+	recordAssistantStop,
+} from "./lib.js";
 
 export default function registerAutoContinue(pi: ExtensionAPI): void {
-	let lastAssistantStopReason: string | null = null;
-	let consecutiveResumes = 0;
+	const state = createAutoContinueState();
 
 	pi.on("message_end", (event) => {
 		const message = event.message;
 		if (message && message.role === "assistant") {
-			lastAssistantStopReason = message.stopReason ?? null;
+			recordAssistantStop(state, message.stopReason ?? null);
 		}
 	});
 
 	pi.on("agent_settled", (event, ctx) => {
-		if (lastAssistantStopReason !== "length") {
-			// Run settled on a clean stop (or abort/error) → reset the budget.
-			consecutiveResumes = 0;
+		const decision = decideOnSettle(state);
+		if (decision.action === "none") {
+			applyDecision(state, decision);
 			return;
 		}
 
-		if (consecutiveResumes >= MAX_CONSECUTIVE_RESUMES) {
+		if (decision.action === "cap-hit") {
+			applyDecision(state, decision);
 			ctx.ui.notify(
 				"Output limit hit on consecutive turns — auto-continue paused. " +
 					"Send 'continue' to resume manually, or run /compact to shrink the context.",
@@ -59,18 +58,16 @@ export default function registerAutoContinue(pi: ExtensionAPI): void {
 			return;
 		}
 
-		consecutiveResumes += 1;
-		lastAssistantStopReason = null;
 		ctx.ui.notify(
 			`Response hit the output limit — auto-continuing ` +
-				`(${consecutiveResumes}/${MAX_CONSECUTIVE_RESUMES})…`,
+				`(${decision.resumeCount}/${MAX_CONSECUTIVE_RESUMES})…`,
 			"info",
 		);
-
 		// We are settled → idle, so this starts a fresh prompt run whose
 		// preflight compacts the context first if it is still over threshold.
 		// sendUserMessage is fire-and-forget at the extension surface; the
 		// runtime wrapper emits an extension error event if it rejects.
 		pi.sendUserMessage(CONTINUE_PROMPT);
+		applyDecision(state, decision);
 	});
 }
