@@ -17,7 +17,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          # Matches Server2 and satisfies pi-coding-agent's Node >=22.19 requirement.
+          node-version: "24"
           cache: "npm"
 
       - name: Install
@@ -32,12 +33,9 @@ jobs:
         run: npm run typecheck
 
       - name: Lint (biome)
-        # Catches formatting drift + dead-code/suspicious-pattern issues
-        # that tsc won't. Scoped to src/ (app code) — scripts/ holds dev
-        # tooling/smoke tests outside this gate's scope. The 5 remaining
-        # styles.css warnings (CSS specificity / !important) are warnings,
-        # not errors, so biome exits 0.
-        run: npx biome check src/
+        # Check application and bundled pi-extension source. Scripts remain
+        # outside this gate because they are standalone maintenance tooling.
+        run: npm run lint
 
       - name: Test
         run: npm test -- --reporter=verbose 2>&1

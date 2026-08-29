@@ -25,6 +25,19 @@ describe("parseClientMessage", () => {
 		);
 	});
 
+	it("accepts bounded compact instructions and rejects oversized/non-string values", () => {
+		expect(parseClientMessage({ type: "compact" })).toEqual({ type: "compact" });
+		expect(
+			parseClientMessage({ type: "compact", customInstructions: "retain error details" }),
+		).toEqual({ type: "compact", customInstructions: "retain error details" });
+		expect(() =>
+			parseClientMessage({ type: "compact", customInstructions: "x".repeat(2_001) }),
+		).toThrow("customInstructions");
+		expect(() =>
+			parseClientMessage({ type: "compact", customInstructions: { unsafe: true } }),
+		).toThrow("customInstructions");
+	});
+
 	it("accepts a small raster image and rejects SVG/base64 abuse", () => {
 		expect(
 			parseClientMessage({

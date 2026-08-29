@@ -3,9 +3,9 @@ import {
 	LOCAL_AI_STATUS_KEY,
 	LOCAL_MODEL_ID,
 	LOCAL_PROVIDER,
+	type LocalAiState,
 	localAiLabel,
 	parseLocalAiState,
-	type LocalAiState,
 } from "./lib.js";
 
 const SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
@@ -135,7 +135,8 @@ export default function registerLocalAi(pi: ExtensionAPI): void {
 			}
 			if (command === "report" || command === "status") {
 				const state = await readState(pi, ctx);
-				if (command === "status") ctx.ui.notify(`Server4 local AI: ${localAiLabel(state)}.`, "info");
+				if (command === "status")
+					ctx.ui.notify(`Server4 local AI: ${localAiLabel(state)}.`, "info");
 				return;
 			}
 			if (command === "text" || command === "qwen") {

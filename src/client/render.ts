@@ -87,7 +87,9 @@ function refreshComposerState(): void {
 		return;
 	}
 	if (state.connectionStatus === "closed" || state.connectionStatus === "stalled") {
-		line.append(el("span", { class: "composer-state-label" }, "Connection lost · your draft will be kept"));
+		line.append(
+			el("span", { class: "composer-state-label" }, "Connection lost · your draft will be kept"),
+		);
 		const reconnect = el(
 			"button",
 			{ class: "composer-reconnect-btn", type: "button", title: "Reconnect to agentchatbox" },
@@ -258,7 +260,9 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		setUserRichText(bubble, m.text);
 		const queuedPosition = m.delivered
 			? 0
-			: state.messages.filter((candidate) => candidate.kind === "steer" && !candidate.delivered).indexOf(m) + 1;
+			: state.messages
+					.filter((candidate) => candidate.kind === "steer" && !candidate.delivered)
+					.indexOf(m) + 1;
 		bubble.append(
 			el(
 				"span",
@@ -523,9 +527,13 @@ export function makeVoiceVariantButton(
 ): HTMLElement {
 	const icon = variant === "long" ? "🗣️" : variant === "medium" ? "📝" : "💬";
 	const label = variant === "long" ? "Long" : variant === "medium" ? "Med" : "Short";
-	const variantName = variant === "long" ? "Long TTS" : variant === "medium" ? "Medium TTS" : "Short TTS";
+	const variantName =
+		variant === "long" ? "Long TTS" : variant === "medium" ? "Medium TTS" : "Short TTS";
 	const btn = el("button", { class: "speak-btn voice-variant-btn", title }) as HTMLButtonElement;
-	btn.append(el("span", { class: "voice-icon", text: icon }), el("span", { class: "voice-label" }, label));
+	btn.append(
+		el("span", { class: "voice-icon", text: icon }),
+		el("span", { class: "voice-label" }, label),
+	);
 	btn.dataset.voiceVariant = variant;
 	btn.setAttribute("aria-label", title);
 	btn.addEventListener("click", () => {
@@ -566,11 +574,14 @@ type MessageIcon = "copy" | "retry" | "continue" | "fork" | "share" | "listen";
 function messageIcon(name: MessageIcon): HTMLElement {
 	const paths: Record<MessageIcon, string> = {
 		copy: '<rect x="8" y="8" width="10" height="10" rx="1.5"/><path d="M6 15H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1"/>',
-		retry: '<path d="M20 11a8 8 0 0 0-14.7-4L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L21 15"/><path d="M21 20v-5h-5"/>',
+		retry:
+			'<path d="M20 11a8 8 0 0 0-14.7-4L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L21 15"/><path d="M21 20v-5h-5"/>',
 		continue: '<path d="M4 12h15"/><path d="m13 6 6 6-6 6"/>',
 		fork: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v4a4 4 0 0 0 4 4h6"/><path d="M18 7v3"/>',
-		share: '<path d="M14 5h5v5"/><path d="m19 5-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>',
-		listen: '<path d="M4 10v4"/><path d="M8 8v8"/><path d="M12 6v12"/><path d="M16 9v6"/><path d="M20 11v2"/>',
+		share:
+			'<path d="M14 5h5v5"/><path d="m19 5-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>',
+		listen:
+			'<path d="M4 10v4"/><path d="M8 8v8"/><path d="M12 6v12"/><path d="M16 9v6"/><path d="M20 11v2"/>',
 	};
 	return el("span", {
 		class: "message-action-icon",
@@ -602,7 +613,11 @@ function makeMessageActionButton(
  * its final text and sequence number exist.
  */
 function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTMLElement {
-	const bar = el("div", { class: "message-actions assistant-actions", role: "toolbar", "aria-label": "Answer actions" });
+	const bar = el("div", {
+		class: "message-actions assistant-actions",
+		role: "toolbar",
+		"aria-label": "Answer actions",
+	});
 	const sendActionPrompt = (text: string) => {
 		if (state.isStreaming) {
 			showToast("Wait for the current response to finish first.", "warning");
@@ -752,7 +767,11 @@ function appendToolResult(card: HTMLElement, result: string, isError: boolean): 
 		) as HTMLButtonElement;
 		head.append(toggle);
 	}
-	const status = el("span", { class: `tool-status${isError ? " tool-status-error" : ""}` }, isError ? "✕" : "✓");
+	const status = el(
+		"span",
+		{ class: `tool-status${isError ? " tool-status-error" : ""}` },
+		isError ? "✕" : "✓",
+	);
 	const anchor = head.querySelector<HTMLElement>(".tool-download") ?? toggle;
 	head.insertBefore(status, anchor);
 	head.addEventListener("click", () => {
@@ -1202,8 +1221,7 @@ export function appendCompactionChip(
 	const k = (n: number): string => `${Math.round(n / 1000)}k`;
 	const why =
 		reason === "overflow"
-			? "context overflow — condensed history" +
-				(willRetry ? " and resuming the cut-off turn" : "")
+			? "context overflow — condensed history" + (willRetry ? " and resuming the cut-off turn" : "")
 			: reason === "manual"
 				? "context compacted on request"
 				: "context near the limit — condensed history";
@@ -1261,7 +1279,8 @@ function refreshCapabilitiesBadge(): void {
 		fastButton.style.display = fastAvailable ? "" : "none";
 		if (fastAvailable) {
 			const status = state.extensionStatusLabels["codex-fast"];
-			const label = status === "Enabled" ? "Fast" : status === "Standard" ? "Standard" : "Checking…";
+			const label =
+				status === "Enabled" ? "Fast" : status === "Standard" ? "Standard" : "Checking…";
 			fastButton.textContent = `⚡ ${label}`;
 			fastButton.title = `Codex response speed: ${label} (/fast)`;
 			fastButton.setAttribute("aria-label", `Configure Codex response speed (currently ${label})`);
@@ -1393,9 +1412,11 @@ export function refreshStatus(): void {
 		// disagree. They reset together when pi compacts. `tokens` is null
 		// right after a compaction (pi can't size the context until the next
 		// reply) → show `?`.
-		const core = [esc(modelLabel), `think: ${esc(state.currentThinking)}`, esc(contextFillLabel())].join(
-			" · ",
-		);
+		const core = [
+			esc(modelLabel),
+			`think: ${esc(state.currentThinking)}`,
+			esc(contextFillLabel()),
+		].join(" · ");
 		coreEl.innerHTML = core;
 		// Full value on hover when truncated.
 		coreEl.title = core;
@@ -3027,10 +3048,7 @@ function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList
 			items.length * rowPitch,
 			pane.scrollTop + pane.clientHeight - listTop,
 		);
-		const start = Math.max(
-			0,
-			Math.floor(visibleTop / rowPitch) - SIDEBAR_WINDOW_OVERSCAN,
-		);
+		const start = Math.max(0, Math.floor(visibleTop / rowPitch) - SIDEBAR_WINDOW_OVERSCAN);
 		const end = Math.min(
 			items.length,
 			Math.ceil(visibleBottom / rowPitch) + SIDEBAR_WINDOW_OVERSCAN,
@@ -3091,9 +3109,10 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 		text: collapsed ? "▸" : "▾",
 		"aria-hidden": "true",
 	});
-	const icon = p.icon === "📁" || p.icon === "📂" || !p.icon
-		? renderBrandFolderIcon()
-		: el("span", { class: "project-icon", text: p.icon, "aria-hidden": "true" });
+	const icon =
+		p.icon === "📁" || p.icon === "📂" || !p.icon
+			? renderBrandFolderIcon()
+			: el("span", { class: "project-icon", text: p.icon, "aria-hidden": "true" });
 	const name = el("span", { class: "project-name", text: p.name });
 	const count = el("span", {
 		class: "project-count",
@@ -3346,11 +3365,7 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 
 /** Touch-friendly action sheet. Desktop keeps the compact hover controls;
  * coarse pointers and narrow screens get one stable kebab target instead. */
-function openSessionActions(
-	titleEl: HTMLElement,
-	actions: HTMLElement,
-	s: SessionSummary,
-): void {
+function openSessionActions(titleEl: HTMLElement, actions: HTMLElement, s: SessionSummary): void {
 	const title = s.title || "Untitled";
 	const overlay = el("div", { class: "modal-overlay" });
 	const box = el("div", { class: "modal-box session-action-sheet" });

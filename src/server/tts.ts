@@ -259,8 +259,9 @@ export function kokoroHealthIsAvailable(data: {
 }): boolean {
 	// New lazy servers expose capability separately from warm residency. Fall
 	// back to modelLoaded for older pi-voice-server releases.
-	return data.modelAvailable === true ||
-		(data.modelAvailable === undefined && data.modelLoaded === true);
+	return (
+		data.modelAvailable === true || (data.modelAvailable === undefined && data.modelLoaded === true)
+	);
 }
 
 async function checkKokoroHealth(): Promise<{

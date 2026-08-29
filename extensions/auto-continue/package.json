@@ -1,15 +1,19 @@
 {
-  "name": "acb-auto-continue",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Auto-resume turns that were cut off by the output token limit (stopReason 'length').",
-  "type": "module",
-  "keywords": ["pi-package"],
-  "pi": {
-    "extensions": ["./index.ts"]
-  },
-  "dependencies": {},
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
-  }
+	"name": "acb-auto-continue",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Auto-resume turns that were cut off by the output token limit (stopReason 'length').",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
 }

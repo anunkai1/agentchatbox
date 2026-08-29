@@ -4,9 +4,13 @@
 	"private": true,
 	"description": "Pi-owned on-demand server4 local AI controls for AgentChatBox.",
 	"type": "module",
-	"keywords": ["pi-package"],
+	"keywords": [
+		"pi-package"
+	],
 	"pi": {
-		"extensions": ["./index.ts"]
+		"extensions": [
+			"./index.ts"
+		]
 	},
 	"dependencies": {},
 	"peerDependencies": {

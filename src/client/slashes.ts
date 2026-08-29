@@ -127,9 +127,7 @@ function getCommandPaletteEntries(): CommandPaletteEntry[] {
 		entries.push({
 			name: command.name,
 			description: command.description || "Extension command",
-			category: ["research", "fetch", "codesearch"].includes(command.name)
-				? "Tools"
-				: "Extensions",
+			category: ["research", "fetch", "codesearch"].includes(command.name) ? "Tools" : "Extensions",
 			order: entries.length,
 		});
 		names.add(command.name);
@@ -303,7 +301,9 @@ export function isKnownSlash(s: string): boolean {
 	const cmd = s.replace(/^\//, "").split(/\s+/)[0]?.toLowerCase() ?? "";
 	return (
 		cmd in SLASH_COMMANDS ||
-		(state.capabilities ?? []).some((entry) => entry.name.toLowerCase() === cmd && entry.source !== "skill")
+		(state.capabilities ?? []).some(
+			(entry) => entry.name.toLowerCase() === cmd && entry.source !== "skill",
+		)
 	);
 }
 
