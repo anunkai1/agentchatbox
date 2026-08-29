@@ -1,0 +1,15 @@
+{
+  "name": "acb-local-qwen-compaction",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi-owned compact, non-reasoning context summaries for Server4 local Qwen.",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
