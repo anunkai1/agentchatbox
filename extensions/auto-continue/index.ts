@@ -1,0 +1,76 @@
+/**
+ * auto-continue — pi extension
+ *
+ * Resumes turns that were cut off by the model's output token limit.
+ *
+ * Background: when an assistant turn ends with stopReason "length" the work is
+ * incomplete, but pi has no built-in auto-retry for that case (its overflow
+ * retry only fires for hard context-overflow errors, i.e. "length" with zero
+ * output). The agent simply goes idle and the user has to type "continue".
+ *
+ * This extension closes the gap at the lowest reliable point pi exposes: the
+ * `agent_settled` event, which fires exactly once after a run has fully
+ * settled — after any automatic retries and compaction, and only when no
+ * queued continuation will run. At that moment `_isAgentRunActive` is already
+ * false, so `pi.sendUserMessage(...)` (without `deliverAs`) starts a fresh
+ * prompt run instead of queueing. The new run's preflight check compacts the
+ * context first if it is still over the threshold, so resuming works in both
+ * the over-threshold and under-threshold cases. No races: everything that
+ * could continue the run has already run before settled fires.
+ *
+ * Safety: a cap on consecutive auto-resumes prevents an infinite loop if a
+ * task genuinely cannot finish (each resumed run can itself end in "length").
+ * The counter resets whenever a run settles on a clean stop.
+ */
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+/** Max consecutive auto-resumes before we stop and ask the user. */
+const MAX_CONSECUTIVE_RESUMES = 3;
+
+const CONTINUE_PROMPT =
+	"Your previous response was cut off at the output token limit, mid-task. " +
+	"Continue from exactly where you left off. Do not repeat work already completed, " +
+	"and do not re-read files or re-run commands whose results are already in context.";
+
+export default function registerAutoContinue(pi: ExtensionAPI): void {
+	let lastAssistantStopReason: string | null = null;
+	let consecutiveResumes = 0;
+
+	pi.on("message_end", (event) => {
+		const message = event.message;
+		if (message && message.role === "assistant") {
+			lastAssistantStopReason = message.stopReason ?? null;
+		}
+	});
+
+	pi.on("agent_settled", (event, ctx) => {
+		if (lastAssistantStopReason !== "length") {
+			// Run settled on a clean stop (or abort/error) → reset the budget.
+			consecutiveResumes = 0;
+			return;
+		}
+
+		if (consecutiveResumes >= MAX_CONSECUTIVE_RESUMES) {
+			ctx.ui.notify(
+				"Output limit hit on consecutive turns — auto-continue paused. " +
+					"Send 'continue' to resume manually, or run /compact to shrink the context.",
+				"warning",
+			);
+			return;
+		}
+
+		consecutiveResumes += 1;
+		lastAssistantStopReason = null;
+		ctx.ui.notify(
+			`Response hit the output limit — auto-continuing ` +
+				`(${consecutiveResumes}/${MAX_CONSECUTIVE_RESUMES})…`,
+			"info",
+		);
+
+		// We are settled → idle, so this starts a fresh prompt run whose
+		// preflight compacts the context first if it is still over threshold.
+		// sendUserMessage is fire-and-forget at the extension surface; the
+		// runtime wrapper emits an extension error event if it rejects.
+		pi.sendUserMessage(CONTINUE_PROMPT);
+	});
+}

@@ -270,6 +270,11 @@ export interface AppState {
 	 * the thin fill meter above the status bar. Null before the first
 	 * reply or when the model has no known context window. */
 	contextUsage: ContextUsage | null;
+	/** Proactive "context nearly full" nudge — warned once per fill-up.
+	 * Reset to false whenever the meter drops back under the warn threshold
+	 * (which is exactly what compaction does), so a long session gets the
+	 * nudge again after each refill but never twice for the same fill. */
+	contextWarned: boolean;
 	/** Whether the server has semantic session search enabled. */
 	searchEnabled: boolean;
 	/** Whether the sidebar is currently showing search results (vs the date list). */
@@ -391,6 +396,7 @@ export const state: AppState = {
 	activeProjectId: "global",
 	capabilities: null,
 	contextUsage: null,
+	contextWarned: false,
 	searchEnabled: false,
 	searchActive: false,
 };

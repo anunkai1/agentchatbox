@@ -105,6 +105,10 @@ export interface VoicesResponse {
 //       before the next LLM call. Translated to `pi` `steer`.
 //   { type: "abort" }
 //       abort the current run. Translated to `pi` `abort`.
+//   { type: "compact", customInstructions? }
+//       compact the context now (summarize older turns). Translated
+//       to the `pi` `compact` RPC; pi aborts any in-flight run first,
+//       streams compaction_start/end events, then settles idle.
 //   { type: "setModel", modelId, provider }
 //       in-process model switch. Translated to `pi` `set_model`.
 //   { type: "setThinking", level }
@@ -297,6 +301,7 @@ export type ClientMessage =
 	| { type: "prompt"; text: string; images?: PromptImage[] }
 	| { type: "steer"; text: string; images?: PromptImage[] }
 	| { type: "abort" }
+	| { type: "compact"; customInstructions?: string }
 	| { type: "abortRetry" }
 	| { type: "setModel"; modelId: string; provider: string }
 	| { type: "setThinking"; level: ThinkingLevel }

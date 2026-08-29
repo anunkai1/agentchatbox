@@ -1185,6 +1185,42 @@ export function appendError(text: string): void {
 	appendNode(el("div", { class: "row row-error" }, el("div", { class: "body" }, text)));
 }
 
+/**
+ * Inline scrollback marker for a completed compaction — the before→after
+ * size, plus WHY it happened (the compaction reason). The status bar only
+ * shows compaction *while it runs*; this leaves a durable trace in the chat
+ * itself so "why did my history shrink / why is the meter low now?" is
+ * answerable from the transcript. Ephemeral by design: rebuilt only from
+ * live events, so it is not part of the on-disk transcript.
+ */
+export function appendCompactionChip(
+	reason: string,
+	tokensBefore: number | null,
+	tokensAfter: number | null,
+	willRetry: boolean,
+): void {
+	const k = (n: number): string => `${Math.round(n / 1000)}k`;
+	const why =
+		reason === "overflow"
+			? "context overflow — condensed history" +
+				(willRetry ? " and resuming the cut-off turn" : "")
+			: reason === "manual"
+				? "context compacted on request"
+				: "context near the limit — condensed history";
+	const sizes =
+		tokensBefore != null && tokensAfter != null
+			? ` · ${k(tokensBefore)} → ${k(tokensAfter)} tok`
+			: tokensBefore != null
+				? ` · ${k(tokensBefore)} tok before`
+				: "";
+	const row = el(
+		"div",
+		{ class: "row row-compaction" },
+		el("div", { class: "compaction-chip" }, `🗜 ${why}${sizes}`),
+	);
+	appendNode(row);
+}
+
 // ---------------------------------------------------------------------------
 // Status bar
 // ---------------------------------------------------------------------------

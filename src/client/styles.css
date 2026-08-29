@@ -1666,6 +1666,30 @@ body.sidebar-resizing iframe {
 	font-size: 14px;
 }
 
+/* compaction row — a durable inline marker where a compaction happened:
+   why (manual / threshold / overflow) and the before→after size. Muted by
+   design — it is a transcript annotation, not a message. */
+.row-compaction {
+	justify-content: flex-start;
+	padding: 2px 4px;
+}
+.row-compaction .compaction-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 2px 0;
+	padding: 4px 10px;
+	border-radius: 999px;
+	border: 1px dashed var(--border-strong);
+	background: var(--surface);
+	color: var(--text-secondary);
+	font: 12px var(--font-sans);
+	white-space: nowrap;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 /* ------------------------------------------------------------------ */
 /* Composer                                                            */
 /* ------------------------------------------------------------------ */

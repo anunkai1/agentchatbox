@@ -50,6 +50,7 @@ function el_pre(text: string): HTMLPreElement {
 
 export const SLASH_COMMANDS: Record<string, string> = {
 	// Core
+	compact: "compact the context now (summarize older turns): /compact [instructions]",
 	model: "open the model picker",
 	models: "show all models & services in use (display-only overview)",
 	imagemodel: "open the image-generation model picker (alias: /image)",
@@ -314,6 +315,8 @@ export interface ChatControls {
 	setModel(modelId: string, provider: string): void;
 	setThinking(level: ThinkingLevel): void;
 	abort(): void;
+	/** Compact the context now (pi aborts any in-flight run first). */
+	compact(customInstructions?: string): void;
 	/** Start a new session in a project (defaults to Global when omitted). */
 	newSession(projectId?: string): void;
 	resumeSession(sessionId: string): void;
@@ -348,6 +351,8 @@ function resetChatState(): void {
 	state.history = [];
 	state.historyIdx = null;
 	state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+	state.contextUsage = null;
+	state.contextWarned = false;
 	renderShell();
 }
 
@@ -452,6 +457,14 @@ export function handleSlash(arg: string): void {
 			chatControls?.abort();
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
+		case "compact": {
+			// Manual compaction through pi's native `compact` RPC — the
+			// status bar shows "Saving chat summary" while it runs, and a
+			// before→after chip lands in the scrollback on compaction_end.
+			chatControls?.compact(rest.trim() || undefined);
+			$<HTMLTextAreaElement>("#input").value = "";
+			break;
+		}
 		// --- New commands: aliases first, then actions. ---
 		case "new":
 			// Alias for /clear.

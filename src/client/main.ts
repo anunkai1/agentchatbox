@@ -30,6 +30,7 @@ import { applySessionPrefs } from "./prefs.js";
 import { projectTranscript } from "./project.js";
 import {
 	appendAssistantPlaceholder,
+	appendCompactionChip,
 	appendError,
 	appendToolCall,
 	autoSize,
@@ -1001,6 +1002,9 @@ function onEvent(event: Record<string, unknown>): void {
 
 		case "compaction_end": {
 			const failed = typeof e.errorMessage === "string" ? e.errorMessage : null;
+			const result = (e.result ?? null) as
+				| { tokensBefore?: number; estimatedTokensAfter?: number }
+				| null;
 			state.compaction = null;
 			if (!e.willRetry) {
 				setStreaming(false);
@@ -1008,7 +1012,30 @@ function onEvent(event: Record<string, unknown>): void {
 			} else {
 				refreshStatus();
 			}
-			if (failed) showToast(failed, "warning");
+			if (failed) {
+				showToast(failed, "warning");
+			} else if (result) {
+				// Durable scrollback trace of the compaction (status bar only
+				// shows it while running): reason + before→after size.
+				appendCompactionChip(
+					String(e.reason ?? "threshold"),
+					typeof result.tokensBefore === "number" ? result.tokensBefore : null,
+					typeof result.estimatedTokensAfter === "number" ? result.estimatedTokensAfter : null,
+					e.willRetry === true,
+				);
+				// Seed the meter from pi's own estimate so the pill doesn't sit
+				// at "? tok" until the next reply settles exact usage.
+				const est = result.estimatedTokensAfter;
+				if (typeof est === "number" && state.contextUsage?.contextWindow) {
+					const win = state.contextUsage.contextWindow;
+					state.contextUsage = {
+						...state.contextUsage,
+						tokens: est,
+						percent: Math.round((est / win) * 100),
+					};
+					refreshStatus();
+				}
+			}
 			// A completed compaction invalidates pi's last usage snapshot. Ask
 			// for the fresh post-cleanup meter as soon as it is available.
 			getSessionStatsHook();
@@ -1337,6 +1364,7 @@ async function boot(): Promise<void> {
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
 		setThinking: (level) => chatClient.setThinking(level),
 		abort: () => chatClient.abort(),
+		compact: (customInstructions) => chatClient.compact(customInstructions),
 		newSession: (projectId) => chatClient.newSession(projectId),
 		resumeSession: (id) => chatClient.resumeSession(id),
 		listSessions: () => chatClient.listSessions(),
@@ -1456,6 +1484,24 @@ async function boot(): Promise<void> {
 	// otherwise be stale).
 	chatClient.onSessionStats((stats) => {
 		state.contextUsage = stats.contextUsage;
+		// Proactive nudge (B): the meter alone is easy to miss in a long
+		// session, and the failure mode — output truncation, agent idling
+		// at 98%+ context — is exactly the kind of thing to warn about
+		// BEFORE it happens. Warn once per fill-up; the flag resets when
+		// the meter drops back under 70% (compaction's job), so each new
+		// fill of the window earns at most one nudge.
+		const pct = stats.contextUsage?.percent;
+		if (typeof pct === "number") {
+			if (pct >= 85 && !state.contextWarned) {
+				state.contextWarned = true;
+				showToast(
+					`Context is ${pct}% full (${stats.contextUsage?.tokens?.toLocaleString() ?? "?"} tok). /compact will summarize older turns before you run out.`,
+					"warning",
+				);
+			} else if (pct < 70) {
+				state.contextWarned = false;
+			}
+		}
 		// Seed cumulative token + cost totals from pi's ground truth so a
 		// fresh page load shows the session's REAL running totals instead
 		// of resetting to 0. The client still accumulates live from
