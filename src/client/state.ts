@@ -129,6 +129,24 @@ export type PersistedMessage =
 // In-memory app state
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-assistant-message output-speed meter. Exact token totals are only
+ * available when the provider reports streaming/final usage; character count
+ * keeps the live meter useful for providers that report usage at completion.
+ */
+export interface StreamingTokenSpeed {
+	/** First visible text or thinking delta, excluding time-to-first-token. */
+	startedAt: number | null;
+	/** Characters received in text/thinking deltas for the live estimate. */
+	estimatedCharacters: number;
+	/** Latest provider-reported cumulative output-token count, when available. */
+	reportedOutputTokens: number | null;
+	/** Completed-message average, retained until the next assistant message. */
+	finalTokensPerSecond: number | null;
+	/** False once the assistant message has ended. */
+	active: boolean;
+}
+
 export interface AppState {
 	/** Title of the current chat. Set on first user message; updatable via /name. */
 	title: string;
@@ -298,6 +316,12 @@ export interface AppState {
 	 * slow" visually distinct from "frozen".
 	 */
 	streamingStartedAt: number | null;
+	/** Live/final output rate for the current or most recent assistant message. */
+	streamingTokenSpeed: StreamingTokenSpeed | null;
+	/** Active pi context cleanup, surfaced from its raw compaction events.
+	 * This is display-only transport state: pi remains the sole owner of the
+	 * summary and its lifecycle. */
+	compaction: { reason: "manual" | "threshold" | "overflow"; startedAt: number } | null;
 	/** Absolute cwd of the active pi session; tool paths are relative to this. */
 	sessionCwd: string | null;
 	/** All known projects (folders with their own cwd + AGENTS.md). */
@@ -360,6 +384,8 @@ export const state: AppState = {
 	pendingSteerCount: 0,
 	retry: null,
 	streamingStartedAt: null,
+	streamingTokenSpeed: null,
+	compaction: null,
 	sessionCwd: null,
 	projects: [],
 	activeProjectId: "global",

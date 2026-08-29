@@ -545,6 +545,49 @@ function flushStreamDom(): void {
 	if (p) paintStreamDom(p);
 }
 
+/** Start measuring output throughput at the first visible model delta. */
+function startTokenSpeed(): void {
+	state.streamingTokenSpeed = {
+		startedAt: null,
+		estimatedCharacters: 0,
+		reportedOutputTokens: null,
+		finalTokensPerSecond: null,
+		active: true,
+	};
+}
+
+/** Record a text/thinking delta. Providers that expose incremental usage give
+ * us an exact token numerator; otherwise the status bar deliberately labels
+ * its character-based live value as an estimate. */
+function recordTokenSpeed(delta: unknown, message: AssistantMessage): void {
+	if (typeof delta !== "string" || delta.length === 0) return;
+	const speed = state.streamingTokenSpeed;
+	if (!speed) return;
+	if (speed.startedAt === null) speed.startedAt = Date.now();
+	speed.estimatedCharacters += delta.length;
+	const output = message.usage?.output;
+	if (typeof output === "number" && Number.isFinite(output) && output > 0) {
+		speed.reportedOutputTokens = output;
+	}
+}
+
+/** Lock in the completed-message average using final provider usage where it
+ * exists. Timing begins at the first streamed delta, so it measures decoding
+ * speed rather than time-to-first-token. */
+function finishTokenSpeed(message: AssistantMessage): void {
+	const speed = state.streamingTokenSpeed;
+	if (!speed) return;
+	speed.active = false;
+	const output = message.usage?.output;
+	if (typeof output === "number" && Number.isFinite(output) && output > 0) {
+		speed.reportedOutputTokens = output;
+	}
+	if (speed.startedAt === null) return;
+	const tokens = speed.reportedOutputTokens ?? Math.ceil(speed.estimatedCharacters / 4);
+	const elapsedSeconds = (Date.now() - speed.startedAt) / 1000;
+	if (tokens > 0 && elapsedSeconds > 0) speed.finalTokensPerSecond = tokens / elapsedSeconds;
+}
+
 function onEvent(event: Record<string, unknown>): void {
 	// The server forwards raw `pi --mode rpc` events, which is a
 	// superset of the bare `AgentEvent` union. Cast to a permissive
@@ -553,6 +596,10 @@ function onEvent(event: Record<string, unknown>): void {
 	const e = event as Record<string, any>;
 	switch (e.type) {
 		case "agent_start":
+			// An overflow compaction can immediately retry the interrupted run.
+			// The new agent run is the authoritative end of the cleanup state.
+			state.compaction = null;
+			state.streamingTokenSpeed = null;
 			setStreaming(true);
 			state.streamingStartedAt = Date.now();
 			refreshStatus();
@@ -561,8 +608,13 @@ function onEvent(event: Record<string, unknown>): void {
 		case "agent_end":
 			// Flush any final pending repaint before tearing down streaming UI.
 			flushStreamDom();
-			setStreaming(false);
-			state.streamingStartedAt = null;
+			// Pi may move straight from this low-level run into compaction. Keep
+			// the Stop control and elapsed working state alive if that event has
+			// already arrived, rather than briefly presenting the chat as idle.
+			if (!state.compaction) {
+				setStreaming(false);
+				state.streamingStartedAt = null;
+			}
 			state.retry = null;
 			// Safety net: if a Long/Short button was pressed to generate a
 			// voice reply but pi finished without emitting one (error or
@@ -631,7 +683,9 @@ function onEvent(event: Record<string, unknown>): void {
 				liveMessageSeq++;
 			}
 			if (e.message.role === "assistant") {
-				// New assistant message — create a fresh block.
+				// New assistant message — create a fresh block and start its
+				// output-speed meter when its first text/thinking delta arrives.
+				startTokenSpeed();
 				lastAssistant = {
 					kind: "assistant",
 					text: "",
@@ -746,6 +800,10 @@ function onEvent(event: Record<string, unknown>): void {
 
 		case "message_update": {
 			const m = e.message as AssistantMessage;
+			const update = e.assistantMessageEvent as { type?: unknown; delta?: unknown } | undefined;
+			if (update?.type === "text_delta" || update?.type === "thinking_delta") {
+				recordTokenSpeed(update.delta, m);
+			}
 			// Reconstruct the assistant text from content blocks.
 			let text = "";
 			let thinking = "";
@@ -811,6 +869,7 @@ function onEvent(event: Record<string, unknown>): void {
 			// before this case finalizes or removes the row.
 			flushStreamDom();
 			const m = e.message as AssistantMessage;
+			if (m.role === "assistant") finishTokenSpeed(m);
 			// Suppress the blank spurious assistant message that the
 			// pi-voice-reply extension's sendMessage triggers (see the
 			// extension's spurious-turn handling). The extension blanks
@@ -926,6 +985,35 @@ function onEvent(event: Record<string, unknown>): void {
 			// for the toolResult. Nothing to do here; finalizeToolCall is
 			// called from there.
 			break;
+
+		case "compaction_start": {
+			// Raw pi transport event: compaction is agent-owned, while the
+			// browser only makes the otherwise-silent cleanup visibly active.
+			const reason =
+				e.reason === "manual" || e.reason === "overflow" || e.reason === "threshold"
+					? e.reason
+					: "threshold";
+			state.compaction = { reason, startedAt: Date.now() };
+			state.streamingStartedAt = state.compaction.startedAt;
+			setStreaming(true);
+			break;
+		}
+
+		case "compaction_end": {
+			const failed = typeof e.errorMessage === "string" ? e.errorMessage : null;
+			state.compaction = null;
+			if (!e.willRetry) {
+				setStreaming(false);
+				state.streamingStartedAt = null;
+			} else {
+				refreshStatus();
+			}
+			if (failed) showToast(failed, "warning");
+			// A completed compaction invalidates pi's last usage snapshot. Ask
+			// for the fresh post-cleanup meter as soon as it is available.
+			getSessionStatsHook();
+			break;
+		}
 
 		case "auto_retry_start": {
 			// pi hit a recoverable error (transient model/transport fault)

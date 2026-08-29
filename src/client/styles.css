@@ -148,8 +148,8 @@ body {
 	border-radius: var(--radius-pill);
 	cursor: pointer;
 	font-family: inherit;
-	font-size: 13px;
-	font-weight: 650;
+	font-size: 12px;
+	font-weight: 400;
 	box-shadow: 0 2px 10px rgba(39, 196, 200, 0.14);
 	transition:
 		filter 0.12s,
@@ -269,7 +269,7 @@ body.sidebar-resizing iframe {
 	border-radius: var(--radius-sm);
 	background: var(--surface);
 	color: var(--text);
-	font-size: 13px;
+	font-size: 12px;
 	outline: none;
 }
 .sidebar-search:focus {
@@ -376,8 +376,8 @@ body.sidebar-resizing iframe {
 	gap: 4px;
 }
 .session-item-title {
-	font-size: 14px;
-	font-weight: 520;
+	font-size: 13px;
+	font-weight: 400;
 	color: var(--text);
 	white-space: nowrap;
 	overflow: hidden;
@@ -488,7 +488,7 @@ body.sidebar-resizing iframe {
 .session-rename-input {
 	flex: 1;
 	min-width: 0;
-	font-size: 14px;
+	font-size: 13px;
 	font-family: inherit;
 	color: var(--text);
 	background: var(--bg);
@@ -507,7 +507,7 @@ body.sidebar-resizing iframe {
 .sidebar-empty {
 	padding: 16px 12px;
 	color: var(--text-muted);
-	font-size: 13px;
+	font-size: 12px;
 	text-align: center;
 }
 
@@ -3061,8 +3061,8 @@ body.modal-open {
 	padding: 0;
 	border-radius: var(--radius);
 	user-select: none;
-	font-size: 13px;
-	font-weight: 600;
+	font-size: 12px;
+	font-weight: 400;
 	color: var(--text);
 	transition: background 0.12s;
 }
