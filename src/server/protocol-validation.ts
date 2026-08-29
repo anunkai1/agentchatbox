@@ -148,6 +148,13 @@ export function parseClientMessage(value: unknown): ClientMessage {
 			}
 			return { type, provider, modelId };
 		}
+		case "compact":
+			return {
+				type,
+				...(msg.customInstructions === undefined
+					? {}
+					: { customInstructions: string(msg.customInstructions, "customInstructions", 2000, true) }),
+			};
 		case "setThinking":
 			return { type, level: thinking(msg.level) };
 		case "extensionUiResponse":
