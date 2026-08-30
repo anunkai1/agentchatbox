@@ -131,13 +131,24 @@ import type { ThinkingLevel } from "./thinking.js";
 
 export type { ThinkingLevel };
 
-/** Base64-encoded image attached to a user prompt. */
-export interface PromptImage {
-	/** Base64-encoded image bytes (no data: URL prefix). */
-	data: string;
-	/** MIME type, e.g. "image/jpeg", "image/png". */
-	mimeType: string;
-}
+/** Image attached to a user prompt. New clients reference the file they
+ * already uploaded over HTTP, keeping multi-megabyte base64 out of the browser
+ * WebSocket frame. The legacy inline shape remains accepted across rolling
+ * deploys so an already-open tab can reconnect safely after a server restart. */
+export type PromptImage =
+	| {
+			/** Same-origin upload URL returned by POST /api/upload. */
+			url: string;
+			data?: never;
+			mimeType?: never;
+	  }
+	| {
+			/** Legacy base64-encoded image bytes (no data: URL prefix). */
+			data: string;
+			/** MIME type, e.g. "image/jpeg", "image/png". */
+			mimeType: string;
+			url?: never;
+	  };
 
 /**
  * A summary of a `pi` session for the `/sessions` picker. Mirrors the

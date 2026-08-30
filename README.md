@@ -8,7 +8,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 
 - Streaming responses, model picker, thinking levels
 - **Steering** — type while the agent is working and your message is queued for the next turn (mirrors the CLI; delivered after the current turn's tool calls finish)
-- File / image / voice attachments (image bytes go straight to multimodal models)
+- File / image / voice attachments (images upload once over HTTP, then a small private reference is resolved into multimodal input server-side)
 - **Agent → you file delivery** — every tool call that touches a `path` (write / edit / read) gets a `⬇ download` link on its card, served from the project dir via `GET /api/file`
 - Persistent sessions on disk (`pi` manages JSONL files — survive page reloads and server restarts)
 - **Automatic session titles** — the bundled pi extension replaces the temporary first-message title with a concise model-generated name after the first successful answer; manual renames always win
@@ -77,6 +77,7 @@ src/
     config.ts             # validated environment → ServerConfig
     paths.ts              # projectRoot (cwd-independent)
     protocol-validation.ts # runtime validation/bounds for browser WS messages
+    prompt-images.ts      # bounded no-follow upload reference → pi image block
     upload-store.ts       # aggregate quota, reservations, private staging/publish
     uploads.ts            # /api/upload
     uploads-serving.ts    # safe raster preview / forced attachment delivery
@@ -170,7 +171,7 @@ One connection per session. The client must send `init` as its first message; th
 ```ts
 // client → server
 { type: "init", provider, modelId, thinkingLevel, sessionId? }  // FIRST message — spawns pi child
-{ type: "prompt", text: string, images?: PromptImage[] }
+{ type: "prompt", text: string, images?: Array<{ url: "/uploads/<name>" }> }
 { type: "abort" }
 { type: "setModel", modelId: string, provider: string }
 { type: "setThinking", level: ThinkingLevel }

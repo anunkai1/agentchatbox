@@ -19,7 +19,7 @@ import type {
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import type { ProjectSummary, SessionSummary } from "../shared/protocol.js";
+import type { ProjectSummary, PromptImage, SessionSummary } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
 import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
 import {
@@ -227,7 +227,9 @@ function handleSend(): void {
 	}
 	const input = $<HTMLTextAreaElement>("#input");
 	const trimmed = input.value.trim();
-	if (!trimmed) return;
+	// An image is now represented by its attachment preview, not Markdown in
+	// the textarea, so an image-only prompt is valid too.
+	if (!trimmed && state.uploadedImages.size === 0) return;
 
 	// Known slash commands consume the composer immediately. Normal prompts
 	// stay in the input until the WebSocket accepts them, so a disconnected
@@ -250,25 +252,27 @@ function handleSend(): void {
  * extensions and arrive through the normal RPC event stream instead.
  */
 function sendAsUser(trimmed: string): boolean {
-	if (!trimmed) return false;
-	const images = collectUploadedImages(trimmed);
-	if (!sendPromptHook(trimmed, images.length > 0 ? images : undefined)) {
+	const images = collectUploadedImages();
+	if (!trimmed && images.length === 0) return false;
+	const messageText = withImageAttachmentMarkdown(trimmed);
+	if (!sendPromptHook(messageText, images.length > 0 ? images : undefined)) {
 		showToast("Not connected — your draft was kept.", "warning");
 		return false;
 	}
-	// Only clear the attachment byte cache after the WebSocket accepted the
+	// Only clear the attachment references after the WebSocket accepted the
 	// prompt. If the connection is unavailable, the draft and attachments
 	// remain resubmittable.
 	state.uploadedImages.clear();
 
-	// Push to history only after acceptance.
-	if (state.history[state.history.length - 1] !== trimmed) state.history.push(trimmed);
+	// Push typed text to history only after acceptance; attachment Markdown
+	// is transport/display metadata and should not reappear in the composer.
+	if (trimmed && state.history[state.history.length - 1] !== trimmed) state.history.push(trimmed);
 	state.historyIdx = null;
 
 	// Add user message to in-memory transcript. ts is stamped locally
 	// at send time (ms-accurate enough for a relative "2m" label); the
 	// authoritative SDK timestamp lands on resume via projectTranscript.
-	const userMsg = { kind: "user" as const, text: trimmed, ts: Date.now() };
+	const userMsg = { kind: "user" as const, text: messageText, ts: Date.now() };
 	state.messages.push(userMsg);
 	// New message resets the jump walk: the next Alt+↑ / button press
 	// should start fresh from this newest position, not resume a stale
@@ -278,7 +282,7 @@ function sendAsUser(trimmed: string): boolean {
 
 	// Auto-title from the first user message.
 	if (state.title === "New chat" || !state.title) {
-		state.title = trimmed.split(/[.\n!?]/)[0].slice(0, 50) || "New chat";
+		state.title = trimmed.split(/[.\n!?]/)[0].slice(0, 50) || "Photo";
 		$<HTMLSpanElement>("#title").textContent = state.title;
 	}
 	return true;
@@ -289,7 +293,7 @@ function sendAsUser(trimmed: string): boolean {
  * hook because composer handlers are registered before the WebSocket client
  * finishes booting.
  */
-type SendPromptHook = (text: string, images?: Array<{ data: string; mimeType: string }>) => boolean;
+type SendPromptHook = (text: string, images?: PromptImage[]) => boolean;
 let sendPromptHook: SendPromptHook = () => false;
 /** Closure over `chatClient.steer`, wired in boot(). */
 let steerHook: SendPromptHook = () => false;
@@ -316,22 +320,23 @@ let extensionUiResponder: ExtensionUiResponder | null = null;
 let liveMessageSeq = 0;
 
 /**
- * Pull the base64 bytes for every /uploads/<id> URL referenced in `text`
- * out of the in-memory image map without mutating the draft. The map is
- * cleared only after the WebSocket accepts the prompt, so failed sends can
- * be retried with their attachments intact.
+ * Collect a small upload reference for every image attached to the composer.
+ * The server resolves each reference from its private upload store, avoiding
+ * duplicate base64 in the browser socket and keeping upload URLs out of the
+ * visible draft.
  */
-function collectUploadedImages(text: string): Array<{ data: string; mimeType: string }> {
-	const images: Array<{ data: string; mimeType: string }> = [];
-	const seen = new Set<string>();
-	for (const m of text.matchAll(/(\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)/g)) {
-		const url = m[1];
-		if (seen.has(url)) continue;
-		seen.add(url);
-		const img = state.uploadedImages.get(url);
-		if (img) images.push({ data: img.data, mimeType: img.mimeType });
-	}
-	return images;
+function collectUploadedImages(): PromptImage[] {
+	return Array.from(state.uploadedImages.keys(), (url) => ({ url }));
+}
+
+/** Preserve the familiar image in the sent user bubble and a durable filename
+ * label in pi's transcript without exposing the URL in the textarea itself. */
+function withImageAttachmentMarkdown(text: string): string {
+	const attachments = Array.from(
+		state.uploadedImages,
+		([url, image]) => `![image: ${image.filename}](${url})`,
+	);
+	return [...attachments, text].filter(Boolean).join("\n");
 }
 
 /**
@@ -408,14 +413,15 @@ function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
  * course-correction, not a standalone prompt you'd recall with ↑/↓.
  */
 function sendSteer(trimmed: string): boolean {
-	if (!trimmed) return false;
-	const images = collectUploadedImages(trimmed);
-	if (!steerHook(trimmed, images.length > 0 ? images : undefined)) {
+	const images = collectUploadedImages();
+	if (!trimmed && images.length === 0) return false;
+	const messageText = withImageAttachmentMarkdown(trimmed);
+	if (!steerHook(messageText, images.length > 0 ? images : undefined)) {
 		showToast("Not connected — your draft was kept.", "warning");
 		return false;
 	}
 	state.uploadedImages.clear();
-	const msg: PersistedMessage = { kind: "steer", text: trimmed, delivered: false };
+	const msg: PersistedMessage = { kind: "steer", text: messageText, delivered: false };
 	state.messages.push(msg);
 	appendNode(renderMessageNode(msg), { pin: true });
 	state.pendingSteerCount += 1;

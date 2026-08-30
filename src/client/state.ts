@@ -196,13 +196,12 @@ export interface AppState {
 	 */
 	pendingModelSet: string | null;
 	/**
-	 * Map of uploaded image URL → base64 data + mime + filename. Populated
-	 * when the user attaches an image via the file picker, consumed when
-	 * they send a prompt that references the URL. Used to pass image
-	 * bytes to the model so multimodal models (e.g. minimax M3) can see
-	 * the picture, not just the markdown link.
+	 * Map of uploaded image URL → display metadata. Populated when the user
+	 * attaches an image and consumed when a prompt references that URL. The
+	 * URL is sent as a small transport reference; the server resolves the
+	 * already-uploaded file into pi's image block.
 	 */
-	uploadedImages: Map<string, { data: string; mimeType: string; filename: string }>;
+	uploadedImages: Map<string, { mimeType: string; filename: string }>;
 	/**
 	 * Connection state reported by the WS client. "stalled" means the
 	 * socket reports OPEN but no messages (including heartbeats) have

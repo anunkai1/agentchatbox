@@ -19,6 +19,7 @@ const PROVIDER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MODEL_RE = /^[^\s\p{Cc}]{1,256}$/u;
 const MIME_RE = /^image\/[A-Za-z0-9.+-]{1,64}$/;
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const UPLOAD_IMAGE_URL_RE = /^\/uploads\/[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 
 export class ProtocolError extends Error {
 	constructor(message: string) {
@@ -83,6 +84,17 @@ function images(value: unknown): PromptImage[] | undefined {
 	}
 	return value.map((entry, index) => {
 		const img = object(entry);
+		if (img.url !== undefined) {
+			if (img.data !== undefined || img.mimeType !== undefined) {
+				throw new ProtocolError(`images[${index}] must use either url or inline data`);
+			}
+			const url = string(img.url, `images[${index}].url`, 265);
+			if (!UPLOAD_IMAGE_URL_RE.test(url)) {
+				throw new ProtocolError(`images[${index}].url is not a valid upload URL`);
+			}
+			return { url };
+		}
+
 		const data = string(img.data, `images[${index}].data`, MAX_IMAGE_BASE64_CHARS);
 		const mimeType = string(img.mimeType, `images[${index}].mimeType`, 70);
 		if (!MIME_RE.test(mimeType) || mimeType.toLowerCase() === "image/svg+xml") {

@@ -1651,7 +1651,7 @@ export function addImageAttachmentPreview(
 
 /**
  * Rebuild image previews after renderShell() replaces the composer DOM.
- * Uploaded image bytes live in state until the prompt is accepted, but the
+ * Uploaded image references live in state until the prompt is accepted, but the
  * old composer node (and its thumbnails) does not. Without this restoration,
  * a transcript refresh makes an attached image appear to vanish from the UI.
  */
@@ -1659,14 +1659,6 @@ export function restoreImageAttachmentPreviews(): void {
 	for (const [url, attachment] of state.uploadedImages) {
 		addImageAttachmentPreview(url, attachment.filename, () => {
 			state.uploadedImages.delete(url);
-			const ta = document.querySelector<HTMLTextAreaElement>("#input");
-			if (ta) {
-				ta.value = ta.value
-					.replace(`![image: ${attachment.filename}](${url})`, "")
-					.replace(`[image: ${attachment.filename}](${url})`, "")
-					.trim();
-				autoSize();
-			}
 		});
 	}
 }
@@ -2294,8 +2286,9 @@ export function renderShell(): void {
 	// The old globe/reasoning buttons were removed because they had no
 	// direct effect (they opened other menus instead).
 	const composerWrap = el("div", { class: "composer-wrap" });
-	// A textarea cannot paint an inline image. Keep the model-visible Markdown
-	// in it, and show each attached image as a removable thumbnail just above.
+	// A textarea cannot paint an inline image. Keep each attached image as a
+	// removable thumbnail just above the composer; its transport reference is
+	// kept out of the visible draft.
 	composerWrap.append(el("div", { class: "attachment-previews", id: "attachment-previews" }));
 	composerWrap.append(el("div", { class: "composer-state hidden", id: "composer-state" }));
 	const composer = el("div", { class: "composer", id: "composer" });
