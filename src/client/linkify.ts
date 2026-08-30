@@ -60,8 +60,9 @@ export function setRichText(container: HTMLElement, text: string): void {
 /**
  * Render a user-authored message. Older ACB versions stored pasted images
  * as ordinary `[image: name](url)` links; recognise that narrowly-defined
- * legacy form so existing transcript entries render as pictures too. New
- * attachments use standard `![image: name](url)` Markdown from the start.
+ * legacy form so existing transcript entries render as pictures too. Current
+ * image attachments use structured transport references instead of adding
+ * Markdown to the composer.
  */
 export function setUserRichText(container: HTMLElement, text: string): void {
 	setRichText(

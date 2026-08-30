@@ -1763,9 +1763,8 @@ body.sidebar-resizing iframe {
 	font-size: 13px;
 }
 
-/* Pasted/attached images remain standard Markdown in the textarea for pi,
- * but a textarea cannot render them. Show a compact, removable preview just
- * above the composer instead. */
+/* Attached images use structured transport references rather than visible
+ * Markdown. Show a compact, removable preview above the composer instead. */
 .composer-state {
 	max-width: var(--chat-max);
 	margin: 0 auto 5px;
