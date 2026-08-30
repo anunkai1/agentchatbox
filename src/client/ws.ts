@@ -59,7 +59,7 @@ export interface ChatClient {
 		thinkingLevel: ThinkingLevel;
 		sessionId?: string;
 	}): void;
-	/** Send a user prompt. Optionally attach images (base64 + mimeType). */
+	/** Send a user prompt. Optionally attach uploaded image references. */
 	prompt(text: string, images?: PromptImage[]): boolean;
 	/**
 	 * Queue a steering message while the agent is running. Delivered

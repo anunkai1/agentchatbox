@@ -4,8 +4,8 @@
  *   - speakText(): POST to /api/tts, play the WAV in the shared <audio>
  *   - toggleSpeak(): per-message Long/Short button: play/stop the chosen
  *     message's audio
- *   - handleFileAttach(): POST to /api/upload, remember base64 bytes for
- *     multimodal models, insert a markdown link into the input
+ *   - handleFileAttach(): POST to /api/upload, remember structured image
+ *     references for multimodal models, and show attachment previews
  *   - handleVoiceRecord(): MediaRecorder → POST to /api/transcribe →
  *     paste the transcript into the input
  */
@@ -489,17 +489,16 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 // File attach
 // ---------------------------------------------------------------------------
 
-// Matches the server's bounded structured-image transport. Larger images can
-// still be uploaded as ordinary files without allocating a 4/3-size base64
-// copy in browser memory or creating an oversized WebSocket frame.
-const MAX_INLINE_IMAGE_BYTES = 25 * 1024 * 1024;
+// Matches the server's bounded structured-image transport. Larger images are
+// still uploaded as ordinary files, but are not attached as model image input.
+const MAX_PROMPT_IMAGE_BYTES = 25 * 1024 * 1024;
 
 /**
  * Shared core: take a list of File objects (from the file picker, a
- * paste, or a drag-and-drop) and upload each one, remembering image
- * bytes for multimodal models, inserting standard image Markdown into
- * the input, and showing a removable thumbnail above the composer. The
- * file picker resets its own .value; callers that don't come from an
+ * paste, or a drag-and-drop) and upload each one, remembering its private
+ * upload reference for multimodal models and showing a removable thumbnail
+ * above the composer. Non-image files still get a Markdown link in the input.
+ * The file picker resets its own .value; callers that don't come from an
  * <input type=file> simply pass an empty Event-less path.
  */
 export async function attachFiles(files: File[]): Promise<void> {
@@ -512,13 +511,6 @@ export async function attachFiles(files: File[]): Promise<void> {
 		});
 		uploadCount++;
 		try {
-			// Only images need base64 copies for multimodal messages. Keep that
-			// conversion parallel with their upload, but never allocate a second
-			// multi-gigabyte in-browser copy of a video or other attachment.
-			const imageData =
-				file.type.startsWith("image/") && file.size <= MAX_INLINE_IMAGE_BYTES
-					? blobToBase64(file)
-					: undefined;
 			const res = await uploadFile(
 				file,
 				({ loaded, total }) => {
@@ -526,32 +518,27 @@ export async function attachFiles(files: File[]): Promise<void> {
 				},
 				uploadController.signal,
 			);
-			if (res.mimeType.startsWith("image/") && imageData) {
-				const data = await imageData;
+			const isImage = res.mimeType.startsWith("image/") && res.size <= MAX_PROMPT_IMAGE_BYTES;
+			if (isImage) {
+				// Keep only the small upload reference. The server reads the file it
+				// already accepted over HTTP and builds pi's inline image block; this
+				// avoids a multi-megabyte base64 WebSocket frame on mobile browsers.
 				state.uploadedImages.set(res.url, {
-					data,
 					mimeType: res.mimeType,
 					filename: res.filename,
 				});
 			}
-			const isImage = res.mimeType.startsWith("image/") && !!imageData;
-			const insertion = isImage
-				? `![image: ${res.filename}](${res.url})`
-				: `[file: ${res.filename}](${res.url})`;
-			ta.value = `${ta.value}\n${insertion}`.trim();
 			if (isImage) {
+				// Keep image uploads out of the visible draft. The thumbnail is
+				// the attachment affordance; the URL is sent separately as a
+				// structured reference and resolved by the server.
 				uploadPreview.remove();
 				addImageAttachmentPreview(res.url, res.filename, () => {
-					// The upload can remain on disk, but removing it from the draft
-					// must also prevent its base64 data reaching the model.
 					state.uploadedImages.delete(res.url);
-					ta.value = ta.value
-						.replace(`![image: ${res.filename}](${res.url})`, "")
-						.replace(`[image: ${res.filename}](${res.url})`, "")
-						.trim();
-					autoSize();
 				});
 			} else {
+				const insertion = `[file: ${res.filename}](${res.url})`;
+				ta.value = `${ta.value}\n${insertion}`.trim();
 				uploadPreview.complete(() => {
 					ta.value = ta.value.replace(`[file: ${res.filename}](${res.url})`, "").trim();
 					autoSize();
@@ -606,25 +593,6 @@ export async function handleDrop(e: DragEvent): Promise<void> {
 	if (!files || files.length === 0) return;
 	e.preventDefault();
 	await attachFiles(Array.from(files));
-}
-
-/** Convert a Blob to a base64 string (no data: URL prefix). */
-function blobToBase64(blob: Blob): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onloadend = () => {
-			const result = reader.result;
-			if (typeof result !== "string") {
-				reject(new Error("FileReader returned non-string"));
-				return;
-			}
-			// Strip the "data:<mime>;base64," prefix.
-			const comma = result.indexOf(",");
-			resolve(comma >= 0 ? result.slice(comma + 1) : result);
-		};
-		reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
-		reader.readAsDataURL(blob);
-	});
 }
 
 // ---------------------------------------------------------------------------

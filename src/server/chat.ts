@@ -36,7 +36,6 @@ import { type WebSocket, WebSocketServer } from "ws";
 import type {
 	ClientMessage,
 	ProjectSummary,
-	PromptImage,
 	ServerMessage,
 	SessionSummary,
 } from "../shared/protocol.js";
@@ -53,6 +52,7 @@ import {
 	reorderProjects,
 	updateProject,
 } from "./projects.js";
+import { resolvePromptImages } from "./prompt-images.js";
 import { ProtocolError, parseClientMessage } from "./protocol-validation.js";
 import { isAllowedWsOrigin } from "./security.js";
 import {
@@ -238,8 +238,11 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 	const session = registry.acquire(resolvedInit);
 	registry.attach(session, ws);
 
-	// Handle subsequent client messages: forward to `pi` or handle
-	// session-control messages locally (those swap the bound session).
+	// Handle subsequent client messages in arrival order. Image references are
+	// resolved asynchronously from the private upload store; serialising the
+	// dispatch keeps a prompt followed immediately by Abort/Steer in the same
+	// order the browser sent it.
+	let messageQueue = Promise.resolve();
 	ws.on("message", (raw) => {
 		let msg: ClientMessage;
 		try {
@@ -248,33 +251,25 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 			protocolViolation(ws, error);
 			return;
 		}
-		// Read the CURRENTLY bound session off the socket — NOT the
-		// `session` captured at init time. newSession / resumeSession swap
-		// the bound session via registry.attach (which sets ws._session);
-		// the captured variable would still point at the now-killed old
-		// child, whose pi.send() silently drops commands (PiProcess.killed),
-		// and the prompt would vanish into the void — the hang bug.
-		const current = ws._session;
-		if (!current) {
-			deliverError(ws, "no active session");
-			return;
-		}
-		// A synchronous throw here (e.g. registry.acquire rejecting a
-		// logged-out provider, a disk error in a sidecar write) would
-		// otherwise propagate out of the ws "message" listener as an
-		// uncaughtException and crash the whole server — taking every
-		// active session and every pi child with it (the exact failure
-		// the registry exists to prevent). Surface it to the client as an
-		// error frame instead. The per-command guards below own their
-		// own, more specific, recovery (e.g. replaceSession clearing
-		// ws._session on a failed acquire); this is the catch-all backstop.
-		try {
-			onClientMessage(ws, msg, current);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			log.error("client message handler threw", { error: message });
-			deliverError(ws, "internal server error");
-		}
+		messageQueue = messageQueue
+			.then(async () => {
+				// Read the CURRENTLY bound session off the socket — NOT the
+				// `session` captured at init time. newSession / resumeSession swap
+				// the bound session via registry.attach (which sets ws._session).
+				const current = ws._session;
+				if (!current) {
+					deliverError(ws, "no active session");
+					return;
+				}
+				await onClientMessage(ws, msg, current);
+			})
+			.catch((err) => {
+				// Never leave the chain rejected: later browser commands must still
+				// run even when one command hits an unexpected transport failure.
+				const message = err instanceof Error ? err.message : String(err);
+				log.error("client message handler threw", { error: message });
+				deliverError(ws, "internal server error");
+			});
 	});
 
 	// Detach on disconnect — the agent keeps running. The registry reaps
@@ -290,22 +285,11 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 // Client message dispatch
 // ---------------------------------------------------------------------------
 
-/** Shape `PromptImage`s into pi's `ImageContent` wire format.
- *
- * pi's RPC `ImageContent` requires a `type: "image"` discriminator on
- * every block; the browser's `PromptImage` only carries `{data, mimeType}`.
- * Forwarding the browser shape verbatim means pi persists a block with no
- * `type` field into the session transcript — the live vision-proxy call
- * still works (it intercepts before the provider sees the block), but on
- * resume the replayed history is sent straight to the model and rejected:
- * `400 messages.content.type is invalid, allowed values: ['text']`, which
- * silently bricks the whole session (every future turn 400s). Stamping the
- * discriminator here at the transport boundary is the fix. */
-function toImageContent(images: PromptImage[] | undefined) {
-	return images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
-}
-
-function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession): void {
+async function onClientMessage(
+	ws: PiSocket,
+	msg: ClientMessage,
+	session: LiveSession,
+): Promise<void> {
 	const pi = session.pi;
 
 	switch (msg.type) {
@@ -316,6 +300,14 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			break;
 		}
 		case "prompt": {
+			let imageContent: Awaited<ReturnType<typeof resolvePromptImages>>;
+			try {
+				imageContent = await resolvePromptImages(msg.images);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				deliverError(ws, `could not send image: ${message}`);
+				break;
+			}
 			// Translate /uploads/<file> web URLs to absolute filesystem paths
 			// so pi's read tool can access uploaded files. The browser
 			// inserts markdown links like [/uploads/<uuid>.csv] in the
@@ -323,25 +315,33 @@ function onClientMessage(ws: PiSocket, msg: ClientMessage, session: LiveSession)
 			// exist on disk; the files live in config.uploadsDir. Image
 			// links are reduced to a bare label when their bytes also ride
 			// in the structured `images` field (see rewriteUploadUrls).
-			const hasImages = !!msg.images && msg.images.length > 0;
+			const hasImages = imageContent !== undefined && imageContent.length > 0;
 			const message = rewriteUploadUrls(msg.text, hasImages);
 			pi.send({
 				type: "prompt",
 				message,
-				...(hasImages ? { images: toImageContent(msg.images) } : {}),
+				...(hasImages ? { images: imageContent } : {}),
 			});
 			break;
 		}
 		case "steer": {
+			let imageContent: Awaited<ReturnType<typeof resolvePromptImages>>;
+			try {
+				imageContent = await resolvePromptImages(msg.images);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				deliverError(ws, `could not send image: ${message}`);
+				break;
+			}
 			// Steering messages are queued while the agent runs and delivered
 			// after the current assistant turn finishes its tool calls,
 			// before the next LLM call. Same upload-URL rewriting as `prompt`.
-			const hasImages = !!msg.images && msg.images.length > 0;
+			const hasImages = imageContent !== undefined && imageContent.length > 0;
 			const message = rewriteUploadUrls(msg.text, hasImages);
 			pi.send({
 				type: "steer",
 				message,
-				...(hasImages ? { images: toImageContent(msg.images) } : {}),
+				...(hasImages ? { images: imageContent } : {}),
 			});
 			break;
 		}

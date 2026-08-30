@@ -38,14 +38,39 @@ describe("parseClientMessage", () => {
 		).toThrow("customInstructions");
 	});
 
-	it("accepts a small raster image and rejects SVG/base64 abuse", () => {
+	it("accepts upload references and legacy inline images, rejecting malformed sources", () => {
 		expect(
 			parseClientMessage({
 				type: "prompt",
 				text: "look",
+				images: [{ url: "/uploads/123e4567-e89b-12d3-a456-426614174000.jpg" }],
+			}),
+		).toMatchObject({
+			type: "prompt",
+			text: "look",
+			images: [{ url: "/uploads/123e4567-e89b-12d3-a456-426614174000.jpg" }],
+		});
+		expect(
+			parseClientMessage({
+				type: "prompt",
+				text: "legacy tab",
 				images: [{ data: "AQ==", mimeType: "image/png" }],
 			}),
-		).toMatchObject({ type: "prompt", text: "look" });
+		).toMatchObject({ type: "prompt", text: "legacy tab" });
+		expect(() =>
+			parseClientMessage({
+				type: "prompt",
+				text: "look",
+				images: [{ url: "/uploads/../../etc/passwd" }],
+			}),
+		).toThrow("upload URL");
+		expect(() =>
+			parseClientMessage({
+				type: "prompt",
+				text: "look",
+				images: [{ url: "/uploads/photo.jpg", data: "AQ==", mimeType: "image/png" }],
+			}),
+		).toThrow("either url or inline data");
 		expect(() =>
 			parseClientMessage({
 				type: "prompt",
