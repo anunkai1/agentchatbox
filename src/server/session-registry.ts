@@ -138,6 +138,15 @@ export interface LiveSession {
 	 * isStreaming (and the Stop button) correctly.
 	 */
 	streaming: boolean;
+	/** True while pi is compacting its context; transport-visible only. */
+	compaction: { reason: "manual" | "threshold" | "overflow"; startedAt: number } | null;
+	/** Most recent completed compaction, retained for the status bridge. */
+	lastCompaction: {
+		reason: "manual" | "threshold" | "overflow";
+		tokensBefore?: number;
+		estimatedTokensAfter?: number;
+		completedAt: number;
+	} | null;
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	currentTurn: unknown[];
 	currentTurnBytes: number;
@@ -218,6 +227,25 @@ class SessionRegistry {
 		return out;
 	}
 
+	/** Read-only lifecycle snapshot for local status consumers such as Shed. */
+	statusSnapshot(): Array<Record<string, unknown>> {
+		const out: Array<Record<string, unknown>> = [];
+		for (const [id, s] of this.entries) {
+			if (!id || !s.ready) continue;
+			out.push({
+				sessionId: id,
+				cwd: s.init.cwd,
+				provider: s.init.provider,
+				modelId: s.init.modelId,
+				busy: s.busy,
+				streaming: s.streaming,
+				compaction: s.compaction,
+				lastCompaction: s.lastCompaction,
+			});
+		}
+		return out;
+	}
+
 	stats(): { live: number; pending: number; limit: number } {
 		return { live: this.entries.size, pending: this.pending.size, limit: config.maxLiveSessions };
 	}
@@ -277,6 +305,8 @@ class SessionRegistry {
 			ready: false,
 			busy: false,
 			streaming: false,
+			compaction: null,
+			lastCompaction: null,
 			idleTimer: null,
 			currentTurn: [],
 			currentTurnBytes: 0,
@@ -701,6 +731,25 @@ class SessionRegistry {
 		// is immune to idle reaping. The current-turn buffer is replayed on
 		// reattach to reconstruct an in-flight assistant message whose
 		// `message_start` the client missed while disconnected.
+		if (line.type === "compaction_start") {
+			const reason = line.reason === "manual" || line.reason === "overflow" || line.reason === "threshold"
+				? line.reason
+				: "threshold";
+			session.compaction = { reason, startedAt: Date.now() };
+		} else if (line.type === "compaction_end") {
+			const reason = line.reason === "manual" || line.reason === "overflow" || line.reason === "threshold"
+				? line.reason
+				: "threshold";
+			const result = line.result && typeof line.result === "object" ? line.result as Record<string, unknown> : null;
+			session.lastCompaction = {
+				reason,
+				...(typeof result?.tokensBefore === "number" ? { tokensBefore: result.tokensBefore } : {}),
+				...(typeof result?.estimatedTokensAfter === "number" ? { estimatedTokensAfter: result.estimatedTokensAfter } : {}),
+				completedAt: Date.now(),
+			};
+			session.compaction = null;
+		}
+
 		if (line.type === "agent_start") {
 			// The agent run as a whole (possibly multiple turns). Mirror the
 			// client's isStreaming so a tab refresh can recover it from the

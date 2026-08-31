@@ -117,6 +117,17 @@ app.get("/api/projects", (_req, res) => {
 });
 
 /**
+ * GET /api/agent-status
+ *
+ * Local read-only lifecycle snapshot for Mavali Shed. This is a transport
+ * projection of pi children already owned by the session registry; it does
+ * not interpret prompts or run agent logic.
+ */
+app.get("/api/agent-status", (_req, res) => {
+	res.json({ sessions: registry.statusSnapshot() });
+});
+
+/**
  * GET /api/projects/:id/instructions
  * Returns the project's AGENTS.md text (empty string if absent). Used by
  * the project editor modal to pre-fill the instructions textarea.
