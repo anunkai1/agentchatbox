@@ -732,19 +732,26 @@ class SessionRegistry {
 		// reattach to reconstruct an in-flight assistant message whose
 		// `message_start` the client missed while disconnected.
 		if (line.type === "compaction_start") {
-			const reason = line.reason === "manual" || line.reason === "overflow" || line.reason === "threshold"
-				? line.reason
-				: "threshold";
+			const reason =
+				line.reason === "manual" || line.reason === "overflow" || line.reason === "threshold"
+					? line.reason
+					: "threshold";
 			session.compaction = { reason, startedAt: Date.now() };
 		} else if (line.type === "compaction_end") {
-			const reason = line.reason === "manual" || line.reason === "overflow" || line.reason === "threshold"
-				? line.reason
-				: "threshold";
-			const result = line.result && typeof line.result === "object" ? line.result as Record<string, unknown> : null;
+			const reason =
+				line.reason === "manual" || line.reason === "overflow" || line.reason === "threshold"
+					? line.reason
+					: "threshold";
+			const result =
+				line.result && typeof line.result === "object"
+					? (line.result as Record<string, unknown>)
+					: null;
 			session.lastCompaction = {
 				reason,
 				...(typeof result?.tokensBefore === "number" ? { tokensBefore: result.tokensBefore } : {}),
-				...(typeof result?.estimatedTokensAfter === "number" ? { estimatedTokensAfter: result.estimatedTokensAfter } : {}),
+				...(typeof result?.estimatedTokensAfter === "number"
+					? { estimatedTokensAfter: result.estimatedTokensAfter }
+					: {}),
 				completedAt: Date.now(),
 			};
 			session.compaction = null;
