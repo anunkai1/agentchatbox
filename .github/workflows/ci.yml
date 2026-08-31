@@ -24,6 +24,11 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Lint (biome)
+        # Run the cheapest source gate first so formatting failures do not
+        # spend CI time on TypeScript analysis or the test/build stages.
+        run: npm run lint
+
       - name: Typecheck
         # Runs both server and client configs. `npm run typecheck` chains
         # the two tsc invocations; client side was previously excluded
@@ -31,11 +36,6 @@ jobs:
         # were fixed when main.ts was split into the dom/render/slashes/
         # voice/state modules.
         run: npm run typecheck
-
-      - name: Lint (biome)
-        # Check application and bundled pi-extension source. Scripts remain
-        # outside this gate because they are standalone maintenance tooling.
-        run: npm run lint
 
       - name: Test
         run: npm test -- --reporter=verbose 2>&1
