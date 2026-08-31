@@ -19,7 +19,6 @@ import { saveSessionPrefs } from "./prefs.js";
 import {
 	appendError,
 	appendNode,
-	autoSize,
 	openProjectEditor,
 	refreshStatus,
 	renderShell,
