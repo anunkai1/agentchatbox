@@ -55,7 +55,10 @@ app.use(express.json({ limit: "2mb", strict: true }));
 
 // Lightweight access log so we can see what the browser is actually doing.
 app.use((req, _res, next) => {
-	if (req.url.startsWith("/api/")) {
+	// Shed polls this internal lifecycle projection over loopback. Logging
+	// every unchanged snapshot adds tens of thousands of lines per day without
+	// diagnostic value; all user-facing API traffic remains logged.
+	if (req.url.startsWith("/api/") && req.path !== "/api/agent-status") {
 		log.info("http request", {
 			method: req.method,
 			// Never log query strings: /api/file paths and semantic-search text
