@@ -628,7 +628,7 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 	bar.append(
 		makeMessageActionButton("copy", "Copy this answer", (button) => {
 			const message = getMessage();
-			if (!message || message.kind !== "assistant" || !message.text.trim()) return;
+			if (message?.kind !== "assistant" || !message.text.trim()) return;
 			if (!services.copyText) return;
 			void services.copyText(message.text).then((ok) => {
 				button.classList.toggle("is-success", ok);
@@ -1221,7 +1221,7 @@ export function appendCompactionChip(
 	const k = (n: number): string => `${Math.round(n / 1000)}k`;
 	const why =
 		reason === "overflow"
-			? "context overflow — condensed history" + (willRetry ? " and resuming the cut-off turn" : "")
+			? `context overflow — condensed history${willRetry ? " and resuming the cut-off turn" : ""}`
 			: reason === "manual"
 				? "context compacted on request"
 				: "context near the limit — condensed history";
