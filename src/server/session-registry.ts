@@ -185,6 +185,43 @@ export interface LiveSession {
 	readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }>;
 }
 
+export interface AgentLifecycleStatus {
+	sessionId: string;
+	cwd?: string;
+	provider: string;
+	modelId: string;
+	busy: boolean;
+	streaming: boolean;
+	compaction: LiveSession["compaction"];
+	lastCompaction: LiveSession["lastCompaction"];
+}
+
+type StatusSession = Pick<
+	LiveSession,
+	"ready" | "init" | "busy" | "streaming" | "compaction" | "lastCompaction"
+>;
+
+/** Pure transport projection, split out so its public contract is regression-tested. */
+export function buildStatusSnapshot(
+	entries: Iterable<readonly [string, StatusSession]>,
+): AgentLifecycleStatus[] {
+	const out: AgentLifecycleStatus[] = [];
+	for (const [id, session] of entries) {
+		if (!id || !session.ready) continue;
+		out.push({
+			sessionId: id,
+			cwd: session.init.cwd,
+			provider: session.init.provider,
+			modelId: session.init.modelId,
+			busy: session.busy,
+			streaming: session.streaming,
+			compaction: session.compaction,
+			lastCompaction: session.lastCompaction,
+		});
+	}
+	return out;
+}
+
 class SessionRegistry {
 	/** Every live `pi` child, keyed by session id. */
 	private readonly entries = new Map<string, LiveSession>();
@@ -228,22 +265,8 @@ class SessionRegistry {
 	}
 
 	/** Read-only lifecycle snapshot for local status consumers such as Shed. */
-	statusSnapshot(): Array<Record<string, unknown>> {
-		const out: Array<Record<string, unknown>> = [];
-		for (const [id, s] of this.entries) {
-			if (!id || !s.ready) continue;
-			out.push({
-				sessionId: id,
-				cwd: s.init.cwd,
-				provider: s.init.provider,
-				modelId: s.init.modelId,
-				busy: s.busy,
-				streaming: s.streaming,
-				compaction: s.compaction,
-				lastCompaction: s.lastCompaction,
-			});
-		}
-		return out;
+	statusSnapshot(): AgentLifecycleStatus[] {
+		return buildStatusSnapshot(this.entries);
 	}
 
 	stats(): { live: number; pending: number; limit: number } {
