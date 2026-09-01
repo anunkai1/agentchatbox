@@ -127,7 +127,7 @@ app.get("/api/projects", (_req, res) => {
  * not interpret prompts or run agent logic.
  */
 app.get("/api/agent-status", (_req, res) => {
-	res.json({ sessions: registry.statusSnapshot() });
+	res.json({ generatedAt: new Date().toISOString(), sessions: registry.statusSnapshot() });
 });
 
 /**
