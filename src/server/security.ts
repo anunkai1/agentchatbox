@@ -37,3 +37,38 @@ export function isAllowedWsOrigin(origin: string | undefined): boolean {
 	if (!origin) return config.allowMissingWsOrigin;
 	return config.allowedOrigins.has(origin);
 }
+
+/**
+ * Market-data hosts reachable from pages under /experiments/. The app CSP
+ * keeps connect-src 'self' for everything else; experiments are self-contained
+ * static pages that fetch public crypto APIs directly from the browser.
+ */
+const EXPERIMENT_CONNECT_SRC = [
+	"https://fapi.binance.com",
+	"https://api.binance.com",
+	"https://api.hyperliquid.xyz",
+	"wss://fstream.binance.com",
+	"wss://api.hyperliquid.xyz",
+	"wss://stream.binance.com",
+];
+
+export function experimentSecurityHeaders(req: Request, res: Response, next: NextFunction): void {
+	if (req.path === "/experiments" || req.path.startsWith("/experiments/")) {
+		res.setHeader(
+			"Content-Security-Policy",
+			[
+				"default-src 'self'",
+				"base-uri 'none'",
+				"frame-ancestors 'none'",
+				"form-action 'self'",
+				"object-src 'none'",
+				"script-src 'self'",
+				"style-src 'self' 'unsafe-inline'",
+				"img-src 'self' data: blob: https:",
+				`connect-src 'self' ${EXPERIMENT_CONNECT_SRC.join(" ")}`,
+				"font-src 'self'",
+			].join("; "),
+		);
+	}
+	next();
+}
