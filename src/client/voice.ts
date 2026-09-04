@@ -10,7 +10,7 @@
  *     paste the transcript into the input
  */
 
-import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
+import { synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
 import {
@@ -172,123 +172,24 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 	const controller = new AbortController();
 	activeController = controller;
 
-	// Chunked streaming playback state for this utterance. pi-voice-server
-	// /tts/stream synthesizes text in ~500-char chunks and writes each
-	// chunk's WAV the moment it's ready; we push arriving blobs into `queue`
-	// and pump them through the shared <audio> one at a time — so the first
-	// chunk starts playing long before the rest is synthesized, instead of
-	// stalling for many seconds on a long reply.
-	const queue: Blob[] = [];
-	let streamDone = false;
-	let started = false;
+	// Use the whole-utterance endpoint rather than streaming individual WAV
+	// chunks. Kokoro still chunks internally to stay within its context window,
+	// but the server concatenates those chunks before returning one WAV. This
+	// avoids browser source-swaps and queue-underflow gaps during long replies,
+	// at the cost of waiting for the full synthesis before playback starts.
 	// Clear any leftover user-pause intent from a previous utterance so this
-	// one starts playing immediately. (pauseVoice() sets this; it must not
-	// carry over — otherwise the first chunk would queue but never play.)
+	// one starts playing immediately.
 	userPaused = false;
 
-	// Play the next queued blob if the <audio> element is free. Called both
-	// when a chunk arrives (from the stream loop) and when the previous
-	// chunk finishes (from onended). No-op if something is still playing or
-	// if this utterance has been superseded by stop / a newer speak.
-	const playFromQueue = (): void => {
-		if (gen !== speakGeneration) return;
-		// Don't advance to the next chunk while the user has paused — let
-		// arriving chunks pile up in the queue and resumeVoice() will pump
-		// them once the current (paused) chunk finishes after a resume.
-		if (userPaused) return;
-		if (!audio.paused) return; // current chunk still playing — wait for ended
-		const blob = queue.shift();
-		if (!blob) return; // underflow (waiting for next chunk) or done
-		const url = URL.createObjectURL(blob);
-		// Keep the previous object URL alive until the new src is set, then
-		// revoke it — pausing/revoking early can make Android's media session
-		// drop the element mid-playback.
-		if (activeObjectUrl && activeObjectUrl !== url) URL.revokeObjectURL(activeObjectUrl);
-		activeObjectUrl = url;
-		audio.src = url;
-		audio.playbackRate = state.ttsSpeed;
-		void audio.play().catch((err) => {
-			if (err instanceof DOMException && err.name === "AbortError") return;
-			appendError(`tts play failed: ${err instanceof Error ? err.message : String(err)}`);
-		});
-		if (!started) {
-			started = true;
-			// Playback has begun — flip the button from spinner to ⏹.
-			if (gen === speakGeneration) setSpeakBtnState(currentSpeakSrc, "playing");
-			// Drop the TTS banner now that audio is actually playing — the
-			// status bar takes over with "♪ playing".
-			if (gen === speakGeneration) hideToast();
-		}
-	};
-	// Tear down after the last chunk finishes (or on a clean end with nothing
-	// produced). Revokes the final object URL and resets button + source.
-	const finish = (): void => {
-		if (gen !== speakGeneration) return;
-		if (activeObjectUrl) {
-			URL.revokeObjectURL(activeObjectUrl);
-			activeObjectUrl = null;
-		}
-		audio.onended = null;
-		setSpeakBtnState(currentSpeakSrc, "idle");
-		currentSpeakSrc = null;
-		// Nothing more is coming — clear the banner (covers the zero-chunks
-		// case where playback never started to hide it).
-		hideToast();
-	};
-	// Chain chunks: when one finishes, play the next; if none are queued and
-	// the stream is still open we simply wait (underflow) — the next chunk to
-	// arrive will call playFromQueue() itself. Only when the stream is done
-	// AND the queue is empty do we finalize.
-	audio.onended = () => {
-		if (gen !== speakGeneration) return;
-		if (queue.length > 0) playFromQueue();
-		else if (streamDone) finish();
-	};
-
 	try {
-		// Prefer the streaming endpoint: it lets us start playing the first
-		// chunk immediately. If it's unavailable (old server, or
-		// a transient failure) and nothing has played yet, fall back to the
-		// whole-blob /api/tts path below.
-		for await (const blob of streamSynthesizeSpeech(
-			spoken,
-			state.ttsVoice ?? undefined,
-			controller.signal,
-		)) {
-			// Stop was pressed mid-stream — drop the rest, don't play.
-			if (gen !== speakGeneration) return;
-			queue.push(blob);
-			playFromQueue();
-		}
-		streamDone = true;
-		// Stream finished. If playback already drained (or never started, e.g.
-		// zero chunks), finalize now; otherwise the running chunk's onended
-		// will finish when it ends.
-		if (!started || (audio.paused && queue.length === 0)) finish();
+		await playWholeBlob(audio, spoken, gen, controller);
 	} catch (err) {
-		// stopAllVoice() aborted the stream fetch on purpose — reset quietly.
+		// stopAllVoice() aborted synthesis on purpose — reset quietly.
 		if (err instanceof DOMException && err.name === "AbortError") {
 			setSpeakBtnState(currentSpeakSrc, "idle");
 			currentSpeakSrc = null;
 			hideToast();
 			return;
-		}
-		// If the stream failed before any audio played, fall back to the
-		// classic whole-blob synthesis once (covers an old pi-voice-server
-		// without /tts/stream).
-		if (!started) {
-			try {
-				await playWholeBlob(audio, spoken, gen, controller);
-				return;
-			} catch (err2) {
-				if (!(err2 instanceof DOMException && err2.name === "AbortError")) {
-					appendError(`tts failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
-				}
-				setSpeakBtnState(currentSpeakSrc, "idle");
-				currentSpeakSrc = null;
-				hideToast();
-				return;
-			}
 		}
 		appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
 		setSpeakBtnState(currentSpeakSrc, "idle");
@@ -302,11 +203,9 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 }
 
 /**
- * Whole-utterance fallback: synthesize the entire text in one /api/tts
- * request and play the resulting single WAV on the shared <audio>. Used
- * when the streaming endpoint is unavailable (old pi-voice-server).
- * Mirrors the original non-streaming
- * speakText() lifecycle so the fallback path behaves exactly as before.
+ * Whole-utterance playback: synthesize the entire text in one /api/tts
+ * request and play the resulting single WAV on the shared <audio>. Kokoro
+ * still chunks internally, but the browser receives one continuous asset.
  */
 async function playWholeBlob(
 	audio: HTMLAudioElement,
