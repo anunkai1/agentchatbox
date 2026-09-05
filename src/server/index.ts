@@ -29,7 +29,7 @@ import { log } from "./logger.js";
 import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
-import { securityHeaders, experimentSecurityHeaders } from "./security.js";
+import { experimentSecurityHeaders, securityHeaders } from "./security.js";
 import {
 	findPiSessionFile,
 	findSessionCwd,
