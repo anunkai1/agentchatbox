@@ -8,7 +8,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({ generateSummaryWithUsage }))
 
 import registerLocalQwenCompaction from "../extensions/local-qwen-compaction/index.js";
 
-type CompactHandler = (event: any, ctx: any) => Promise<any>;
+type CompactHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
 
 function register(): CompactHandler {
 	let handler: CompactHandler | undefined;
@@ -16,9 +16,20 @@ function register(): CompactHandler {
 		on(name: string, candidate: CompactHandler) {
 			if (name === "session_before_compact") handler = candidate;
 		},
-	} as any);
+	} as unknown as Parameters<typeof registerLocalQwenCompaction>[0]);
 	if (!handler) throw new Error("session_before_compact handler was not registered");
 	return handler;
+}
+
+function completeSummary() {
+	return [
+		"## Goal\nfinish the task",
+		"## Constraints & Preferences\nkeep the existing behaviour",
+		"## Progress\n### Done\n- [x] checkpoint",
+		"## Key Decisions\n- Keep the safe path",
+		"## Next Steps\n1. Verify the change",
+		"## Critical Context\n- Tests are required",
+	].join("\n\n");
 }
 
 function fixture() {
@@ -73,7 +84,7 @@ describe("local Qwen compaction extension", () => {
 
 	it("uses one bounded non-reasoning summary and preserves compaction metadata", async () => {
 		generateSummaryWithUsage.mockResolvedValue({
-			text: "checkpoint\n",
+			text: completeSummary(),
 			usage: { input: 10, output: 5 },
 		});
 		const handler = register();
@@ -90,12 +101,12 @@ describe("local Qwen compaction extension", () => {
 		expect(args[2]).toBe(2_560);
 		expect(args[4]).toEqual({ "x-test": "yes" });
 		expect(args[6]).toContain("retain deployment details");
+		expect(args[6]).toContain("Prioritise unresolved user requirements");
 		expect(args[7]).toBe("previous");
 		expect(args[8]).toBe("off");
 		expect(result).toEqual({
 			compaction: {
-				summary:
-					"checkpoint\n\n<read-files>\na.ts\nz.ts\n</read-files>\n\n<modified-files>\nchanged.ts\nedited.ts\n</modified-files>",
+				summary: `${completeSummary()}\n\n<read-files>\na.ts\nz.ts\n</read-files>\n\n<modified-files>\nchanged.ts\nedited.ts\n</modified-files>`,
 				firstKeptEntryId: "kept-1",
 				tokensBefore: 90_000,
 				usage: { input: 10, output: 5 },
@@ -105,5 +116,39 @@ describe("local Qwen compaction extension", () => {
 				},
 			},
 		});
+	});
+
+	it("rejects an incomplete checkpoint so Pi uses its standard fallback", async () => {
+		generateSummaryWithUsage.mockResolvedValue({
+			text: "## Goal\nstarted but cut off",
+			usage: { input: 10, output: 5 },
+		});
+		const handler = register();
+		const { event, ctx } = fixture();
+
+		expect(await handler(event, ctx)).toBeUndefined();
+	});
+
+	it("rejects a checkpoint that reaches the output cap", async () => {
+		generateSummaryWithUsage.mockResolvedValue({
+			text: completeSummary(),
+			usage: { input: 10, output: 2_048 },
+		});
+		const handler = register();
+		const { event, ctx } = fixture();
+
+		expect(await handler(event, ctx)).toBeUndefined();
+	});
+
+	it("passes the previous checkpoint back for iterative compaction", async () => {
+		generateSummaryWithUsage.mockResolvedValue({
+			text: completeSummary(),
+			usage: { input: 10, output: 5 },
+		});
+		const handler = register();
+		const { event, ctx } = fixture();
+
+		await handler(event, ctx);
+		expect(generateSummaryWithUsage.mock.calls[0][7]).toBe("previous");
 	});
 });

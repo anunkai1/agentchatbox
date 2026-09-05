@@ -10,6 +10,27 @@ const LOCAL_MODEL_ID = "qwen3.8-27b-ud-q3";
 // 2,048-token cap: enough for the structured checkpoint, without making the
 // context cleanup look like a stuck chat.
 const SUMMARY_RESERVE_TOKENS = 2_560;
+const SUMMARY_MAX_TOKENS = Math.floor(0.8 * SUMMARY_RESERVE_TOKENS);
+const REQUIRED_CHECKPOINT_SECTIONS = [
+	"## Goal",
+	"## Constraints & Preferences",
+	"## Progress",
+	"## Key Decisions",
+	"## Next Steps",
+	"## Critical Context",
+] as const;
+
+/**
+ * generateSummaryWithUsage intentionally exposes only text and usage, not the
+ * provider stop reason. Treat a maxed-out response or a missing required
+ * section as an incomplete checkpoint and let Pi's safer standard compactor
+ * handle it instead of persisting a silently truncated handover.
+ */
+function isCompleteCheckpoint(summary: string, usage: { output?: number }): boolean {
+	const text = summary.trim();
+	if (!text || (usage.output ?? 0) >= SUMMARY_MAX_TOKENS) return false;
+	return REQUIRED_CHECKPOINT_SECTIONS.every((section) => text.includes(section));
+}
 
 function appendFileLists(
 	summary: string,
@@ -67,6 +88,7 @@ export default function registerLocalQwenCompaction(pi: ExtensionAPI): void {
 			const instructions = [
 				event.customInstructions,
 				"Be concise: fit the entire checkpoint in 2,048 tokens or fewer. Preserve exact paths, commands, decisions, blockers, and next steps.",
+				"Prioritise unresolved user requirements and constraints, test outcomes and failures, current work, blockers, and the exact next action. Do not omit a required section; do not end mid-sentence or mid-list.",
 			]
 				.filter(Boolean)
 				.join("\n\n");
@@ -83,7 +105,14 @@ export default function registerLocalQwenCompaction(pi: ExtensionAPI): void {
 				undefined,
 				auth.env,
 			);
-			if (event.signal.aborted || !result.text.trim()) return;
+			if (event.signal.aborted || !isCompleteCheckpoint(result.text, result.usage)) {
+				if (!event.signal.aborted) {
+					console.warn(
+						"[local-qwen-compaction] checkpoint was incomplete; falling back to pi's standard compactor",
+					);
+				}
+				return;
+			}
 
 			const checkpoint = appendFileLists(result.text, event.preparation.fileOps);
 			return {
