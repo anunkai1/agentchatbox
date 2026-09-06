@@ -10,6 +10,11 @@
  *     paste the transcript into the input
  */
 
+import {
+	MAX_PROMPT_IMAGE_BYTES,
+	MAX_PROMPT_IMAGE_TOTAL_BYTES,
+	MAX_PROMPT_IMAGES,
+} from "../shared/limits.js";
 import { synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
@@ -388,10 +393,8 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 // File attach
 // ---------------------------------------------------------------------------
 
-// Matches the server's bounded structured-image transport. Larger images are
-// still uploaded as ordinary files, but are not attached as model image input.
-const MAX_PROMPT_IMAGE_BYTES = 25 * 1024 * 1024;
-
+// Matches the server's bounded structured-image transport. Images above the
+// per-image limit are rejected before any upload begins.
 /**
  * Shared core: take a list of File objects (from the file picker, a
  * paste, or a drag-and-drop) and upload each one, remembering its private
@@ -404,6 +407,18 @@ export async function attachFiles(files: File[]): Promise<void> {
 	if (files.length === 0) return;
 	const ta = $<HTMLTextAreaElement>("#input");
 	for (const file of files) {
+		if (file.type.startsWith("image/") && file.size > MAX_PROMPT_IMAGE_BYTES) {
+			appendError(
+				`Cannot attach ${file.name}: image is ${formatFileSize(file.size)}, above the ${formatFileSize(MAX_PROMPT_IMAGE_BYTES)} per-image limit.`,
+			);
+			continue;
+		}
+		if (file.type.startsWith("image/") && state.uploadedImages.size >= MAX_PROMPT_IMAGES) {
+			appendError(
+				`Cannot attach ${file.name}: at most ${MAX_PROMPT_IMAGES} images can be attached.`,
+			);
+			continue;
+		}
 		const uploadController = new AbortController();
 		const uploadPreview = addFileUploadPreview(file.name, file.size, () => {
 			uploadController.abort();
@@ -425,6 +440,7 @@ export async function attachFiles(files: File[]): Promise<void> {
 				state.uploadedImages.set(res.url, {
 					mimeType: res.mimeType,
 					filename: res.filename,
+					size: res.size,
 				});
 			}
 			if (isImage) {
@@ -456,6 +472,22 @@ export async function attachFiles(files: File[]): Promise<void> {
 			uploadCount--;
 		}
 	}
+}
+
+export function promptImageLimitError(): string | null {
+	const total = Array.from(state.uploadedImages.values()).reduce(
+		(sum, image) => sum + image.size,
+		0,
+	);
+	if (total > MAX_PROMPT_IMAGE_TOTAL_BYTES) {
+		return `The attached images total ${formatFileSize(total)}, above the ${formatFileSize(MAX_PROMPT_IMAGE_TOTAL_BYTES)} combined limit.`;
+	}
+	return null;
+}
+
+function formatFileSize(bytes: number): string {
+	if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+	return `${Math.max(1, Math.ceil(bytes / 1024))} KiB`;
 }
 
 export async function handleFileAttach(e: Event): Promise<void> {

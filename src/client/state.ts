@@ -201,7 +201,7 @@ export interface AppState {
 	 * URL is sent as a small transport reference; the server resolves the
 	 * already-uploaded file into pi's image block.
 	 */
-	uploadedImages: Map<string, { mimeType: string; filename: string }>;
+	uploadedImages: Map<string, { mimeType: string; filename: string; size: number }>;
 	/**
 	 * Connection state reported by the WS client. "stalled" means the
 	 * socket reports OPEN but no messages (including heartbeats) have

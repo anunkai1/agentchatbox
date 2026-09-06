@@ -62,12 +62,20 @@ export function uploadFile(
 			cleanupAbortListener();
 			const text = xhr.responseText;
 			if (xhr.status < 200 || xhr.status >= 300) {
+				let serverError = "";
+				try {
+					const body = JSON.parse(text) as { error?: unknown };
+					if (typeof body.error === "string") serverError = body.error;
+				} catch {
+					/* fall back to the status-specific message below */
+				}
 				const detail =
-					xhr.status === 413
+					serverError ||
+					(xhr.status === 413
 						? "file is larger than the server upload limit"
 						: text.trim().startsWith("<")
 							? "the server rejected the upload"
-							: text.trim().slice(0, 300) || "the server rejected the upload";
+							: text.trim().slice(0, 300) || "the server rejected the upload");
 				reject(new Error(`upload failed (${xhr.status}): ${detail}`));
 				return;
 			}

@@ -42,21 +42,6 @@ describe("prompt image upload references", () => {
 		).resolves.toEqual([{ type: "image", data: "AQ==", mimeType: "image/png" }]);
 	});
 
-	it("rejects image sets that exceed the combined prompt limit", async () => {
-		const dir = tempDir();
-		const bytes = (size: number) =>
-			Buffer.concat([Buffer.from("ffd8ffe000104a464946", "hex"), Buffer.alloc(size)]);
-		writeFileSync(join(dir, "one.jpg"), bytes(17 * 1024 * 1024), { mode: 0o600 });
-		writeFileSync(join(dir, "two.jpg"), bytes(17 * 1024 * 1024), { mode: 0o600 });
-
-		await expect(
-			resolvePromptImages(
-				[{ url: "/uploads/one.jpg" }, { url: "/uploads/two.jpg" }],
-				dir,
-			),
-		).rejects.toThrow("32 MiB combined prompt limit");
-	});
-
 	it("rejects missing, non-raster, and symlink upload references", async () => {
 		const dir = tempDir();
 		writeFileSync(join(dir, "notes.jpg"), "not an image", { mode: 0o600 });

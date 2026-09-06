@@ -115,10 +115,10 @@ export class PiProcess extends EventEmitter {
 	 * A prompt containing several uploaded images is echoed by pi as one
 	 * JSONL message. The image bytes are base64-encoded, so seven ordinary
 	 * 3–4 MiB phone photos can legitimately produce a line just over 32 MiB.
-	 * Keep a finite bound, but leave room for the bounded aggregate image
-	 * allowance enforced by prompt-images.ts.
+	 * The prompt-image aggregate is capped at 500 MiB; base64 expands that to
+	 * roughly 667 MiB, so the RPC framing bound leaves room for JSON overhead.
 	 */
-	private static readonly MAX_STDOUT_LINE_CHARS = 64 * 1024 * 1024;
+	private static readonly MAX_STDOUT_LINE_CHARS = 768 * 1024 * 1024;
 	/**
 	 * True once the child has either been killed (`kill()` called) OR
 	 * exited on its own (exit handler flips this). Read by callers

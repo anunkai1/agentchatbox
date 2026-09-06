@@ -95,6 +95,7 @@ import {
 	handleVoiceRecord,
 	isUploadInProgress,
 	pauseVoice,
+	promptImageLimitError,
 	resumeVoice,
 	speakText,
 	stopAllVoice,
@@ -223,6 +224,12 @@ function handleSend(): void {
 	closeSlashMenu();
 	if (isUploadInProgress()) {
 		showToast("Upload in progress — wait for it to finish before sending.");
+		return;
+	}
+	const imageLimitError = promptImageLimitError();
+	if (imageLimitError) {
+		appendError(imageLimitError);
+		showToast(imageLimitError, "warning");
 		return;
 	}
 	const input = $<HTMLTextAreaElement>("#input");
