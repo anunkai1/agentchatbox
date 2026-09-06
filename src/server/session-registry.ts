@@ -34,6 +34,7 @@
  * pipe reattachable, no smarter.
  */
 
+import type { Message } from "@earendil-works/pi-ai";
 import type { WebSocket } from "ws";
 import type {
 	ContextUsage,
@@ -45,7 +46,7 @@ import type {
 import { config, getServerApiKey } from "./config.js";
 import { log } from "./logger.js";
 import { type PiProcess, spawnPi } from "./pi-process.js";
-import { readPiSessionMessages } from "./session-list.js";
+import { browserReplayMessage, readPiSessionMessages } from "./session-list.js";
 import { safeUnref } from "./util.js";
 
 /**
@@ -220,6 +221,19 @@ export function buildStatusSnapshot(
 		});
 	}
 	return out;
+}
+
+/**
+ * Remove binary image blocks from events crossing to the browser. Pi still
+ * receives and persists the original bytes, but the renderer only needs
+ * roles, text and metadata. This prevents a reconnect from sending the
+ * same multi-megabyte image payload back over WebSocket.
+ */
+function browserEvent(event: Record<string, unknown>): Record<string, unknown> {
+	const message = event.message;
+	if (!message || typeof message !== "object" || Array.isArray(message)) return event;
+	const safeMessage = browserReplayMessage(message as Message);
+	return safeMessage === message ? event : { ...event, message: safeMessage };
 }
 
 class SessionRegistry {
@@ -838,7 +852,7 @@ class SessionRegistry {
 			for (const listener of this.sessionInfoChangedListeners) listener();
 		}
 
-		deliver(session.ws, { type: "event", event: line });
+		deliver(session.ws, { type: "event", event: browserEvent(line) });
 	}
 
 	private sendNextThinkingChange(session: LiveSession): void {
@@ -887,7 +901,7 @@ class SessionRegistry {
 		// double-render it.
 		if (session.busy) {
 			for (const ev of session.currentTurn) {
-				deliver(ws, { type: "event", event: ev as Record<string, unknown> });
+				deliver(ws, { type: "event", event: browserEvent(ev as Record<string, unknown>) });
 			}
 		}
 	}

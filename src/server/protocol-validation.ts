@@ -3,6 +3,7 @@ import type { ClientMessage, PromptImage, ThinkingLevel } from "../shared/protoc
 const MAX_PROMPT_CHARS = 1_000_000;
 const MAX_INSTRUCTIONS_CHARS = 256_000;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_IMAGE_BASE64_CHARS = Math.ceil(MAX_IMAGE_BYTES / 3) * 4;
 const MAX_IMAGES = 8;
 const THINKING_LEVELS = new Set<ThinkingLevel>([
@@ -82,6 +83,7 @@ function images(value: unknown): PromptImage[] | undefined {
 	if (!Array.isArray(value) || value.length > MAX_IMAGES) {
 		throw new ProtocolError(`images must be an array of at most ${MAX_IMAGES} entries`);
 	}
+	let totalInlineBytes = 0;
 	return value.map((entry, index) => {
 		const img = object(entry);
 		if (img.url !== undefined) {
@@ -100,8 +102,13 @@ function images(value: unknown): PromptImage[] | undefined {
 		if (!MIME_RE.test(mimeType) || mimeType.toLowerCase() === "image/svg+xml") {
 			throw new ProtocolError(`images[${index}].mimeType is not supported`);
 		}
-		if (!BASE64_RE.test(data) || Buffer.byteLength(data, "base64") > MAX_IMAGE_BYTES) {
+		const imageBytes = Buffer.byteLength(data, "base64");
+		if (!BASE64_RE.test(data) || imageBytes > MAX_IMAGE_BYTES) {
 			throw new ProtocolError(`images[${index}].data is not valid bounded base64`);
+		}
+		totalInlineBytes += imageBytes;
+		if (totalInlineBytes > MAX_TOTAL_IMAGE_BYTES) {
+			throw new ProtocolError("image attachments exceed the 32 MiB combined prompt limit");
 		}
 		return { data, mimeType };
 	});

@@ -111,7 +111,14 @@ export class PiProcess extends EventEmitter {
 	private stdoutBuf = "";
 	private stderrBuf = "";
 	private killTimer: ReturnType<typeof setTimeout> | null = null;
-	private static readonly MAX_STDOUT_LINE_CHARS = 32 * 1024 * 1024;
+	/**
+	 * A prompt containing several uploaded images is echoed by pi as one
+	 * JSONL message. The image bytes are base64-encoded, so seven ordinary
+	 * 3–4 MiB phone photos can legitimately produce a line just over 32 MiB.
+	 * Keep a finite bound, but leave room for the bounded aggregate image
+	 * allowance enforced by prompt-images.ts.
+	 */
+	private static readonly MAX_STDOUT_LINE_CHARS = 64 * 1024 * 1024;
 	/**
 	 * True once the child has either been killed (`kill()` called) OR
 	 * exited on its own (exit handler flips this). Read by callers
@@ -310,6 +317,11 @@ export class PiProcess extends EventEmitter {
 	}
 
 	private handleStdout(chunk: string): void {
+		// A size violation calls kill(), which marks the process as dead while
+		// already-buffered stdout chunks may still be delivered. Ignore those
+		// chunks so one bad line produces one error rather than a burst of
+		// duplicate errors in the browser.
+		if (this.killed) return;
 		this.stdoutBuf += chunk;
 		if (this.stdoutBuf.length > PiProcess.MAX_STDOUT_LINE_CHARS && !this.stdoutBuf.includes("\n")) {
 			this.emit("error", new Error("pi emitted an oversized RPC line"));
