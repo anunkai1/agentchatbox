@@ -2,12 +2,14 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
+import {
+	MAX_PROMPT_IMAGE_BYTES,
+	MAX_PROMPT_IMAGE_TOTAL_BYTES,
+	MAX_PROMPT_IMAGES,
+} from "../shared/limits.js";
 import type { PromptImage } from "../shared/protocol.js";
 import { config } from "./config.js";
 
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-/** Keep the single pi RPC message bounded when several images are attached. */
-export const MAX_PROMPT_IMAGE_TOTAL_BYTES = 32 * 1024 * 1024;
 const UPLOAD_URL_RE = /^\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]{0,255})$/;
 
 /** Identify the bounded raster formats accepted as prompt images from magic,
@@ -55,6 +57,9 @@ export async function resolvePromptImages(
 	uploadsDir = config.uploadsDir,
 ): Promise<ImageContent[] | undefined> {
 	if (!images || images.length === 0) return undefined;
+	if (images.length > MAX_PROMPT_IMAGES) {
+		throw new Error(`image attachments exceed the ${MAX_PROMPT_IMAGES}-image limit`);
+	}
 	const resolved: ImageContent[] = [];
 	let totalBytes = 0;
 
@@ -62,7 +67,7 @@ export async function resolvePromptImages(
 		if ("data" in image && image.data !== undefined) {
 			const imageBytes = Buffer.byteLength(image.data, "base64");
 			if (totalBytes + imageBytes > MAX_PROMPT_IMAGE_TOTAL_BYTES) {
-				throw new Error("image attachments exceed the 32 MiB combined prompt limit");
+				throw new Error("image attachments exceed the 500 MiB combined prompt limit");
 			}
 			totalBytes += imageBytes;
 			resolved.push({ type: "image", data: image.data, mimeType: image.mimeType });
@@ -79,11 +84,14 @@ export async function resolvePromptImages(
 
 		try {
 			const before = await handle.stat();
-			if (!before.isFile() || before.size <= 0 || before.size > MAX_IMAGE_BYTES) {
+			if (!before.isFile() || before.size <= 0) {
 				throw new Error("image attachment is not a bounded regular file");
 			}
+			if (before.size > MAX_PROMPT_IMAGE_BYTES) {
+				throw new Error("image attachment exceeds the 25 MiB per-image prompt limit");
+			}
 			if (totalBytes + before.size > MAX_PROMPT_IMAGE_TOTAL_BYTES) {
-				throw new Error("image attachments exceed the 32 MiB combined prompt limit");
+				throw new Error("image attachments exceed the 500 MiB combined prompt limit");
 			}
 			totalBytes += before.size;
 			const header = Buffer.alloc(16);
@@ -96,7 +104,7 @@ export async function resolvePromptImages(
 			if (
 				data.length !== before.size ||
 				after.size !== before.size ||
-				data.length > MAX_IMAGE_BYTES
+				data.length > MAX_PROMPT_IMAGE_BYTES
 			) {
 				throw new Error("image attachment changed while it was being read");
 			}
