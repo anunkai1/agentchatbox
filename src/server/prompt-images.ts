@@ -6,6 +6,8 @@ import type { PromptImage } from "../shared/protocol.js";
 import { config } from "./config.js";
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+/** Keep the single pi RPC message bounded when several images are attached. */
+export const MAX_PROMPT_IMAGE_TOTAL_BYTES = 32 * 1024 * 1024;
 const UPLOAD_URL_RE = /^\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]{0,255})$/;
 
 /** Identify the bounded raster formats accepted as prompt images from magic,
@@ -54,9 +56,15 @@ export async function resolvePromptImages(
 ): Promise<ImageContent[] | undefined> {
 	if (!images || images.length === 0) return undefined;
 	const resolved: ImageContent[] = [];
+	let totalBytes = 0;
 
 	for (const image of images) {
 		if ("data" in image && image.data !== undefined) {
+			const imageBytes = Buffer.byteLength(image.data, "base64");
+			if (totalBytes + imageBytes > MAX_PROMPT_IMAGE_TOTAL_BYTES) {
+				throw new Error("image attachments exceed the 32 MiB combined prompt limit");
+			}
+			totalBytes += imageBytes;
 			resolved.push({ type: "image", data: image.data, mimeType: image.mimeType });
 			continue;
 		}
@@ -74,6 +82,10 @@ export async function resolvePromptImages(
 			if (!before.isFile() || before.size <= 0 || before.size > MAX_IMAGE_BYTES) {
 				throw new Error("image attachment is not a bounded regular file");
 			}
+			if (totalBytes + before.size > MAX_PROMPT_IMAGE_TOTAL_BYTES) {
+				throw new Error("image attachments exceed the 32 MiB combined prompt limit");
+			}
+			totalBytes += before.size;
 			const header = Buffer.alloc(16);
 			const { bytesRead } = await handle.read(header, 0, header.length, 0);
 			const mimeType = detectPromptImageMime(header.subarray(0, bytesRead));

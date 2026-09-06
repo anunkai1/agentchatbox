@@ -146,6 +146,8 @@ Non-secret server settings go through `.env`; chat-provider availability comes f
 | `AUTO_TITLE_MODEL`             | active session model          | Optional `provider/modelId` used for automatic first-turn session titles |
 | `*_API_KEY`                    | (unset)                       | Optional: env keys for non-chat tools (e.g. `VENICE_API_KEY` for pi-venice-image, `GEMINI_API_KEY` for YouTube transcripts). Chat auth itself is NOT configured here — see below. |
 
+Prompt-image input is bounded to 25 MiB per image and 32 MiB combined. The pi RPC line limit is 64 MiB to allow for base64 expansion; binary image blocks are removed from browser replay traffic.
+
 Chat-model providers are authenticated via `pi` itself: run `pi auth login <provider>` once and the key is stored in `~/.pi/agent/auth.json`. agentchatbox reads that file live (`getServerApiKey` in `src/server/config.ts`) both to gate the picker and to decide which providers it may spawn a `pi` child for — so logging a provider in or out of `pi` adds or removes it in the UI on the next request, with no ACB restart and no second key store to keep in sync. The spawned `pi` child reads the same `auth.json` directly; ACB does **not** re-inject the key (verified: `pi --mode rpc` authenticates from `auth.json` alone). The `*_API_KEY` env vars above are therefore only for extensions/tools that need a key ACB doesn't pass on, not for chat auth. Only providers present in `auth.json` are exposed via `/api/models`.
 
 ## Endpoints

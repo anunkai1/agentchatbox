@@ -673,7 +673,7 @@ export function deletePiSession(cwd: string, sessionId: string): boolean {
  * Omitting both prevents large image-heavy sessions from crossing the socket
  * high-water mark and entering a reconnect/replay loop.
  */
-function browserReplayMessage(message: Message): Message {
+export function browserReplayMessage(message: Message): Message {
 	const candidate = message as unknown as {
 		role?: unknown;
 		content?: unknown;

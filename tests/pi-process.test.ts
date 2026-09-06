@@ -22,6 +22,40 @@ afterEach(() => {
 });
 
 describe("PiProcess", () => {
+	it("accepts a multi-image-sized RPC line", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "agentchatbox-pi-process-large-"));
+		tempDirs.push(dir);
+		const bin = join(dir, "fake-pi-large");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env node
+const data = "x".repeat(33 * 1024 * 1024);
+process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "user", content: [{ type: "image", data, mimeType: "image/jpeg" }] } }) + String.fromCharCode(10));
+setTimeout(() => {}, 1000);
+`,
+			{ mode: 0o755 },
+		);
+
+		const child = spawnPi({
+			bin,
+			provider: "zai",
+			modelId: "glm-5.2",
+			apiKey: "test-dummy",
+			cwd: dir,
+		});
+		children.push(child);
+
+		const event = await new Promise<Record<string, unknown>>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("timed out waiting for large RPC line")), 15_000);
+			child.on("event", (line) => {
+				clearTimeout(timer);
+				resolve(line);
+			});
+		});
+		const message = event.message as { content: Array<{ data: string }> };
+		expect(message.content[0].data).toHaveLength(33 * 1024 * 1024);
+	}, 15_000);
+
 	it("starts RPC children offline so startup probes cannot block a chat", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "agentchatbox-pi-process-"));
 		tempDirs.push(dir);
