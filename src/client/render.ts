@@ -273,7 +273,14 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		return el("div", { class: "row row-user row-steer" }, bubble);
 	}
 	if (m.kind === "assistant") {
-		const wrap = el("div", { class: "row row-assistant" });
+		const hasText = Boolean(m.text.trim());
+		const hasThinking = Boolean(state.showThinking && m.thinking.trim());
+		const internalOnly = !hasText;
+		const wrap = el("div", {
+			class: `row row-assistant${!hasText && !hasThinking ? " display-hidden" : ""}`,
+			"data-internal-only": internalOnly ? "1" : "0",
+			"aria-hidden": String(!hasText && !hasThinking),
+		});
 		const avatar = el("div", { class: "avatar" });
 		avatar.append(el("span", { class: "avatar-icon" }, "✦"));
 		wrap.append(avatar);
@@ -370,6 +377,14 @@ export function syncDisplayPreferences(): void {
 	for (const node of document.querySelectorAll<HTMLElement>("#messages .row-tool")) {
 		node.classList.toggle("display-hidden", toolsHidden);
 		node.setAttribute("aria-hidden", String(toolsHidden));
+	}
+	for (const node of document.querySelectorAll<HTMLElement>(
+		"#messages .row-assistant[data-internal-only=\"1\"]",
+	)) {
+		const hasThinking = Boolean(node.querySelector(".thinking-body")?.textContent?.trim());
+		const hidden = !state.showThinking || !hasThinking;
+		node.classList.toggle("display-hidden", hidden);
+		node.setAttribute("aria-hidden", String(hidden));
 	}
 }
 
@@ -1093,7 +1108,11 @@ export function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): voi
  * AND the thinking container so message_update can update both in place.
  */
 export function appendAssistantPlaceholder(): LiveAssistantDom {
-	const wrap = el("div", { class: "row row-assistant" });
+	const wrap = el("div", {
+		class: "row row-assistant display-hidden",
+		"data-internal-only": "1",
+		"aria-hidden": "true",
+	});
 	const avatar = el("div", { class: "avatar" });
 	avatar.append(el("span", { class: "avatar-icon" }, "✦"));
 	wrap.append(avatar);
