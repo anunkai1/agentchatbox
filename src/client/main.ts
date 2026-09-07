@@ -522,6 +522,15 @@ function paintStreamDom(p: { dom: LiveAssistantDom; text: string; thinking: stri
 	}
 	p.dom.thinkingWrap.classList.toggle("display-hidden", !state.showThinking);
 	p.dom.thinkingWrap.setAttribute("aria-hidden", String(!state.showThinking));
+	const row = p.dom.textPre.closest<HTMLElement>(".row-assistant");
+	if (row) {
+		const hasText = Boolean(p.text.trim());
+		const hasThinking = Boolean(state.showThinking && p.thinking.trim());
+		const hidden = !hasText && !hasThinking;
+		row.dataset.internalOnly = hasText ? "0" : "1";
+		row.classList.toggle("display-hidden", hidden);
+		row.setAttribute("aria-hidden", String(hidden));
+	}
 	if (wasPinned) scrollToBottom();
 }
 
@@ -923,23 +932,12 @@ function onEvent(event: Record<string, unknown>): void {
 			// from message_update) is non-empty. Treat either as removable so
 			// no frozen bubble lingers.
 			//
-			// IMPORTANT: the emptiness check must consider THINKING too. A
-			// turn that streams reasoning and then makes a tool call (no
-			// visible text) is not empty — it has a reasoning transcript the
-			// user wants to see. Without this, the thinking block gets
-			// yanked together with the row at message_end, and the user
-			// watches it appear, get pushed up by the tool card, and
-			// vanish.
-			//
-			// Logic note: the previous incarnation used `||` here, which
-			// was wrong — any single empty field would trigger removal, so
-			// the very case this guard exists to protect (thinking + tool
-			// call, text empty) still tripped it. The correct shape is
-			// AND-of-ANDs: the row is empty only when *both* the streaming-
-			// accumulated state AND the authoritative message_end payload
-			// have no text AND no thinking. That keeps the pi-voice-reply
-			// blanked turn and the error-retry paths working (no text, no
-			// thinking) while preserving `thinking + toolCall` rows.
+			// A turn that has no visible text can still contain thinking or
+			// tool-call context. The renderer hides the assistant shell when
+			// all of that internal detail is hidden, but we retain the raw
+			// message in state so changing the preference can reveal it
+			// immediately. Only genuinely empty assistant messages are
+			// removed here (spurious extension turns / provider errors).
 			let finalText = "";
 			let finalThinking = "";
 			if (m.role === "assistant") {
@@ -950,14 +948,18 @@ function onEvent(event: Record<string, unknown>): void {
 			}
 			const isEmptyError =
 				m.role === "assistant" && (m as { stopReason?: string }).stopReason === "error";
+			const hasRawText =
+				(lastAssistant?.kind === "assistant" && lastAssistant.text.trim().length > 0) ||
+				finalText.trim().length > 0;
+			const hasRawThinking =
+				(lastAssistant?.kind === "assistant" && lastAssistant.thinking.trim().length > 0) ||
+				finalThinking.trim().length > 0;
 			if (
 				m.role === "assistant" &&
 				lastAssistant &&
 				lastAssistant.kind === "assistant" &&
-				!lastAssistant.text.trim() &&
-				!lastAssistant.thinking.trim() &&
-				!finalText.trim() &&
-				!finalThinking.trim() &&
+				!hasRawText &&
+				!hasRawThinking &&
 				lastAssistantDom
 			) {
 				if (isEmptyError) {
