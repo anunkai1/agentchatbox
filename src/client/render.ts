@@ -279,7 +279,10 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		wrap.append(avatar);
 		const body = el("div", { class: "body" });
 		if (m.thinking) {
-			const t = el("div", { class: "thinking" });
+			const t = el("div", {
+				class: `thinking${state.showThinking ? "" : " display-hidden"}`,
+				"aria-hidden": String(!state.showThinking),
+			});
 			// Default: expanded (▾). Click to collapse.
 			t.append(el("span", { class: "thinking-toggle" }, "▾ thinking"));
 			const pre = el("pre", { class: "thinking-body" }, m.thinking);
@@ -315,7 +318,10 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		return wrap;
 	}
 	if (m.kind === "tool") {
-		const wrap = el("div", { class: "row row-tool" });
+		const wrap = el("div", {
+			class: `row row-tool${state.showToolCalls ? "" : " display-hidden"}`,
+			"aria-hidden": String(!state.showToolCalls),
+		});
 		const card = el("div", { class: "tool-card" });
 		const toolPath = toolPathFromArgs(m.args);
 		mountToolHead(card, m.name, m.args, toolPath);
@@ -351,6 +357,20 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	// remaining union is just the error case with `.text`.)
 	if (m.kind !== "error") return el("div", { class: "row" });
 	return el("div", { class: "row row-error" }, el("div", { class: "body" }, m.text));
+}
+
+/** Apply the current per-session display preferences to already-rendered rows. */
+export function syncDisplayPreferences(): void {
+	const thinkingHidden = !state.showThinking;
+	for (const node of document.querySelectorAll<HTMLElement>("#messages .thinking")) {
+		node.classList.toggle("display-hidden", thinkingHidden);
+		node.setAttribute("aria-hidden", String(thinkingHidden));
+	}
+	const toolsHidden = !state.showToolCalls;
+	for (const node of document.querySelectorAll<HTMLElement>("#messages .row-tool")) {
+		node.classList.toggle("display-hidden", toolsHidden);
+		node.setAttribute("aria-hidden", String(toolsHidden));
+	}
 }
 
 /**
@@ -1082,7 +1102,10 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	// message_update events stream in thinking content. If the model never
 	// emits thinking, the container stays empty and we remove it at
 	// message_end so it doesn't leave a stray "▾ thinking" header.
-	const thinkingWrap = el("div", { class: "thinking hidden-thinking" });
+	const thinkingWrap = el("div", {
+		class: `thinking hidden-thinking${state.showThinking ? "" : " display-hidden"}`,
+		"aria-hidden": String(!state.showThinking),
+	});
 	// Default expanded (▾). Click to collapse.
 	const thinkingToggle = el("span", { class: "thinking-toggle" }, "▾ thinking");
 	const thinkingPre = el("pre", { class: "thinking-body" }, "");
@@ -1136,7 +1159,10 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	return { textPre: pre, thinkingWrap, thinkingPre, voiceTextBox: voiceBox };
 }
 export function appendToolCall(name: string, args: unknown, toolCallId: string): void {
-	const wrap = el("div", { class: "row row-tool" });
+	const wrap = el("div", {
+		class: `row row-tool${state.showToolCalls ? "" : " display-hidden"}`,
+		"aria-hidden": String(!state.showToolCalls),
+	});
 	const card = el("div", { class: "tool-card" });
 	const toolPath = toolPathFromArgs(args);
 	mountToolHead(card, name, args, toolPath);

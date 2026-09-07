@@ -7,6 +7,7 @@
 A web chat interface for the [pi coding agent](https://pi.dev). The browser is a thin renderer — the server is a thin transport layer that owns one detachable `pi --mode rpc` subprocess per live session, forwards its events to the attached browser, and translates validated client messages into pi RPC commands. The actual agent logic (tools, model routing, system prompt, streaming) lives entirely inside the `pi` subprocess.
 
 - Streaming responses, model picker, thinking levels
+- Per-session display toggles for thinking blocks and tool calls/results (hidden by default)
 - **Steering** — type while the agent is working and your message is queued for the next turn (mirrors the CLI; delivered after the current turn's tool calls finish)
 - File / image / voice attachments (images upload once over HTTP, then a small private reference is resolved into multimodal input server-side)
 - **Agent → you file delivery** — every tool call that touches a `path` (write / edit / read) gets a `⬇ download` link on its card, served from the project dir via `GET /api/file`
