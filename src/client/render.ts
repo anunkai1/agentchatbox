@@ -379,7 +379,7 @@ export function syncDisplayPreferences(): void {
 		node.setAttribute("aria-hidden", String(toolsHidden));
 	}
 	for (const node of document.querySelectorAll<HTMLElement>(
-		"#messages .row-assistant[data-internal-only=\"1\"]",
+		'#messages .row-assistant[data-internal-only="1"]',
 	)) {
 		const hasThinking = Boolean(node.querySelector(".thinking-body")?.textContent?.trim());
 		const hidden = !state.showThinking || !hasThinking;
