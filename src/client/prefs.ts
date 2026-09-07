@@ -10,6 +10,7 @@
  * What's persisted here (client-owned only):
  *   - ttsVoice   (selected Kokoro voice)
  *   - ttsSpeed   (playback rate)
+ *   - showThinking / showToolCalls (chat display toggles)
  *
  * What is NOT persisted here:
  *   - model + thinking level. Those are server-authoritative (the pi
@@ -30,6 +31,8 @@ const PREFIX = "acb:prefs:";
 export interface SessionPrefs {
 	ttsVoice?: string | null;
 	ttsSpeed?: number;
+	showThinking?: boolean;
+	showToolCalls?: boolean;
 }
 
 function key(sessionId: string): string {
@@ -76,11 +79,18 @@ import { state } from "./state.js";
 export function applySessionPrefs(): void {
 	const id = state.sessionId;
 	if (!id) return;
+	// Defaults are deliberately hidden. Reset before loading so switching to
+	// a session without saved display prefs cannot inherit another session's
+	// choices.
+	state.showThinking = false;
+	state.showToolCalls = false;
 	const prefs = loadPrefs(id);
 	if (typeof prefs.ttsVoice === "string") state.ttsVoice = prefs.ttsVoice;
 	if (typeof prefs.ttsSpeed === "number" && Number.isFinite(prefs.ttsSpeed)) {
 		state.ttsSpeed = prefs.ttsSpeed;
 	}
+	if (typeof prefs.showThinking === "boolean") state.showThinking = prefs.showThinking;
+	if (typeof prefs.showToolCalls === "boolean") state.showToolCalls = prefs.showToolCalls;
 }
 
 /** Persist the current client-owned prefs for the current session. */
@@ -90,5 +100,7 @@ export function saveSessionPrefs(): void {
 	savePrefs(id, {
 		ttsVoice: state.ttsVoice,
 		ttsSpeed: state.ttsSpeed,
+		showThinking: state.showThinking,
+		showToolCalls: state.showToolCalls,
 	});
 }

@@ -176,6 +176,10 @@ export interface AppState {
 	currentModelLabel: string;
 	currentProvider: string | null;
 	currentThinking: ThinkingLevel;
+	/** Whether assistant thinking blocks are visible in the chat UI. */
+	showThinking: boolean;
+	/** Whether tool-call cards and results are visible in the chat UI. */
+	showToolCalls: boolean;
 	/**
 	 * Human-readable label for the current image-generation model, shown
 	 * in the status overflow row. Updated by the pi-venice-image
@@ -366,6 +370,8 @@ export const state: AppState = {
 	currentImageModelLabel: null,
 	extensionStatusLabels: {},
 	currentThinking: "high",
+	showThinking: false,
+	showToolCalls: false,
 	pendingModelSet: null,
 	uploadedImages: new Map(),
 	connectionStatus: "connecting",

@@ -60,6 +60,7 @@ import {
 	scrollToBottom,
 	setStreaming,
 	showToast,
+	syncDisplayPreferences,
 	syncSteerBadges,
 	updateJumpFabState,
 	updateJumpToBottomFabState,
@@ -519,6 +520,8 @@ function paintStreamDom(p: { dom: LiveAssistantDom; text: string; thinking: stri
 		p.dom.thinkingPre.textContent = p.thinking;
 		p.dom.thinkingWrap.classList.remove("hidden-thinking");
 	}
+	p.dom.thinkingWrap.classList.toggle("display-hidden", !state.showThinking);
+	p.dom.thinkingWrap.setAttribute("aria-hidden", String(!state.showThinking));
 	if (wasPinned) scrollToBottom();
 }
 
@@ -1296,6 +1299,7 @@ async function boot(): Promise<void> {
 		if (exists) {
 			state.sessionId = urlSessionId;
 			applySessionPrefs();
+			syncDisplayPreferences();
 		} else {
 			writeSessionIdToUrl(null); // stale link — drop it, start fresh
 		}
@@ -1420,6 +1424,7 @@ async function boot(): Promise<void> {
 		if (info.sessionId) {
 			state.sessionId = info.sessionId;
 			applySessionPrefs();
+			syncDisplayPreferences();
 			// A cached/server sidebar snapshot can name a resumed session before
 			// its transcript arrives. Fresh sessions simply have no match yet.
 			syncCurrentSessionTitle(sidebarSessionsForCache);
@@ -1580,6 +1585,7 @@ async function boot(): Promise<void> {
 					JSON.stringify(projected[projected.length - 1]));
 		state.sessionId = sessionId;
 		applySessionPrefs();
+		syncDisplayPreferences();
 		syncCurrentSessionTitle(sidebarSessionsForCache);
 		state.messages = projected;
 		// Seed the live message ordinal from the replayed transcript so

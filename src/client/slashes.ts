@@ -22,6 +22,7 @@ import {
 	openProjectEditor,
 	refreshStatus,
 	renderShell,
+	syncDisplayPreferences,
 	toggleCapabilitiesPopover,
 } from "./render.js";
 import { services } from "./services.js";
@@ -1444,6 +1445,41 @@ export function openOverflowMenu(): void {
 		overlay.remove();
 		action();
 	};
+	const displayToggleRow = (
+		label: string,
+		isShown: () => boolean,
+		setShown: (shown: boolean) => void,
+		description: string,
+	) => {
+		const value = el("span", { class: "overflow-value" });
+		const row = el("button", {
+			class: "overflow-row settings-row",
+			type: "button",
+			title: description,
+		});
+		const update = () => {
+			const shown = isShown();
+			value.textContent = shown ? "Shown" : "Hidden";
+			row.setAttribute("aria-pressed", String(shown));
+		};
+		row.append(
+			el("span", { class: "overflow-label" }, label),
+			el(
+				"span",
+				{ class: "settings-row-end" },
+				value,
+				el("span", { class: "settings-chevron", "aria-hidden": "true" }, "↔"),
+			),
+		);
+		row.addEventListener("click", () => {
+			setShown(!isShown());
+			saveSessionPrefs();
+			syncDisplayPreferences();
+			update();
+		});
+		update();
+		return row;
+	};
 
 	const chatRows = [
 		actionRow(
@@ -1472,6 +1508,27 @@ export function openOverflowMenu(): void {
 		);
 	}
 	box.append(section("Chat", ...chatRows));
+	box.append(
+		section(
+			"Display",
+			displayToggleRow(
+				"Thinking blocks",
+				() => state.showThinking,
+				(shown) => {
+					state.showThinking = shown;
+				},
+				"Show or hide model thinking in the conversation",
+			),
+			displayToggleRow(
+				"Tool calls",
+				() => state.showToolCalls,
+				(shown) => {
+					state.showToolCalls = shown;
+				},
+				"Show or hide tool calls and results in the conversation",
+			),
+		),
+	);
 
 	// Local AI lifecycle is extension-owned. This row is only a transport
 	// shortcut; the pi extension starts server4, waits for health, and selects
@@ -1657,13 +1714,14 @@ export function exportSessionAsHtml(): void {
 			);
 		} else if (m.kind === "assistant") {
 			lines.push(`<div class="msg assistant"><span class="role">Pi ›</span><span class="body">`);
-			if (m.thinking)
+			if (state.showThinking && m.thinking)
 				lines.push(
 					`<details class="thinking"><summary>▸ thinking</summary><pre class="thinking-body">${esc(m.thinking)}</pre></details>`,
 				);
 			lines.push(esc(m.text));
 			lines.push(`</span></div>`);
 		} else if (m.kind === "tool") {
+			if (!state.showToolCalls) continue;
 			const args = (() => {
 				try {
 					return JSON.stringify(m.args);

@@ -939,6 +939,13 @@ body.sidebar-resizing iframe {
 
 /* ---------- message rows ---------- */
 
+/* Client display preferences hide internal agent details without removing
+   them from state, the pi context, or the persisted session transcript. */
+.row.display-hidden,
+.thinking.display-hidden {
+	display: none;
+}
+
 .row {
 	display: flex;
 	gap: 12px;
