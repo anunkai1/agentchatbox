@@ -56,28 +56,49 @@ describe("chat display preferences", () => {
 		expect(state.showToolCalls).toBe(false);
 	});
 
-	it("persists thinking and tool-call visibility independently per session", () => {
+	it("persists thinking and tool-call visibility independently", () => {
 		state.showThinking = true;
 		state.showToolCalls = false;
 		saveSessionPrefs();
 
 		state.showThinking = false;
 		state.showToolCalls = true;
+		state.sessionId = "another-session";
 		applySessionPrefs();
 
 		expect(state.showThinking).toBe(true);
 		expect(state.showToolCalls).toBe(false);
 	});
 
-	it("does not carry one session's display choices into another", () => {
+	it("saves display choices before a session id exists", () => {
+		state.sessionId = null;
 		state.showThinking = true;
 		state.showToolCalls = true;
 		saveSessionPrefs();
 
-		state.sessionId = "another-session";
+		state.sessionId = "new-session";
+		state.showThinking = false;
+		state.showToolCalls = false;
 		applySessionPrefs();
 
-		expect(state.showThinking).toBe(false);
+		expect(state.showThinking).toBe(true);
+		expect(state.showToolCalls).toBe(true);
+	});
+
+	it("migrates legacy per-session display choices", () => {
+		storage.setItem(
+			"acb:prefs:legacy-session",
+			JSON.stringify({ showThinking: true, showToolCalls: false }),
+		);
+		state.sessionId = "legacy-session";
+		applySessionPrefs();
+
+		expect(state.showThinking).toBe(true);
+		expect(state.showToolCalls).toBe(false);
+
+		state.sessionId = "another-session";
+		applySessionPrefs();
+		expect(state.showThinking).toBe(true);
 		expect(state.showToolCalls).toBe(false);
 	});
 });
