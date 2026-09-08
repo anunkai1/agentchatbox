@@ -7,7 +7,7 @@ import type { NextFunction, Request, Response, Router } from "express";
 import express from "express";
 import multer from "multer";
 import type { UploadResponse } from "../shared/protocol.js";
-import { uploadStore } from "./upload-store.js";
+import type { UploadStore } from "./upload-store.js";
 
 type UploadRequest = Request & { file?: Express.Multer.File; _uploadTempPath?: string };
 
@@ -18,7 +18,7 @@ export function safeExtension(name: string): string {
 	return "";
 }
 
-export function createUploadsRouter(store = uploadStore): Router {
+export function createUploadsRouter(store: UploadStore): Router {
 	const router = express.Router();
 	const upload = multer({
 		storage: multer.diskStorage({

@@ -16,7 +16,7 @@
 import "dotenv/config";
 
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import express from "express";
@@ -40,11 +40,16 @@ import { registry } from "./session-registry.js";
 import { staticCacheControl } from "./static-cache.js";
 import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
-import { uploadStore } from "./upload-store.js";
+import { UploadStore } from "./upload-store.js";
 import { createUploadsRouter } from "./uploads.js";
 import { createUploadsServingRouter } from "./uploads-serving.js";
 
-mkdirSync(config.uploadsDir, { recursive: true, mode: 0o700 });
+const uploadStore = new UploadStore(
+	config.uploadsDir,
+	config.maxUploadBytes,
+	config.maxUploadStorageBytes,
+);
+uploadStore.recoverAbandonedUploads();
 
 const app = express();
 app.disable("x-powered-by");
@@ -89,7 +94,7 @@ try {
 }
 
 // API routes
-app.use("/api/upload", createUploadsRouter());
+app.use("/api/upload", createUploadsRouter(uploadStore));
 app.use("/api/file", createFilesRouter());
 app.use("/api/transcribe", createTranscribeRouter());
 app.use("/api/tts", createTtsRouter());

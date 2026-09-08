@@ -12,7 +12,6 @@ import {
 	statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { config } from "./config.js";
 
 export const UPLOAD_RESERVATION_PREFIX = ".acb-upload-reservation-";
 
@@ -73,16 +72,16 @@ export class UploadStore {
 		} catch {
 			/* a read-only test fixture will fail later with a useful write error */
 		}
-		// No HTTP request survives process boot, and systemd stops all pi
-		// descendants before starting ACB again. Remove abandoned staging and
-		// reservations left by the prior service generation.
+		mkdirSync(this.tempDir, { recursive: true, mode: 0o700 });
+	}
+
+	/** Server boot only, before accepting HTTP uploads. Construction is non-destructive. */
+	recoverAbandonedUploads(): void {
+		// HTTP staging belongs to the previous server generation. Independent
+		// extension writers can outlive that generation: preserve their live claims.
 		rmSync(this.tempDir, { recursive: true, force: true });
 		mkdirSync(this.tempDir, { recursive: true, mode: 0o700 });
-		for (const entry of readdirSync(uploadsDir, { withFileTypes: true })) {
-			if (entry.isFile() && entry.name.startsWith(UPLOAD_RESERVATION_PREFIX)) {
-				rmSync(join(uploadsDir, entry.name), { force: true });
-			}
-		}
+		this.removeDeadReservations();
 	}
 
 	reserve(): string {
@@ -104,13 +103,16 @@ export class UploadStore {
 			closeSync(fd);
 		}
 		this.reservations.set(token, reservationPath);
-		const allocation = this.scanAllocation();
-		if (allocation.bytes + allocation.reservedBytes > this.quotaBytes) {
-			this.reservations.delete(token);
-			rmSync(reservationPath, { force: true });
-			throw new UploadQuotaError();
+		try {
+			const allocation = this.scanAllocation();
+			if (allocation.bytes + allocation.reservedBytes > this.quotaBytes) {
+				throw new UploadQuotaError();
+			}
+			return token;
+		} catch (error) {
+			this.cancel(token);
+			throw error;
 		}
-		return token;
 	}
 
 	/** Publish a completed temporary file by same-filesystem atomic rename. */
@@ -193,9 +195,3 @@ export class UploadStore {
 		throw new Error("upload directory changed too quickly to calculate quota safely");
 	}
 }
-
-export const uploadStore = new UploadStore(
-	config.uploadsDir,
-	config.maxUploadBytes,
-	config.maxUploadStorageBytes,
-);

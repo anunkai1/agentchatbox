@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -13,6 +16,9 @@ export default defineConfig({
 	test: {
 		include: ["tests/**/*.test.ts"],
 		environment: "node",
+		// Never let an accidental import-time store use production uploads.
+		env: { UPLOADS_DIR: mkdtempSync(join(tmpdir(), "acb-test-uploads-")) },
+		globalSetup: ["./tests/upload-test-sandbox.ts"],
 		// Server tests boot an express listener on an ephemeral port. Keep
 		// the default 5s timeout — the smoke round-trip should be fast.
 		hookTimeout: 10_000,

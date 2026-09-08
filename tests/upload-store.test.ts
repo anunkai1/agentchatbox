@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	UPLOAD_RESERVATION_PREFIX,
 	UploadQuotaError,
@@ -19,6 +19,8 @@ import {
 
 const roots: string[] = [];
 afterEach(() => {
+	vi.restoreAllMocks();
+	vi.unstubAllEnvs();
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -74,14 +76,59 @@ describe("UploadStore", () => {
 		expect(statSync(join(dir, filename)).mode & 0o777).toBe(0o600);
 	});
 
-	it("removes abandoned staging and sparse reservation files on startup", () => {
+	it("does not touch configured storage when store/router modules are imported", async () => {
+		const dir = root();
+		mkdirSync(join(dir, ".tmp"));
+		const staging = join(dir, ".tmp", "active.part");
+		const claim = join(dir, `${UPLOAD_RESERVATION_PREFIX}${process.pid}-active`);
+		writeFileSync(staging, "partial");
+		writeFileSync(claim, "claim");
+		vi.stubEnv("UPLOADS_DIR", dir);
+		vi.resetModules();
+		await import("../src/server/upload-store.js");
+		await import("../src/server/uploads.js");
+		expect(readFileSync(staging, "utf8")).toBe("partial");
+		expect(readFileSync(claim, "utf8")).toBe("claim");
+	});
+
+	it("preserves staging on construction; explicit boot recovery removes only dead claims", () => {
 		const dir = root();
 		const temp = join(dir, ".tmp");
 		mkdirSync(temp);
-		writeFileSync(join(temp, "abandoned.part"), "partial");
-		writeFileSync(join(dir, `${UPLOAD_RESERVATION_PREFIX}stale`), "reservation");
-		new UploadStore(dir, 50, 100);
-		expect(existsSync(join(temp, "abandoned.part"))).toBe(false);
-		expect(readdirSync(dir).some((name) => name.startsWith(UPLOAD_RESERVATION_PREFIX))).toBe(false);
+		const staging = join(temp, "abandoned.part");
+		const dead = join(dir, `${UPLOAD_RESERVATION_PREFIX}2147483647-dead`);
+		const live = join(dir, `${UPLOAD_RESERVATION_PREFIX}${process.pid}-live`);
+		writeFileSync(staging, "partial");
+		writeFileSync(dead, "dead");
+		writeFileSync(live, "live");
+		const store = new UploadStore(dir, 50, 100);
+		expect(existsSync(staging)).toBe(true);
+		expect(existsSync(dead)).toBe(true);
+		expect(existsSync(live)).toBe(true);
+		store.recoverAbandonedUploads();
+		expect(existsSync(staging)).toBe(false);
+		expect(existsSync(dead)).toBe(false);
+		expect(readFileSync(live, "utf8")).toBe("live");
+	});
+
+	it("releases the claim when a quota scan throws, allowing the next upload", () => {
+		const dir = root();
+		const store = new UploadStore(dir, 60, 100);
+		const error = new Error("upload directory changed too quickly to calculate quota safely");
+		// Fault-inject the scan boundary after the real sparse claim is created.
+		vi.spyOn(
+			store as unknown as { scanAllocation(): unknown },
+			"scanAllocation",
+		).mockImplementationOnce(() => {
+			throw error;
+		});
+		expect(() => store.reserve()).toThrow(error);
+		expect(store.usage().reservedBytes).toBe(0);
+		expect(readdirSync(dir).filter((name) => name.startsWith(UPLOAD_RESERVATION_PREFIX))).toEqual(
+			[],
+		);
+		const token = store.reserve();
+		expect(store.usage().reservedBytes).toBe(60);
+		store.cancel(token);
 	});
 });

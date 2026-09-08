@@ -26,6 +26,9 @@ import { sessionPath } from "./url.js";
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
+	// Native sizing follows typing, pasted/restored drafts and width changes
+	// without collapsing the focused textarea and disturbing caret scrolling.
+	if (CSS.supports("field-sizing", "content")) return;
 	ta.style.height = "auto";
 	ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
 }
@@ -66,24 +69,11 @@ function refreshComposerState(): void {
 	line.className = "composer-state";
 	line.replaceChildren();
 	if (state.isStreaming) {
-		// The persistent streaming indicator below the composer already owns
-		// the working state. Keep this line quiet, except for a useful
-		// navigation control when the user has scrolled up for older output.
-		if (isAtBottom()) {
-			line.classList.add("hidden");
-			return;
-		}
-		const latest = el(
-			"button",
-			{ class: "composer-latest-btn", type: "button", title: "Jump to the latest output" },
-			"New output ↓",
-		) as HTMLButtonElement;
-		latest.addEventListener("click", () => {
-			scrollToBottom();
-			updateJumpToBottomFabState();
-		});
-		line.append(latest);
-		line.classList.add("composer-state-working");
+		// Working status lives below the composer; navigation already has a
+		// floating jump-to-bottom button. A second, in-flow navigation row
+		// changes the scroll viewport while measuring whether it is pinned.
+		// Keep streaming status updates out of the composer's layout.
+		line.classList.add("hidden");
 		return;
 	}
 	if (state.connectionStatus === "closed" || state.connectionStatus === "stalled") {
