@@ -232,7 +232,7 @@ npm run typecheck # tsc, both server and client configs
 npm run build     # full production build
 ```
 
-CI runs all three on push to `main` and on PRs. Tests live in `tests/`.
+CI runs all three on push to `main` and on PRs. Tests live in `tests/`. The vitest config pins `UPLOADS_DIR` to a per-run temp directory and removes it afterwards, so tests never read or delete production uploads — even tests that intentionally import the upload-store singleton.
 
 ## Why a subprocess architecture?
 

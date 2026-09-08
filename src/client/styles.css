@@ -1787,16 +1787,12 @@ body.sidebar-resizing iframe {
 .composer-state.hidden {
 	display: none;
 }
-.composer-state-working {
-	color: var(--c-ok);
-}
 .composer-state-label {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.composer-latest-btn,
 .composer-reconnect-btn {
 	flex: 0 0 auto;
 	padding: 3px 8px;
@@ -1807,7 +1803,6 @@ body.sidebar-resizing iframe {
 	font: 11px var(--font-sans);
 	cursor: pointer;
 }
-.composer-latest-btn:hover,
 .composer-reconnect-btn:hover {
 	background: var(--surface-hover);
 	border-color: currentColor;
@@ -1981,6 +1976,18 @@ body.sidebar-resizing iframe {
 	line-height: 1.5;
 	max-height: 200px;
 	outline: none;
+}
+@supports (field-sizing: content) {
+	.composer .input {
+		field-sizing: content;
+		/* Let flex own width; text controls height only. */
+		width: 0;
+		min-width: 0;
+	}
+	.composer .input:placeholder-shown {
+		/* The long keyboard-shortcut hint must not size an empty draft. */
+		field-sizing: fixed;
+	}
 }
 .composer .input::placeholder {
 	color: var(--text-muted);
