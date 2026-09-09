@@ -1,0 +1,6 @@
+# Targeted security maintenance for the existing shared ACB Python environment.
+# This is not a complete environment lock; do not recreate the venv from it.
+# Applied in place with: .venv/bin/pip install --upgrade -r requirements-security.txt
+Pillow==12.3.0
+pip==26.2.1
+setuptools==84.0.0
