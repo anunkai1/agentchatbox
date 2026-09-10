@@ -167,6 +167,7 @@
   let hover = null;              // {x, time} while the crosshair is over the chart
   let measure = null;            // {a:{time,price}, b:{time,price}} measurement box
   let favouriteGesture = null;   // pointer state for favourite scrolling/reordering
+  let favouriteMomentumFrame = 0;
   let suppressFavouriteClick = false;
 
   // ============================== dom ==============================
@@ -1318,6 +1319,31 @@
     }));
     saveSettings();
   }
+  function stopFavouriteMomentum() {
+    if (favouriteMomentumFrame) cancelAnimationFrame(favouriteMomentumFrame);
+    favouriteMomentumFrame = 0;
+  }
+  function startFavouriteMomentum(initialVelocity) {
+    stopFavouriteMomentum();
+    let velocity = initialVelocity;
+    let lastTime = performance.now();
+    const step = (now) => {
+      const elapsed = Math.min(32, now - lastTime);
+      lastTime = now;
+      const before = elFavourites.scrollLeft;
+      const max = Math.max(0, elFavourites.scrollWidth - elFavourites.clientWidth);
+      elFavourites.scrollLeft = Math.max(0, Math.min(max, before + velocity * elapsed));
+      if (elFavourites.scrollLeft === before || Math.abs(velocity) < 0.015) {
+        favouriteMomentumFrame = 0;
+        return;
+      }
+      // Exponential decay keeps the post-swipe glide responsive rather than
+      // mechanical, while naturally stopping at either end of the strip.
+      velocity *= Math.pow(0.94, elapsed / 16.67);
+      favouriteMomentumFrame = requestAnimationFrame(step);
+    };
+    if (Math.abs(velocity) >= 0.015) favouriteMomentumFrame = requestAnimationFrame(step);
+  }
   function clearFavouriteGesture() {
     const gesture = favouriteGesture;
     if (!gesture) return;
@@ -1377,17 +1403,19 @@
     loadHistory();
   }
 
-  // The strip uses one pointer gesture for both sideways scrolling and
-  // reordering. A short swipe scrolls it; a long press (or mouse drag) picks
-  // up a chip. This avoids relying on desktop-only HTML drag and drop.
+  // A short swipe scrolls the strip with kinetic momentum. A long press (or
+  // mouse drag) picks up a chip for reordering without desktop-only HTML drag
+  // and drop.
   elFavourites.addEventListener("pointerdown", (event) => {
     const chip = event.target.closest(".favourite-chip");
     if (!chip || event.button !== 0 || favouriteGesture) return;
     const pointerId = event.pointerId;
+    stopFavouriteMomentum();
     favouriteGesture = {
       chip, pointerId, startX: event.clientX, startY: event.clientY,
-      startScroll: elFavourites.scrollLeft, dragging: false, scrolling: false,
-      pressTimer: null,
+      startScroll: elFavourites.scrollLeft, lastScroll: elFavourites.scrollLeft,
+      lastMoveAt: performance.now(), velocity: 0,
+      dragging: false, scrolling: false, pressTimer: null,
     };
     chip.setPointerCapture(pointerId);
     if (event.pointerType === "mouse") return;
@@ -1403,7 +1431,14 @@
       else if (Math.hypot(dx, dy) > 8) {
         clearTimeout(gesture.pressTimer);
         gesture.scrolling = true;
+      }
+      if (gesture.scrolling) {
+        const now = performance.now();
         elFavourites.scrollLeft = gesture.startScroll - dx;
+        const elapsed = Math.max(1, now - gesture.lastMoveAt);
+        gesture.velocity = (elFavourites.scrollLeft - gesture.lastScroll) / elapsed;
+        gesture.lastScroll = elFavourites.scrollLeft;
+        gesture.lastMoveAt = now;
       }
     }
     if (gesture.dragging) moveFavouriteChip(event.clientX);
@@ -1414,6 +1449,7 @@
     if (!gesture || event.pointerId !== gesture.pointerId) return;
     const changed = gesture.dragging || gesture.scrolling;
     if (gesture.dragging) saveFavouriteOrderFromDom();
+    else if (gesture.scrolling) startFavouriteMomentum(gesture.velocity);
     clearFavouriteGesture();
     if (changed) {
       suppressFavouriteClick = true;
