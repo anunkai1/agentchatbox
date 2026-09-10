@@ -67,7 +67,9 @@ export async function resolvePromptImages(
 		if ("data" in image && image.data !== undefined) {
 			const imageBytes = Buffer.byteLength(image.data, "base64");
 			if (totalBytes + imageBytes > MAX_PROMPT_IMAGE_TOTAL_BYTES) {
-				throw new Error("image attachments exceed the 500 MiB combined prompt limit");
+				throw new Error(
+					`image attachments exceed the ${MAX_PROMPT_IMAGE_TOTAL_BYTES / (1024 * 1024)} MiB combined prompt limit`,
+				);
 			}
 			totalBytes += imageBytes;
 			resolved.push({ type: "image", data: image.data, mimeType: image.mimeType });
@@ -91,7 +93,9 @@ export async function resolvePromptImages(
 				throw new Error("image attachment exceeds the 25 MiB per-image prompt limit");
 			}
 			if (totalBytes + before.size > MAX_PROMPT_IMAGE_TOTAL_BYTES) {
-				throw new Error("image attachments exceed the 500 MiB combined prompt limit");
+				throw new Error(
+					`image attachments exceed the ${MAX_PROMPT_IMAGE_TOTAL_BYTES / (1024 * 1024)} MiB combined prompt limit`,
+				);
 			}
 			totalBytes += before.size;
 			const header = Buffer.alloc(16);

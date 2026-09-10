@@ -110,7 +110,9 @@ function images(value: unknown): PromptImage[] | undefined {
 		}
 		totalInlineBytes += imageBytes;
 		if (totalInlineBytes > MAX_PROMPT_IMAGE_TOTAL_BYTES) {
-			throw new ProtocolError("image attachments exceed the 500 MiB combined prompt limit");
+			throw new ProtocolError(
+				`image attachments exceed the ${MAX_PROMPT_IMAGE_TOTAL_BYTES / (1024 * 1024)} MiB combined prompt limit`,
+			);
 		}
 		return { data, mimeType };
 	});
