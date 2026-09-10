@@ -166,6 +166,8 @@
   let drawFrameIsTimeout = false;
   let hover = null;              // {x, time} while the crosshair is over the chart
   let measure = null;            // {a:{time,price}, b:{time,price}} measurement box
+  let favouriteGesture = null;   // pointer state for favourite scrolling/reordering
+  let suppressFavouriteClick = false;
 
   // ============================== dom ==============================
   const $ = (id) => document.getElementById(id);
@@ -1295,14 +1297,63 @@
       const active = f.source === settings.source && f.symbol === settings.symbol;
       chip.type = "button";
       chip.className = "favourite-chip" + (active ? " active" : "");
+      chip.dataset.source = f.source;
+      chip.dataset.symbol = f.symbol;
       chip.textContent = src.display(f.symbol);
-      chip.title = `Show ${src.display(f.symbol)} on ${src.label}`;
+      chip.title = `Show ${src.display(f.symbol)} on ${src.label}. Long-press and drag to reorder.`;
       chip.setAttribute("aria-label", chip.title);
       chip.setAttribute("aria-pressed", String(active));
-      chip.addEventListener("click", () => selectTicker(f.source, f.symbol));
+      chip.addEventListener("click", () => {
+        if (suppressFavouriteClick) return;
+        selectTicker(f.source, f.symbol);
+      });
       elFavourites.appendChild(chip);
     });
     renderFavouriteToggle();
+  }
+  function saveFavouriteOrderFromDom() {
+    settings.favourites = [...elFavourites.children].map((chip) => ({
+      source: chip.dataset.source,
+      symbol: chip.dataset.symbol,
+    }));
+    saveSettings();
+  }
+  function clearFavouriteGesture() {
+    const gesture = favouriteGesture;
+    if (!gesture) return;
+    clearTimeout(gesture.pressTimer);
+    gesture.chip.classList.remove("dragging");
+    elFavourites.classList.remove("reordering");
+    try { gesture.chip.releasePointerCapture(gesture.pointerId); } catch (_) {}
+    favouriteGesture = null;
+  }
+  function startFavouriteDrag() {
+    const gesture = favouriteGesture;
+    if (!gesture || gesture.dragging || gesture.scrolling) return;
+    gesture.dragging = true;
+    gesture.chip.classList.add("dragging");
+    elFavourites.classList.add("reordering");
+    if (navigator.vibrate) navigator.vibrate(12);
+  }
+  function moveFavouriteChip(clientX) {
+    const gesture = favouriteGesture;
+    if (!gesture || !gesture.dragging) return;
+    const chips = [...elFavourites.querySelectorAll(".favourite-chip")];
+    const others = chips.filter((chip) => chip !== gesture.chip);
+    if (!others.length) return;
+    const strip = elFavourites.getBoundingClientRect();
+    if (clientX < strip.left + 28) elFavourites.scrollLeft -= 10;
+    else if (clientX > strip.right - 28) elFavourites.scrollLeft += 10;
+    let target = others[0];
+    let distance = Infinity;
+    for (const chip of others) {
+      const rect = chip.getBoundingClientRect();
+      const d = Math.abs(clientX - (rect.left + rect.width / 2));
+      if (d < distance) { target = chip; distance = d; }
+    }
+    const targetRect = target.getBoundingClientRect();
+    if (clientX < targetRect.left + targetRect.width / 2) target.before(gesture.chip);
+    else target.after(gesture.chip);
   }
   function toggleFavourite() {
     const index = favouriteIndex();
@@ -1325,6 +1376,52 @@
     renderFavourites();
     loadHistory();
   }
+
+  // The strip uses one pointer gesture for both sideways scrolling and
+  // reordering. A short swipe scrolls it; a long press (or mouse drag) picks
+  // up a chip. This avoids relying on desktop-only HTML drag and drop.
+  elFavourites.addEventListener("pointerdown", (event) => {
+    const chip = event.target.closest(".favourite-chip");
+    if (!chip || event.button !== 0 || favouriteGesture) return;
+    const pointerId = event.pointerId;
+    favouriteGesture = {
+      chip, pointerId, startX: event.clientX, startY: event.clientY,
+      startScroll: elFavourites.scrollLeft, dragging: false, scrolling: false,
+      pressTimer: null,
+    };
+    chip.setPointerCapture(pointerId);
+    if (event.pointerType === "mouse") return;
+    favouriteGesture.pressTimer = setTimeout(startFavouriteDrag, 350);
+  });
+  elFavourites.addEventListener("pointermove", (event) => {
+    const gesture = favouriteGesture;
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const dx = event.clientX - gesture.startX;
+    const dy = event.clientY - gesture.startY;
+    if (!gesture.dragging) {
+      if (event.pointerType === "mouse" && Math.hypot(dx, dy) > 5) startFavouriteDrag();
+      else if (Math.hypot(dx, dy) > 8) {
+        clearTimeout(gesture.pressTimer);
+        gesture.scrolling = true;
+        elFavourites.scrollLeft = gesture.startScroll - dx;
+      }
+    }
+    if (gesture.dragging) moveFavouriteChip(event.clientX);
+    event.preventDefault();
+  });
+  function finishFavouriteGesture(event) {
+    const gesture = favouriteGesture;
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const changed = gesture.dragging || gesture.scrolling;
+    if (gesture.dragging) saveFavouriteOrderFromDom();
+    clearFavouriteGesture();
+    if (changed) {
+      suppressFavouriteClick = true;
+      setTimeout(() => { suppressFavouriteClick = false; }, 0);
+    }
+  }
+  elFavourites.addEventListener("pointerup", finishFavouriteGesture);
+  elFavourites.addEventListener("pointercancel", finishFavouriteGesture);
 
   elSymbol.addEventListener("change", () => {
     settings.symbol = elSymbol.value;

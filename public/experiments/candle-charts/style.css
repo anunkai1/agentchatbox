@@ -59,7 +59,7 @@ body {
   overscroll-behavior-x: contain;
   scrollbar-width: none;
   scroll-snap-type: x proximity;
-  touch-action: pan-x;
+  touch-action: none;
   padding: 1px 0 3px;
 }
 .favourites-scroll::-webkit-scrollbar { display: none; }
@@ -70,7 +70,7 @@ body {
   border-radius: 999px;
   background: #1e2329;
   color: var(--muted);
-  cursor: pointer;
+  cursor: grab;
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
@@ -80,6 +80,9 @@ body {
 .favourite-chip::before { content: "★"; color: var(--accent); margin-right: 4px; }
 .favourite-chip:hover { color: var(--text); border-color: #3b4450; }
 .favourite-chip.active { color: var(--accent); border-color: var(--accent); }
+.favourites-scroll.reordering { cursor: grabbing; }
+.favourite-chip.dragging { opacity: .55; cursor: grabbing; border-style: dashed; }
+.favourite-chip, .favourite-toggle { -webkit-user-select: none; user-select: none; }
 .instrument-row {
   display: flex;
   align-items: center;
