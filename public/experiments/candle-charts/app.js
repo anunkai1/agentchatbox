@@ -139,6 +139,15 @@
 
   // ============================== state ==============================
   const settings = loadSettings();
+  // Telegram chart links select an allowlisted market without changing alerts.
+  const chartLink = new URLSearchParams(location.search);
+  const linkedSource = chartLink.get("source"), linkedSymbol = chartLink.get("symbol");
+  if (Object.hasOwn(SOURCES, linkedSource) && SOURCES[linkedSource].symbols.includes(linkedSymbol)) {
+    settings.source = linkedSource;
+    settings.symbol = linkedSymbol;
+    settings.symbolBySource[linkedSource] = linkedSymbol;
+  }
+  let alertUI = null;
   let candles = [];              // sorted, de-duplicated, valid bars
   let emaValues = [];            // aligned with candles (null until index 7)
   let rsiValues = [];            // aligned with candles (null until index 14)
@@ -788,6 +797,7 @@
 
   // ============================== data ==============================
   async function loadHistory() {
+    alertUI?.marketChanged();
     const token = ++loadToken;
     if (historyController) historyController.abort();
     historyController = new AbortController();
@@ -1114,6 +1124,7 @@
   }
 
   chart.subscribeCrosshairMove((param) => {
+    alertUI?.track(param);
     hover = param.time && param.point ? { x: param.point.x, time: param.time } : null;
     invalidateRSI();
     if (!param.time || !param.seriesData.has(candleSeries)) { updateLegend(); return; }
@@ -1123,6 +1134,7 @@
 
   // ============================== tools / drawings ==============================
   function armTool(t) {
+    alertUI?.clearSelection();
     tool = t === tool ? null : t;
     anchor = null;
     document.body.classList.toggle("hline-mode", !!tool);
@@ -1612,6 +1624,13 @@
   roRsi.observe(elRsi);
 
   // ============================== boot ==============================
+  alertUI = window.createCandleAlerts({
+    chart, series: candleSeries, element: elMain,
+    canSelect: () => !tool && !loading && candles.length > 0,
+    getMarket: () => ({ source: settings.source, symbol: settings.symbol,
+      label: SOURCES[settings.source].display(settings.symbol), sourceLabel: SOURCES[settings.source].label }),
+    onSelectMarket: selectTicker,
+  });
   renderSource();
   renderSymbols();
   renderFavourites();

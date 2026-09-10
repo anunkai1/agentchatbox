@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Candle Charts — Live Markets</title>
-<link rel="stylesheet" href="style.css?v=6875222c2da5">
+<link rel="stylesheet" href="style.css?v=0f4f2213ac11">
 <script src="lwc-4.0.1.js?v=575fe9c48279" defer></script>
 </head>
 <body>
@@ -23,6 +23,7 @@
       <select id="symbol" aria-label="Market ticker"></select>
     </div>
     <button type="button" class="favourite-toggle" id="btn-favourite" aria-pressed="false" title="Add current ticker to favourites">☆</button>
+    <button type="button" id="btn-alerts" class="alerts-button" aria-label="Manage price alerts" title="Price alerts">🔔 0</button>
     <div class="status" title="Live market connection">
       <div class="price-tag" id="last-price">—</div>
       <div class="live-dot" id="live-dot" aria-hidden="true">●</div>
@@ -50,6 +51,37 @@
   <div id="rsi-chart" class="rsi-pane"></div>
 </main>
 
-<script src="app.js?v=2966d348bc8e" defer></script>
+<dialog id="alert-dialog" class="alert-sheet" aria-labelledby="alert-heading">
+  <form id="alert-form">
+    <h2 id="alert-heading">Create price alert</h2>
+    <p id="alert-market"></p>
+    <label for="alert-level">Crossing price</label>
+    <input id="alert-level" type="number" inputmode="decimal" step="any" required autocomplete="off">
+    <p id="alert-quote" class="alert-hint"></p>
+    <p>Either direction · One shot · Expires in 1 year</p>
+    <p class="alert-hint">Telegram only. Watches live trades on this market even when the chart is closed. Reaching or passing the level counts; creating the alert does not trigger it.</p>
+    <p id="alert-error" class="alert-warning" role="alert"></p>
+    <div class="alert-actions">
+      <button type="button" id="alert-cancel">Cancel</button>
+      <button type="submit" id="alert-create" class="alert-primary">Create alert</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="alerts-manager" class="alert-sheet" aria-labelledby="alerts-heading">
+  <div class="alert-sheet-heading"><h2 id="alerts-heading">Price alerts</h2><button type="button" id="alerts-close" aria-label="Close alerts">✕</button></div>
+  <p id="alerts-status" class="alert-hint" role="status">Loading alerts…</p>
+  <div class="alert-actions">
+    <button type="button" id="alerts-new" class="alert-primary">＋ New alert</button>
+    <button type="button" id="alerts-refresh">Refresh</button>
+    <select id="alerts-filter" aria-label="Filter alerts">
+      <option value="active">Active</option><option value="triggered">Triggered</option>
+      <option value="expired">Expired</option><option value="cancelled">Cancelled</option><option value="all">All</option>
+    </select>
+  </div>
+  <div id="alerts-list"></div>
+</dialog>
+<div id="alert-toast" role="status" hidden></div>
+<script src="alerts.js?v=10a36941e194" defer></script>
+<script src="app.js?v=a557128fae3b" defer></script>
 </body>
 </html>
