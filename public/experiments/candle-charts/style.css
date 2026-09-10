@@ -231,6 +231,31 @@ body {
   #rsi-chart.rsi-pane { height: 84px; }
 }
 
+/* Server-monitored price alerts. Touch targets stay separate from the canvas. */
+.alerts-button { flex: 0 0 auto; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; color: var(--text); background: #1e2329; cursor: pointer; }
+.alert-selected-line { position: absolute; left: 0; right: 0; border-top: 1px dashed #38bdf8; pointer-events: none; z-index: 11; }
+.alert-crosshair-plus { position: absolute; right: 2px; z-index: 12; min-height: 44px; min-width: 44px; padding: 6px 10px; border: 1px solid #38bdf8; border-radius: 6px; color: #fff; background: #153343; font-size: 14px; font-variant-numeric: tabular-nums; cursor: pointer; touch-action: manipulation; }
+.alert-sheet { color: var(--text); background: var(--panel); border: 1px solid #3b4450; border-radius: 14px; margin: auto; width: min(480px, calc(100% - 24px)); max-height: 85dvh; padding: 20px; overflow-y: auto; overscroll-behavior: contain; }
+.alert-sheet::backdrop { background: #0009; }
+.alert-sheet h2 { font-size: 18px; margin-bottom: 12px; }
+.alert-sheet p { margin: 10px 0; line-height: 1.5; overflow-wrap: anywhere; }
+.alert-sheet label { display: block; margin: 16px 0 8px; }
+.alert-sheet input { width: 100%; font-size: 20px; padding: 12px; background: var(--bg); color: var(--accent); border: 1px solid #3b4450; border-radius: 6px; }
+.alert-sheet button, .alert-sheet select { min-height: 44px; padding: 8px 12px; color: var(--text); background: #1e2329; border: 1px solid #3b4450; border-radius: 6px; font-size: 14px; cursor: pointer; }
+.alert-sheet button:disabled { opacity: .5; cursor: wait; }
+.alert-sheet .alert-primary { background: var(--accent); border-color: var(--accent); color: #12161c; font-weight: 600; }
+.alert-hint { color: var(--muted); font-size: 12px; }
+.alert-warning { color: #ffbc69; }
+.alert-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.alert-sheet-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.alert-sheet-heading h2 { margin: 0; }
+.alert-card { border-top: 1px solid #3b4450; padding: 16px 0; margin-top: 12px; }
+.alert-card strong { font-size: 15px; color: #38bdf8; }
+#alert-toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 30; width: max-content; max-width: calc(100% - 28px); padding: 12px 16px; border: 1px solid #38bdf8; border-radius: 8px; background: #153343; color: white; }
+@media (max-width: 640px) {
+  .alert-sheet { margin: auto 0 0; width: 100%; max-width: 100%; max-height: 88dvh; border-radius: 16px 16px 0 0; padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+}
+
 /* placement hint while any drawing/measurement tool is armed */
 body.hline-mode #main-chart { cursor: crosshair; }
 body.hline-mode .chart-area::after {
