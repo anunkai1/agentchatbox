@@ -465,6 +465,13 @@ function reconcileSteerQueue(serverSteering: unknown[]): void {
 // ---------------------------------------------------------------------------
 
 let lastAssistant: PersistedMessage | null = null;
+/** pi 0.84+ sends `message_update` as deltas only — the cumulative
+ *  `message.content` stays empty mid-stream. We accumulate the streamed
+ *  deltas here so live rendering keeps working; the cumulative content
+ *  (when a provider still populates it) stays authoritative and syncs
+ *  the accumulators back. */
+let streamText = "";
+let streamThinking = "";
 let lastAssistantDom: LiveAssistantDom | null = null;
 
 /**
@@ -592,13 +599,13 @@ function startTokenSpeed(): void {
 /** Record a text/thinking delta. Providers that expose incremental usage give
  * us an exact token numerator; otherwise the status bar deliberately labels
  * its character-based live value as an estimate. */
-function recordTokenSpeed(delta: unknown, message: AssistantMessage): void {
+function recordTokenSpeed(delta: unknown, message: AssistantMessage | undefined): void {
 	if (typeof delta !== "string" || delta.length === 0) return;
 	const speed = state.streamingTokenSpeed;
 	if (!speed) return;
 	if (speed.startedAt === null) speed.startedAt = Date.now();
 	speed.estimatedCharacters += delta.length;
-	const output = message.usage?.output;
+	const output = message?.usage?.output;
 	if (typeof output === "number" && Number.isFinite(output) && output > 0) {
 		speed.reportedOutputTokens = output;
 	}
@@ -719,6 +726,9 @@ function onEvent(event: Record<string, unknown>): void {
 				// New assistant message — create a fresh block and start its
 				// output-speed meter when its first text/thinking delta arrives.
 				startTokenSpeed();
+				// Fresh delta accumulators for this message (see message_update).
+				streamText = "";
+				streamThinking = "";
 				lastAssistant = {
 					kind: "assistant",
 					text: "",
@@ -841,18 +851,32 @@ function onEvent(event: Record<string, unknown>): void {
 			break;
 
 		case "message_update": {
-			const m = e.message as AssistantMessage;
+			const m = e.message as AssistantMessage | undefined;
 			const update = e.assistantMessageEvent as { type?: unknown; delta?: unknown } | undefined;
 			if (update?.type === "text_delta" || update?.type === "thinking_delta") {
 				recordTokenSpeed(update.delta, m);
 			}
-			// Reconstruct the assistant text from content blocks.
+			// pi 0.85+ emits `message_update` as deltas ONLY: the cumulative
+			// `message.content` is empty until message_end. Accumulate the
+			// streamed deltas ourselves so thinking/text paint live. When a
+			// cumulative message IS populated (older providers), it wins and
+			// resyncs the accumulators.
+			if (update?.type === "text_delta" && typeof update.delta === "string") {
+				streamText += update.delta;
+			} else if (update?.type === "thinking_delta" && typeof update.delta === "string") {
+				streamThinking += update.delta;
+			}
+			// Reconstruct the assistant text from content blocks (when present).
 			let text = "";
 			let thinking = "";
-			for (const block of m.content) {
+			for (const block of m?.content ?? []) {
 				if (block.type === "text") text += (block as TextContent).text;
 				else if (block.type === "thinking") thinking += (block as ThinkingContent).thinking;
 			}
+			if (text) streamText = text;
+			else text = streamText;
+			if (thinking) streamThinking = thinking;
+			else thinking = streamThinking;
 			if (lastAssistant && lastAssistant.kind === "assistant") {
 				lastAssistant.text = text;
 				lastAssistant.thinking = thinking;
@@ -868,7 +892,7 @@ function onEvent(event: Record<string, unknown>): void {
 				scheduleStreamDom(lastAssistantDom, text, thinking);
 			}
 			// Update cost incrementally.
-			if (m.usage) {
+			if (m?.usage) {
 				state.costTotal.input += m.usage.input;
 				state.costTotal.output += m.usage.output;
 				state.costTotal.cacheRead += m.usage.cacheRead;
