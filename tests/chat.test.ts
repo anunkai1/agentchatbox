@@ -719,6 +719,75 @@ describe("mountChatWs — pi subprocess pipe", () => {
 		}
 	});
 
+	it("strips image payloads during live delivery, reattach replay and run completion", async () => {
+		writeFileSync(
+			fakePiPath!,
+			`#!${process.execPath}
+const { createInterface } = require('node:readline');
+const send = (event) => console.log(JSON.stringify(event));
+const image = { type: 'image', data: 'PRIVATE_IMAGE_BYTES', mimeType: 'image/png' };
+const text = { type: 'text', text: '[photo](/uploads/photo.png)' };
+const user = { role: 'user', content: [text, image], timestamp: 1 };
+const result = { content: [text, image], details: { raw: 'PRIVATE_PROVIDER_DATA' } };
+const tool = { role: 'toolResult', toolCallId: 'call-1', ...result };
+const assistant = { role: 'assistant', content: [{ type: 'text', text: 'done' }] };
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line);
+  if (command.type === 'get_state') {
+    send({ type: 'response', command: 'get_state', success: true, data: { sessionId: 'image-projection-session', messageCount: 0 } });
+  } else if (command.type === 'prompt') {
+    send({ type: 'agent_start' });
+    send({ type: 'turn_start' });
+    send({ type: 'message_start', message: user });
+    send({ type: 'tool_execution_update', toolCallId: 'call-1', partialResult: result });
+    send({ type: 'tool_execution_end', toolCallId: 'call-1', result });
+  } else if (command.type === 'abort') {
+    send({ type: 'turn_end', message: assistant, toolResults: [tool] });
+    send({ type: 'agent_end', messages: [user, assistant, tool] });
+  }
+});
+`,
+		);
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const first = await connectClient();
+		let second: Awaited<ReturnType<typeof connectClient>> | undefined;
+		try {
+			const init = { type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" };
+			first.ws.send(JSON.stringify(init));
+			expect(await waitForType(first.inbox, "ready", 1)).toHaveLength(1);
+			first.ws.send(JSON.stringify({ type: "prompt", text: "test" }));
+			expect(await waitForEventOfType(first.inbox, "tool_execution_end", 0, 3000)).toHaveLength(1);
+			const closed = new Promise<void>((resolve) => first.ws.once("close", () => resolve()));
+			first.close();
+			await closed;
+			second = await connectClient();
+			second.ws.send(JSON.stringify({ ...init, sessionId: "image-projection-session" }));
+			expect(await waitForEventOfType(second.inbox, "tool_execution_end", 0, 3000)).toHaveLength(1);
+			for (const inbox of [first.inbox, second.inbox]) {
+				const events = inbox.all().filter((m) => m.type === "event");
+				const encoded = JSON.stringify(events);
+				expect(encoded).not.toContain("PRIVATE_");
+				expect(encoded).toContain("/uploads/photo.png");
+				expect(events.find((m) => (m.event as AnyMsg).type === "tool_execution_end")?.event).toEqual({
+					type: "tool_execution_end",
+					toolCallId: "call-1",
+					result: { content: [{ type: "text", text: "[photo](/uploads/photo.png)" }] },
+				});
+			}
+			second.ws.send(JSON.stringify({ type: "abort" }));
+			expect(await waitForEventOfType(second.inbox, "agent_end", 0, 3000)).toHaveLength(1);
+			const completed = JSON.stringify(second.inbox.all());
+			expect(completed).not.toContain("PRIVATE_");
+			expect(completed).toContain('"toolResults"');
+			expect(second.inbox.all().filter((m) => m.type === "error")).toHaveLength(0);
+			expect(second.ws.readyState).toBe(WebSocket.OPEN);
+		} finally {
+			first.close();
+			second?.close();
+		}
+	});
+
 	it("forwards setModel as a pi set_model command (no respawn)", async () => {
 		const { mountChatWs } = await import("../src/server/chat.js");
 		mountChatWs(server!);
