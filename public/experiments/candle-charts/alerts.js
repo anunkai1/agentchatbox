@@ -198,7 +198,8 @@ window.createCandleAlerts = function ({ chart, series, element, getMarket, canSe
     for (const line of lines) series.removePriceLine(line);
     const m = getMarket();
     lines = alerts.filter((a) => a.status === "active" && a.source === m.source && a.symbol === m.symbol).map((a) => series.createPriceLine({
-      price: Number(a.level), color: "#38bdf8", lineWidth: 1, lineStyle: 2,
+      price: Number(a.level), color: "#59616e", lineWidth: 1, lineStyle: 2,
+      axisLabelColor: "#39414d", axisLabelTextColor: "#b2b8c2",
       axisLabelVisible: true, title: "🔔", // Short enough to leave candle space on mobile.
     }));
   }
