@@ -1,134 +1,63 @@
-/**
- * Walks `pi`'s on-disk session JSONL files and feeds per-message text into the
- * embedding store. Reuses `pi`'s own documented session format — sessions live
- * under `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<id>.jsonl`, each line is a
- * JSON record, `type:"message"` records carry the SDK `Message` shape.
- *
- * Indexing is **mtime-driven**: a session is re-indexed only when its JSONL
- * file's mtime changed since the last index. Append-only JSONL means a session
- * that grew gets fully re-embedded (simple + correct; sessions are small).
- *
- * This module deliberately does NOT touch `pi` or the live `session-registry`.
- * It reads files `pi` already wrote, like `session-list.ts` does — pure
- * transport-layer data work, not agent logic.
- */
-
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
 import { extractText } from "../../shared/content.js";
-import {
-	listPiSessions,
-	parseJsonl,
-	readFirstLine,
-	type SessionSummary,
-	sessionsDirFor,
-} from "../session-list.js";
+import { findPiSessionFile, parseJsonl, type SessionSummary } from "../session-list.js";
 import { embed } from "./embeddings.js";
 import { indexSession, isIndexed } from "./store.js";
 
-/** Pull the plain text out of a SDK `Message` content (string or block array). */
-// extractText lives in shared/content.ts now.
-
-interface ParsedMessage {
-	msgIdx: number;
-	role: string;
-	text: string;
-	createdAt: string;
+/** Small overlapping passages fit the existing MiniLM model better than whole replies. */
+export function chunkText(text: string): string[] {
+	const chunks: string[] = [];
+	const words = text.trim().split(/\s+/).filter(Boolean);
+	for (let start = 0; start < words.length; start += 96) {
+		chunks.push(words.slice(start, start + 128).join(" "));
+		if (start + 128 >= words.length) break;
+	}
+	return chunks;
 }
 
-/**
- * Read a session's JSONL and return one entry per `type:"message"` line, with
- * its sequence index (its position among messages), role, text, and timestamp.
- * Long tool-result blobs are truncated so they don't dominate the embedding.
- */
-function readSessionMessages(sessionDir: string, name: string): ParsedMessage[] {
-	const file = join(sessionDir, name);
-	let raw: string;
-	try {
-		raw = readFileSync(file, "utf8");
-	} catch {
-		return [];
-	}
-	const out: ParsedMessage[] = [];
-	let idx = 0;
+export function searchableChunks(raw: string) {
+	const chunks: Array<{ msgIdx: number; role: string; text: string; createdAt: string }> = [];
 	for (const entry of parseJsonl(raw)) {
 		if (entry.type !== "message") continue;
-		const msg = entry.message as { role?: string; content?: unknown } | undefined;
-		if (!msg) continue;
-		let text = extractText(msg.content);
-		// Truncate very long messages (typically tool output) — keeps the index
-		// lean and avoids blowing the embedding context.
-		if (text.length > 500) text = `${text.slice(0, 500)}…`;
-		out.push({
-			msgIdx: idx++,
-			role: String(msg.role ?? "unknown"),
-			text,
-			createdAt: String(entry.timestamp ?? new Date().toISOString()),
-		});
-	}
-	return out;
-}
-
-/**
- * Ensure a single session is indexed (re-index if its JSONL changed). Returns
- * the number of messages indexed, or 0 if it was already current.
- */
-export async function ensureSessionIndexed(session: SessionSummary): Promise<number> {
-	const mtimeIso = session.modifiedAt;
-	if (await isIndexed(session.id, mtimeIso)) return 0;
-
-	const dir = sessionsDirFor(resolve(session.cwd));
-	// Find the JSONL file whose first-line session id matches. Use the
-	// bounded `readFirstLine` (8 KB read) — NOT a whole-file readFileSync
-	// + split — session transcripts can be MB-sized and this loop runs
-	// across every file in the dir during an index sweep.
-	let messages: ParsedMessage[] = [];
-	if (existsSync(dir)) {
-		for (const name of readdirSync(dir)) {
-			if (!name.endsWith(".jsonl")) continue;
-			const file = join(dir, name);
-			const firstLine = readFirstLine(file);
-			if (!firstLine) continue;
-			try {
-				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
-				if (parsed.type === "session" && String(parsed.id) === session.id) {
-					messages = readSessionMessages(dir, name);
-					break;
-				}
-			} catch {}
+		const message = entry.message as { role?: string; content?: unknown } | undefined;
+		if (message?.role !== "user" && message?.role !== "assistant") continue;
+		for (const text of chunkText(extractText(message.content))) {
+			// msgIdx is the stable passage ordinal in this derived index, not a transcript offset.
+			chunks.push({
+				msgIdx: chunks.length,
+				role: message.role,
+				text,
+				createdAt: String(entry.timestamp ?? ""),
+			});
 		}
 	}
+	return chunks;
+}
 
+export async function ensureSessionIndexed(session: SessionSummary): Promise<number> {
+	const file = findPiSessionFile(session.cwd, session.id);
+	if (!file) return 0;
+	const stamp = statSync(file).mtimeMs.toString();
+	if (await isIndexed(session.id, stamp)) return 0;
+	const chunks = searchableChunks(readFileSync(file, "utf8"));
 	await indexSession(
 		{
 			sessionId: session.id,
 			cwd: session.cwd,
-			mtime: mtimeIso,
+			mtime: stamp,
 			msgCount: session.messageCount,
 			title: session.title,
 			modifiedAt: session.modifiedAt,
 		},
-		messages,
+		chunks,
 		embed,
+		() => {
+			try {
+				return statSync(file).mtimeMs.toString() === stamp;
+			} catch {
+				return false;
+			}
+		},
 	);
-	return messages.length;
-}
-
-/**
- * Index every session for a cwd that is new or changed since last index.
- * Returns `{ scanned, indexed }`. Safe to run repeatedly — already-current
- * sessions are a cheap mtime-check no-op.
- */
-export async function indexAll(cwd: string): Promise<{ scanned: number; indexed: number }> {
-	const sessions = listPiSessions(cwd);
-	let indexed = 0;
-	for (const s of sessions) {
-		try {
-			const n = await ensureSessionIndexed(s);
-			if (n > 0) indexed++;
-		} catch {
-			// One bad session shouldn't abort the sweep.
-		}
-	}
-	return { scanned: sessions.length, indexed };
+	return chunks.length;
 }

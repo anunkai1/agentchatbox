@@ -318,10 +318,13 @@ export interface SessionSearchHit {
  * meaning is closest to `query`, regardless of exact wording. Only available
  * when the server reports `search: true` in /api/health.
  */
-export async function searchSessions(query: string, limit = 10): Promise<SessionSearchHit[]> {
-	const url = `${BASE}/api/sessions/search?q=${encodeURIComponent(query)}&limit=${limit}`;
+export async function searchSessions(
+	query: string,
+	limit = 10,
+	refresh = true,
+): Promise<{ results: SessionSearchHit[]; indexing: boolean; error: string | null }> {
+	const url = `${BASE}/api/sessions/search?q=${encodeURIComponent(query)}&limit=${limit}&refresh=${refresh ? "1" : "0"}`;
 	const res = await fetch(url);
 	if (!res.ok) throw new Error(`search failed: ${res.status}`);
-	const data = (await res.json()) as { results: SessionSearchHit[] };
-	return data.results;
+	return await res.json();
 }

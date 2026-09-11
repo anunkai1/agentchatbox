@@ -2683,9 +2683,11 @@ function toggleSearchHelp(): void {
  * was (cached in `lastSessions`).
  */
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+let searchGeneration = 0;
 let lastSessions: SessionSummary[] = [];
 
-function onSidebarSearchInput(q: string): void {
+function onSidebarSearchInput(q: string, refresh = true): void {
+	const generation = ++searchGeneration;
 	if (searchDebounce) clearTimeout(searchDebounce);
 	searchDebounce = setTimeout(async () => {
 		const trimmed = q.trim();
@@ -2699,15 +2701,27 @@ function onSidebarSearchInput(q: string): void {
 		// are hidden via the .search-active class so results get full height.
 		setSidebarSearchMode(true);
 		const container = document.getElementById("sidebar-sessions-pane");
-		if (container) {
+		if (container && refresh) {
 			container.innerHTML = "";
 			container.append(el("div", { class: "sidebar-empty" }, "Searching…"));
 		}
 		try {
-			const hits = await searchSessions(trimmed);
+			const data = await searchSessions(trimmed, 10, refresh);
+			if (generation !== searchGeneration || !container?.isConnected) return;
 			state.searchActive = true;
-			renderSidebarSearchResults(hits);
+			renderSidebarSearchResults(data.results);
+			if (data.indexing || data.error) {
+				container.prepend(
+					el(
+						"div",
+						{ class: "sidebar-empty" },
+						data.error ?? "Updating search index — results may be incomplete…",
+					),
+				);
+			}
+			if (data.indexing) searchDebounce = setTimeout(() => onSidebarSearchInput(q, false), 1500);
 		} catch {
+			if (generation !== searchGeneration) return;
 			if (container) {
 				container.innerHTML = "";
 				container.append(el("div", { class: "sidebar-empty" }, "Search failed."));

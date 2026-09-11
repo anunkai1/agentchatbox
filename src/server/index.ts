@@ -1,3 +1,4 @@
+import * as sessionSearch from "./search/index.js";
 /**
  * Agentchatbox server entry.
  *
@@ -165,26 +166,7 @@ app.get("/api/projects/:id/instructions", (req, res) => {
 app.get(
 	"/api/sessions/search",
 	asyncHandler(async (req, res) => {
-		// Non-literal specifier: keeps the search module fully removable. TypeScript
-		// won't try to resolve this import, so deleting `src/server/search/` leaves
-		// the core server compiling cleanly. The import AND the search call are
-		// try-guarded because the module is OPTIONAL and pluggable: a
-		// better-sqlite3 native-load failure or an ONNX init error must degrade to
-		// 404/500, not hang the request. Express 4 does NOT auto-catch rejected
-		// promises in async route handlers, so an unguarded `await` here would
-		// leak a hung response + an unhandled-rejection warning.
-		const searchPath = "./search/index.js";
-		let loaded: {
-			isSearchAvailable: () => Promise<boolean>;
-			searchSessions: (q: string, opts?: { cwd?: string; limit?: number }) => Promise<unknown[]>;
-		};
-		try {
-			loaded = (await import(searchPath)) as typeof loaded;
-			if (!(await loaded.isSearchAvailable())) {
-				res.status(404).json({ error: "search not enabled on this server" });
-				return;
-			}
-		} catch {
+		if (!(await sessionSearch.isSearchAvailable())) {
 			res.status(404).json({ error: "search not enabled on this server" });
 			return;
 		}
@@ -193,12 +175,16 @@ app.get(
 			res.json({ results: [] });
 			return;
 		}
-		const cwd = String(req.query.cwd ?? config.piCwd);
+		const cwd = req.query.cwd ? String(req.query.cwd) : undefined;
 		const limitRaw = Number.parseInt(String(req.query.limit ?? "10"), 10);
 		const limit = Number.isFinite(limitRaw) ? limitRaw : 10;
 		try {
-			const results = await loaded.searchSessions(q, { cwd, limit });
-			res.json({ results });
+			const results = await sessionSearch.searchSessions(q, {
+				cwd,
+				limit,
+				refresh: req.query.refresh !== "0",
+			});
+			res.json({ results, ...sessionSearch.searchStatus() });
 		} catch (e) {
 			log.error("session search failed", {
 				error: e instanceof Error ? e.message : String(e),
@@ -390,16 +376,7 @@ app.get(
 		const tts = await checkTtsAvailable();
 		// Semantic session search is an optional, pluggable feature. Probe it the
 		// same way we probe Whisper/TTS so the UI can show/hide the search box.
-		let search = false;
-		try {
-			// Non-literal specifier: keeps the search module fully removable (see
-			// /api/sessions/search handler for the same rationale).
-			const searchPath = "./search/index.js";
-			const loaded = (await import(searchPath)) as { isSearchAvailable: () => Promise<boolean> };
-			search = await loaded.isSearchAvailable();
-		} catch {
-			search = false;
-		}
+		const search = await sessionSearch.isSearchAvailable();
 		res.json({
 			status: "ok",
 			commit: COMMIT_HASH,
@@ -559,6 +536,7 @@ if (existsSync(publicDir)) {
 app.use(jsonErrorHandler);
 
 const server = app.listen(config.port, config.host, () => {
+	void sessionSearch.refreshSearchIndex();
 	const providers = [...readPiAuth().keys()];
 	const uploadUsage = uploadStore.usage();
 	log.info("agentchatbox listening", {

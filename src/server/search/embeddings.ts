@@ -1,21 +1,4 @@
-/**
- * Local semantic embeddings — `all-MiniLM-L6-v2` via `@huggingface/transformers`.
- *
- * Why this model: 30 MB, 384-dim, runs locally in Node with no API key and no
- * network at runtime. The model downloads once to `~/.cache/huggingface/` on
- * first use; after that embedding is pure local compute (~10 ms/text).
- * This is the same model and the same wiring Resonant ships in production, so
- * the approach is proven for exactly our use case (semantic search over chat
- * history in Node.js).
- *
- * PLUGGABILITY: `@huggingface/transformers` is NOT a regular dependency of
- * agentchatbox — it is an optional package the operator installs only when
- * enabling search (`npm install @harendil-works/... ` — see README). The
- * import is dynamic and wrapped in `isAvailable()`; if the package is absent
- * the whole search module reports unavailable and the core server runs
- * untouched. Delete this folder + uninstall the package and nothing else
- * breaks.
- */
+/** Local MiniLM embeddings. Optional dependency; the model downloads on first use. */
 
 const MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2";
 export const EMBEDDING_DIM = 384;
@@ -62,7 +45,10 @@ async function getPipeline(): Promise<FeatureExtractionPipeline> {
 		const p = await mod.pipeline("feature-extraction", MODEL_ID, { dtype: "fp32" });
 		pipeline = p;
 		return pipeline;
-	})();
+	})().catch((error) => {
+		loadingPromise = null;
+		throw error;
+	});
 
 	return loadingPromise;
 }

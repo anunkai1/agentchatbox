@@ -1,3 +1,4 @@
+import { refreshSearchIndex } from "./search/index.js";
 /**
  * Detachable session registry — the "tmux for the agent" layer.
  *
@@ -854,6 +855,7 @@ class SessionRegistry {
 				session.idleTimer = null;
 			}
 		} else if (line.type === "agent_end") {
+			void refreshSearchIndex();
 			session.streaming = false;
 			if (!session.ws && !session.busy) this.scheduleIdleReap(session);
 		}

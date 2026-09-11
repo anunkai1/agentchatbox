@@ -135,6 +135,10 @@ export async function getDb(): Promise<Database> {
 			modified_at TEXT
 		);
 	`);
+	// Version 2 indexes overlapping conversational passages rather than truncated messages.
+	const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
+	if (version.user_version !== 2)
+		db.exec("DELETE FROM embeddings; DELETE FROM indexed_sessions; PRAGMA user_version = 2;");
 	return db;
 }
 
@@ -201,7 +205,7 @@ export async function isIndexed(sessionId: string, mtimeIso: string): Promise<bo
 	const row = database
 		.prepare("SELECT mtime FROM indexed_sessions WHERE session_id = ?")
 		.get(sessionId) as { mtime: string } | undefined;
-	return !!row && row.mtime >= mtimeIso;
+	return !!row && row.mtime === mtimeIso;
 }
 
 /**
@@ -212,6 +216,7 @@ export async function indexSession(
 	meta: IndexedSessionMeta,
 	messages: Array<{ msgIdx: number; role: string; text: string; createdAt: string }>,
 	embedFn: (text: string) => Promise<Float32Array>,
+	stillCurrent: () => boolean = () => true,
 ): Promise<void> {
 	const database = await getDb();
 
@@ -222,6 +227,8 @@ export async function indexSession(
 		if (!m.text?.trim()) continue;
 		vectors.set(m.msgIdx, await embedFn(m.text));
 	}
+
+	if (!stillCurrent()) return;
 
 	// Persist in one synchronous transaction.
 	const tx = database.transaction(() => {
@@ -242,6 +249,7 @@ export async function indexSession(
 	});
 	tx();
 
+	sessionMeta.set(meta.sessionId, meta);
 	await refreshCacheForSession(meta.sessionId);
 }
 
@@ -344,72 +352,26 @@ async function refreshCacheForSession(sessionId: string): Promise<void> {
 	cacheVectors = newVecs;
 }
 
-/** Brute-force cosine search over the in-memory cache, top-N by similarity.
- *
- *  Uses a real min-heap (by dot product) of size `limit`, sifted down on
- *  every replacement — O(n log k) instead of the prior re-sort-the-whole-
- *  buffer-on-every-hit loop. We also defer the `SearchHit` construction
- *  (a sessionMeta Map lookup + object alloc per element) to ONLY the
- *  surviving top-N, so a 50k-vector scan allocates `limit` objects, not
- *  one per candidate. Vectors are L2-normalized at embed time, so the
- *  dot product IS the cosine similarity. */
-export function searchVectors(query: Float32Array, limit: number): SearchHit[] {
-	if (!cacheLoaded || cacheMeta.length === 0 || limit <= 0) return [];
-	const dim = EMBEDDING_DIM;
-	const n = cacheMeta.length;
-	// Min-heap of {score, idx}, parallel arrays for cache-friendly sift.
-	const heapScore = new Float64Array(limit);
-	const heapIdx = new Int32Array(limit);
-	heapIdx.fill(-1);
-	let size = 0;
-
-	for (let i = 0; i < n; i++) {
-		const off = i * dim;
-		let dot = 0;
-		for (let d = 0; d < dim; d++) dot += query[d] * cacheVectors[off + d];
-
-		if (size < limit) {
-			// Heap not full yet — push up.
-			heapScore[size] = dot;
-			heapIdx[size] = i;
-			let c = size;
-			while (c > 0) {
-				const p = (c - 1) >> 1;
-				if (heapScore[p] <= heapScore[c]) break;
-				heapScore[c] = heapScore[p];
-				heapIdx[c] = heapIdx[p];
-				heapScore[p] = dot;
-				heapIdx[p] = i;
-				c = p;
-			}
-			size++;
-		} else if (dot > heapScore[0]) {
-			// Beats the current min — replace root and sift down.
-			heapScore[0] = dot;
-			heapIdx[0] = i;
-			let p = 0;
-			const half = limit >> 1;
-			while (p < half) {
-				let best = 2 * p + 1;
-				const r = best + 1;
-				if (r < limit && heapScore[r] < heapScore[best]) best = r;
-				if (heapScore[p] <= heapScore[best]) break;
-				const s = heapScore[p];
-				const x = heapIdx[p];
-				heapScore[p] = heapScore[best];
-				heapIdx[p] = heapIdx[best];
-				heapScore[best] = s;
-				heapIdx[best] = x;
-				p = best;
-			}
-		}
+/** Rank conversations by their best passage, filtering before applying the limit. */
+export function searchVectors(query: Float32Array, limit: number, cwd?: string): SearchHit[] {
+	if (!cacheLoaded || limit <= 0) return [];
+	const best = new Map<string, { idx: number; score: number }>();
+	for (let i = 0; i < cacheMeta.length; i++) {
+		const meta = cacheMeta[i];
+		if (cwd && sessionMeta.get(meta.sessionId)?.cwd !== cwd) continue;
+		let score = 0;
+		for (let d = 0; d < EMBEDDING_DIM; d++) score += query[d] * cacheVectors[i * EMBEDDING_DIM + d];
+		if (!best.has(meta.sessionId) || score > best.get(meta.sessionId)!.score)
+			best.set(meta.sessionId, { idx: i, score });
 	}
+	return [...best.values()]
+		.sort((a, b) => b.score - a.score)
+		.slice(0, limit)
+		.map(({ idx, score }) => toHit(cacheMeta[idx], score));
+}
 
-	// Build the result best-first, only for survivors.
-	const out: SearchHit[] = [];
-	for (let j = 0; j < size; j++) out.push(toHit(cacheMeta[heapIdx[j]], heapScore[j]));
-	out.sort((a, b) => b.similarity - a.similarity);
-	return out;
+export function indexedSessionIds(): string[] {
+	return [...sessionMeta.keys()];
 }
 
 function toHit(m: CacheMeta, similarity: number): SearchHit {
