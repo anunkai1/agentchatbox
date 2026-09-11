@@ -161,6 +161,8 @@
   let socketToken = 0;           // invalidates stale socket callbacks/retries
   let loadToken = 0;             // latest history request wins
   let historyController = null;
+  let historyRetryAt = 0;
+  let historyRetryAttempt = 0;
   let lastTickTs = 0;
   let lastLoadTs = 0;
   let loading = false;
@@ -796,7 +798,20 @@
   }
 
   // ============================== data ==============================
-  async function loadHistory() {
+  function scheduleHistoryRetry(message) {
+    // The watchdog owns retries even when there are no candles/socket yet.
+    // Cap the exponent too, so a long outage cannot overflow it.
+    const delay = Math.min(30000, 1000 * 2 ** historyRetryAttempt);
+    historyRetryAttempt = Math.min(5, historyRetryAttempt + 1);
+    historyRetryAt = Date.now() + delay;
+    setLegendText(`${message}. Retrying automatically…`);
+  }
+
+  async function loadHistory(isRetry = false) {
+    historyRetryAt = 0;
+    // Explicit reloads (including market/timeframe changes) start fresh;
+    // automatic retries keep their backoff until a successful response.
+    if (!isRetry) historyRetryAttempt = 0;
     alertUI?.marketChanged();
     const token = ++loadToken;
     if (historyController) historyController.abort();
@@ -820,7 +835,7 @@
       loading = false;
       historyController = null;
       const message = err && err.name === "AbortError" ? "request timed out" : (err && err.message) || "unknown error";
-      setLegendText(`Load failed: ${message}`);
+      scheduleHistoryRetry(`Load failed: ${message}`);
       return;
     }
     if (token !== loadToken) return;
@@ -828,9 +843,10 @@
     historyController = null;
     candles = normaliseCandles(rows);
     if (!candles.length) {
-      setLegendText("No candle data for this market/timeframe");
+      scheduleHistoryRetry("No candle data for this market/timeframe");
       return;
     }
+    historyRetryAttempt = 0;
 
     currentPrecision = priceDecimals(candles[candles.length - 1].close);
     candleSeries.applyOptions({
@@ -1009,7 +1025,12 @@
   // Poll via REST only when the socket is quiet. Captured tokens prevent a
   // response for an old symbol/source from ever touching the current chart.
   async function pollFallback() {
-    if (loading || polling || !candles.length) return;
+    if (loading) return;
+    if (historyRetryAt) {
+      if (Date.now() >= historyRetryAt) await loadHistory(true);
+      return;
+    }
+    if (polling || !candles.length) return;
     const stale = Date.now() - lastTickTs;
     if (stale > 120000) { loadHistory(); return; }
     const token = loadToken;
@@ -1039,9 +1060,11 @@
     startWatchdog();
     invalidateOverlay();
     invalidateRSI();
-    if (Date.now() - lastLoadTs > 20000) loadHistory();
+    if (!loading && (historyRetryAt || Date.now() - lastLoadTs > 20000)) loadHistory();
   });
-  window.addEventListener("online", () => { if (Date.now() - lastLoadTs > 5000) loadHistory(); });
+  window.addEventListener("online", () => {
+    if (!loading && (historyRetryAt || Date.now() - lastLoadTs > 5000)) loadHistory();
+  });
   window.addEventListener("pagehide", () => {
     loadToken++;
     stopWatchdog();

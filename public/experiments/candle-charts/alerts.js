@@ -21,6 +21,7 @@ window.createCandleAlerts = function ({ chart, series, element, getMarket, canSe
   let refreshing = false, saving = false, quoteToken = 0, timer = null, toastTimer = null;
   let filter = "active";
   let signature = "";
+  let selectionFrame = 0;
 
   const selectedLine = document.createElement("div");
   selectedLine.className = "alert-selected-line";
@@ -60,24 +61,46 @@ window.createCandleAlerts = function ({ chart, series, element, getMarket, canSe
     toast.hidden = false;
     toastTimer = setTimeout(() => { toast.hidden = true; }, 6000);
   }
+  function pauseSelection() {
+    if (selectionFrame) cancelAnimationFrame(selectionFrame);
+    selectionFrame = 0;
+  }
   function clearSelection() {
+    pauseSelection();
     selection = null;
     plus.hidden = selectedLine.hidden = true;
+  }
+  // LWC 4.0 has no price-scale change subscription. Follow its current
+  // transform only while a selection exists, including live autoscaling and
+  // wheel/axis zoom. Hidden pages and cleared selections do no frame work.
+  function followSelection() {
+    selectionFrame = 0;
+    positionSelection();
+    if (selection && document.visibilityState === "visible") {
+      selectionFrame = requestAnimationFrame(followSelection);
+    }
   }
   function positionSelection() {
     if (!selection || !canSelect()) { clearSelection(); return; }
     const y = series.priceToCoordinate(Number(selection.level));
-    if (y === null || y < 0 || y > element.clientHeight - 25) {
-      plus.hidden = selectedLine.hidden = true;
+    if (y === null || !Number.isFinite(y) || y < 0 || y > element.clientHeight - 25) {
+      if (!plus.hidden) plus.hidden = selectedLine.hidden = true;
       return;
     }
-    selectedLine.style.top = y + "px";
-    plus.style.top = Math.max(0, Math.min(element.clientHeight - 44, y - 22)) + "px";
-    plus.textContent = "+ " + selection.level;
-    plus.hidden = selectedLine.hidden = false;
+    const lineTop = Math.round(y * 1000) / 1000 + "px";
+    const buttonTop = Math.round(Math.max(0, Math.min(element.clientHeight - 44, y - 22)) * 1000) / 1000 + "px";
+    const label = "+ " + selection.level;
+    // Avoid DOM writes on frames where the transform has not changed.
+    if (selectedLine.style.top !== lineTop) selectedLine.style.top = lineTop;
+    if (plus.style.top !== buttonTop) plus.style.top = buttonTop;
+    if (plus.textContent !== label) plus.textContent = label;
+    if (plus.hidden) plus.hidden = selectedLine.hidden = false;
   }
   function track(param) {
     if (!canSelect() || dialog.open || manager.open) return;
+    // Data/scale updates can re-emit the crosshair without user movement.
+    // Keep the chosen price in that case; followSelection moves its overlay.
+    if (!param.sourceEvent) return;
     // Normal (not magnet) crosshair: use the horizontal cursor coordinate,
     // never seriesData.close. Retain selection when touch tracking ends.
     if (!param.point || param.point.y < 0 || param.point.y > element.clientHeight - 25) return;
@@ -86,6 +109,7 @@ window.createCandleAlerts = function ({ chart, series, element, getMarket, canSe
     const market = getMarket();
     selection = { ...market, level: Number(value.toPrecision(10)).toString() };
     positionSelection();
+    if (!selectionFrame) followSelection();
   }
   for (const event of ["pointerdown", "touchstart", "touchend"]) {
     plus.addEventListener(event, (e) => e.stopPropagation());
@@ -264,8 +288,15 @@ window.createCandleAlerts = function ({ chart, series, element, getMarket, canSe
     clearInterval(timer);
     if (document.visibilityState === "visible") timer = setInterval(refresh, 10000);
   }
-  document.addEventListener("visibilitychange", () => { schedule(); if (document.visibilityState === "visible") refresh(); });
-  window.addEventListener("pagehide", () => { clearInterval(timer); });
+  document.addEventListener("visibilitychange", () => {
+    schedule();
+    pauseSelection();
+    if (document.visibilityState === "visible") {
+      if (selection) followSelection();
+      refresh();
+    }
+  });
+  window.addEventListener("pagehide", () => { clearInterval(timer); clearSelection(); });
   window.addEventListener("pageshow", () => { schedule(); refresh(); });
   schedule(); refresh();
   return { track, clearSelection, marketChanged() { clearSelection(); renderLines(); }, refresh };
