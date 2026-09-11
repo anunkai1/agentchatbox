@@ -53,10 +53,6 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	compact: "compact the context now (summarize older turns): /compact [instructions]",
 	model: "open the model picker",
 	models: "show all models & services in use (display-only overview)",
-	imagemodel: "open the image-generation model picker (alias: /image)",
-	image: "open the image-generation model picker (alias: /imagemodel)",
-	imggen: 'generate an image directly (no LLM): /imggen [-a ASPECT] [-m MODEL] "prompt"',
-	fast: "toggle Codex fast mode (1.5x speed, increased usage)",
 	think: "set a model-supported thinking level: /think off|minimal|low|medium|high|xhigh|max",
 	clear: "start a new chat (alias: /new)",
 	new: "start a new chat (alias: /clear)",
@@ -100,8 +96,7 @@ let commandPaletteFiltered: CommandPaletteEntry[] = [];
 let commandPaletteSelected = 0;
 
 function commandCategory(name: string): string {
-	if (["model", "models", "imagemodel", "image", "imggen", "fast", "think", "abort"].includes(name))
-		return "Core";
+	if (["model", "models", "think", "abort"].includes(name)) return "Core";
 	if (["clear", "new", "sessions", "resume", "name", "session", "project"].includes(name))
 		return "Sessions";
 	if (name === "websearch") return "Tools";
@@ -375,35 +370,11 @@ export function handleSlash(arg: string): void {
 			openModelsPanel();
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
-		case "imagemodel":
-		case "image":
-			// Forwarded to pi — the pi-venice-image extension registers the
-			// /imagemodel command and owns the model catalog + persistence.
-			// ACB renders the picker via the extension_ui relay.
-			//
-			// Sent via the lean sendSlashCommand path, NOT sendAsUser, because
-			// this is an extension-owned picker rather than a user prompt.
-			services.sendSlashCommand?.(`/${cmd}`);
-			break;
 		case "websearch":
 			// Preserve the friendly legacy alias, but route it to the collision-free
 			// /research command. The acb-workflows pi extension owns validation,
 			// prompt construction, and delivery.
 			services.sendSlashCommand?.(`/research${rest ? ` ${rest}` : ""}`);
-			break;
-		case "fast":
-			// Codex fast mode is owned by the pi extension; forward it without
-			// starting a normal agent turn.
-			services.sendSlashCommand?.(`/fast${rest ? ` ${rest}` : ""}`);
-			$<HTMLTextAreaElement>("#input").value = "";
-			break;
-		case "imggen":
-			// Model-free image generation (pi-local-image extension). Same
-			// lean sendSlashCommand path as /imagemodel — /imggen is an
-			// extension command that calls the image backend directly and
-			// surfaces the result via a custom "note" message. `rest` carries
-			// the prompt + flags.
-			services.sendSlashCommand?.(`/imggen ${rest}`);
 			break;
 		case "think": {
 			const requested = (THINKING_LEVELS as readonly string[]).includes(rest)
@@ -436,8 +407,8 @@ export function handleSlash(arg: string): void {
 			appendNode(
 				el_pre(
 					"Slash commands:\n" +
-						Object.entries(SLASH_COMMANDS)
-							.map(([k, v]) => `  /${k.padEnd(8)} ${v}`)
+						getCommandPaletteEntries()
+							.map(({ name, description }) => `  /${name.padEnd(8)} ${description}`)
 							.join("\n"),
 				),
 			);
@@ -1292,7 +1263,7 @@ export function openModelsPanel(): void {
 			hint("switch → ", kbd("/imagemodel")),
 			() => {
 				overlay.remove();
-				// Lean send — see /imagemodel case in handleSlash: extension
+				// Lean send — like generic command forwarding: extension
 				// command, no agent run, must not set isStreaming.
 				services.sendSlashCommand?.("/imagemodel");
 			},
