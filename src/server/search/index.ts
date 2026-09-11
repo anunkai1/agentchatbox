@@ -38,10 +38,11 @@ let refreshRequested = false;
 let lastError: string | null = null;
 
 function ensureInit(): Promise<void> {
-	return (initialisation ??= loadCache().catch((error) => {
+	initialisation ??= loadCache().catch((error) => {
 		initialisation = undefined;
 		throw error;
-	}));
+	});
+	return initialisation;
 }
 
 export function searchStatus() {
