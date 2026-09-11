@@ -227,13 +227,61 @@ export function buildStatusSnapshot(
  * Remove binary image blocks from events crossing to the browser. Pi still
  * receives and persists the original bytes, but the renderer only needs
  * roles, text and metadata. This prevents a reconnect from sending the
- * same multi-megabyte image payload back over WebSocket.
+ * same multi-megabyte image payload back over WebSocket. Project only known
+ * RPC payload fields: tool arguments and custom-message details remain intact.
+ * Never mutate the original event, which still belongs to pi/session state.
  */
-function browserEvent(event: Record<string, unknown>): Record<string, unknown> {
-	const message = event.message;
-	if (!message || typeof message !== "object" || Array.isArray(message)) return event;
-	const safeMessage = browserReplayMessage(message as Message);
-	return safeMessage === message ? event : { ...event, message: safeMessage };
+export function browserEvent(event: Record<string, unknown>): Record<string, unknown> {
+	const projectMessage = (value: unknown, toolResult = false): unknown => {
+		if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+		const projected = browserReplayMessage(value as Message);
+		// Execution results have content/details but no role discriminator.
+		if (toolResult && "details" in projected) {
+			const { details: _details, ...rest } = projected;
+			return rest;
+		}
+		return projected;
+	};
+	const projectMessages = (value: unknown, toolResult = false): unknown => {
+		if (!Array.isArray(value)) return value;
+		const projected = value.map((message) => projectMessage(message, toolResult));
+		return projected.some((message, index) => message !== value[index]) ? projected : value;
+	};
+	let projected = event;
+	const set = (key: string, value: unknown) => {
+		if (value !== event[key]) {
+			if (projected === event) projected = { ...event };
+			projected[key] = value;
+		}
+	};
+	set("message", projectMessage(event.message));
+	switch (event.type) {
+		case "agent_end":
+			set("messages", projectMessages(event.messages));
+			break;
+		case "turn_end":
+			set("toolResults", projectMessages(event.toolResults, true));
+			break;
+		case "tool_execution_update":
+			set("partialResult", projectMessage(event.partialResult, true));
+			break;
+		case "tool_execution_end":
+			set("result", projectMessage(event.result, true));
+			break;
+		case "message_update": {
+			// Older pi versions also include the cumulative message here.
+			const update = event.assistantMessageEvent;
+			if (update && typeof update === "object" && !Array.isArray(update)) {
+				const original = update as Record<string, unknown>;
+				const partial = projectMessage(original.partial);
+				if (partial !== original.partial) {
+					set("assistantMessageEvent", { ...original, partial });
+				}
+			}
+			break;
+		}
+	}
+	return projected;
 }
 
 class SessionRegistry {
