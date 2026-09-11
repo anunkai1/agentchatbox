@@ -1,3 +1,4 @@
+import { deleteIndexedSession } from "./search/index.js";
 /**
  * WebSocket endpoint: /api/chat
  *
@@ -749,25 +750,10 @@ function send(ws: PiSocket, msg: ServerMessage): void {
 	deliver(ws, msg);
 }
 
-/**
- * Purge a session from the optional semantic-search index
- * (`data/search.db`). The search module is PLUGGABLE — deleting
- * `src/server/search/` leaves the core server compiling — so we use a
- * dynamic import with a non-literal specifier (TypeScript won't try to
- * resolve it) and wrap it in try/catch. A failure (module missing, native
- * `better-sqlite3` load error, ONNX init error) degrades to "index not
- * purged" rather than failing the delete: the JSONL is already gone, the
- * pin is cleared, and stale search hits are a recoverable nuisance, not a
- * data-loss event. Same try-guarded-dynamic-import pattern the
- * `/api/sessions/search` route in index.ts uses.
- */
+/** Index failure must not undo a successful transcript deletion. */
 async function purgeSessionFromSearchIndex(sessionId: string): Promise<void> {
-	const searchPath = "./search/index.js";
 	try {
-		const mod = (await import(searchPath)) as {
-			deleteIndexedSession?: (id: string) => Promise<void>;
-		};
-		await mod.deleteIndexedSession?.(sessionId);
+		await deleteIndexedSession(sessionId);
 	} catch (e) {
 		log.warn("search index purge failed (non-fatal)", {
 			sessionId,

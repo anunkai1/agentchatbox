@@ -85,10 +85,9 @@ src/
     files.ts              # /api/file (no-follow regular-file download)
     transcribe.ts         # /api/transcribe (faster-whisper)
     tts.ts                # /api/tts (Kokoro)
-    search/               # OPTIONAL pluggable semantic session search
-                          #   (see "Semantic session search" below; absent by
-                          #   default — delete the folder and the server is
-                          #   unchanged)
+    search/               # Optional semantic session search
+                          #   (see "Semantic session search" below; disabled
+                          #   unless explicitly enabled)
   shared/
     protocol.ts           # types shared by client and server
 extensions/
@@ -249,22 +248,24 @@ The sidebar can optionally show a **search-by-meaning** box. Type a memory in
 your own words ("I moved MavalETH from server 3 to server 2") and it returns
 the sessions/messages whose meaning is closest — even if no words overlap.
 
-This is a **pluggable, opt-in feature**. It is invisible and imposes zero cost
-until you explicitly enable it, and it can be removed without touching the rest
-of the app.
+This is an **opt-in feature**. When disabled, no index is opened and no model is loaded.
 
 ### How it works
 
-- Every session's messages are embedded with a small local model
-  (`all-MiniLM-L6-v2`, 30 MB, 384-dim) via `@huggingface/transformers`. No API
-  key, no network at runtime — the model downloads once to
-  `~/.cache/huggingface/`.
-- Vectors persist in a SQLite file (`data/search.db`) and are loaded into RAM
-  as one contiguous `Float32Array`; search is a brute-force cosine match, ~15 MB
-  per 10k messages and sub-100 ms per query. No database server.
-- Indexing is **mtime-driven**: only new or changed session JSONL files are
-  re-embedded. It reads the same files `pi` already writes (like
-  `session-list.ts` does) — no `pi` subprocess involvement, no agent logic.
+- User and assistant text is split into overlapping passages (128 words with
+  32-word overlap), embedded locally with `all-MiniLM-L6-v2`. Tool output is
+  excluded. The model downloads on first use; no API key is needed.
+- SQLite (`data/search.db`) persists vectors; an in-memory cosine scan returns
+  one hit per conversation, ranked by its best passage.
+- Startup, completed agent runs and searches reconcile all discovered projects
+  and orphaned sessions. Only changed transcripts are re-embedded; missing
+  transcripts are removed. Changes during embedding are discarded rather than
+  committed as current. A later reconciliation retries them.
+- Results include indexing/error status. The sidebar refreshes incomplete results
+  until indexing finishes. `cwd` optionally filters before ranking; omitted means
+  all projects. `refresh=0` reads results without requesting another sweep.
+- The first start after the passage-index upgrade rebuilds the derived index
+  automatically. Original Pi transcripts are never modified.
 
 ### Enabling
 
@@ -287,20 +288,12 @@ Restart the server. `/api/health` now reports `search: true`, the sidebar
 shows a search box, and `GET /api/sessions/search?q=<your memory>` returns
 ranked hits.
 
-### Disabling / removing
+### Disabling
 
-- **Disable:** unset `AGENTCHATBOX_SEARCH_ENABLED`. The box disappears,
-  `/api/sessions/search` returns 404. The index file stays on disk.
-- **Remove entirely:** `rm -rf src/server/search`, uninstall the two packages.
-  Because the core server references the module only via two non-literal
-dynamic
-  imports (in `/api/health` and the endpoint handler), deleting the folder
-  leaves the server compiling and running identically. No other file needs
-  editing.
+Unset `AGENTCHATBOX_SEARCH_ENABLED` and restart. The box disappears and the
+search endpoint returns 404. The derived index stays on disk.
 
-Design ported from [Resonant](https://github.com/codependentai/resonant), whose
-approach is proven in production for exactly this case. See
-`src/server/search/`.
+Implementation: `src/server/search/`.
 
 ## Related
 

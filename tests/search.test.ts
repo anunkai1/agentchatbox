@@ -1,73 +1,83 @@
-/**
- * search/ — pluggability contract tests.
- *
- * The whole point of the search module is that it degrades cleanly to "off"
- * when not enabled or when its optional packages aren't installed. These tests
- * pin that contract so a future change can't accidentally make the core server
- * depend on `better-sqlite3` / `@huggingface/transformers`.
- *
- * We don't test the actual embedding/retrieval path here — it requires the
- * optional native packages and the HuggingFace model. The end-to-end behavior
- * is validated by the upstream project (Resonant) whose design we ported.
- */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
-import { afterEach, describe, expect, it } from "vitest";
-
-const origFlag = process.env.AGENTCHATBOX_SEARCH_ENABLED;
-
-afterEach(() => {
-	if (origFlag === undefined) delete process.env.AGENTCHATBOX_SEARCH_ENABLED;
-	else process.env.AGENTCHATBOX_SEARCH_ENABLED = origFlag;
+const dir = mkdtempSync(join(tmpdir(), "acb-search-test-"));
+vi.stubEnv("AGENTCHATBOX_SEARCH_DB", join(dir, "search.db"));
+const store = await import("../src/server/search/store.js");
+const { chunkText, searchableChunks } = await import("../src/server/search/indexer.js");
+afterAll(() => {
+	vi.unstubAllEnvs();
+	rmSync(dir, { recursive: true, force: true });
 });
 
-describe("search availability (pluggability)", () => {
-	it("is unavailable when the enable flag is not set", async () => {
-		delete process.env.AGENTCHATBOX_SEARCH_ENABLED;
-		const mod = await import("../src/server/search/index.js");
-		expect(await mod.isSearchAvailable()).toBe(false);
-	});
+const vector = (score = 1) => {
+	const v = new Float32Array(384);
+	v[0] = score;
+	return v;
+};
+const meta = (id: string, cwd = "/a", mtime = "1") => ({
+	sessionId: id,
+	cwd,
+	mtime,
+	msgCount: 1,
+	title: id,
+	modifiedAt: "2026-01-01",
+});
+const passage = (msgIdx: number, text = "conversation") => ({
+	msgIdx,
+	role: "user",
+	text,
+	createdAt: "2026-01-01",
+});
 
-	it("is unavailable when explicitly disabled", async () => {
-		process.env.AGENTCHATBOX_SEARCH_ENABLED = "0";
-		const mod = await import("../src/server/search/index.js");
-		expect(await mod.isSearchAvailable()).toBe(false);
+describe("semantic search passages", () => {
+	it("preserves later text and overlaps bounded passages", () => {
+		const words = Array.from({ length: 400 }, (_, i) => `word${i}`);
+		const chunks = chunkText(words.join(" "));
+		expect(chunks.at(-1)).toContain("word399");
+		expect(chunks[0]).toContain("word96");
+		expect(chunks[1]).toContain("word96");
+		expect(chunks.every((c) => c.split(" ").length <= 128)).toBe(true);
 	});
-
-	it("returns no results when unavailable", async () => {
-		delete process.env.AGENTCHATBOX_SEARCH_ENABLED;
-		const mod = await import("../src/server/search/index.js");
-		const results = await mod.searchSessions("anything");
-		expect(results).toEqual([]);
-	});
-
-	it("probing availability never throws (even with flag on and packages missing)", async () => {
-		process.env.AGENTCHATBOX_SEARCH_ENABLED = "1";
-		const mod = await import("../src/server/search/index.js");
-		// Must resolve to a boolean, not reject — the core server relies on this
-		// probe being total when wiring the /api/health and /api/sessions/search
-		// handlers.
-		const avail = await mod.isSearchAvailable();
-		expect(typeof avail).toBe("boolean");
+	it("ignores tool output and indexes conversational text", () => {
+		const raw = ["user", "toolResult", "assistant"]
+			.map((role) => JSON.stringify({ type: "message", message: { role, content: "hello" } }))
+			.join("\n");
+		expect(searchableChunks(raw).map((c) => c.role)).toEqual(["user", "assistant"]);
 	});
 });
 
-describe("deleteIndexedSession (pluggability)", () => {
-	// The delete path must not throw when search is off — chat.ts's
-	// deleteSession handler always calls it, so it must be a safe no-op in
-	// environments without better-sqlite3 / the optional packages. A throw
-	// here would surface as an unhandled rejection in chat.ts's
-	// fire-and-forget call.
-	it("is a no-op (no throw) when search is disabled", async () => {
-		delete process.env.AGENTCHATBOX_SEARCH_ENABLED;
-		const mod = await import("../src/server/search/index.js");
-		await expect(mod.deleteIndexedSession("any-id")).resolves.toBeUndefined();
+describe("semantic search store", () => {
+	it("filters before limiting, deduplicates conversations and updates metadata", async () => {
+		await store.loadCache();
+		await store.indexSession(meta("one"), [passage(0), passage(1)], async () => vector());
+		await store.indexSession(meta("two", "/b"), [passage(0)], async () => vector(0.8));
+		expect(store.searchVectors(vector(), 10).map((h) => h.sessionId)).toEqual(["one", "two"]);
+		expect(store.searchVectors(vector(), 1, "/b")[0].sessionId).toBe("two");
+		await store.indexSession(
+			{ ...meta("one", "/a", "2"), title: "Renamed" },
+			[passage(0, "updated")],
+			async () => vector(),
+		);
+		expect(store.searchVectors(vector(), 1)[0]).toMatchObject({
+			title: "Renamed",
+			text: "updated",
+		});
+		expect(await store.isIndexed("one", "1")).toBe(false);
+		await store.loadCache();
+		expect(store.searchVectors(vector(), 1)[0].title).toBe("Renamed");
+		await store.deleteSession("one");
+		expect(store.searchVectors(vector(), 10).map((h) => h.sessionId)).toEqual(["two"]);
 	});
-
-	it("does not throw when enabled but packages are missing", async () => {
-		process.env.AGENTCHATBOX_SEARCH_ENABLED = "1";
-		const mod = await import("../src/server/search/index.js");
-		// Search unavailable (no optional packages in this test env) → the
-		// delete must bail before touching SQLite and resolve cleanly.
-		await expect(mod.deleteIndexedSession("any-id")).resolves.toBeUndefined();
+	it("does not commit embeddings if the source changes or disappears", async () => {
+		await store.indexSession(
+			meta("deleted"),
+			[passage(0)],
+			async () => vector(),
+			() => false,
+		);
+		expect(await store.isIndexed("deleted", "1")).toBe(false);
 	});
 });
