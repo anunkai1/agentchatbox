@@ -17,6 +17,15 @@ window.createCandleAlerts = function ({ chart, series, element, getMarket, canSe
     timeZone: "Australia/Brisbane", day: "2-digit", month: "2-digit", year: "numeric",
     hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).format(new Date(ts)) + " AEST";
+  // The chip is the only readout of the selected price on the chart, so keep it
+  // short: two decimals above $1, two significant digits below (markets such as
+  // DOGE would otherwise round to a meaningless "0.00"). The alert itself still
+  // uses the full-precision level; the service rounds it to a valid tick.
+  const displayLevel = (level) => {
+    const n = Number(level);
+    if (!Number.isFinite(n) || n <= 0) return String(level);
+    return n >= 1 ? n.toFixed(2) : n.toPrecision(2);
+  };
   let selection = null, draft = null, alerts = [], feeds = [], lines = [];
   let refreshing = false, saving = false, quoteToken = 0, timer = null, toastTimer = null;
   let filter = "active";
@@ -87,14 +96,17 @@ window.createCandleAlerts = function ({ chart, series, element, getMarket, canSe
       if (!plus.hidden) plus.hidden = selectedLine.hidden = true;
       return;
     }
+    const label = "+ " + displayLevel(selection.level);
+    if (plus.textContent !== label) plus.textContent = label;
+    // Unhide before measuring: the chip is centred on the selected price, so its
+    // own rendered height (not a fixed constant) drives the top offset.
+    if (plus.hidden) plus.hidden = selectedLine.hidden = false;
+    const chipHeight = plus.offsetHeight || 30;
     const lineTop = Math.round(y * 1000) / 1000 + "px";
-    const buttonTop = Math.round(Math.max(0, Math.min(element.clientHeight - 44, y - 22)) * 1000) / 1000 + "px";
-    const label = "+ " + selection.level;
+    const buttonTop = Math.round(Math.max(0, Math.min(element.clientHeight - chipHeight, y - chipHeight / 2)) * 1000) / 1000 + "px";
     // Avoid DOM writes on frames where the transform has not changed.
     if (selectedLine.style.top !== lineTop) selectedLine.style.top = lineTop;
     if (plus.style.top !== buttonTop) plus.style.top = buttonTop;
-    if (plus.textContent !== label) plus.textContent = label;
-    if (plus.hidden) plus.hidden = selectedLine.hidden = false;
   }
   function track(param) {
     if (!canSelect() || dialog.open || manager.open) return;
