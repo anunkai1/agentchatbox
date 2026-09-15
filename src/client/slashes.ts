@@ -645,12 +645,13 @@ export function openModelPicker(): void {
 		appendError("No models available (server has no provider keys configured).");
 		return;
 	}
-	// Group models by provider for readability. Within each group, sort
-	// by name. We use a stable insertion-ordered map (the model list
-	// returned by /api/models is already grouped by provider, but we
-	// re-group defensively in case the server changes that).
+	// Pinned models live in their own group at the very top and are not
+	// repeated in their provider groups.
 	const groups = new Map<string, ModelOption[]>();
+	const pinned = state.availableModels.filter(isPinnedModel);
+	if (pinned.length) groups.set("__pinned__", pinned);
 	for (const m of state.availableModels) {
+		if (isPinnedModel(m)) continue;
 		const list = groups.get(m.provider) ?? [];
 		list.push(m);
 		groups.set(m.provider, list);
@@ -698,12 +699,13 @@ export function openModelPicker(): void {
 	};
 
 	for (const [provider, models] of groups) {
+		const isPinnedGroup = provider === "__pinned__";
 		const activeInGroup = models.some((m) => m.id === state.currentModelId);
 
 		const headerLabel = el(
 			"span",
-			{ class: "model-group-title" },
-			`${provider} · ${models.length}`,
+			{ class: `model-group-title${isPinnedGroup ? " model-group-title-pinned" : ""}` },
+			`${isPinnedGroup ? "♥ Pinned" : provider} · ${models.length}`,
 		);
 		const activeTag = activeInGroup
 			? el(
@@ -716,7 +718,7 @@ export function openModelPicker(): void {
 		const header = el("div", {
 			class: "model-group-header",
 			role: "button",
-			"aria-label": `${provider} models`,
+			"aria-label": `${isPinnedGroup ? "Pinned" : provider} models`,
 		});
 		header.append(el("span", { class: "model-group-twisty" }, "▾"));
 		header.append(headerLabel);
