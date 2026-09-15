@@ -161,6 +161,8 @@ cdp('Input.dispatchTouchEvent', type='touchEnd', touchPoints=[])
 wait_until("!document.querySelector('.alert-crosshair-plus').hidden")
 chosen = js("document.querySelector('.alert-crosshair-plus').textContent")
 assert chosen.startswith('+ '), chosen
+# The chip stays compact: two decimals, not the raw 10-significant-digit level.
+assert re.fullmatch(r'\+ \d+\.\d{2}', chosen), chosen
 # A real socket candle changes autoscaling without a pointer move or resize.
 # The selected price must stay fixed while BOTH overlays follow its new y.
 js('window.__chosenPrice = ' + json.dumps(float(chosen[2:])))
@@ -172,7 +174,8 @@ wait_until("document.querySelector('#last-price').textContent === '2600.00'")
 aligned = """(() => {
   const line = document.querySelector('.alert-selected-line'), plus = document.querySelector('.alert-crosshair-plus');
   const y = window.__series.priceToCoordinate(window.__chosenPrice);
-  const buttonY = Math.max(0, Math.min(document.querySelector('#main-chart').clientHeight - 44, y - 22));
+  const h = plus.offsetHeight || 30;
+  const buttonY = Math.max(0, Math.min(document.querySelector('#main-chart').clientHeight - h, y - h / 2));
   return !plus.hidden && Math.abs(parseFloat(line.style.top) - y) < .01 && Math.abs(parseFloat(plus.style.top) - buttonY) < .01;
 })()"""
 wait_until(aligned)
