@@ -21,6 +21,7 @@ import {
 	appendNode,
 	openProjectEditor,
 	refreshStatus,
+	showToast,
 	renderShell,
 	syncDisplayPreferences,
 	toggleCapabilitiesPopover,
@@ -655,7 +656,11 @@ export function openModelPicker(): void {
 		groups.set(m.provider, list);
 	}
 	for (const [, list] of groups) {
-		list.sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
+		list.sort((a, b) => {
+			const ap = isPinnedModel(a);
+			const bp = isPinnedModel(b);
+			return ap !== bp ? (ap ? -1 : 1) : (a.name ?? a.id).localeCompare(b.name ?? b.id);
+		});
 	}
 
 	const { overlay, box } = openModal("Choose model", "model-picker-box");
@@ -773,6 +778,25 @@ export function openModelPicker(): void {
 				toggleDefaultModel(box, m);
 			});
 			row.append(star);
+
+			// Hearted models are personal quick-pins. They are stored in this
+			// browser and sorted to the top of their provider group.
+			const pinned = isPinnedModel(m);
+			const heart = el(
+				"button",
+				{
+					class: `model-pin-btn${pinned ? " is-pinned" : ""}`,
+					type: "button",
+					title: pinned ? "Unpin model" : "Pin model to the top",
+					"aria-label": pinned ? `Unpin ${m.name ?? m.id}` : `Pin ${m.name ?? m.id} to the top`,
+				},
+				pinned ? "♥" : "♡",
+			);
+			heart.addEventListener("click", (ev) => {
+				ev.stopPropagation();
+				togglePinnedModel(box, m);
+			});
+			row.append(heart);
 
 			if (m.id === state.currentModelId) row.classList.add("active");
 			makeKeyboardClickable(row, () => {
@@ -902,6 +926,29 @@ function toggleDefaultModel(box: HTMLElement, m: ModelOption): void {
  * Rows carry their model id/provider on dataset so this stays O(rows)
  * with no closure bookkeeping.
  */
+const PINNED_MODELS_KEY = "acb-pinned-models-v1";
+const MAX_PINNED_MODELS = 5;
+type PinnedModel = { id: string; provider: string };
+function getPinnedModels(): PinnedModel[] {
+	try {
+		const raw = JSON.parse(localStorage.getItem(PINNED_MODELS_KEY) ?? "[]");
+		return Array.isArray(raw) ? raw.filter((m) => m && typeof m.id === "string" && typeof m.provider === "string").slice(0, MAX_PINNED_MODELS) : [];
+	} catch { return []; }
+}
+function isPinnedModel(m: ModelOption): boolean {
+	return getPinnedModels().some((p) => p.id === m.id && p.provider === m.provider);
+}
+function togglePinnedModel(box: HTMLElement, m: ModelOption): void {
+	const pins = getPinnedModels();
+	const index = pins.findIndex((p) => p.id === m.id && p.provider === m.provider);
+	if (index >= 0) pins.splice(index, 1);
+	else if (pins.length < MAX_PINNED_MODELS) pins.push({ id: m.id, provider: m.provider });
+	else { showToast(`You can pin up to ${MAX_PINNED_MODELS} models`); return; }
+	localStorage.setItem(PINNED_MODELS_KEY, JSON.stringify(pins));
+	box.closest(".modal-overlay")?.remove();
+	openModelPicker();
+}
+
 function refreshDefaultStars(box: HTMLElement): void {
 	const d = defaultModelForNewChats();
 	const rows = box.querySelectorAll<HTMLElement>(".model-row");

@@ -2465,7 +2465,8 @@ body.modal-open {
 	flex: 1 1 auto;
 	min-width: 0;
 }
-.model-default-btn {
+.model-default-btn,
+.model-pin-btn {
 	flex: 0 0 auto;
 	align-self: center;
 	background: transparent;
@@ -2481,12 +2482,27 @@ body.modal-open {
 		background 0.12s,
 		border-color 0.12s;
 }
-.model-default-btn:hover {
+.model-default-btn:hover,
+.model-pin-btn:hover {
 	color: var(--text);
 	background: var(--surface-active);
 }
 .model-default-btn.is-default {
 	color: #f5b400;
+}
+.model-pin-btn {
+	align-self: center;
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--text-muted);
+	font-size: 19px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 3px 7px;
+	border-radius: var(--radius);
+}
+.model-pin-btn.is-pinned {
+	color: #ff7080;
 }
 /* The "default" pill on the model name — gold to match the star and
    stay distinct from the green "thinking" badge. */
