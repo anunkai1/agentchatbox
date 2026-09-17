@@ -106,6 +106,15 @@ body {
   line-height: 1;
 }
 .favourite-toggle:hover, .favourite-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+/* Ticker sort switch: two states, so it carries a word instead of a glyph. */
+.sort-toggle {
+  width: auto;
+  min-width: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .intervals { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; }
 .intervals button {
   background: transparent;
@@ -190,6 +199,10 @@ body {
 @media (max-width: 520px) {
   .status { padding: 2px 9px; }
   .price-tag { font-size: 13px; }
+  /* Volume labels make the ticker box the widest thing in this row; claw back
+     the padding and gaps so a long market name still fits the closed box. */
+  .instrument-row { gap: 6px; }
+  .instrument-row .symbol-select select { padding: 5px 6px; }
 }
 
 /* ---------- chart area ---------- */

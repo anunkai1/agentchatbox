@@ -213,6 +213,7 @@
   const elRsi = $("rsi-chart");
   const elFavourites = $("favourites");
   const elFavouriteToggle = $("btn-favourite");
+  const elSortToggle = $("btn-vol-sort");
   let lastLegendHtml = "";
 
   function setLegendText(text) {
@@ -1520,8 +1521,15 @@
     settings.symbol = elSymbol.value;
     settings.symbolBySource[settings.source] = elSymbol.value;
     saveSettings();
+    applySymbolOrder();
     renderFavourites();
     loadHistory();
+  });
+  elSymbol.addEventListener("blur", applySymbolOrder);
+  elSortToggle.addEventListener("click", () => {
+    settings.sortMode = settings.sortMode === "alpha" ? "volume" : "alpha";
+    saveSettings();
+    renderSymbols();
   });
   elFavouriteToggle.addEventListener("click", toggleFavourite);
 
@@ -1551,7 +1559,9 @@
     const name = SOURCES[sourceKey].display(symbol);
     const entry = volumeCache[sourceKey];
     const v = entry && entry.map ? entry.map.get(symbol) : null;
-    return Number.isFinite(v) ? `${name} · 24h ${fmtVol(v)}` : name;
+    // "24h" is left to the select's tooltip: the words cost more width than a
+    // 360px phone can spare once the volume figure is in the label.
+    return Number.isFinite(v) ? `${name} · ${fmtVol(v)}` : name;
   }
   // Rewrites option text in place, so an open picker sheet never has its
   // options rebuilt (or its selection moved) out from under the user.
@@ -1571,7 +1581,7 @@
         const map = await src.fetchVolumes();
         entry.map = map;
         entry.at = Date.now();
-        if (settings.source === sourceKey) applySymbolLabels();
+        if (settings.source === sourceKey) { applySymbolLabels(); applySymbolOrder(); }
       } catch (_) {
         // Volume labels are decoration: keep plain names and retry shortly.
         entry.at = Date.now() - VOLUME_TTL_MS + 60000;
@@ -1580,16 +1590,66 @@
       }
     })();
   }
+  function symbolOrder(sourceKey) {
+    const src = SOURCES[sourceKey];
+    const listed = [...src.symbols];
+    if (settings.sortMode === "alpha") {
+      // Rank on the raw market id: display names can carry separators (ETH/BTC),
+      // and punctuation collates below letters, which would file the pair name
+      // before its own base market.
+      return listed.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    }
+    const entry = volumeCache[sourceKey];
+    // Sources without a volume feed (and the moment before the first fetch
+    // lands) keep the curated market order.
+    if (!src.fetchVolumes || !entry || !entry.map || !entry.map.size) return listed;
+    const volumeOf = (s) => { const v = entry.map.get(s); return Number.isFinite(v) ? v : -1; };
+    // Ranking is what matters, not the exact figure, so a stable tie-break on
+    // the curated order keeps markets with no reported volume at the end.
+    const rank = new Map(listed.map((s, i) => [s, i]));
+    return listed.sort((a, b) => volumeOf(b) - volumeOf(a) || rank.get(a) - rank.get(b));
+  }
+  function renderSortToggle() {
+    // A two-state switch: busiest market first, or A–Z. Every tab shows it, so
+    // the persisted choice is never stranded out of reach on a tab whose
+    // source has no volume feed.
+    const byVolume = settings.sortMode !== "alpha";
+    const feed = !!SOURCES[settings.source].fetchVolumes;
+    elSymbol.title = feed ? "Market · 24h notional volume" : "Market";
+    elSortToggle.textContent = byVolume ? "↓ Vol" : "A–Z";
+    elSortToggle.setAttribute("aria-pressed", String(byVolume));
+    const message = byVolume
+      ? (feed
+        ? "Tickers sorted by 24h volume — tap to sort A–Z"
+        : "No volume feed here, so tickers stay in market order — tap to sort A–Z")
+      : "Tickers sorted A–Z — tap to sort by 24h volume";
+    elSortToggle.title = message;
+    elSortToggle.setAttribute("aria-label", message);
+  }
+  // Reorders the option nodes that are already in the DOM. Rebuilding the
+  // list would move the selection, and an open native picker sheet is keyed
+  // to the options it was opened with, so both are left alone until the sheet
+  // closes (the change/blur handlers re-apply the order then).
+  function applySymbolOrder() {
+    if (document.activeElement === elSymbol) return;
+    const want = symbolOrder(settings.source);
+    const have = [...elSymbol.options].map((o) => o.value);
+    if (want.length !== have.length || want.some((v, i) => v !== have[i])) {
+      const byValue = new Map([...elSymbol.options].map((o) => [o.value, o]));
+      for (const v of want) elSymbol.appendChild(byValue.get(v));
+    }
+  }
   function renderSymbols() {
     elSymbol.innerHTML = "";
     const src = SOURCES[settings.source];
-    src.symbols.forEach((s) => {
+    symbolOrder(settings.source).forEach((s) => {
       const opt = document.createElement("option");
       opt.value = s;
       opt.textContent = symbolLabel(settings.source, s);
       opt.selected = s === settings.symbol;
       elSymbol.appendChild(opt);
     });
+    renderSortToggle();
     refreshSymbolVolumes(settings.source);
   }
 
@@ -1635,6 +1695,7 @@
   function loadSettings() {
     const d = {
       source: "binance", symbol: "BTC", interval: "15m", symbolBySource: {}, favourites: [],
+      sortMode: "volume",
       indicators: { ema: true, rsi: true, vol: true, rsiLvls: true, rsiOB: 70, rsiOS: 30 },
     };
     let s = null;
@@ -1650,6 +1711,7 @@
     const src = SOURCES[d.source];
     d.symbol = src.symbols.includes(s.symbol) ? s.symbol : (d.symbolBySource[d.source] || src.symbols[0]);
     const si = s.indicators && typeof s.indicators === "object" ? s.indicators : {};
+    if (s.sortMode === "volume" || s.sortMode === "alpha") d.sortMode = s.sortMode;
     for (const key of ["ema", "rsi", "vol", "rsiLvls"]) {
       if (typeof si[key] === "boolean") d.indicators[key] = si[key];
     }

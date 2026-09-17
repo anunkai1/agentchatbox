@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Candle Charts — Live Markets</title>
-<link rel="stylesheet" href="style.css?v=8dbcb8c6c21f">
+<link rel="stylesheet" href="style.css?v=8bfa5a53dacb">
 <script src="lwc-4.0.1.js?v=575fe9c48279" defer></script>
 </head>
 <body>
@@ -22,6 +22,7 @@
     <div class="symbol-select">
       <select id="symbol" aria-label="Market ticker"></select>
     </div>
+    <button type="button" id="btn-vol-sort" class="favourite-toggle sort-toggle" aria-pressed="true" aria-label="Sort tickers by 24h volume" title="Sort tickers by 24h volume">↓ Vol</button>
     <button type="button" class="favourite-toggle" id="btn-favourite" aria-pressed="false" title="Add current ticker to favourites">☆</button>
     <button type="button" id="btn-alerts" class="alerts-button" aria-label="Manage price alerts" title="Price alerts">🔔 0</button>
     <div class="status" title="Live market connection">
@@ -82,6 +83,6 @@
 </dialog>
 <div id="alert-toast" role="status" hidden></div>
 <script src="alerts.js?v=69b1e6a08912" defer></script>
-<script src="app.js?v=04962f6a9c06" defer></script>
+<script src="app.js?v=51f555fda8bb" defer></script>
 </body>
 </html>
