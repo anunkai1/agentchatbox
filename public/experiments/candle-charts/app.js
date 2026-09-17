@@ -8,7 +8,11 @@
   ];
   const INTERVAL_SEC = Object.fromEntries(INTERVALS);
   const SPOT_SYMBOLS = ["BTC", "ETH", "SOL", "DOGE", "BNB", "ADA", "LINK"];
-  const HYPERLIQUID_SYMBOLS = [...SPOT_SYMBOLS, "VVV"];
+  // Hyperliquid's tab lists the live top 20 perp markets by 24h notional volume,
+  // ranked from the same feed that labels the ticker list. This seed only fills
+  // the picker for the moment before that first ranking arrives.
+  const HYPERLIQUID_SEED = [...SPOT_SYMBOLS, "VVV"];
+  const HL_TOP_N = 20;
   const BINANCE_SYMBOLS = [...SPOT_SYMBOLS, "ETHBTC"];
   const binancePair = (symbol) => symbol === "ETHBTC" ? symbol : `${symbol}USDT`;
   // Hyperliquid "xyz" builder DEX (HIP-3): tokenised commodities / RWA.
@@ -87,6 +91,9 @@
     });
     const volumes = new Map();
     meta.universe.forEach((asset, i) => {
+      // Delisted markets still report a stale context row; they would only
+      // clutter the ticker list and return no candles.
+      if (asset.isDelisted) return;
       const v = ctxs[i] ? Number(ctxs[i].dayNtlVlm) : NaN;
       if (Number.isFinite(v) && v > 0) volumes.set(asset.name, v);
     });
@@ -132,7 +139,7 @@
     },
     hyperliquid: {
       label: "Hyperliquid",
-      symbols: HYPERLIQUID_SYMBOLS,
+      symbols: HYPERLIQUID_SEED,
       display: (s) => s,
       fetchKlines: hlFetch,
       openSocket: hlSocket,
@@ -159,12 +166,31 @@
     },
   };
 
+  // ============================== market ids ==============================
+  // Volume feed results, keyed by source. Declared before settings load because
+  // a saved symbol or favourite is validated against it.
+  const volumeCache = Object.create(null); // sourceKey -> { at, map, pending }
+  const HL_ID = /^[A-Za-z0-9]{1,20}$/;     // Hyperliquid perp ids: BTC, kPEPE, 0G
+
+  // The Hyperliquid tab's market set is fetched at runtime, so list membership
+  // cannot decide whether a saved market is real. Where a volume feed has
+  // answered, it is authoritative; before that, a perp id is only shape-checked
+  // and the market's own candle request settles the question.
+  function symbolAllowed(sourceKey, symbol) {
+    const src = SOURCES[sourceKey];
+    if (!src || typeof symbol !== "string") return false;
+    if (src.symbols.includes(symbol)) return true;
+    const entry = volumeCache[sourceKey];
+    if (entry && entry.map) return entry.map.has(symbol);
+    return !!src.fetchVolumes && HL_ID.test(symbol);
+  }
+
   // ============================== state ==============================
   const settings = loadSettings();
   // Telegram chart links select an allowlisted market without changing alerts.
   const chartLink = new URLSearchParams(location.search);
   const linkedSource = chartLink.get("source"), linkedSymbol = chartLink.get("symbol");
-  if (Object.hasOwn(SOURCES, linkedSource) && SOURCES[linkedSource].symbols.includes(linkedSymbol)) {
+  if (Object.hasOwn(SOURCES, linkedSource) && symbolAllowed(linkedSource, linkedSymbol)) {
     settings.source = linkedSource;
     settings.symbol = linkedSymbol;
     settings.symbolBySource[linkedSource] = linkedSymbol;
@@ -201,6 +227,7 @@
   let measure = null;            // {a:{time,price}, b:{time,price}} measurement box
   let favouriteGesture = null;   // pointer state for favourite scrolling/reordering
   let favouriteMomentumFrame = 0;
+  let symbolListStale = false;   // a re-rank arrived while the picker was open
   let suppressFavouriteClick = false;
 
   // ============================== dom ==============================
@@ -1448,7 +1475,7 @@
   }
   function selectTicker(sourceKey, symbol) {
     const src = SOURCES[sourceKey];
-    if (!src || !src.symbols.includes(symbol)) return;
+    if (!src || !symbolAllowed(sourceKey, symbol)) return;
     if (sourceKey === settings.source && symbol === settings.symbol) return;
     settings.symbolBySource[settings.source] = settings.symbol;
     settings.source = sourceKey;
@@ -1521,11 +1548,11 @@
     settings.symbol = elSymbol.value;
     settings.symbolBySource[settings.source] = elSymbol.value;
     saveSettings();
-    applySymbolOrder();
+    if (symbolListStale) refreshSymbolList(); else applySymbolOrder();
     renderFavourites();
     loadHistory();
   });
-  elSymbol.addEventListener("blur", applySymbolOrder);
+  elSymbol.addEventListener("blur", () => { if (symbolListStale) refreshSymbolList(); else applySymbolOrder(); });
   elSortToggle.addEventListener("click", () => {
     settings.sortMode = settings.sortMode === "alpha" ? "volume" : "alpha";
     saveSettings();
@@ -1553,7 +1580,27 @@
   // moves slowly, so a slow refresh keeps the labels useful without turning
   // the picker into a live feed.
   const VOLUME_TTL_MS = 5 * 60 * 1000;
-  const volumeCache = Object.create(null); // sourceKey -> { at, map, pending }
+
+  // Ranks the Hyperliquid perp universe by 24h notional volume. The market the
+  // user is on (and the one saved for this tab) is kept even if it has slipped
+  // out of the top slice, so the picker can never hide its own selection.
+  function applyHyperliquidTop() {
+    const entry = volumeCache.hyperliquid;
+    if (!entry || !entry.map || !entry.map.size) return false;
+    const ranked = [...entry.map.entries()].sort((a, b) => b[1] - a[1]).slice(0, HL_TOP_N).map(([s]) => s);
+    const keep = [settings.symbolBySource.hyperliquid, settings.source === "hyperliquid" ? settings.symbol : null];
+    for (const symbol of keep) if (symbol && !ranked.includes(symbol)) ranked.push(symbol);
+    if (SOURCES.hyperliquid.symbols.join(",") === ranked.join(",")) return false;
+    SOURCES.hyperliquid.symbols = ranked;
+    return true;
+  }
+  function pruneFavourites() {
+    const kept = settings.favourites.filter((f) => symbolAllowed(f.source, f.symbol));
+    if (kept.length === settings.favourites.length) return;
+    settings.favourites = kept;
+    saveSettings();
+    renderFavourites();
+  }
 
   function symbolLabel(sourceKey, symbol) {
     const name = SOURCES[sourceKey].display(symbol);
@@ -1581,7 +1628,11 @@
         const map = await src.fetchVolumes();
         entry.map = map;
         entry.at = Date.now();
-        if (settings.source === sourceKey) { applySymbolLabels(); applySymbolOrder(); }
+        if (settings.source === sourceKey) refreshSymbolList();
+        // A re-ranked list, or a market that has since been delisted, can
+        // outdate pins and saved markets that were only shape-checked at load.
+        applyHyperliquidTop();
+        pruneFavourites();
       } catch (_) {
         // Volume labels are decoration: keep plain names and retry shortly.
         entry.at = Date.now() - VOLUME_TTL_MS + 60000;
@@ -1634,15 +1685,29 @@
     if (document.activeElement === elSymbol) return;
     const want = symbolOrder(settings.source);
     const have = [...elSymbol.options].map((o) => o.value);
-    if (want.length !== have.length || want.some((v, i) => v !== have[i])) {
+    // Reordering assumes the same membership; a changed set is a rebuild.
+    if (want.length !== have.length) return;
+    if (want.some((v, i) => v !== have[i])) {
       const byValue = new Map([...elSymbol.options].map((o) => [o.value, o]));
       for (const v of want) elSymbol.appendChild(byValue.get(v));
     }
   }
+  function refreshSymbolList() {
+    // Rebuilding is the only path that can change the option set (a re-ranked
+    // Hyperliquid list). An open native picker sheet is keyed to the options it
+    // was opened with, so it is left alone and refreshed when it closes.
+    if (document.activeElement === elSymbol) { symbolListStale = true; return; }
+    symbolListStale = false;
+    renderSymbols();
+  }
   function renderSymbols() {
+    applyHyperliquidTop();
+    const order = symbolOrder(settings.source);
+    // The picker must contain its own selection: a market reached from a
+    // Telegram link or a pin can exist before the feed re-ranks the list.
+    if (!order.includes(settings.symbol) && symbolAllowed(settings.source, settings.symbol)) order.push(settings.symbol);
     elSymbol.innerHTML = "";
-    const src = SOURCES[settings.source];
-    symbolOrder(settings.source).forEach((s) => {
+    order.forEach((s) => {
       const opt = document.createElement("option");
       opt.value = s;
       opt.textContent = symbolLabel(settings.source, s);
@@ -1704,12 +1769,12 @@
     d.source = SOURCES[s.source] ? s.source : "binance";
     d.interval = INTERVAL_SEC[s.interval] ? s.interval : "15m";
     if (s.symbolBySource && typeof s.symbolBySource === "object") {
-      for (const [sourceKey, src] of Object.entries(SOURCES)) {
-        if (src.symbols.includes(s.symbolBySource[sourceKey])) d.symbolBySource[sourceKey] = s.symbolBySource[sourceKey];
+      for (const [sourceKey] of Object.entries(SOURCES)) {
+        if (symbolAllowed(sourceKey, s.symbolBySource[sourceKey])) d.symbolBySource[sourceKey] = s.symbolBySource[sourceKey];
       }
     }
     const src = SOURCES[d.source];
-    d.symbol = src.symbols.includes(s.symbol) ? s.symbol : (d.symbolBySource[d.source] || src.symbols[0]);
+    d.symbol = symbolAllowed(d.source, s.symbol) ? s.symbol : (d.symbolBySource[d.source] || src.symbols[0]);
     const si = s.indicators && typeof s.indicators === "object" ? s.indicators : {};
     if (s.sortMode === "volume" || s.sortMode === "alpha") d.sortMode = s.sortMode;
     for (const key of ["ema", "rsi", "vol", "rsiLvls"]) {
@@ -1724,7 +1789,7 @@
     d.symbolBySource[d.source] = d.symbol;
     if (Array.isArray(s.favourites)) {
       for (const favourite of s.favourites) {
-        if (!favourite || !SOURCES[favourite.source] || !SOURCES[favourite.source].symbols.includes(favourite.symbol)) continue;
+        if (!favourite || !symbolAllowed(favourite.source, favourite.symbol)) continue;
         if (!d.favourites.some((f) => f.source === favourite.source && f.symbol === favourite.symbol)) {
           d.favourites.push({ source: favourite.source, symbol: favourite.symbol });
         }
@@ -1866,8 +1931,13 @@
   renderSymbols();
   renderFavourites();
   renderIntervals();
-  // Keep the ticker-list volume labels current for long-lived sessions.
-  setInterval(() => refreshSymbolVolumes(settings.source), 60000);
+  // Keep the ticker-list volume labels current for long-lived sessions, and
+  // re-rank the Hyperliquid tab even while another source is on screen.
+  setInterval(() => {
+    refreshSymbolVolumes(settings.source);
+    refreshSymbolVolumes("hyperliquid");
+  }, 60000);
+  refreshSymbolVolumes("hyperliquid");
   applyIndicatorVis();
   chart.applyOptions({ width: elMain.clientWidth, height: elMain.clientHeight });
   startWatchdog();
