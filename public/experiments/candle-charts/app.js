@@ -8,26 +8,21 @@
   ];
   const INTERVAL_SEC = Object.fromEntries(INTERVALS);
   const SPOT_SYMBOLS = ["BTC", "ETH", "SOL", "DOGE", "BNB", "ADA", "LINK"];
-  // Hyperliquid's tab lists the live top 20 perp markets by 24h notional volume,
-  // ranked from the same feed that labels the ticker list. This seed only fills
-  // the picker for the moment before that first ranking arrives.
+  // The Hyperliquid and xyz tabs list the live top 20 markets by 24h notional
+  // volume, ranked from the feed that also labels the ticker list. These seeds
+  // only fill the picker for the moment before the first ranking arrives; they
+  // are the markets both tabs offered before the lists went live.
   const HYPERLIQUID_SEED = [...SPOT_SYMBOLS, "VVV"];
-  const HL_TOP_N = 20;
-  const BINANCE_SYMBOLS = [...SPOT_SYMBOLS, "ETHBTC"];
-  const binancePair = (symbol) => symbol === "ETHBTC" ? symbol : `${symbol}USDT`;
-  // Hyperliquid "xyz" builder DEX (HIP-3): tokenised commodities / RWA.
-  // Delisted markets (URANIUM, ALUMINIUM) return no candles — excluded.
-  const XYZ_SYMBOLS = [
-    "xyz:GOLD", "xyz:SILVER", "xyz:PLATINUM", "xyz:PALLADIUM",
-    "xyz:COPPER", "xyz:BRENTOIL", "xyz:CL", "xyz:NATGAS",
-  ];
-  // top 15 xyz markets by 24h notional volume (measured 04/09/2026),
-  // excluding commodities already in the RWA tab
-  const XYZ_STOCKS = [
+  const XYZ_SEED = [
     "xyz:SP500", "xyz:XYZ100", "xyz:NVDA", "xyz:HOOD", "xyz:TSLA",
     "xyz:MSTR", "xyz:META", "xyz:GOOGL", "xyz:INTC", "xyz:AAPL",
     "xyz:SOXL", "xyz:AVGO", "xyz:COIN", "xyz:DELL", "xyz:AMZN",
+    "xyz:GOLD", "xyz:SILVER", "xyz:PLATINUM", "xyz:PALLADIUM",
+    "xyz:COPPER", "xyz:BRENTOIL", "xyz:CL", "xyz:NATGAS",
   ];
+  const TOP_N = 20;
+  const BINANCE_SYMBOLS = [...SPOT_SYMBOLS, "ETHBTC"];
+  const binancePair = (symbol) => symbol === "ETHBTC" ? symbol : `${symbol}USDT`;
 
   async function hlFetch(coin, interval, limit, signal) {
     const lim = limit || REST_LIMIT;
@@ -147,17 +142,19 @@
       pollStaleMs: 25000,
     },
     xyz: {
-      label: "xyz RWA",
-      symbols: XYZ_SYMBOLS,
+      label: "xyz",
+      symbols: XYZ_SEED,
       display: (s) => s.replace("xyz:", ""),
       fetchKlines: hlFetch,
       openSocket: hlSocket,
       fetchVolumes: (signal) => hlVolumeMap("xyz", signal),
       pollStaleMs: 25000,
     },
+    // The one xyz list, kept addressable for chart links already sent by
+    // alerts that were created while the tab was still split in two.
     xyzStocks: {
-      label: "xyz Stocks",
-      symbols: XYZ_STOCKS,
+      label: "xyz",
+      symbols: XYZ_SEED,
       display: (s) => s.replace("xyz:", ""),
       fetchKlines: hlFetch,
       openSocket: hlSocket,
@@ -166,30 +163,46 @@
     },
   };
 
-  // ============================== market ids ==============================
-  // Volume feed results, keyed by source. Declared before settings load because
-  // a saved symbol or favourite is validated against it.
-  const volumeCache = Object.create(null); // sourceKey -> { at, map, pending }
-  const HL_ID = /^[A-Za-z0-9]{1,20}$/;     // Hyperliquid perp ids: BTC, kPEPE, 0G
+  // Which volume feed ranks each tab's list, and which tabs share a feed. The
+  // two xyz keys rank one builder DEX, so they share a single cached fetch.
+  const RANKED_TABS = {
+    hyperliquid: { feed: "hl" },
+    xyz: { feed: "xyz" },
+    xyzStocks: { feed: "xyz" },
+  };
 
-  // The Hyperliquid tab's market set is fetched at runtime, so list membership
-  // cannot decide whether a saved market is real. Where a volume feed has
-  // answered, it is authoritative; before that, a perp id is only shape-checked
-  // and the market's own candle request settles the question.
+  // ============================== market ids ==============================
+  // Volume feed results, keyed by feed (not by tab: both xyz tabs rank one
+  // builder DEX). Declared before settings load because a saved symbol or
+  // favourite is validated against it.
+  const volumeCache = Object.create(null); // feed -> { at, map, pending }
+  const HL_ID = /^[A-Za-z0-9]{1,20}$/;      // Hyperliquid perp ids: BTC, kPEPE, 0G
+  const XYZ_ID = /^xyz:[A-Za-z0-9]{1,20}$/; // xyz builder DEX ids: xyz:GOLD, xyz:SP500
+  const ID_SHAPE = { hyperliquid: HL_ID, xyz: XYZ_ID, xyzStocks: XYZ_ID };
+
+  // The ranked tabs fetch their market set at runtime, so list membership
+  // cannot decide whether a saved market is real. Where a feed has answered, it
+  // is authoritative; before that, an id is only shape-checked and the market's
+  // own candle request settles the question.
   function symbolAllowed(sourceKey, symbol) {
     const src = SOURCES[sourceKey];
     if (!src || typeof symbol !== "string") return false;
     if (src.symbols.includes(symbol)) return true;
-    const entry = volumeCache[sourceKey];
+    const entry = volumeCache[feedOf(sourceKey)];
     if (entry && entry.map) return entry.map.has(symbol);
-    return !!src.fetchVolumes && HL_ID.test(symbol);
+    const shape = ID_SHAPE[sourceKey];
+    return !!shape && shape.test(symbol);
   }
+  function feedOf(sourceKey) { return RANKED_TABS[sourceKey] ? RANKED_TABS[sourceKey].feed : null; }
 
   // ============================== state ==============================
   const settings = loadSettings();
   // Telegram chart links select an allowlisted market without changing alerts.
   const chartLink = new URLSearchParams(location.search);
-  const linkedSource = chartLink.get("source"), linkedSymbol = chartLink.get("symbol");
+  // Alerts created while the xyz tab was split in two still link to the single
+  // xyz list by their old source key.
+  const linkedSource = chartLink.get("source") === "xyzStocks" ? "xyz" : chartLink.get("source");
+  const linkedSymbol = chartLink.get("symbol");
   if (Object.hasOwn(SOURCES, linkedSource) && symbolAllowed(linkedSource, linkedSymbol)) {
     settings.source = linkedSource;
     settings.symbol = linkedSymbol;
@@ -1581,17 +1594,18 @@
   // the picker into a live feed.
   const VOLUME_TTL_MS = 5 * 60 * 1000;
 
-  // Ranks the Hyperliquid perp universe by 24h notional volume. The market the
-  // user is on (and the one saved for this tab) is kept even if it has slipped
-  // out of the top slice, so the picker can never hide its own selection.
-  function applyHyperliquidTop() {
-    const entry = volumeCache.hyperliquid;
+  // Ranks a tab's market universe by 24h notional volume. The market the user
+  // is on (and the one saved for this tab) is kept even if it has slipped out
+  // of the top slice, so the picker can never hide its own selection.
+  function applyRankedList(sourceKey) {
+    const spec = RANKED_TABS[sourceKey];
+    const entry = spec ? volumeCache[spec.feed] : null;
     if (!entry || !entry.map || !entry.map.size) return false;
-    const ranked = [...entry.map.entries()].sort((a, b) => b[1] - a[1]).slice(0, HL_TOP_N).map(([s]) => s);
-    const keep = [settings.symbolBySource.hyperliquid, settings.source === "hyperliquid" ? settings.symbol : null];
+    const ranked = [...entry.map.entries()].sort((a, b) => b[1] - a[1]).slice(0, TOP_N).map(([s]) => s);
+    const keep = [settings.symbolBySource[sourceKey], settings.source === sourceKey ? settings.symbol : null];
     for (const symbol of keep) if (symbol && !ranked.includes(symbol)) ranked.push(symbol);
-    if (SOURCES.hyperliquid.symbols.join(",") === ranked.join(",")) return false;
-    SOURCES.hyperliquid.symbols = ranked;
+    if (SOURCES[sourceKey].symbols.join(",") === ranked.join(",")) return false;
+    SOURCES[sourceKey].symbols = ranked;
     return true;
   }
   function pruneFavourites() {
@@ -1604,7 +1618,7 @@
 
   function symbolLabel(sourceKey, symbol) {
     const name = SOURCES[sourceKey].display(symbol);
-    const entry = volumeCache[sourceKey];
+    const entry = volumeCache[feedOf(sourceKey)];
     const v = entry && entry.map ? entry.map.get(symbol) : null;
     // "24h" is left to the select's tooltip: the words cost more width than a
     // 360px phone can spare once the volume figure is in the label.
@@ -1620,18 +1634,22 @@
   }
   function refreshSymbolVolumes(sourceKey) {
     const src = SOURCES[sourceKey];
-    if (!src.fetchVolumes) return; // no cheap volume endpoint for this source
-    const entry = volumeCache[sourceKey] || (volumeCache[sourceKey] = { at: 0, map: null, pending: null });
+    const feed = feedOf(sourceKey);
+    if (!feed || !src.fetchVolumes) return; // no cheap volume endpoint for this source
+    const entry = volumeCache[feed] || (volumeCache[feed] = { at: 0, map: null, pending: null });
     if (entry.pending || Date.now() - entry.at < VOLUME_TTL_MS) return;
     entry.pending = (async () => {
       try {
         const map = await src.fetchVolumes();
         entry.map = map;
         entry.at = Date.now();
-        if (settings.source === sourceKey) refreshSymbolList();
-        // A re-ranked list, or a market that has since been delisted, can
-        // outdate pins and saved markets that were only shape-checked at load.
-        applyHyperliquidTop();
+        // One fetch ranks every tab sharing this feed; a re-ranked list, or a
+        // market that has since been delisted, can also outdate pins and saved
+        // markets that were only shape-checked at load.
+        for (const tab of Object.keys(RANKED_TABS)) {
+          if (RANKED_TABS[tab].feed === feed) applyRankedList(tab);
+        }
+        if (feedOf(settings.source) === feed) refreshSymbolList();
         pruneFavourites();
       } catch (_) {
         // Volume labels are decoration: keep plain names and retry shortly.
@@ -1650,10 +1668,10 @@
       // before its own base market.
       return listed.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
     }
-    const entry = volumeCache[sourceKey];
+    const entry = volumeCache[feedOf(sourceKey)];
     // Sources without a volume feed (and the moment before the first fetch
-    // lands) keep the curated market order.
-    if (!src.fetchVolumes || !entry || !entry.map || !entry.map.size) return listed;
+    // lands) keep the listed market order.
+    if (!entry || !entry.map || !entry.map.size) return listed;
     const volumeOf = (s) => { const v = entry.map.get(s); return Number.isFinite(v) ? v : -1; };
     // Ranking is what matters, not the exact figure, so a stable tie-break on
     // the curated order keeps markets with no reported volume at the end.
@@ -1701,7 +1719,7 @@
     renderSymbols();
   }
   function renderSymbols() {
-    applyHyperliquidTop();
+    applyRankedList(settings.source);
     const order = symbolOrder(settings.source);
     // The picker must contain its own selection: a market reached from a
     // Telegram link or a pin can exist before the feed re-ranks the list.
@@ -1767,6 +1785,12 @@
     try { s = JSON.parse(localStorage.getItem(LS_SETTINGS) || "null"); } catch (_) {}
     if (!s || typeof s !== "object") return d;
     d.source = SOURCES[s.source] ? s.source : "binance";
+    // Both xyz tabs are one list now: a session that saved the old Stocks tab
+    // keeps its market and lands on the single xyz tab.
+    if (d.source === "xyzStocks") d.source = "xyz";
+    if (s.symbolBySource && s.symbolBySource.xyzStocks && !s.symbolBySource.xyz) {
+      s.symbolBySource = { ...s.symbolBySource, xyz: s.symbolBySource.xyzStocks };
+    }
     d.interval = INTERVAL_SEC[s.interval] ? s.interval : "15m";
     if (s.symbolBySource && typeof s.symbolBySource === "object") {
       for (const [sourceKey] of Object.entries(SOURCES)) {
@@ -1932,12 +1956,14 @@
   renderFavourites();
   renderIntervals();
   // Keep the ticker-list volume labels current for long-lived sessions, and
-  // re-rank the Hyperliquid tab even while another source is on screen.
+  // re-rank the feed-backed tabs even while another source is on screen.
   setInterval(() => {
     refreshSymbolVolumes(settings.source);
     refreshSymbolVolumes("hyperliquid");
+    refreshSymbolVolumes("xyz");
   }, 60000);
   refreshSymbolVolumes("hyperliquid");
+  refreshSymbolVolumes("xyz");
   applyIndicatorVis();
   chart.applyOptions({ width: elMain.clientWidth, height: elMain.clientHeight });
   startWatchdog();
