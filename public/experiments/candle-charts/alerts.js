@@ -201,15 +201,22 @@ window.createCandleAlerts = function ({ chart, series, element, getMarket, canSe
   $("alerts-refresh").addEventListener("click", refresh);
   $("alerts-filter").addEventListener("change", (e) => { filter = e.target.value; signature = ""; renderList(); });
 
+  // The xyz tabs were merged into one list. Alerts, and the market the chart
+  // reports, can still carry the old key: compare and display them canonically,
+  // or a stock alert created before the merge loses its chart line.
+  const SOURCE_ALIAS = { xyzStocks: "xyz" };
+  const canonicalSource = (source) => SOURCE_ALIAS[source] || source;
   function marketLabel(a) {
-    const src = { binance: "Binance Spot", hyperliquid: "Hyperliquid", xyz: "xyz RWA", xyzStocks: "xyz Stocks" };
+    const src = { binance: "Binance Spot", hyperliquid: "Hyperliquid", xyz: "xyz" };
     const label = a.source === "binance" ? (a.symbol === "ETHBTC" ? "ETH/BTC" : a.symbol + "USDT") : a.symbol.replace("xyz:", "");
-    return { ...a, label, sourceLabel: src[a.source] || a.source };
+    const source = canonicalSource(a.source);
+    return { ...a, label, sourceLabel: src[source] || source };
   }
   function renderLines() {
     for (const line of lines) series.removePriceLine(line);
     const m = getMarket();
-    lines = alerts.filter((a) => a.status === "active" && a.source === m.source && a.symbol === m.symbol).map((a) => series.createPriceLine({
+    const market = canonicalSource(m.source);
+    lines = alerts.filter((a) => a.status === "active" && canonicalSource(a.source) === market && a.symbol === m.symbol).map((a) => series.createPriceLine({
       price: Number(a.level), color: "#59616e", lineWidth: 1, lineStyle: 2,
       axisLabelColor: "#39414d", axisLabelTextColor: "#b2b8c2",
       axisLabelVisible: true, title: "🔔", // Short enough to leave candle space on mobile.
