@@ -75,6 +75,10 @@
   }
   // 24h notional volume for every perp market on a Hyperliquid DEX, in one
   // call. Only used to annotate ticker-list labels.
+  // Returns the feed's live market universe plus its 24h volumes, deliberately
+  // separate: a market with no trades in the window is still a real market (its
+  // pin and its saved selection must survive), but it cannot be ranked or
+  // labelled. Delisted markets are excluded from both.
   async function hlVolumeMap(dex, signal) {
     const body = { type: "metaAndAssetCtxs" };
     if (dex) body.dex = dex;
@@ -84,15 +88,15 @@
       body: JSON.stringify(body),
       signal,
     });
+    const universe = new Set();
     const volumes = new Map();
     meta.universe.forEach((asset, i) => {
-      // Delisted markets still report a stale context row; they would only
-      // clutter the ticker list and return no candles.
       if (asset.isDelisted) return;
+      universe.add(asset.name);
       const v = ctxs[i] ? Number(ctxs[i].dayNtlVlm) : NaN;
       if (Number.isFinite(v) && v > 0) volumes.set(asset.name, v);
     });
-    return volumes;
+    return { universe, volumes };
   }
 
   const REST_LIMIT = 500;
@@ -175,21 +179,26 @@
   // Volume feed results, keyed by feed (not by tab: both xyz tabs rank one
   // builder DEX). Declared before settings load because a saved symbol or
   // favourite is validated against it.
-  const volumeCache = Object.create(null); // feed -> { at, map, pending }
+  const volumeCache = Object.create(null); // feed -> { at, universe, map, pending }
   const HL_ID = /^[A-Za-z0-9]{1,20}$/;      // Hyperliquid perp ids: BTC, kPEPE, 0G
   const XYZ_ID = /^xyz:[A-Za-z0-9]{1,20}$/; // xyz builder DEX ids: xyz:GOLD, xyz:SP500
   const ID_SHAPE = { hyperliquid: HL_ID, xyz: XYZ_ID, xyzStocks: XYZ_ID };
+  // The xyz tabs were merged into one list; the old key stays addressable for
+  // alerts, links and pins stored while the tabs were split.
+  const SOURCE_ALIAS = { xyzStocks: "xyz" };
+  const canonicalSource = (sourceKey) => SOURCE_ALIAS[sourceKey] || sourceKey;
+  let settingsMigrated = false;  // stored data carried an old source key
 
   // The ranked tabs fetch their market set at runtime, so list membership
-  // cannot decide whether a saved market is real. Where a feed has answered, it
-  // is authoritative; before that, an id is only shape-checked and the market's
-  // own candle request settles the question.
+  // cannot decide whether a saved market is real. Where a feed has answered,
+  // its live universe is authoritative; before that, an id is only
+  // shape-checked and the market's own candle request settles the question.
   function symbolAllowed(sourceKey, symbol) {
     const src = SOURCES[sourceKey];
     if (!src || typeof symbol !== "string") return false;
     if (src.symbols.includes(symbol)) return true;
     const entry = volumeCache[feedOf(sourceKey)];
-    if (entry && entry.map) return entry.map.has(symbol);
+    if (entry && entry.universe) return entry.universe.has(symbol);
     const shape = ID_SHAPE[sourceKey];
     return !!shape && shape.test(symbol);
   }
@@ -1491,7 +1500,9 @@
     if (!src || !symbolAllowed(sourceKey, symbol)) return;
     if (sourceKey === settings.source && symbol === settings.symbol) return;
     settings.symbolBySource[settings.source] = settings.symbol;
-    settings.source = sourceKey;
+    // Pins and alert links saved while the xyz tabs were split carry the old
+    // source key; land them on the single xyz tab rather than a tab-less state.
+    settings.source = canonicalSource(sourceKey);
     settings.symbol = symbol;
     settings.symbolBySource[sourceKey] = symbol;
     saveSettings();
@@ -1600,10 +1611,15 @@
   function applyRankedList(sourceKey) {
     const spec = RANKED_TABS[sourceKey];
     const entry = spec ? volumeCache[spec.feed] : null;
-    if (!entry || !entry.map || !entry.map.size) return false;
+    if (!entry || !entry.universe || !entry.map || !entry.map.size) return false;
     const ranked = [...entry.map.entries()].sort((a, b) => b[1] - a[1]).slice(0, TOP_N).map(([s]) => s);
+    // Keep the market the user is on (and the one saved for this tab) only when
+    // the returned universe confirms it exists and is trading: re-inserting a
+    // delisted name would let it survive validation by list membership alone.
     const keep = [settings.symbolBySource[sourceKey], settings.source === sourceKey ? settings.symbol : null];
-    for (const symbol of keep) if (symbol && !ranked.includes(symbol)) ranked.push(symbol);
+    for (const symbol of keep) {
+      if (symbol && entry.universe.has(symbol) && !ranked.includes(symbol)) ranked.push(symbol);
+    }
     if (SOURCES[sourceKey].symbols.join(",") === ranked.join(",")) return false;
     SOURCES[sourceKey].symbols = ranked;
     return true;
@@ -1614,6 +1630,19 @@
     settings.favourites = kept;
     saveSettings();
     renderFavourites();
+  }
+  // The market a tab saved no longer exists (delisted, or the feed dropped it):
+  // fall back to the best market the tab now offers instead of an empty chart.
+  function dropMissingMarket() {
+    const src = SOURCES[settings.source];
+    const fallback = src.symbols[0];
+    if (!fallback || fallback === settings.symbol) return;
+    settings.symbol = fallback;
+    settings.symbolBySource[settings.source] = fallback;
+    saveSettings();
+    renderSymbols();
+    renderFavourites();
+    loadHistory();
   }
 
   function symbolLabel(sourceKey, symbol) {
@@ -1640,8 +1669,9 @@
     if (entry.pending || Date.now() - entry.at < VOLUME_TTL_MS) return;
     entry.pending = (async () => {
       try {
-        const map = await src.fetchVolumes();
-        entry.map = map;
+        const fetched = await src.fetchVolumes();
+        entry.map = fetched.volumes;
+        entry.universe = fetched.universe;
         entry.at = Date.now();
         // One fetch ranks every tab sharing this feed; a re-ranked list, or a
         // market that has since been delisted, can also outdate pins and saved
@@ -1649,8 +1679,13 @@
         for (const tab of Object.keys(RANKED_TABS)) {
           if (RANKED_TABS[tab].feed === feed) applyRankedList(tab);
         }
-        if (feedOf(settings.source) === feed) refreshSymbolList();
         pruneFavourites();
+        if (feedOf(settings.source) === feed) {
+          // A saved market that the universe no longer lists (delisted, or gone)
+          // would otherwise sit on an empty chart retrying forever.
+          if (!symbolAllowed(settings.source, settings.symbol)) dropMissingMarket();
+          else refreshSymbolList();
+        }
       } catch (_) {
         // Volume labels are decoration: keep plain names and retry shortly.
         entry.at = Date.now() - VOLUME_TTL_MS + 60000;
@@ -1780,16 +1815,16 @@
       source: "binance", symbol: "BTC", interval: "15m", symbolBySource: {}, favourites: [],
       sortMode: "volume",
       indicators: { ema: true, rsi: true, vol: true, rsiLvls: true, rsiOB: 70, rsiOS: 30 },
-    };
-    let s = null;
+    };    let s = null;
     try { s = JSON.parse(localStorage.getItem(LS_SETTINGS) || "null"); } catch (_) {}
     if (!s || typeof s !== "object") return d;
     d.source = SOURCES[s.source] ? s.source : "binance";
     // Both xyz tabs are one list now: a session that saved the old Stocks tab
     // keeps its market and lands on the single xyz tab.
-    if (d.source === "xyzStocks") d.source = "xyz";
+    if (d.source === "xyzStocks") { d.source = "xyz"; settingsMigrated = true; }
     if (s.symbolBySource && s.symbolBySource.xyzStocks && !s.symbolBySource.xyz) {
       s.symbolBySource = { ...s.symbolBySource, xyz: s.symbolBySource.xyzStocks };
+      settingsMigrated = true;
     }
     d.interval = INTERVAL_SEC[s.interval] ? s.interval : "15m";
     if (s.symbolBySource && typeof s.symbolBySource === "object") {
@@ -1814,8 +1849,12 @@
     if (Array.isArray(s.favourites)) {
       for (const favourite of s.favourites) {
         if (!favourite || !symbolAllowed(favourite.source, favourite.symbol)) continue;
-        if (!d.favourites.some((f) => f.source === favourite.source && f.symbol === favourite.symbol)) {
-          d.favourites.push({ source: favourite.source, symbol: favourite.symbol });
+        // Pins saved while the xyz tabs were split move to the single xyz tab,
+        // otherwise the chip would select a source no tab button represents.
+        const source = canonicalSource(favourite.source);
+        if (source !== favourite.source) settingsMigrated = true;
+        if (!d.favourites.some((f) => f.source === source && f.symbol === favourite.symbol)) {
+          d.favourites.push({ source, symbol: favourite.symbol });
         }
       }
     } else {
@@ -1955,6 +1994,9 @@
   renderSymbols();
   renderFavourites();
   renderIntervals();
+  // Persist a one-time rewrite so a stored xyz Stocks key does not have to be
+  // translated on every load.
+  if (settingsMigrated) saveSettings();
   // Keep the ticker-list volume labels current for long-lived sessions, and
   // re-rank the feed-backed tabs even while another source is on screen.
   setInterval(() => {
