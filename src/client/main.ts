@@ -741,7 +741,7 @@ function onEvent(event: Record<string, unknown>): void {
 				// via appendAssistantPlaceholder) can read it without a
 				// back-reference into the messages array.
 				state.lastAssistantSeq = liveMessageSeq;
-				lastAssistantDom = appendAssistantPlaceholder();
+				lastAssistantDom = appendAssistantPlaceholder(lastAssistant);
 			} else if (e.message.role === "custom") {
 				// Custom message from an extension. The pi-voice-reply
 				// extension emits customType:"voice-reply" carrying ONE
