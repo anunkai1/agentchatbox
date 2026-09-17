@@ -1097,7 +1097,9 @@ export function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): voi
  * Live rendering for the streaming case: returns the `.text` <pre> node
  * AND the thinking container so message_update can update both in place.
  */
-export function appendAssistantPlaceholder(): LiveAssistantDom {
+export function appendAssistantPlaceholder(
+	message: Extract<PersistedMessage, { kind: "assistant" }>,
+): LiveAssistantDom {
 	const wrap = el("div", {
 		class: "row row-assistant display-hidden",
 		"data-internal-only": "1",
@@ -1154,15 +1156,9 @@ export function appendAssistantPlaceholder(): LiveAssistantDom {
 	// so the voice-reply handler can populate it live without a re-render.
 	const voiceBox = makeVoiceTextBox();
 	body.append(voiceBox);
-	body.append(
-		makeAssistantActionBar(() => {
-			for (let i = state.messages.length - 1; i >= 0; i--) {
-				const message = state.messages[i];
-				if (message.kind === "assistant") return message;
-			}
-			return null;
-		}),
-	);
+	// Capture this row's message, not the latest assistant at click time.
+	// Streaming mutates the same object, so text and seq stay up to date.
+	body.append(makeAssistantActionBar(() => message));
 	wrap.append(body);
 	appendNode(wrap, { pin: true });
 	return { textPre: pre, thinkingWrap, thinkingPre, voiceTextBox: voiceBox };
