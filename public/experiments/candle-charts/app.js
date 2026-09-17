@@ -1634,9 +1634,93 @@
     return clean;
   }
 
+  // ============================== candle close countdown ==============================
+  // Time left on the newest bar. It is derived from that bar's own open time
+  // (not from when the page loaded), so interval switches, market closures and
+  // irregular monthly bars all stay correct. It lives in the empty right-hand
+  // gutter just above the time axis, clear of candles and the price scale.
+  const elCountdown = document.createElement("div");
+  elCountdown.className = "candle-countdown";
+  elCountdown.title = "Time until the current candle closes";
+  elCountdown.hidden = true;
+  elCountdown.innerHTML = '<span class="cd-what"></span><span class="cd-left"></span>';
+  elMain.appendChild(elCountdown);
+  const elCdWhat = elCountdown.firstElementChild, elCdLeft = elCountdown.lastElementChild;
+  let countdownTick = null, countdownOffset = "", countdownText = "", countdownLabel = "";
+
+  function barCloseMs() {
+    const last = candles[candles.length - 1];
+    if (!last || !Number.isFinite(last.time)) return null;
+    const openMs = last.time * 1000;
+    if (settings.interval === "1M") {
+      const d = new Date(openMs);
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+    }
+    return openMs + INTERVAL_SEC[settings.interval] * 1000;
+  }
+
+  function formatCountdown(ms) {
+    const total = Math.max(0, Math.round(ms / 1000));
+    const pad = (n) => String(n).padStart(2, "0");
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const mins = Math.floor((total % 3600) / 60);
+    if (days) return `${days}d ${pad(hours)}:${pad(mins)}:${pad(total % 60)}`;
+    if (hours) return `${hours}:${pad(mins)}:${pad(total % 60)}`;
+    return `${mins}:${pad(total % 60)}`;
+  }
+
+  // Keep clear of the price scale (its width tracks the printed precision) and
+  // of the time axis.
+  function placeCountdown() {
+    let scale = 0, axis = 0;
+    try { scale = chart.priceScale("right").width() || 0; } catch (_) { /* older library */ }
+    try { axis = chart.timeScale().height() || 0; } catch (_) { /* older library */ }
+    const right = `${Math.round(Math.max(scale, 56) + 10)}px`;
+    const bottom = `${Math.round(Math.max(axis, 26) + 6)}px`;
+    if (`${right}|${bottom}` === countdownOffset) return;
+    countdownOffset = `${right}|${bottom}`;
+    elCountdown.style.right = right;
+    elCountdown.style.bottom = bottom;
+  }
+
+  function renderCountdown() {
+    const close = barCloseMs();
+    // A bar older than one interval means the market itself is closed, so a
+    // countdown there would only ever read zero.
+    if (close === null || Date.now() - close > INTERVAL_SEC[settings.interval] * 1000) {
+      if (!elCountdown.hidden) elCountdown.hidden = true;
+      return;
+    }
+    elCountdown.hidden = false;
+    placeCountdown();
+    const left = close - Date.now();
+    const text = formatCountdown(left);
+    if (text !== countdownText) { countdownText = text; elCdLeft.textContent = text; }
+    const label = `${settings.interval} closes in`;
+    if (label !== countdownLabel) { countdownLabel = label; elCdWhat.textContent = label; }
+    elCountdown.classList.toggle("closing", left <= 10000);
+  }
+
+  function stopCountdown() {
+    if (countdownTick) clearTimeout(countdownTick);
+    countdownTick = null;
+  }
+
+  function startCountdown() {
+    stopCountdown();
+    renderCountdown();
+    // Re-align to the wall clock every tick so the digits never skip.
+    const arm = () => {
+      countdownTick = setTimeout(() => { renderCountdown(); arm(); }, 1000 - (Date.now() % 1000) + 5);
+    };
+    arm();
+  }
+
   // ============================== resize ==============================
   const roMain = new ResizeObserver(() => {
     chart.applyOptions({ width: elMain.clientWidth, height: elMain.clientHeight });
+    placeCountdown();
     invalidateOverlay();
     invalidateRSI();
   });
@@ -1661,5 +1745,6 @@
   applyIndicatorVis();
   chart.applyOptions({ width: elMain.clientWidth, height: elMain.clientHeight });
   startWatchdog();
+  startCountdown();
   loadHistory();
 })();

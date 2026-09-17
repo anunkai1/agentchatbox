@@ -225,6 +225,31 @@ body {
   .legend .src { display: none; }
 }
 #main-chart { flex: 1; min-height: 0; }
+/* candle close countdown — bottom-right gutter of the main chart */
+.candle-countdown {
+  position: absolute;
+  z-index: 9;
+  pointer-events: none;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(11,14,17,.72);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.candle-countdown[hidden] { display: none; }
+.candle-countdown .cd-left { color: var(--text); font-weight: 600; }
+.candle-countdown.closing .cd-left { color: var(--accent); }
+@media (max-width: 520px) {
+  .candle-countdown { font-size: 11px; padding: 2px 6px; }
+  .candle-countdown .cd-what { display: none; }
+}
 #rsi-chart.rsi-pane { height: 110px; border-top: 1px solid var(--border); position: relative; }
 #rsi-chart.rsi-pane.hidden { display: none; }
 @media (max-width: 520px) {

@@ -121,6 +121,25 @@ js("window.__historyMode='success'; void window.__tick(30000)")
 wait_until("document.querySelector('#last-price').textContent !== '—' && window.__sockets.length === 1")
 assert js('window.__historyRequests.length') == 9
 
+# The countdown to the current candle's close lives in the bottom-right gutter
+# of the main chart, clear of the time axis. It renders on its own wall-clock
+# tick, so wait for the first one after the load.
+countdown = """(() => {
+  const el = document.querySelector('.candle-countdown');
+  if (!el) return JSON.stringify({missing:true});
+  const r = el.getBoundingClientRect(), m = document.querySelector('#main-chart').getBoundingClientRect();
+  return JSON.stringify({hidden:el.hidden, text:el.textContent, right:r.right, bottom:r.bottom,
+    mainRight:m.right, mainBottom:m.bottom});
+})()"""
+wait_until("(() => { const el = document.querySelector('.candle-countdown');"
+           " return !!el && !el.hidden && /^15m closes in\\d+:\\d\\d$/.test(el.textContent); })()")
+cd = json.loads(js(countdown))
+assert cd.get('hidden') is False, cd
+assert re.fullmatch(r'15m closes in\d+:\d\d', cd['text']), cd
+assert cd['right'] <= cd['mainRight'] and cd['bottom'] <= cd['mainBottom'] - 20, cd
+assert js("!!document.querySelector('#main-chart > .candle-countdown')") is True
+print('PASS: candle-close countdown renders in the bottom-right gutter and tracks the 15m bar.')
+
 # Explicit market changes reset backoff and cancel pending retries.
 js("window.__historyMode='fail'; document.querySelector('#symbol').value='ETH'; document.querySelector('#symbol').dispatchEvent(new Event('change'))")
 wait_until("window.__historyRequests.length === 10 && document.querySelector('#legend').textContent.includes('Retrying automatically')")
