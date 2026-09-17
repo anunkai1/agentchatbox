@@ -74,6 +74,25 @@
     });
     return ws;
   }
+  // 24h notional volume for every perp market on a Hyperliquid DEX, in one
+  // call. Only used to annotate ticker-list labels.
+  async function hlVolumeMap(dex, signal) {
+    const body = { type: "metaAndAssetCtxs" };
+    if (dex) body.dex = dex;
+    const [meta, ctxs] = await fetchJson("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    const volumes = new Map();
+    meta.universe.forEach((asset, i) => {
+      const v = ctxs[i] ? Number(ctxs[i].dayNtlVlm) : NaN;
+      if (Number.isFinite(v) && v > 0) volumes.set(asset.name, v);
+    });
+    return volumes;
+  }
+
   const REST_LIMIT = 500;
   const EMA_PERIOD = 8;
   const RSI_PERIOD = 14;
@@ -117,6 +136,7 @@
       display: (s) => s,
       fetchKlines: hlFetch,
       openSocket: hlSocket,
+      fetchVolumes: (signal) => hlVolumeMap(null, signal),
       pollStaleMs: 25000,
     },
     xyz: {
@@ -125,6 +145,7 @@
       display: (s) => s.replace("xyz:", ""),
       fetchKlines: hlFetch,
       openSocket: hlSocket,
+      fetchVolumes: (signal) => hlVolumeMap("xyz", signal),
       pollStaleMs: 25000,
     },
     xyzStocks: {
@@ -133,6 +154,7 @@
       display: (s) => s.replace("xyz:", ""),
       fetchKlines: hlFetch,
       openSocket: hlSocket,
+      fetchVolumes: (signal) => hlVolumeMap("xyz", signal),
       pollStaleMs: 25000,
     },
   };
@@ -1519,16 +1541,56 @@
       btn.setAttribute("aria-pressed", String(active));
     }
   }
+  // Ticker labels carry each market's 24h volume once we know it. Liquidity
+  // moves slowly, so a slow refresh keeps the labels useful without turning
+  // the picker into a live feed.
+  const VOLUME_TTL_MS = 5 * 60 * 1000;
+  const volumeCache = Object.create(null); // sourceKey -> { at, map, pending }
+
+  function symbolLabel(sourceKey, symbol) {
+    const name = SOURCES[sourceKey].display(symbol);
+    const entry = volumeCache[sourceKey];
+    const v = entry && entry.map ? entry.map.get(symbol) : null;
+    return Number.isFinite(v) ? `${name} · 24h ${fmtVol(v)}` : name;
+  }
+  // Rewrites option text in place, so an open picker sheet never has its
+  // options rebuilt (or its selection moved) out from under the user.
+  function applySymbolLabels() {
+    for (const opt of elSymbol.options) {
+      const label = symbolLabel(settings.source, opt.value);
+      if (opt.textContent !== label) opt.textContent = label;
+    }
+  }
+  function refreshSymbolVolumes(sourceKey) {
+    const src = SOURCES[sourceKey];
+    if (!src.fetchVolumes) return; // no cheap volume endpoint for this source
+    const entry = volumeCache[sourceKey] || (volumeCache[sourceKey] = { at: 0, map: null, pending: null });
+    if (entry.pending || Date.now() - entry.at < VOLUME_TTL_MS) return;
+    entry.pending = (async () => {
+      try {
+        const map = await src.fetchVolumes();
+        entry.map = map;
+        entry.at = Date.now();
+        if (settings.source === sourceKey) applySymbolLabels();
+      } catch (_) {
+        // Volume labels are decoration: keep plain names and retry shortly.
+        entry.at = Date.now() - VOLUME_TTL_MS + 60000;
+      } finally {
+        entry.pending = null;
+      }
+    })();
+  }
   function renderSymbols() {
     elSymbol.innerHTML = "";
     const src = SOURCES[settings.source];
     src.symbols.forEach((s) => {
       const opt = document.createElement("option");
       opt.value = s;
-      opt.textContent = src.display(s);
+      opt.textContent = symbolLabel(settings.source, s);
       opt.selected = s === settings.symbol;
       elSymbol.appendChild(opt);
     });
+    refreshSymbolVolumes(settings.source);
   }
 
   const cbEma = $("cb-ema"), cbRsi = $("cb-rsi"), cbVol = $("cb-vol"), cbRsiLv = $("cb-rsilv");
@@ -1742,6 +1804,8 @@
   renderSymbols();
   renderFavourites();
   renderIntervals();
+  // Keep the ticker-list volume labels current for long-lived sessions.
+  setInterval(() => refreshSymbolVolumes(settings.source), 60000);
   applyIndicatorVis();
   chart.applyOptions({ width: elMain.clientWidth, height: elMain.clientHeight });
   startWatchdog();
