@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Candle Charts — Live Markets</title>
-<link rel="stylesheet" href="style.css?v=8bfa5a53dacb">
+<link rel="stylesheet" href="style.css?v=f2be3e8dddd3">
 <script src="lwc-4.0.1.js?v=575fe9c48279" defer></script>
 </head>
 <body>
@@ -23,6 +23,7 @@
     </div>
     <button type="button" id="btn-vol-sort" class="favourite-toggle sort-toggle" aria-pressed="true" aria-label="Sort tickers by 24h volume" title="Sort tickers by 24h volume">↓ Vol</button>
     <button type="button" class="favourite-toggle" id="btn-favourite" aria-pressed="false" title="Add current ticker to favourites">☆</button>
+    <button type="button" id="btn-view" class="favourite-toggle sort-toggle" aria-pressed="false" aria-label="Live prices for your favourite tickers" title="Live prices for your favourite tickers">☰ List</button>
     <button type="button" id="btn-alerts" class="alerts-button" aria-label="Manage price alerts" title="Price alerts">🔔 0</button>
     <div class="status" title="Live market connection">
       <div class="price-tag" id="last-price">—</div>
@@ -49,6 +50,7 @@
   <div class="legend" id="legend"></div>
   <div id="main-chart"></div>
   <div id="rsi-chart" class="rsi-pane"></div>
+  <div id="watchlist" class="watchlist" aria-label="Live favourite tickers"></div>
 </main>
 
 <dialog id="alert-dialog" class="alert-sheet" aria-labelledby="alert-heading">
@@ -82,6 +84,7 @@
 </dialog>
 <div id="alert-toast" role="status" hidden></div>
 <script src="alerts.js?v=f0a52d850169" defer></script>
-<script src="app.js?v=7df9763249fd" defer></script>
+<script src="watchlist.js?v=4458339d767f" defer></script>
+<script src="app.js?v=147dbebac0f0" defer></script>
 </body>
 </html>

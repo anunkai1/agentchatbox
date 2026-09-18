@@ -311,3 +311,89 @@ body.hline-mode .chart-area::after {
 @media (max-width: 520px) {
   body.hline-mode .chart-area::after { content: "Tap chart to place point"; }
 }
+
+/* ---------- live favourites list ---------- */
+/* A separate screen rather than a panel beside the chart: a phone has no room
+   for both, and the chart keeps its data and scale while it is hidden. */
+.watchlist { display: none; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding-bottom: 10px; }
+body.list-view .watchlist { display: block; }
+body.list-view .favourites,
+body.list-view .intervals,
+body.list-view .indicators,
+body.list-view .tools,
+body.list-view .legend,
+body.list-view #main-chart,
+body.list-view #rsi-chart { display: none; }
+
+.quote-status {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(18,22,28,.96);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+.quote-status .live-dot { font-size: 9px; line-height: 1; }
+.quote-status-note { margin-left: auto; color: #ffbc69; }
+
+.quote-rows { list-style: none; }
+.quote-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); }
+.quote-row.active { background: #161b22; box-shadow: inset 3px 0 0 var(--accent); }
+.quote-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 4px 9px 12px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.quote-badge {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0b0e11;
+  font-size: 10px;
+  font-weight: 700;
+}
+.quote-id { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.quote-symbol { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quote-venue { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quote-figs { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding-right: 6px; font-variant-numeric: tabular-nums; }
+.quote-price { font-size: 14px; font-weight: 600; color: #e6e9ee; padding: 0 2px; border-radius: 3px; }
+.quote-change { font-size: 11px; color: var(--muted); }
+.quote-change.pos { color: var(--up); }
+.quote-change.neg { color: var(--down); }
+.quote-row.unsupported .quote-symbol,
+.quote-row.unsupported .quote-price { color: var(--muted); }
+.quote-star {
+  flex: 0 0 auto;
+  width: 36px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+}
+.quote-star:hover { color: #fff; }
+.quote-empty { padding: 26px 18px; color: var(--muted); text-align: center; line-height: 1.6; }
+@media (max-width: 520px) {
+  .quote-main { padding: 8px 2px 8px 10px; gap: 8px; }
+  .quote-star { width: 32px; }
+}
+.quote-row.rejected .quote-symbol,
+.quote-row.rejected .quote-price { color: var(--muted); }

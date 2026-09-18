@@ -218,6 +218,7 @@
     settings.symbolBySource[linkedSource] = linkedSymbol;
   }
   let alertUI = null;
+  let watchlistUI = null;
   let candles = [];              // sorted, de-duplicated, valid bars
   let emaValues = [];            // aligned with candles (null until index 7)
   let rsiValues = [];            // aligned with candles (null until index 14)
@@ -263,6 +264,8 @@
   const elFavourites = $("favourites");
   const elFavouriteToggle = $("btn-favourite");
   const elSortToggle = $("btn-vol-sort");
+  const elViewToggle = $("btn-view");
+  const elWatchlist = $("watchlist");
   let lastLegendHtml = "";
 
   function setLegendText(text) {
@@ -1418,7 +1421,34 @@
       elFavourites.appendChild(chip);
     });
     renderFavouriteToggle();
+    watchlistUI?.refresh();
   }
+  // The ticker list and the live list are separate screens: a phone cannot show
+  // a readable chart and a readable list at once. Hiding the chart leaves its
+  // data, scale and drawings intact, so switching back is instant.
+  function setView(next) {
+    const listing = next === "list";
+    if (settings.view !== (listing ? "list" : "chart")) {
+      settings.view = listing ? "list" : "chart";
+      saveSettings();
+    }
+    document.body.classList.toggle("list-view", listing);
+    elViewToggle.textContent = listing ? "\u{1F4C8} Chart" : "\u2630 List";
+    elViewToggle.setAttribute("aria-pressed", String(listing));
+    elViewToggle.title = listing ? "Back to the chart" : "Live prices for your favourite tickers";
+    elViewToggle.setAttribute("aria-label", elViewToggle.title);
+    watchlistUI?.setOpen(listing);
+    if (!listing) {
+      // The chart was 0x0 while hidden; re-lay it out on the way back.
+      placeCountdown();
+      invalidateOverlay();
+      invalidateRSI();
+    }
+  }
+  elViewToggle.addEventListener("click", () => {
+    setView(document.body.classList.contains("list-view") ? "chart" : "list");
+  });
+
   function saveFavouriteOrderFromDom() {
     settings.favourites = [...elFavourites.children].map((chip) => ({
       source: chip.dataset.source,
@@ -1813,7 +1843,7 @@
   function loadSettings() {
     const d = {
       source: "binance", symbol: "BTC", interval: "15m", symbolBySource: {}, favourites: [],
-      sortMode: "volume",
+      sortMode: "volume", view: "chart",
       indicators: { ema: true, rsi: true, vol: true, rsiLvls: true, rsiOB: 70, rsiOS: 30 },
     };    let s = null;
     try { s = JSON.parse(localStorage.getItem(LS_SETTINGS) || "null"); } catch (_) {}
@@ -1836,6 +1866,7 @@
     d.symbol = symbolAllowed(d.source, s.symbol) ? s.symbol : (d.symbolBySource[d.source] || src.symbols[0]);
     const si = s.indicators && typeof s.indicators === "object" ? s.indicators : {};
     if (s.sortMode === "volume" || s.sortMode === "alpha") d.sortMode = s.sortMode;
+    if (s.view === "list") d.view = "list";
     for (const key of ["ema", "rsi", "vol", "rsiLvls"]) {
       if (typeof si[key] === "boolean") d.indicators[key] = si[key];
     }
@@ -1971,6 +2002,9 @@
 
   // ============================== resize ==============================
   const roMain = new ResizeObserver(() => {
+    // A chart hidden behind the list measures 0x0; resizing to that would blank
+    // it. The observer fires again with the real size when the list closes.
+    if (!elMain.clientWidth || !elMain.clientHeight) return;
     chart.applyOptions({ width: elMain.clientWidth, height: elMain.clientHeight });
     placeCountdown();
     invalidateOverlay();
@@ -1990,6 +2024,26 @@
       label: SOURCES[settings.source].display(settings.symbol), sourceLabel: SOURCES[settings.source].label }),
     onSelectMarket: selectTicker,
   });
+  watchlistUI = window.createCandleWatchlist({
+    element: elWatchlist,
+    getMarkets: () => settings.favourites.map((favourite) => ({
+      source: favourite.source,
+      symbol: favourite.symbol,
+      label: SOURCES[favourite.source].display(favourite.symbol),
+      venue: favourite.source === "binance" ? "Binance Spot" : favourite.source === "xyz" ? "xyz DEX" : "Hyperliquid perp",
+      // Only the Hyperliquid venues are streamed here; a Binance pin stays
+      // selectable but carries no figures rather than a stale one.
+      live: favourite.source !== "binance",
+    })),
+    getCurrent: () => ({ source: settings.source, symbol: settings.symbol }),
+    onSelect: (source, symbol) => { selectTicker(source, symbol); setView("chart"); },
+    onRemove: (source, symbol) => {
+      settings.favourites = settings.favourites.filter((f) => f.source !== source || f.symbol !== symbol);
+      saveSettings();
+      renderFavourites();
+    },
+  });
+  setView(settings.view);
   renderSource();
   renderSymbols();
   renderFavourites();
