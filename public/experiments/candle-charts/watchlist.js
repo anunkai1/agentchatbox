@@ -5,16 +5,28 @@
 // day-change baseline and its volume. Nothing in this file polls, and nothing
 // here is a trading control — a row only selects a market for the chart.
 //
+// The rolling 24h/7d/1M windows are the venue's own candle closes (one REST
+// fetch per market when the list opens, cached), re-percentaged against the
+// live price so they move with every tick. The labelled "Day" window is the
+// stream's own change since 00:00 UTC, which is why it is not the same figure
+// as the rolling 24h.
+//
 // Binance Spot has no live quote feed in this experiment, so markets pinned
-// there stay selectable but carry no figures. Change is the venue's own day
-// change (Hyperliquid resets at 00:00 UTC), never a chart interval.
+// there stay selectable but carry no figures.
 window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSelect, onRemove }) {
   const SOCKET_URL = "wss://api.hyperliquid.xyz/ws";
+  const REST_URL = "https://api.hyperliquid.xyz/info";
   const RETRY_CAP_MS = 15000;
   const RETRY_BASE_MS = 1000;
   const SILENT_MS = 30000;   // connected but silent: say so instead of looking live
   const STATUS_MS = 4000;
   const OPEN_STATE = 1;
+  const HOUR_MS = 3600000;
+  const DAY_MS = 86400000;
+  // Rolling windows shown on every live row. "1M" is 30 days, the longest
+  // span a watchlist row can state without pretending to be a calendar month.
+  const WINDOWS = [["24h", DAY_MS], ["7d", 7 * DAY_MS], ["1M", 30 * DAY_MS]];
+  const HISTORY_TTL_MS = 15 * 60 * 1000;
 
   const status = document.createElement("div");
   status.className = "quote-status";
@@ -42,6 +54,8 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
   let liveBySymbol = new Map();
   const rows = new Map();           // market key -> row elements
   const quotes = new Map();         // market key -> figures seen this session
+  const history = new Map();        // market key -> { at, refs } rolling-window closes
+  const historyPending = new Set();
   let socket = null;
   let socketToken = 0;
   let subscriptionKey = "";
@@ -104,6 +118,64 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
     ], { duration: 420, easing: "ease-out" });
   }
 
+  // ============================== rolling windows ==============================
+  // One REST call per timeframe per market, reusing the closes the venue serves
+  // for its own charts. A market with no candle that far back (a fresh listing)
+  // simply has no reference and its window stays blank.
+  function closeAt(bars, cutoff) {
+    let found = null;
+    for (const bar of bars) {
+      if (bar.t > cutoff) break;
+      found = bar;
+    }
+    const close = found ? Number(found.c) : NaN;
+    return Number.isFinite(close) && close > 0 ? close : null;
+  }
+
+  async function fetchRefs(coin) {
+    const now = Date.now();
+    const snapshot = (interval, span) => fetch(REST_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "candleSnapshot", req: { coin, interval, startTime: now - span, endTime: now } }),
+    }).then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))));
+    const [hourly, daily] = await Promise.all([
+      snapshot("1h", 25 * HOUR_MS),
+      snapshot("1d", 32 * DAY_MS),
+    ]);
+    const ascending = (rows) => (Array.isArray(rows) ? rows.slice().sort((a, b) => Number(a.t) - Number(b.t)) : []);
+    const hours = ascending(hourly), days = ascending(daily);
+    return {
+      at: Date.now(),
+      refs: {
+        "24h": closeAt(hours, now - DAY_MS),
+        "7d": closeAt(days, now - 7 * DAY_MS),
+        "1M": closeAt(days, now - 30 * DAY_MS),
+      },
+    };
+  }
+
+  // Fetched only for markets the venue streams and only while the list is
+  // open, so a closed list costs nothing. The reference prices barely move, so
+  // they are reused for a quarter of an hour and re-percentaged against every
+  // tick in the meantime.
+  function loadRefs() {
+    for (const market of markets) {
+      if (!market.live) continue;
+      const key = keyOf(market);
+      const cached = history.get(key);
+      if (cached && Date.now() - cached.at < HISTORY_TTL_MS) continue;
+      if (historyPending.has(key)) continue;
+      historyPending.add(key);
+      fetchRefs(market.symbol).then((loaded) => {
+        history.set(key, loaded);
+        const row = rows.get(key);
+        const quote = quotes.get(key);
+        if (row) paintWindows(row, quote && Number.isFinite(quote.price) ? quote.price : null);
+      }).catch(() => {}).finally(() => historyPending.delete(key));
+    }
+  }
+
   function buildRow(market) {
     const node = document.createElement("li");
     node.className = "quote-row";
@@ -135,7 +207,20 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
     changeEl.className = "quote-change";
     changeEl.textContent = "—";
     figures.append(priceEl, changeEl);
-    main.append(badge, id, figures);
+    const windowsEl = document.createElement("span");
+    windowsEl.className = "quote-windows";
+    const windowEls = WINDOWS.map(([label]) => {
+      const item = document.createElement("span");
+      item.className = "quote-window";
+      const name = document.createElement("i");
+      name.textContent = label;
+      const value = document.createElement("b");
+      value.textContent = "—";
+      item.append(name, value);
+      windowsEl.append(item);
+      return value;
+    });
+    main.append(badge, id, figures, windowsEl);
     main.title = market.live
       ? `${market.label} · ${market.venue} · show it on the chart`
       : `${market.label} · ${market.venue} · no live feed here · show it on the chart`;
@@ -149,7 +234,21 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
     star.setAttribute("aria-label", star.title);
     star.addEventListener("click", () => onRemove(market.source, market.symbol));
     node.append(main, star);
-    return { node, priceEl, changeEl, key: keyOf(market) };
+    return { node, priceEl, changeEl, windowsEl, windowEls, key: keyOf(market) };
+  }
+
+  // Percentage against the venue's own close for that window, so the figures
+  // track the live price instead of going stale between history fetches.
+  function paintWindows(row, price) {
+    const entry = history.get(row.key);
+    row.windowEls.forEach((node, index) => {
+      const ref = entry ? entry.refs[WINDOWS[index][0]] : null;
+      const value = ref && Number.isFinite(price) ? ((price - ref) / ref) * 100 : null;
+      const text = value === null ? "—" : `${value >= 0 ? "+" : "-"}${Math.abs(value).toFixed(2)}%`;
+      if (node.textContent !== text) node.textContent = text;
+      const state = value === null ? "" : value > 0 ? "pos" : value < 0 ? "neg" : "";
+      if (node.className !== state) node.className = state;
+    });
   }
 
   function paint(row, market) {
@@ -165,6 +264,7 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
         row.changeEl.textContent = note;
         row.changeEl.className = "quote-change";
       }
+      paintWindows(row, null);
       return;
     }
     row.node.classList.remove("rejected");
@@ -178,6 +278,7 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
       row.changeEl.textContent = change.text;
       row.changeEl.className = "quote-change" + (change.dir > 0 ? " pos" : change.dir < 0 ? " neg" : "");
     }
+    paintWindows(row, quote.price);
   }
 
   function repaint() {
@@ -214,6 +315,7 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
       if (!row) { row = buildRow(market); rows.set(key, row); }
       row.node.classList.toggle("active", market.source === current.source && market.symbol === current.symbol);
       row.node.classList.toggle("unsupported", !market.live);
+      row.windowsEl.hidden = !market.live;
       if (list.children[index] !== row.node) list.insertBefore(row.node, list.children[index] || null);
       paint(row, market);
     });
@@ -330,6 +432,7 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
     if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
     if (!open) { disconnect(); return; }
     render();
+    loadRefs();
     connect();
     statusTimer = setInterval(updateStatus, STATUS_MS);
   }
@@ -338,6 +441,7 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
     markets = getMarkets() || [];
     render();
     if (!open) return;
+    loadRefs();
     const wanted = desiredSubscription();
     if (!socket) connect();
     else if (socket.readyState === OPEN_STATE && wanted !== subscriptionKey) {
@@ -350,10 +454,10 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") { disconnect(); return; }
-    if (open) { connect(); updateStatus(); }
+    if (open) { loadRefs(); connect(); updateStatus(); }
   });
   window.addEventListener("pagehide", () => { disconnect(); });
-  window.addEventListener("pageshow", () => { if (open) { connect(); updateStatus(); } });
+  window.addEventListener("pageshow", () => { if (open) { loadRefs(); connect(); updateStatus(); } });
 
   refresh();
   return { setOpen, refresh };
