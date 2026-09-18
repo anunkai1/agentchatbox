@@ -122,7 +122,12 @@ assert js("document.querySelectorAll('.favourite-chip').length") == 4
 assert js("window.__sockets.length") == 1
 assert js("window.__sockets[0].url.includes('stream.binance.com')") is True
 assert js("window.__watchSocket()") is None
-print('PASS: boot leaves the chart view in place and opens no list socket.')
+# The view toggle is the header's leftmost control in both views, clear of the
+# favourite chips and inside the viewport.
+assert js("document.querySelector('.topbar').firstElementChild.id") == 'btn-view'
+assert js("document.querySelector('#btn-view').getBoundingClientRect().x") < js("document.querySelector('.favourites').getBoundingClientRect().x")
+assert js("document.querySelector('#btn-view').getBoundingClientRect().x") >= 0
+print('PASS: boot leaves the chart view in place, opens no list socket, and the view toggle leads the header.')
 
 # ---------------------------------------------------------------- open the list
 js("document.querySelector('#btn-view').click()")
@@ -137,6 +142,9 @@ assert js("getComputedStyle(document.querySelector('.tools')).display") == 'none
 assert js("getComputedStyle(document.querySelector('.favourites')).display") == 'none'
 assert js("getComputedStyle(document.querySelector('#watchlist')).display") == 'block'
 assert js("document.querySelector('#btn-view').textContent") == '\U0001F4C8 Chart'
+assert js("getComputedStyle(document.querySelector('#btn-view')).display") != 'none'
+assert js("document.querySelector('.topbar').firstElementChild.id") == 'btn-view'
+assert js("document.querySelector('#btn-view').getBoundingClientRect().x") < js("document.querySelector('#source-toggle').getBoundingClientRect().x")
 assert json.loads(js("window.__ls['cc-settings-v1']"))['view'] == 'list'
 # One subscription per live market, none for the Binance pin, in star order.
 subs = json.loads(js("JSON.stringify(window.__watchSocket().sent.map(m => m.subscription.coin))"))
