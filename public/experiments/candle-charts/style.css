@@ -350,7 +350,8 @@ body.list-view #rsi-chart { display: none; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 4px 9px 12px;
+  flex-wrap: wrap;
+  padding: 9px 4px 7px 12px;
   background: none;
   border: 0;
   color: inherit;
@@ -395,5 +396,22 @@ body.list-view #rsi-chart { display: none; }
   .quote-main { padding: 8px 2px 8px 10px; gap: 8px; }
   .quote-star { width: 32px; }
 }
+/* Rolling windows sit on their own line, aligned under the symbol. */
+.quote-windows {
+  flex: 1 0 100%;
+  display: flex;
+  gap: 10px;
+  padding: 3px 0 0 36px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.quote-windows[hidden] { display: none; }
+.quote-window { display: flex; gap: 3px; align-items: baseline; }
+.quote-window i { font-style: normal; color: #6c7683; }
+.quote-window b { font-weight: 600; }
+.quote-window b.pos { color: var(--up); }
+.quote-window b.neg { color: var(--down); }
 .quote-row.rejected .quote-symbol,
 .quote-row.rejected .quote-price { color: var(--muted); }

@@ -20,13 +20,14 @@ Object.defineProperty(window, 'localStorage', {configurable:true, value:{
   setItem: (k, v) => { window.__ls[k] = String(v); },
   removeItem: (k) => { delete window.__ls[k]; },
 }});
-// One Binance pin (no live feed here), two live Hyperliquid markets on
-// different DEXes, and one id the venue will reject.
+// One Binance pin (no live feed here), live Hyperliquid markets on different
+// DEXes (one with no candle history yet) and one id the venue will reject.
 window.__ls['cc-settings-v1'] = JSON.stringify({
   source:'binance', symbol:'BTC', interval:'15m', symbolBySource:{},
   favourites:[
     {source:'binance', symbol:'BTC'},
     {source:'hyperliquid', symbol:'ETH'},
+    {source:'hyperliquid', symbol:'SOL'},
     {source:'xyz', symbol:'xyz:SP500'},
     {source:'xyz', symbol:'xyz:GONE'},
   ],
@@ -66,6 +67,9 @@ window.__bars = () => Array.from({length:100}, (_, i) => {
   return {t: base - (99 - i) * 900000, o:'2500', h:'2540', l:'2460', c:String(2500 + Math.sin(i) * 20), v:'100'};
 });
 window.__historyRequests = 0;
+window.__candleRequests = [];
+window.__realNow = Date.now;
+window.__now = Date.now();
 window.fetch = async (raw, opts = {}) => {
   const url = String(raw);
   const send = (data) => new Response(JSON.stringify(data), {status:200, headers:{'content-type':'application/json'}});
@@ -82,6 +86,24 @@ window.fetch = async (raw, opts = {}) => {
     const body = JSON.parse(opts.body || '{}');
     if (body.type === 'candleSnapshot') {
       window.__historyRequests++;
+      const req = body.req;
+      window.__candleRequests.push({coin:req.coin, interval:req.interval, span: window.__now - req.startTime});
+      // A freshly listed market answers with no candles at all.
+      if (req.coin === 'SOL') return send([]);
+      if (req.interval === '1h') {
+        const hour = Math.floor(window.__now / 3600000) * 3600000;
+        return send(Array.from({length:26}, (_, i) => {
+          const back = 25 - i;
+          return {t: hour - back * 3600000, o:'1', h:'1', l:'1', c: back === 24 ? '2400' : '2500', v:'1'};
+        }));
+      }
+      if (req.interval === '1d') {
+        const day = Math.floor(window.__now / 86400000) * 86400000;
+        return send(Array.from({length:33}, (_, i) => {
+          const back = 32 - i;
+          return {t: day - back * 86400000, o:'1', h:'1', l:'1', c: back === 7 ? '2000' : back === 30 ? '1250' : '2500', v:'1'};
+        }));
+      }
       return send(window.__bars());
     }
     if (body.type === 'metaAndAssetCtxs') {
@@ -117,7 +139,7 @@ for filename in ['lwc-4.0.1.js', 'alerts.js', 'watchlist.js', 'app.js']:
 wait_until("document.querySelector('#last-price').textContent !== '—'")
 assert js("document.body.classList.contains('list-view')") is False
 assert js("getComputedStyle(document.querySelector('#watchlist')).display") == 'none'
-assert js("document.querySelectorAll('.favourite-chip').length") == 4
+assert js("document.querySelectorAll('.favourite-chip').length") == 5
 # The chart's own socket is untouched by the list feature.
 assert js("window.__sockets.length") == 1
 assert js("window.__sockets[0].url.includes('stream.binance.com')") is True
@@ -148,12 +170,18 @@ assert js("document.querySelector('#btn-view').getBoundingClientRect().x") < js(
 assert json.loads(js("window.__ls['cc-settings-v1']"))['view'] == 'list'
 # One subscription per live market, none for the Binance pin, in star order.
 subs = json.loads(js("JSON.stringify(window.__watchSocket().sent.map(m => m.subscription.coin))"))
-assert subs == ['ETH', 'xyz:SP500', 'xyz:GONE'], subs
+assert subs == ['ETH', 'SOL', 'xyz:SP500', 'xyz:GONE'], subs
 rows = json.loads(js("JSON.stringify([...document.querySelectorAll('.quote-row')].map(r => r.dataset.symbol))"))
-assert rows == ['BTC', 'ETH', 'xyz:SP500', 'xyz:GONE'], rows
+assert rows == ['BTC', 'ETH', 'SOL', 'xyz:SP500', 'xyz:GONE'], rows
 print('PASS: list view hides chart-only chrome, streams one subscription per live favourite and skips the Binance pin.')
 
 # ------------------------------------------------------- live figures
+def candle_requests(coin=None):
+    """History fetches the list made; the chart's own snapshots are not it."""
+    reqs = [r for r in json.loads(js("JSON.stringify(window.__candleRequests)")) if r['interval'] in ('1h', '1d')]
+    return [r for r in reqs if coin is None or r['coin'] == coin]
+
+
 def row(symbol):
     return f"document.querySelector('.quote-row[data-symbol=\"{symbol}\"]')"
 
@@ -181,9 +209,47 @@ js("window.__push('xyz:GOLD', 4350.02, 4341.84)")
 js("window.__push('xyz:TSLA', 336.34, 330.1)")
 wait_until(f"{row('xyz:GONE')}.querySelector('.quote-change').textContent === 'waiting for the venue'")
 # A market that is not a favourite has no row and no figures here.
-assert js("document.querySelectorAll('.quote-row').length") == 4
+assert js("document.querySelectorAll('.quote-row').length") == 5
 assert js("document.querySelector('.quote-row[data-symbol=\"xyz:GOLD\"]')") is None
+# Rolling windows are the venue's own candle closes, re-percentaged against the
+# live price: 1h bars for 24h, 1d bars for 7d and 1M. One fetch per window per
+# market, none for the Binance pin.
+requests = candle_requests()
+asked = {}
+for request in requests:
+    asked.setdefault(request['coin'], []).append(request['interval'])
+assert {coin: sorted(iv) for coin, iv in asked.items()} == {
+    'ETH': ['1d', '1h'], 'SOL': ['1d', '1h'], 'xyz:SP500': ['1d', '1h'], 'xyz:GONE': ['1d', '1h']}, asked
+assert all(23 * 3600000 <= r['span'] <= 26 * 3600000 for r in requests if r['interval'] == '1h'), requests
+assert all(31 * 86400000 <= r['span'] <= 33 * 86400000 for r in requests if r['interval'] == '1d'), requests
+wait_until(f"{row('ETH')}.querySelectorAll('.quote-window b.pos').length === 3")
+windows = json.loads(js(f"JSON.stringify([...{row('ETH')}.querySelectorAll('.quote-window')].map(w => w.querySelector('i').textContent + w.querySelector('b').textContent))"))
+# Against the 2,440.50 last pushed, and the fixture closes 2400 / 2000 / 1250.
+assert windows == ['24h+1.69%', '7d+22.02%', '1M+95.24%'], windows
+assert js(f"{row('BTC')}.querySelector('.quote-windows').hidden") is True
+assert js(f"getComputedStyle({row('BTC')}.querySelector('.quote-windows')).display") == 'none'
+assert js(f"getComputedStyle({row('ETH')}.querySelector('.quote-windows')).display") == 'flex'
+# A market with no candle history shows no window rather than a guess.
+assert js(f"{row('SOL')}.querySelectorAll('.quote-window b')[0].textContent") == '—'
+assert js(f"{row('SOL')}.querySelector('.quote-price').textContent") == '—'
+js("window.__push('SOL', 150.0, 148.0)")
+wait_until(f"{row('SOL')}.querySelector('.quote-price').textContent === '150.00'")
+assert js(f"{row('SOL')}.querySelectorAll('.quote-window b')[0].textContent") == '—'
+# The windows follow the live price, not the fetch.
+js("window.__push('ETH', 2400.0, 2447.28)")
+wait_until(f"{row('ETH')}.querySelector('.quote-window b').textContent === '+0.00%'")
+windows = json.loads(js(f"JSON.stringify([...{row('ETH')}.querySelectorAll('.quote-window b')].map(b => b.textContent))"))
+assert windows == ['+0.00%', '+20.00%', '+92.00%'], windows
+# A flat window is neither green nor red; the other two still are.
+assert js(f"{row('ETH')}.querySelectorAll('.quote-window b.pos').length") == 2
+assert js(f"{row('ETH')}.querySelector('.quote-window b').className") == ''
+# Each window carries its own direction, so a mixed row reads correctly.
+js("window.__push('ETH', 1900.0, 2447.28)")
+wait_until(f"{row('ETH')}.querySelector('.quote-window b').textContent === '-20.83%'")
+windows = json.loads(js(f"JSON.stringify([...{row('ETH')}.querySelectorAll('.quote-window b')].map(b => b.className + ' ' + b.textContent))"))
+assert windows == ['neg -20.83%', 'neg -5.00%', 'pos +52.00%'], windows
 print('PASS: pushes paint price and day change, colour direction, flash, and leave unsupported pins blank.')
+print('PASS: rolling 24h/7d/1M windows come from one venue history fetch per market and track every tick.')
 capture_screenshot('/tmp/candle-watchlist-mobile.png', max_dim=1200)
 
 # ------------------------------------------------- a venue-rejected market
@@ -218,6 +284,20 @@ assert js(f"{row('xyz:SP500')}.classList.contains('active')") is True
 assert js(f"{row('BTC')}.classList.contains('active')") is False
 print('PASS: reopening the list re-subscribes, refuses to show stale numbers, and marks the charted market.')
 
+# History is reused rather than re-fetched while it is fresh, and re-read from
+# the venue once it is older than the reuse window.
+assert len(candle_requests()) == 8, candle_requests()
+js("Date.now = () => window.__now; void 0")
+js("window.__now += 16 * 60 * 1000; void 0")
+js("document.querySelector('#btn-view').click()")
+wait_until("!document.body.classList.contains('list-view')")
+js("document.querySelector('#btn-view').click()")
+wait_until("!!window.__watchSocket()")
+wait_until("window.__candleRequests.length >= 16")
+assert len(candle_requests()) == 16, candle_requests()
+js("Date.now = window.__realNow; void 0")
+print('PASS: fresh window history is reused, and a stale list re-reads it from the venue.')
+
 # -------------------------------------------- backgrounding pauses the feed
 js("window.__vis = 'hidden'; document.dispatchEvent(new Event('visibilitychange'))")
 wait_until("!!window.__watchSocket() === false")
@@ -236,16 +316,16 @@ wait_until("document.querySelector('#symbol').value === 'ETH'")
 js("document.querySelector('#btn-view').click()")
 wait_until("!!window.__watchSocket()")
 subs = json.loads(js("JSON.stringify(window.__watchSocket().sent.map(m => m.subscription.coin))"))
-assert subs == ['ETH', 'xyz:SP500', 'xyz:GONE'], subs
+assert subs == ['ETH', 'SOL', 'xyz:SP500', 'xyz:GONE'], subs
 assert js(f"{row('ETH')}.classList.contains('active')") is True
 print('PASS: leaving through the header and returning via a favourite chip keeps the live subscription set.')
 
 # --------------------------------------------------------- remove a row
 js(f"{row('xyz:SP500')}.querySelector('.quote-star').click()")
 wait_until(f"{row('xyz:SP500')} === null")
-assert json.loads(js("JSON.stringify(JSON.parse(window.__ls['cc-settings-v1']).favourites.map(f => f.symbol))")) == ['BTC', 'ETH', 'xyz:GONE']
-assert js("document.querySelectorAll('.quote-row').length") == 3
-assert js("document.querySelectorAll('.favourite-chip').length") == 3
+assert json.loads(js("JSON.stringify(JSON.parse(window.__ls['cc-settings-v1']).favourites.map(f => f.symbol))")) == ['BTC', 'ETH', 'SOL', 'xyz:GONE']
+assert js("document.querySelectorAll('.quote-row').length") == 4
+assert js("document.querySelectorAll('.favourite-chip').length") == 4
 assert js("document.querySelector('#btn-favourite').getAttribute('aria-pressed')") == 'true'
 print('PASS: the row star removes the pin from the list, the chip strip and storage together.')
 
@@ -256,7 +336,7 @@ wait_until("!!window.__watchSocket()", timeout=15)
 print('PASS: a dropped feed reports itself and reconnects.')
 
 # ------------------------------------------------------------ empty state
-for _ in range(3):
+for _ in range(4):
     js("document.querySelector('.quote-star').click()")
 wait_until("document.querySelectorAll('.quote-row').length === 0")
 assert js("document.querySelector('.quote-empty').hidden") is False
