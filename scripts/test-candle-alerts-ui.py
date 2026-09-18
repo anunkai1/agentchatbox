@@ -82,12 +82,12 @@ html = root.joinpath('index.html').read_text()
 import re
 html = re.sub(r'<link rel="stylesheet"[^>]+>', '<style>' + root.joinpath('style.css').read_text() + '</style>', html)
 html = re.sub(r'<script src="lwc[^>]+></script>', '', html)
-html = re.sub(r'<script src="(?:alerts|app)\.js[^>]+></script>', '', html)
+html = re.sub(r'<script src="(?:alerts|watchlist|app)\.js[^>]+></script>', '', html)
 html = html.replace('</body>', '<script>' + mock + '</script></body>')
 frame = cdp('Page.getFrameTree')['frameTree']['frame']['id']
 cdp('Page.setDocumentContent', frameId=frame, html=html)
 # Keep each harness protocol message below its line-size ceiling.
-for filename in ['lwc-4.0.1.js', 'alerts.js', 'app.js']:
+for filename in ['lwc-4.0.1.js', 'alerts.js', 'watchlist.js', 'app.js']:
     source = root.joinpath(filename).read_text()
     js("window.__fixtureScript = ''")
     for offset in range(0, len(source), 18000):

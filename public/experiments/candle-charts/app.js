@@ -8,7 +8,7 @@
   ];
   const INTERVAL_SEC = Object.fromEntries(INTERVALS);
   const SPOT_SYMBOLS = ["BTC", "ETH", "SOL", "DOGE", "BNB", "ADA", "LINK"];
-  // The Hyperliquid and xyz tabs list the live top 20 markets by 24h notional
+  // The Hyperliquid and xyz tabs list the live top 30 markets by 24h notional
   // volume, ranked from the feed that also labels the ticker list. These seeds
   // only fill the picker for the moment before the first ranking arrives; they
   // are the markets both tabs offered before the lists went live.
@@ -20,7 +20,9 @@
     "xyz:GOLD", "xyz:SILVER", "xyz:PLATINUM", "xyz:PALLADIUM",
     "xyz:COPPER", "xyz:BRENTOIL", "xyz:CL", "xyz:NATGAS",
   ];
-  const TOP_N = 20;
+  // Sized so the Hyperliquid tab reaches markets that are liquid but not in the
+  // headline ten — DOGE and LINK sat at #27 and #28 when this was raised.
+  const TOP_N = 30;
   const BINANCE_SYMBOLS = [...SPOT_SYMBOLS, "ETHBTC"];
   const binancePair = (symbol) => symbol === "ETHBTC" ? symbol : `${symbol}USDT`;
 
