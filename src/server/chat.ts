@@ -32,7 +32,7 @@ import { deleteIndexedSession } from "./search/index.js";
  */
 
 import type { Server as HttpServer, IncomingMessage } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
 import type {
 	ClientMessage,
@@ -61,6 +61,8 @@ import {
 	findSessionCwd,
 	forkPiSession,
 	listAllSessions,
+	type MoveSessionResult,
+	movePiSession,
 	setPiSessionName,
 } from "./session-list.js";
 import { setPinned } from "./session-pins.js";
@@ -464,6 +466,14 @@ async function onClientMessage(
 			broadcastSessions();
 			break;
 		}
+		case "moveSession": {
+			// Re-file a conversation under another project folder. Async
+			// because the session may currently be bound to a live `pi` child
+			// that has to shut down (and flush) before its transcript file
+			// moves; the helper reports its own failures.
+			void moveSessionToProject(ws, session, msg.sessionId, msg.projectId);
+			break;
+		}
 		// --- Projects -------------------------------------------------------
 		case "listProjects": {
 			send(ws, { type: "projects", projects: listProjects() as ProjectSummary[] });
@@ -619,6 +629,108 @@ async function replaceSession(ws: PiSocket, old: LiveSession, init: InitMessage)
 		}
 	} finally {
 		ws._switching = false;
+	}
+}
+
+/**
+ * Re-file a conversation under another project folder (sidebar "move to
+ * project"). A session's project is derived from its recorded cwd, and pi
+ * keeps each session as `--<cwd>--/<stamp>_<id>.jsonl`, so the move is:
+ * stop any live child, relocate + rewrite the JSONL, then continue the
+ * conversation in the new folder.
+ *
+ * Ordering matters. A live `pi` child appends to its JSONL by path, so it
+ * must be terminated (and allowed to flush) BEFORE the file moves, exactly
+ * as deletion does. If anything then fails we put the child back where it
+ * was, so a failed move never leaves a tab with a dead chat. On success
+ * every view that had the conversation open is re-attached to it in the new
+ * cwd — the requesting tab keeps its chat, now running in the target
+ * project (and therefore loading that project's AGENTS.md).
+ */
+async function moveSessionToProject(
+	ws: PiSocket,
+	bound: LiveSession,
+	sessionId: string,
+	projectId: string,
+): Promise<void> {
+	try {
+		const project = getProject(projectId);
+		if (!project) {
+			deliverError(ws, "could not move conversation: unknown project");
+			return;
+		}
+
+		// Read-committed liveness probe: the session may be bound to a child
+		// (this tab, or another one), which must be stopped first.
+		const live = registry.liveFor(sessionId);
+		if (live && (live.busy || live.streaming)) {
+			deliverError(ws, "could not move conversation: it is still running — stop it first");
+			return;
+		}
+		const view = live?.ws ?? null;
+		const fromCwd = live?.init.cwd ?? findSessionCwd(sessionId, projectCwds());
+		if (!fromCwd) {
+			deliverError(
+				ws,
+				"could not move conversation: its transcript is not on disk yet (send a message first)",
+			);
+			return;
+		}
+		if (resolve(fromCwd) === resolve(project.cwd)) {
+			deliverError(ws, `conversation is already in ${project.name}`);
+			return;
+		}
+
+		const stopped = live ? await registry.terminateById(sessionId) : null;
+
+		// Model/provider/thinking carry over from the session's own child when
+		// it had one, else from the caller's current chat — same rule resume
+		// uses. Only `cwd` changes.
+		const source = stopped?.init ?? bound.init;
+		const resumeInit = (cwd: string): InitMessage => ({
+			provider: source.provider,
+			modelId: source.modelId,
+			thinkingLevel: source.thinkingLevel,
+			sessionId,
+			cwd,
+		});
+
+		const result = movePiSession(fromCwd, sessionId, project.cwd);
+		if (result !== "moved") {
+			// Put a stopped conversation back the way we found it.
+			if (stopped && view) await replaceSession(view, stopped, resumeInit(fromCwd));
+			deliverError(ws, moveFailureMessage(result, project.name));
+			return;
+		}
+
+		// Re-home whoever had it open onto the moved session. `stopped`
+		// (not `bound`) is the correct old binding for both tabs, and it is
+		// always set when there was a view — a view implies a live child.
+		if (view && stopped && view._session === stopped) {
+			await replaceSession(view, stopped, resumeInit(project.cwd));
+		}
+		broadcastSessions();
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		log.error("session move failed", { sessionId, projectId, error: message });
+		deliverError(ws, `could not move conversation: ${message}`);
+	}
+}
+
+/** Human-readable reason for a non-`moved` movePiSession outcome. */
+function moveFailureMessage(
+	result: Exclude<MoveSessionResult, "moved">,
+	projectName: string,
+): string {
+	switch (result) {
+		case "not-found":
+			return "could not move conversation: its transcript is not on disk yet (send a message first)";
+		case "same-project":
+			return `conversation is already in ${projectName}`;
+		case "conflict":
+			return `could not move conversation: ${projectName} already has a session with that id`;
+		case "failed":
+			return "could not move conversation: writing it into the project folder failed";
 	}
 }
 

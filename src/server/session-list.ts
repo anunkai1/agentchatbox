@@ -27,6 +27,7 @@ import {
 	appendFileSync,
 	closeSync,
 	existsSync,
+	mkdirSync,
 	openSync,
 	readdirSync,
 	readFileSync,
@@ -37,7 +38,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Message } from "@earendil-works/pi-ai";
 import { truncate } from "../shared/content.js";
@@ -661,6 +662,126 @@ export function deletePiSession(cwd: string, sessionId: string): boolean {
 	cwdIndex = null;
 	return true;
 }
+/**
+ * Outcome of `movePiSession`. Discriminated so chat.ts can pick a precise
+ * user-facing message instead of one generic failure string.
+ */
+export type MoveSessionResult = "moved" | "not-found" | "same-project" | "conflict" | "failed";
+
+/**
+ * Move a session's JSONL into another project's session directory — this is
+ * what makes the sidebar row appear under that project folder.
+ *
+ * A session's project membership is DERIVED from its recorded cwd (see
+ * projects.ts), and pi stores sessions under
+ * `--<cwd>--/<stamp>_<id>.jsonl`, so "moving" a conversation between
+ * projects is two filesystem facts kept in sync:
+ *
+ *   1. the `session` header's `cwd` is rewritten to the target project,
+ *   2. the file itself lives in that cwd's session directory.
+ *
+ * Both must change together: pi's `--session <id>` resume computes the
+ * session directory from the cwd it was given, and re-reads the header's
+ * cwd (via `metadataFromLegacyV3Header`) as the session's cwd. Rewriting
+ * only one would either hide the session or leave it running in the old
+ * folder (with the wrong AGENTS.md).
+ *
+ * The filename is preserved (pi resolves sessions by the header `id`, and
+ * the `<stamp>_<id>.jsonl` suffix is only used when *creating* a session),
+ * so no other file can collide unless the same id already exists in two
+ * cwds — reported as `"conflict"` rather than overwritten.
+ *
+ * Ordering guarantees the transcript is never lost: the rewritten copy is
+ * written to a temp file in the target dir and atomically renamed into
+ * place, and the source is only unlinked after that succeeded. If the
+ * unlink fails the copy is rolled back and the caller gets `"failed"`.
+ *
+ * The caller (chat.ts) must stop any live `pi` child bound to this session
+ * BEFORE calling this: pi appends its JSONL by path, so a still-running
+ * child would either re-create the old file on its next write or flush into
+ * the moved path.
+ */
+export function movePiSession(
+	fromCwd: string,
+	sessionId: string,
+	toCwd: string,
+): MoveSessionResult {
+	const from = resolve(fromCwd);
+	const to = resolve(toCwd);
+	if (from === to) return "same-project";
+
+	const file = findPiSessionFile(from, sessionId);
+	if (!file) return "not-found";
+
+	let raw: string;
+	try {
+		raw = readFileSync(file, "utf8");
+	} catch {
+		return "failed";
+	}
+
+	// Rewrite ONLY the header line; every other line is copied verbatim so
+	// pi's append-only entry tree (parentIds, labels, session_info renames)
+	// survives untouched.
+	const lines = raw.split("\n");
+	let headerIndex = -1;
+	let header: Record<string, unknown> | null = null;
+	for (let i = 0; i < lines.length; i++) {
+		const trimmed = lines[i].trim();
+		if (!trimmed) continue;
+		try {
+			const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+			if (parsed?.type === "session") {
+				// A different id in the header means findPiSessionFile matched
+				// a file this session doesn't own — never rewrite that one.
+				if (String(parsed.id) !== sessionId) return "failed";
+				headerIndex = i;
+				header = parsed;
+			}
+		} catch {
+			/* skip malformed/torn lines */
+		}
+		if (header) break;
+	}
+	if (!header || headerIndex < 0) return "failed";
+	lines[headerIndex] = JSON.stringify({ ...header, cwd: to });
+
+	const targetDir = sessionsDirFor(to);
+	const targetFile = join(targetDir, basename(file));
+	if (existsSync(targetFile)) return "conflict";
+
+	try {
+		mkdirSync(targetDir, { recursive: true });
+		const temp = `${targetFile}.${process.pid}.tmp`;
+		writeFileSync(temp, lines.join("\n"));
+		renameSync(temp, targetFile);
+	} catch {
+		return "failed";
+	}
+
+	try {
+		unlinkSync(file);
+	} catch {
+		// Keep exactly one copy of the transcript: undo the target write.
+		try {
+			unlinkSync(targetFile);
+		} catch {
+			/* ignore */
+		}
+		return "failed";
+	}
+
+	// Drop both paths from the mtime-keyed summary cache (the target path has
+	// no entry yet, but a same-named file earlier in its life might have) and
+	// invalidate the root-wide id→cwd index + orphan-cwd scan so the session's
+	// new cwd is authoritative on the next listing/resume.
+	sessionFileCache.delete(file);
+	sessionFileCache.delete(targetFile);
+	cwdIndex = null;
+	orphanCwdCache = null;
+	return "moved";
+}
+
 /**
  * Build the browser's lightweight rendering projection without changing pi's
  * on-disk JSONL or the context pi resumes from.

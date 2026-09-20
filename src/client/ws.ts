@@ -94,6 +94,12 @@ export interface ChatClient {
 	/** Delete ANY session by id (sidebar trash). Server removes the JSONL + rebroadcasts. */
 	deleteSession(sessionId: string): void;
 	/**
+	 * Move ANY session into another project folder. The server relocates +
+	 * rewrites the session's JSONL, then rebroadcasts the session list so
+	 * every sidebar re-files the row under the target project.
+	 */
+	moveSession(sessionId: string, projectId: string): void;
+	/**
 	 * Fork (branch) a session into a new one, copying the first
 	 * `messageCount` messages. The server replies via onForked with the
 	 * new session id, which the caller then resumeSession()s.
@@ -425,6 +431,7 @@ export function createChatClient(): ChatClient {
 		renameSessionById: (sessionId, name) => send({ type: "renameSessionById", sessionId, name }),
 		setSessionPinned: (sessionId, pinned) => send({ type: "setSessionPinned", sessionId, pinned }),
 		deleteSession: (sessionId) => send({ type: "deleteSession", sessionId }),
+		moveSession: (sessionId, projectId) => send({ type: "moveSession", sessionId, projectId }),
 		forkSession: (sessionId, messageCount) =>
 			send({ type: "forkSession", sessionId, messageCount }),
 		listSessions: () => send({ type: "listSessions" }),

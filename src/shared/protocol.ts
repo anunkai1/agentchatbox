@@ -126,7 +126,12 @@ export interface VoicesResponse {
 //       child emits a fresh `ready` the client reacts to.
 //   { type: "renameSession", name }
 //       Translated to `pi` `set_session_name`.
-
+//   { type: "moveSession", sessionId, projectId }
+//       re-file an existing conversation under another project folder
+//       (the sidebar's folder button). The server stops any live child,
+//       relocates + rewrites the session JSONL, then continues the chat
+//       in the target project's cwd.
+//
 import type { ThinkingLevel } from "./thinking.js";
 
 export type { ThinkingLevel };
@@ -380,6 +385,22 @@ export type ClientMessage =
 	 * the transport boundary.
 	 */
 	| { type: "forkSession"; sessionId: string; messageCount: number }
+	/**
+	 * Move ANY session (not just the current one) into a different project
+	 * folder, i.e. re-file the conversation under another project in the
+	 * sidebar. A session's project is derived from its recorded cwd, and pi
+	 * stores sessions under `--<cwd>--/<stamp>_<id>.jsonl`, so the server
+	 * rewrites the JSONL `session` header's `cwd` and relocates the file
+	 * into the target project's session directory. The transcript itself is
+	 * untouched. Afterwards the conversation continues in the target folder
+	 * (so it picks up that project's AGENTS.md).
+	 *
+	 * If a live `pi` child is bound to the session (it's open in some tab),
+	 * the server stops it first — pi appends its JSONL by path — and, for
+	 * the client that asked, resumes it in the new project. The session
+	 * list is rebroadcast so every sidebar re-files the row.
+	 */
+	| { type: "moveSession"; sessionId: string; projectId: string }
 	/**
 	 * Request the commands/skills/extensions the live `pi` child has
 	 * loaded for its cwd (pi's `get_commands` RPC). The server forwards

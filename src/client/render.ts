@@ -20,7 +20,7 @@ import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { services } from "./services.js";
-import { type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
+import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { formatAbsolute, formatRelative } from "./time.js";
 import { sessionPath } from "./url.js";
 
@@ -1866,6 +1866,8 @@ export interface ShellHandlers {
 	renameSessionById: (sessionId: string, name: string) => void;
 	/** Delete any session by id (sidebar trash). Server removes the JSONL. */
 	deleteSession: (sessionId: string) => void;
+	/** Move any session into another project folder (sidebar folder button). */
+	moveSession: (sessionId: string, projectId: string) => void;
 	/** Start a fresh Global chat without a confirmation prompt. */
 	newGlobalSession: () => void;
 	// --- Projects --------------------------------------------------------
@@ -3350,10 +3352,21 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		"aria-label": `Delete ${displayTitle}`,
 		html: "🗑",
 	});
+	// Move-to-project sits leftmost in the action cluster (the slot between
+	// the metadata line and the basket on touch layouts). It opens a project
+	// picker; the server does the re-filing.
+	const moveBtn = el("button", {
+		class: "session-action move",
+		type: "button",
+		title: `Move ${displayTitle} to another project`,
+		"aria-label": `Move ${displayTitle} to another project`,
+		html: "📁",
+	});
+	moveBtn.addEventListener("click", () => openMoveToProjectDialog(s));
 	if (pinned) {
 		// Swap the pin and basket positions while keeping the pencil centred:
 		// basket → pencil → star.
-		actions.append(deleteBtn, renameBtn);
+		actions.append(moveBtn, deleteBtn, renameBtn);
 	} else {
 		const pinBtn = el("button", {
 			class: "session-action pin",
@@ -3364,7 +3377,7 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		});
 		pinBtn.addEventListener("click", () => shellHandlers?.setSessionPinned(s.id, true));
 		// Keep the same order before pinning: basket → pencil → star.
-		actions.append(deleteBtn, renameBtn, pinBtn);
+		actions.append(moveBtn, deleteBtn, renameBtn, pinBtn);
 	}
 	link.append(titleRow);
 	const timeStr = formatRelativeTime(s.modifiedAt);
@@ -3428,6 +3441,15 @@ function openSessionActions(titleEl: HTMLElement, actions: HTMLElement, s: Sessi
 		overlay.remove();
 		setTimeout(() => startRename(titleEl, actions, s), 0);
 	});
+	const moveButton = el("button", {
+		class: "session-sheet-action",
+		type: "button",
+		text: "📁  Move to project…",
+	});
+	moveButton.addEventListener("click", () => {
+		overlay.remove();
+		setTimeout(() => openMoveToProjectDialog(s), 0);
+	});
 	const deleteButton = el("button", {
 		class: "session-sheet-action destructive",
 		type: "button",
@@ -3437,8 +3459,60 @@ function openSessionActions(titleEl: HTMLElement, actions: HTMLElement, s: Sessi
 		overlay.remove();
 		setTimeout(() => confirmDeleteSession(s), 0);
 	});
-	box.append(pinButton, renameButton, deleteButton);
+	box.append(pinButton, renameButton, moveButton, deleteButton);
 	mountModal(overlay, box, { label: `Actions for ${title}`, initialFocus: pinButton });
+}
+
+/**
+ * Project picker for a session row's folder button: re-file the conversation
+ * under another project. A session's project membership is derived from its
+ * cwd, so the server rewrites + relocates the JSONL and then continues the
+ * chat in the target folder — this dialog is purely the choice of target.
+ */
+function openMoveToProjectDialog(s: SessionSummary): void {
+	const title = s.title || "Untitled";
+	const currentProjectId = s.projectId ?? GLOBAL_PROJECT_ID;
+	// Every project except the one it is already in. "other" is not a project
+	// (it's the deleted-project bucket), so it is not offered here.
+	const targets = state.projects.filter((p) => p.id !== currentProjectId);
+
+	const overlay = el("div", { class: "modal-overlay" });
+	const box = el("div", { class: "modal-box session-action-sheet" });
+	box.append(el("h3", { text: "Move conversation" }));
+	box.append(
+		el("p", {
+			class: "session-action-sheet-hint",
+			text: targets.length
+				? `File "${title}" under another project. It keeps its history and continues in that folder.`
+				: "No other projects yet. Create one from the Projects folder first.",
+		}),
+	);
+
+	let first: HTMLElement | null = null;
+	for (const p of targets) {
+		const button = el("button", {
+			class: "session-sheet-action",
+			type: "button",
+			text: `${p.icon}  ${p.name}`,
+		});
+		button.addEventListener("click", () => {
+			overlay.remove();
+			shellHandlers?.moveSession(s.id, p.id);
+		});
+		box.append(button);
+		first ??= button;
+	}
+
+	const cancel = el("button", { class: "btn", type: "button", text: "Cancel" });
+	cancel.addEventListener("click", () => overlay.remove());
+	const footer = el("div", { class: "dialog-actions" });
+	footer.append(cancel);
+	box.append(footer);
+
+	mountModal(overlay, box, {
+		label: `Move ${title} to a project`,
+		initialFocus: first ?? cancel,
+	});
 }
 
 /**

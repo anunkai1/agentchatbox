@@ -1388,6 +1388,7 @@ async function boot(): Promise<void> {
 				chatClient.newSession();
 			}
 		},
+		moveSession: (sessionId, projectId) => chatClient.moveSession(sessionId, projectId),
 		newGlobalSession: () => {
 			resetChatState();
 			chatClient.newSession();

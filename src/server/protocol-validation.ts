@@ -212,6 +212,12 @@ export function parseClientMessage(value: unknown): ClientMessage {
 		case "deleteSession":
 		case "resumeSession":
 			return { type, sessionId: identifier(msg.sessionId, "sessionId") };
+		case "moveSession":
+			return {
+				type,
+				sessionId: identifier(msg.sessionId, "sessionId"),
+				projectId: identifier(msg.projectId, "projectId"),
+			};
 		case "forkSession": {
 			const messageCount = msg.messageCount;
 			if (
