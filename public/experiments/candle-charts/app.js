@@ -250,6 +250,8 @@
   let drawFrameIsTimeout = false;
   let hover = null;              // {x, time} while the crosshair is over the chart
   let measure = null;            // {a:{time,price}, b:{time,price}} measurement box
+  let measureDrag = null;        // pointer state while a placed measurement is moved/resized
+  let measureHotKey = null;      // measurement grip under the pointer (highlight + cursor)
   let favouriteGesture = null;   // pointer state for favourite scrolling/reordering
   let favouriteMomentumFrame = 0;
   let symbolListStale = false;   // a re-rank arrived while the picker was open
@@ -672,6 +674,148 @@
     octx.strokeRect(bx, by, bw, bh);
     octx.fillStyle = col;
     lines.forEach((s, i) => octx.fillText(s, bx + 8, by + 17 + i * 15));
+
+    // Grips, so a placed box can be slid around or resized afterwards.
+    for (const g of grabbableHandles({ left, right, top, bot })) {
+      const live = measureDrag ? measureDrag.grip.key === g.key : measureHotKey === g.key;
+      const r = live ? 4.5 : 3.5;
+      octx.beginPath();
+      octx.rect(g.x - r, g.y - r, r * 2, r * 2);
+      octx.fillStyle = live ? "#eaecef" : "#0b0e11";
+      octx.fill();
+      octx.strokeStyle = col;
+      octx.lineWidth = 1.5;
+      octx.stroke();
+    }
+  }
+
+  // ---------- moving / resizing a placed measurement ----------
+  // The box becomes a first-class object once placed: grab the body to slide
+  // it, or a corner/edge grip to resize it. Grips are only offered on edges
+  // long enough to be worth grabbing, so a slim box stays draggable as a whole
+  // instead of collapsing into a pile of overlapping handles.
+  const MEASURE_GRIP = 9;       // hit radius, css px
+  const MEASURE_GRIP_MIN = 14;  // shortest edge (px) that still shows grips
+
+  function releaseMeasureGesture() {
+    if (!measureDrag) return;
+    measureDrag = null;
+    // The chart's own mousedown/touchstart handlers read these flags, so a
+    // gesture we own must hand scrolling and scaling back on release.
+    chart.applyOptions({ handleScroll: true, handleScale: true, kineticScroll: { touch: true } });
+    elMain.style.touchAction = "";
+  }
+
+  function clearMeasure() {
+    releaseMeasureGesture();
+    measure = null;
+    measureHotKey = null;
+    elMain.style.cursor = "";
+    invalidateOverlay();
+  }
+
+  function measureBox() {
+    if (!measure) return null;
+    const x1 = xForTime(measure.a.time), x2 = xForTime(measure.b.time);
+    const y1 = yForPrice(measure.a.price), y2 = yForPrice(measure.b.price);
+    if (x1 === null || x2 === null || y1 === null || y2 === null) return null;
+    return {
+      left: Math.min(x1, x2), right: Math.max(x1, x2),
+      top: Math.min(y1, y2), bot: Math.max(y1, y2),
+    };
+  }
+
+  // h/v name the box edge a grip moves; both set means a corner grip.
+  function grabbableHandles(b) {
+    const wide = b.right - b.left >= MEASURE_GRIP_MIN;
+    const tall = b.bot - b.top >= MEASURE_GRIP_MIN;
+    const cx = (b.left + b.right) / 2, cy = (b.top + b.bot) / 2;
+    return [
+      { key: "tl", x: b.left, y: b.top, cursor: "nwse-resize", h: "left", v: "top" },
+      { key: "tr", x: b.right, y: b.top, cursor: "nesw-resize", h: "right", v: "top" },
+      { key: "bl", x: b.left, y: b.bot, cursor: "nesw-resize", h: "left", v: "bot" },
+      { key: "br", x: b.right, y: b.bot, cursor: "nwse-resize", h: "right", v: "bot" },
+      { key: "t", x: cx, y: b.top, cursor: "ns-resize", h: null, v: "top" },
+      { key: "b", x: cx, y: b.bot, cursor: "ns-resize", h: null, v: "bot" },
+      { key: "l", x: b.left, y: cy, cursor: "ew-resize", h: "left", v: null },
+      { key: "r", x: b.right, y: cy, cursor: "ew-resize", h: "right", v: null },
+    ].filter((g) => (!g.h || wide) && (!g.v || tall));
+  }
+
+  function measureHit(x, y) {
+    const b = measureBox();
+    if (!b) return null;
+    for (const g of grabbableHandles(b)) {
+      if (Math.abs(x - g.x) <= MEASURE_GRIP && Math.abs(y - g.y) <= MEASURE_GRIP) return g;
+    }
+    // Padded body: even a hairline box is easy to grab and slide.
+    const pad = 6;
+    if (x >= b.left - pad && x <= b.right + pad && y >= b.top - pad && y <= b.bot + pad) {
+      return { key: "move", cursor: "move", h: null, v: null };
+    }
+    return null;
+  }
+
+  function beginMeasureDrag(grip, x, y) {
+    const logical = chart.timeScale().coordinateToLogical(x);
+    const price = priceForY(y);
+    if (!measure || logical === null || price === null) return false;
+    measureDrag = {
+      grip,
+      a: { ...measure.a }, b: { ...measure.b },
+      startLogical: logical, startPrice: price,
+      // Which endpoint owns each edge, so resizing never flips the a→b sign.
+      hi: measure.b.price >= measure.a.price ? "b" : "a",
+      lo: measure.b.price >= measure.a.price ? "a" : "b",
+      right: measure.b.time >= measure.a.time ? "b" : "a",
+      left: measure.b.time >= measure.a.time ? "a" : "b",
+    };
+    // The chart reads these when the event reaches it, and this runs first.
+    chart.applyOptions({ handleScroll: false, handleScale: false, kineticScroll: { touch: false } });
+    elMain.style.touchAction = "none";
+    return true;
+  }
+
+  function updateMeasureDrag(x, y) {
+    const d = measureDrag;
+    if (!d || !measure) return;
+    const price = priceForY(y);
+    if (price === null) return;
+    const next = { a: { ...d.a }, b: { ...d.b } };
+    const at = (which) => (which === "a" ? next.a : next.b);
+
+    if (d.grip.key === "move") {
+      const logical = chart.timeScale().coordinateToLogical(x);
+      if (logical === null) return;
+      const dLogical = logical - d.startLogical, dPrice = price - d.startPrice;
+      for (const which of ["a", "b"]) {
+        const lg = logicalForTime(d[which].time);
+        const t = lg === null ? null : timeForLogical(lg + dLogical);
+        if (t !== null) at(which).time = t;
+        at(which).price = d[which].price + dPrice;
+      }
+    } else {
+      // Edge grips pull one endpoint; clamping keeps the a→b direction until
+      // the box itself is re-placed or cleared.
+      if (d.grip.v === "top") at(d.hi).price = Math.max(price, at(d.lo).price);
+      else if (d.grip.v === "bot") at(d.lo).price = Math.min(price, at(d.hi).price);
+      const time = timeForX(x);
+      if (time !== null) {
+        if (d.grip.h === "right") at(d.right).time = Math.max(time, at(d.left).time);
+        else if (d.grip.h === "left") at(d.left).time = Math.min(time, at(d.right).time);
+      }
+    }
+    measure.a = next.a;
+    measure.b = next.b;
+    invalidateOverlay();
+  }
+
+  function endMeasureDrag() {
+    if (!measureDrag) return;
+    releaseMeasureGesture();
+    measureHotKey = null;
+    elMain.style.cursor = "";
+    invalidateOverlay();
   }
 
   function drawOverlay() {
@@ -896,7 +1040,8 @@
     loading = true;
     stopSocket();
     disarm();
-    measure = null; hover = null;
+    clearMeasure();
+    hover = null;
     const sourceKey = settings.source;
     const symbol = settings.symbol;
     const interval = settings.interval;
@@ -1233,7 +1378,15 @@
   });
 
   // ============================== tools / drawings ==============================
+  function updateMeasureHover(x, y) {
+    const grip = tool || !measure ? null : measureHit(x, y);
+    const key = grip ? grip.key : null;
+    if (key !== measureHotKey) { measureHotKey = key; invalidateOverlay(); }
+    elMain.style.cursor = grip ? grip.cursor : "";
+  }
+
   function armTool(t) {
+    clearMeasure();
     alertUI?.clearSelection();
     tool = t === tool ? null : t;
     anchor = null;
@@ -1256,16 +1409,51 @@
   }
 
   elMain.addEventListener("pointermove", (e) => {
-    if (e.isPrimary === false || !tool) return;
+    if (e.isPrimary === false) return;
     const r = elMain.getBoundingClientRect();
-    cursorXY = { x: e.clientX - r.left, y: e.clientY - r.top };
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    if (measureDrag) { updateMeasureDrag(x, y); return; }
+    updateMeasureHover(x, y);
+    if (!tool) return;
+    cursorXY = { x, y };
     // live preview while measuring (first click done, second pending)
     if (tool === "measure" && measure) {
-      const t = timeForX(cursorXY.x), p = priceForY(cursorXY.y);
+      const t = timeForX(x), p = priceForY(y);
       if (t !== null && p !== null) { measure.b = { time: t, price: p }; }
     }
     invalidateOverlay();
   });
+
+  elMain.addEventListener("pointerleave", () => {
+    if (measureDrag || measureHotKey === null) return; // a drag may leave the chart
+    measureHotKey = null;
+    elMain.style.cursor = "";
+    invalidateOverlay();
+  });
+
+  // Grabbing a placed measurement runs in the CAPTURE phase, ahead of the
+  // chart's own mousedown/touchstart handlers, so a drag on the box can never
+  // be swallowed as a pan. A tap that misses the box falls through to the
+  // handlers below, which clear the measurement (TradingView behaviour).
+  elMain.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.isPrimary === false || tool || !measure) return;
+    if (e.target instanceof Element && e.target.closest("button, a, input, select, textarea")) return;
+    const r = elMain.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    const grip = measureHit(x, y);
+    if (!grip) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.altKey) { clearMeasure(); return; } // alt-click deletes drawings too
+    if (!beginMeasureDrag(grip, x, y)) return;
+    measureHotKey = grip.key;
+    elMain.style.cursor = grip.cursor;
+    try { elMain.setPointerCapture(e.pointerId); } catch (_) {}
+    invalidateOverlay();
+  }, true);
+
+  elMain.addEventListener("pointerup", endMeasureDrag);
+  elMain.addEventListener("pointercancel", endMeasureDrag);
 
   // Placement happens on POINTERDOWN, not click: on touch, fingers always
   // drift a few px before lifting, which the chart consumes as a pan and no
@@ -1274,8 +1462,9 @@
   // whole gesture belongs to the tool, TradingView-style.
   elMain.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || e.isPrimary === false) return;
-    // a tap clears a completed measurement (TV behaviour)
-    if (measure && tool !== "measure") { measure = null; invalidateOverlay(); }
+    // a tap clears a completed measurement (TV behaviour); an armed tool still
+    // places its own point in the same gesture
+    if (measure && tool !== "measure") clearMeasure();
     if (e.altKey && !tool) { deleteNearest(e); return; }
     if (!tool) return;
     e.preventDefault();
@@ -1352,14 +1541,14 @@
   }
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { disarm(); measure = null; invalidateOverlay(); }
+    if (e.key === "Escape") { disarm(); clearMeasure(); }
   });
 
   $("btn-hline").addEventListener("click", () => armTool("hline"));
   $("btn-trend").addEventListener("click", () => armTool("trend"));
   $("btn-hline").dataset.tool = "hline";
   $("btn-trend").dataset.tool = "trend";
-  $("btn-measure").addEventListener("click", () => { measure = null; armTool("measure"); });
+  $("btn-measure").addEventListener("click", () => armTool("measure"));
   $("btn-measure").dataset.tool = "measure";
   $("btn-clear").addEventListener("click", () => {
     drawings[key()] = [];
