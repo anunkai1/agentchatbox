@@ -5,11 +5,13 @@
 // day-change baseline and its volume. Nothing in this file polls, and nothing
 // here is a trading control — a row only selects a market for the chart.
 //
-// The rolling 24h/7d/1M windows are the venue's own candle closes (one REST
-// fetch per market when the list opens, cached), re-percentaged against the
-// live price so they move with every tick. The labelled "Day" window is the
-// stream's own change since 00:00 UTC, which is why it is not the same figure
-// as the rolling 24h.
+// The main change figure reads against the current daily candle's open — the
+// same O the chart legend shows — so list and chart quote one number. The
+// rolling 24h/7d/1M windows are the venue's own candle closes (one REST fetch
+// per market when the list opens, cached), re-percentaged against the live
+// price so they move with every tick. Until that fetch lands, the change falls
+// back to the stream's rolling 24h baseline (prevDayPx), so it can briefly
+// disagree with the chart.
 //
 // Binance Spot has no live quote feed in this experiment, so markets pinned
 // there stay selectable but carry no figures.
@@ -132,6 +134,19 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
     return Number.isFinite(close) && close > 0 ? close : null;
   }
 
+  // The open of the candle the live daily bar belongs to — the chart legend's
+  // O for the D timeframe. Null until the venue serves today's bar, which the
+  // quarter-hour refs cache can lag across a 00:00 UTC roll.
+  function dayOpenOf(days, now) {
+    const todayStart = Math.floor(now / DAY_MS) * DAY_MS;
+    for (let i = days.length - 1; i >= 0; i--) {
+      const t = Number(days[i].t);
+      if (t < todayStart) return null;
+      if (t <= now) return Number(days[i].o);
+    }
+    return null;
+  }
+
   async function fetchRefs(coin) {
     const now = Date.now();
     const snapshot = (interval, span) => fetch(REST_URL, {
@@ -147,6 +162,7 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
     const hours = ascending(hourly), days = ascending(daily);
     return {
       at: Date.now(),
+      dayOpen: dayOpenOf(days, now),
       refs: {
         "24h": closeAt(hours, now - DAY_MS),
         "7d": closeAt(days, now - 7 * DAY_MS),
@@ -273,7 +289,11 @@ window.createCandleWatchlist = function ({ element, getMarkets, getCurrent, onSe
       row.priceEl.textContent = priceText;
       if (Number.isFinite(quote.lastTick) && quote.price !== quote.lastTick) flash(row.priceEl, quote.price > quote.lastTick);
     }
-    const change = changeFigures(quote.price, quote.prevDay);
+    // Day change against the D candle's open, matching the chart legend; the
+    // venue's rolling 24h baseline only covers the moment before refs arrive.
+    const entry = history.get(row.key);
+    const dayOpen = entry && Number.isFinite(entry.dayOpen) && entry.dayOpen > 0 ? entry.dayOpen : quote.prevDay;
+    const change = changeFigures(quote.price, dayOpen);
     if (row.changeEl.textContent !== change.text) {
       row.changeEl.textContent = change.text;
       row.changeEl.className = "quote-change" + (change.dir > 0 ? " pos" : change.dir < 0 ? " neg" : "");
