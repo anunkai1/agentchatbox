@@ -6,7 +6,10 @@
 # A placed measurement used to be display-only: any tap except the second
 # placement click wiped it. It is now an object you can grab — the body slides
 # the box, a corner/edge grip resizes it — and dragging the box must never pan
-# the chart underneath it.
+# the chart underneath it. It stays on the chart until it is clicked (a press
+# that never moves), Escaped, alt-clicked, or replaced by a freshly drawn
+# measurement (at most one box), and its top and bottom edges print the price
+# level they sit on.
 #
 # The measurement itself is module-local, so the box is observed the way the
 # user sees it: the app's hit map (published as the cursor on #main-chart) and
@@ -107,6 +110,19 @@ window.__hover = (x, y) => {
   window.__pev('pointermove', x, y, {buttons: 0});
   return window.__chartEl().style.cursor;
 };
+// A price pill is the only thing the app paints over the price-scale gutter:
+// the label colour fill plus its dark text, seen in a single row of pixels.
+window.__rowInk = (y, fromX) => {
+  const c = window.__overlay();
+  const d = c.getContext('2d').getImageData(fromX, Math.round(y), c.width - fromX, 1).data;
+  let pill = 0, ink = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 200) continue;
+    if (d[i] === 14 && d[i + 1] === 203 && d[i + 2] === 129) pill++;
+    else if (d[i] < 100 && d[i + 1] < 140 && d[i + 2] < 120) ink++;   // pill text, antialiased
+  }
+  return JSON.stringify({pill, ink});
+};
 window.__drag = (fromX, fromY, toX, toY, steps = 6) => {
   window.__pev('pointerdown', fromX, fromY);
   window.__mev('mousedown', fromX, fromY);
@@ -135,36 +151,51 @@ window.__px = (x, y) => {
   const d = window.__overlay().getContext('2d').getImageData(Math.round(x), Math.round(y), 1, 1).data;
   return [d[0], d[1], d[2], d[3]];
 };
-// The grips are the only opaque #0b0e11 pixels on the overlay, so their
-// cluster centres give the box edges exactly as they are painted.
+// Grips are the only solid opaque #0b0e11 squares on the overlay, so their
+// cluster centres give the box edges exactly as they are painted. The price
+// pills use the same ink for their text, so blobs have to be square to count.
 window.__boxFromGrips = () => {
   const c = window.__overlay();
   if (!c || !c.width) return null;
-  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-  const cols = new Set(), rows = new Set();
-  let count = 0;
-  for (let y = 0; y < c.height; y++) {
-    for (let x = 0; x < c.width; x++) {
-      const i = (y * c.width + x) * 4;
-      if (d[i] === 11 && d[i + 1] === 14 && d[i + 2] === 17 && d[i + 3] === 255) {
-        count++; cols.add(x); rows.add(y);
+  const w = c.width, h = c.height;
+  const d = c.getContext('2d').getImageData(0, 0, w, h).data;
+  const dark = new Uint8Array(w * h);
+  for (let i = 0, p = 0; i < dark.length; i++, p += 4) {
+    dark[i] = (d[p] === 11 && d[p + 1] === 14 && d[p + 2] === 17 && d[p + 3] === 255) ? 1 : 0;
+  }
+  const at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : dark[y * w + x]);
+  const seen = new Uint8Array(w * h);
+  const centres = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!dark[y * w + x] || seen[y * w + x]) continue;
+      const stack = [[x, y]]; seen[y * w + x] = 1;
+      let minX = x, maxX = x, minY = y, maxY = y, n = 0, solid = 0;
+      while (stack.length) {
+        const [cx, cy] = stack.pop(); n++;
+        if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+        let near = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) near += at(cx + dx, cy + dy);
+        if (near >= 7) solid++;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          if (seen[ny * w + nx] || !dark[ny * w + nx]) continue;
+          seen[ny * w + nx] = 1; stack.push([nx, ny]);
+        }
       }
+      // a grip keeps ~20 dark px with a buried core; glyph strokes are thin
+      if (solid < 3 || maxX - minX < 3 || maxY - minY < 3) continue;
+      centres.push({x: (minX + maxX + 1) / 2, y: (minY + maxY + 1) / 2, n});
     }
   }
-  if (!count) return null;
-  // A grip is a ~5px square of opaque fill inside a 1.5px stroke.
-  const runs = (set) => {
-    const out = [];
-    for (const v of [...set].sort((a, b) => a - b)) {
-      const last = out[out.length - 1];
-      if (last && v - last[1] <= 4) last[1] = v; else out.push([v, v]);
-    }
-    return out.map(([a, z]) => (a + z + 1) / 2);
-  };
-  const xs = runs(cols), ys = runs(rows);
+  if (!centres.length) return null;
+  const xs = centres.map((g) => g.x), ys = centres.map((g) => g.y);
   return JSON.stringify({
-    left: xs[0], right: xs[xs.length - 1], top: ys[0], bot: ys[ys.length - 1],
-    count,
+    left: Math.min(...xs), right: Math.max(...xs),
+    top: Math.min(...ys), bot: Math.max(...ys),
+    count: centres.length,
   });
 };
 '''
@@ -214,12 +245,16 @@ def box():
 def hover(x, y):
     return js(f"window.__hover({round(x)}, {round(y)})")
 
+def row_ink(y):
+    """Pill and text pixels in a row of the price-scale gutter."""
+    return json.loads(js(f"window.__rowInk({round(y)}, {round(W * 0.8)})"))
+
 # ---------- place a measurement ----------
 # a = bottom-left (lower price), b = top-right (higher) so the range is "up".
 assert js(f"window.__place({x1}, {yb}, {x2}, {yt})") is False
 time.sleep(0.4)
 b = box()
-assert b['count'] > 40, b            # eight grips, minus their stroke
+assert b['count'] == 8, b             # all four corners plus four edge grips
 tolerance = 3.5
 for edge, want in (('left', x1), ('right', x2), ('top', yt), ('bot', yb)):
     assert abs(b[edge] - want) <= tolerance, (edge, b[edge], want, (W, H))
@@ -227,6 +262,13 @@ assert json.loads(js(f"JSON.stringify(window.__px({b['left']}, {b['top']}))")) =
 fill = json.loads(js(f"JSON.stringify(window.__px({(b['left'] + b['right']) / 2}, {(b['top'] + b['bot']) / 2}))"))
 assert 0 < fill[3] < 40 and fill[1] > fill[0], fill
 print('PASS: a placed measurement draws its range box plus dark grips on every usable edge.')
+
+# ---------- the top and bottom edges carry their price level ----------
+top_ink, bot_ink = row_ink(b['top']), row_ink(b['bot'])
+assert top_ink['pill'] > 8 and top_ink['ink'] > 3, top_ink
+assert bot_ink['pill'] > 8 and bot_ink['ink'] > 3, bot_ink
+assert row_ink((b['top'] + b['bot']) / 2)['pill'] == 0, 'only the box edges are labelled'
+print('PASS: the top and bottom box lines print the price level they sit on.')
 
 # ---------- the published cursor proves the hit map ----------
 mid = (b['left'] + b['right']) / 2
@@ -277,14 +319,32 @@ assert abs(b4['top'] - b3['top']) <= 2.5, (b4, b3)
 assert hover(mid2, b4['bot']) == 'ns-resize', 'new bottom grip'
 assert hover(mid2, b3['bot']) == 'move', 'old bottom edge is body now'
 assert json.loads(js(f"JSON.stringify(window.__px({round(mid2)}, {round(b4['bot'])}))")) == [11, 14, 17, 255], 'bottom grip pixel'
+# the price pills follow the resized edges rather than staying put
+assert row_ink(b4['top'])['pill'] > 8 and row_ink(b4['bot'])['pill'] > 8, 'pills should follow the box'
+assert row_ink(b2['top'])['pill'] == 0, 'stale pill left at the old top edge'
 capture_screenshot('/tmp/candle-measure-placed.png', max_dim=1200)
-print('PASS: dragging the bottom grip downward grows the measurement box.')
+print('PASS: dragging the bottom grip downward grows the box, carrying its top and bottom price levels.')
 
-# ---------- a tap away still clears it, and so does Esc ----------
+# ---------- it stays put until it is clicked ----------
 js(f"window.__tap({round(W * 0.5)}, {round(H * 0.9)})")
 time.sleep(0.35)
-assert js("window.__boxFromGrips()") is None, 'tap away should clear the measurement'
+assert js("window.__boxFromGrips()") is not None, 'a tap elsewhere must leave the measurement alone'
+assert hover(mid2, b4['bot']) == 'ns-resize', 'box still grabbable after a tap elsewhere'
+
+# a press and release in one spot is a click: it removes the box
+js(f"window.__tap({round(mid2)}, {round((b4['top'] + b4['bot']) / 2)})")
+time.sleep(0.35)
+assert js("window.__boxFromGrips()") is None, 'clicking the box should remove it'
 assert js(f"window.__px({round(mid2)}, {round(b4['bot'])})")[3] == 0, 'overlay not cleared'
+print('PASS: the box survives taps elsewhere and is removed by a click on it.')
+
+# a click on a grip removes it too, and so does Esc
+js(f"window.__place({x1}, {yb}, {x2}, {yt})")
+time.sleep(0.3)
+b5 = box()
+js(f"window.__tap({round(b5['left'])}, {round((b5['top'] + b5['bot']) / 2)})")
+time.sleep(0.35)
+assert js("window.__boxFromGrips()") is None, 'clicking a grip should remove it'
 
 js(f"window.__place({x1}, {yb}, {x2}, {yt})")
 time.sleep(0.3)
@@ -292,7 +352,23 @@ assert js("window.__boxFromGrips()") is not None
 js("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); void 0")
 time.sleep(0.35)
 assert js("window.__boxFromGrips()") is None, 'Esc should clear the measurement'
-print('PASS: a tap off the box, or Esc, still removes a placed measurement.')
+print('PASS: a click on a grip or Esc still removes a placed measurement.')
+
+# ---------- one measurement at a time ----------
+js(f"window.__place({x1}, {yb}, {x2}, {yt})")
+time.sleep(0.3)
+first = box()
+assert abs(first['left'] - x1) <= 3.5 and abs(first['top'] - yt) <= 3.5, first
+sx1, sy1 = round(W * 0.3), round(H * 0.2)
+sx2, sy2 = round(W * 0.7), round(H * 0.45)
+js(f"window.__place({sx1}, {sy2}, {sx2}, {sy1})")
+time.sleep(0.35)
+second = box()
+assert second is not None, 'the second measurement was not drawn'
+assert abs(second['left'] - sx1) <= 3.5 and abs(second['top'] - sy1) <= 3.5, (second, sx1, sy1)
+assert hover(sx1 + 20, (sy1 + sy2) / 2) == 'move', 'the new box is the grabbable one'
+assert hover(x1 + 20, cy) == '', 'the replaced box is gone, so its area is not grabbable any more'
+print('PASS: drawing a second measurement replaces the first — one box is ever on the chart.')
 
 # ---------- an armed tool keeps its own gesture ----------
 js(f"window.__place({x1}, {yb}, {x2}, {yt})")
@@ -303,8 +379,16 @@ assert hover(mid, cy) == '', 'armed tool shows the crosshair, not the grab curso
 js(f"window.__tap({round(mid)}, {round(cy)})")
 time.sleep(0.35)
 assert js("document.body.classList.contains('hline-mode')") is False, 'hline should have placed and disarmed'
-assert js("window.__boxFromGrips()") is None, 'placing via a tool clears the old measurement'
+assert js("window.__boxFromGrips()") is not None, 'a drawing tool leaves the measurement in place'
+assert hover(mid, cy) == 'move', 'grabbable again once the tool disarms'
 print('PASS: an armed drawing tool still owns the gesture over a placed measurement.')
+
+# ---------- Clear takes the measurement with the drawings ----------
+js("document.getElementById('btn-clear').click(); void 0")
+time.sleep(0.35)
+assert js("window.__boxFromGrips()") is None, 'Clear should remove the measurement'
+assert hover(mid, cy) == '', 'nothing grabbable left after Clear'
+print('PASS: the Clear button removes the measurement along with the drawings.')
 
 cdp('Emulation.clearDeviceMetricsOverride')
 finish_scope()

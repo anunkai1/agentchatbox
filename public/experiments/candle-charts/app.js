@@ -658,12 +658,34 @@
       sign + fmtPrice(Math.abs(dPrice)) + " (" + (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%)",
       bars + " bars · " + dur,
     ];
+    const hiPrice = Math.max(measure.a.price, measure.b.price);
+    const loPrice = Math.min(measure.a.price, measure.b.price);
 
     octx.font = "11px sans-serif";
     const tw = Math.max(...lines.map((s) => octx.measureText(s).width));
     const bw = tw + 16, bh = lines.length * 15 + 10;
     const bx = Math.min(w - bw - 6, Math.max(6, right + 8));
-    const by = Math.max(6, Math.min(h - bh - 6, top - bh - 8));
+    // The edge prices own the gutter beside the box's top and bottom lines, so
+    // the stats card steps around them rather than hiding a level: above the
+    // box normally, below it or just inside its top when there is no room.
+    octx.font = "10px sans-serif";
+    const pillLeft = w - 10 - Math.max(
+      octx.measureText(fmtPrice(hiPrice)).width,
+      octx.measureText(fmtPrice(loPrice)).width,
+    );
+    const clampY = (y) => Math.max(6, Math.min(h - bh - 6, y));
+    const clearOfPrices = (y) => bx + bw <= pillLeft
+      || ((y + bh <= top - 8 || y >= top + 8) && (y + bh <= bot - 8 || y >= bot + 8));
+    let by = clampY(top - bh - 8);
+    for (const candidate of [top - bh - 8, bot + 8, top + 8, 6]) {
+      if (clearOfPrices(clampY(candidate))) { by = clampY(candidate); break; }
+    }
+
+    // The top and bottom lines report the level they sit on, so the range can be
+    // read straight off the price scale instead of the crosshair.
+    label(octx, w, top, fmtPrice(hiPrice), col);
+    if (bot - top > 16) label(octx, w, bot, fmtPrice(loPrice), col);
+
     octx.fillStyle = "#1e2329";
     octx.globalAlpha = 0.95;
     octx.beginPath();
@@ -756,14 +778,15 @@
     return null;
   }
 
-  function beginMeasureDrag(grip, x, y) {
+  function beginMeasureDrag(grip, x, y, slop) {
     const logical = chart.timeScale().coordinateToLogical(x);
     const price = priceForY(y);
     if (!measure || logical === null || price === null) return false;
     measureDrag = {
-      grip,
+      grip, slop,
       a: { ...measure.a }, b: { ...measure.b },
-      startLogical: logical, startPrice: price,
+      startX: x, startY: y, startLogical: logical, startPrice: price,
+      moved: false,          // a press that never moves is a click, and clicks remove
       // Which endpoint owns each edge, so resizing never flips the a→b sign.
       hi: measure.b.price >= measure.a.price ? "b" : "a",
       lo: measure.b.price >= measure.a.price ? "a" : "b",
@@ -779,6 +802,9 @@
   function updateMeasureDrag(x, y) {
     const d = measureDrag;
     if (!d || !measure) return;
+    // A few px of slop, so a press meant as a click still counts as a click; a
+    // finger drifts further than a mouse before it lifts.
+    if (!d.moved && Math.hypot(x - d.startX, y - d.startY) > d.slop) d.moved = true;
     const price = priceForY(y);
     if (price === null) return;
     const next = { a: { ...d.a }, b: { ...d.b } };
@@ -810,11 +836,15 @@
     invalidateOverlay();
   }
 
-  function endMeasureDrag() {
+  function endMeasureDrag(e) {
     if (!measureDrag) return;
+    const wasClick = !measureDrag.moved && !!e && e.type === "pointerup";
     releaseMeasureGesture();
     measureHotKey = null;
     elMain.style.cursor = "";
+    // The box stays on the chart until it is clicked (or Esc / alt-clicked), so
+    // a click with no drag is how it is dismissed.
+    if (wasClick) { clearMeasure(); return; }
     invalidateOverlay();
   }
 
@@ -1386,7 +1416,9 @@
   }
 
   function armTool(t) {
-    clearMeasure();
+    // At most one measurement lives on the chart: re-arming replaces the old box
+    // rather than stacking a second one on the same range.
+    if (t === "measure") clearMeasure();
     alertUI?.clearSelection();
     tool = t === tool ? null : t;
     anchor = null;
@@ -1433,8 +1465,8 @@
 
   // Grabbing a placed measurement runs in the CAPTURE phase, ahead of the
   // chart's own mousedown/touchstart handlers, so a drag on the box can never
-  // be swallowed as a pan. A tap that misses the box falls through to the
-  // handlers below, which clear the measurement (TradingView behaviour).
+  // be swallowed as a pan. A press that misses the box falls through to the
+  // handlers below and leaves the box alone — it stays until it is clicked.
   elMain.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || e.isPrimary === false || tool || !measure) return;
     if (e.target instanceof Element && e.target.closest("button, a, input, select, textarea")) return;
@@ -1445,7 +1477,7 @@
     e.preventDefault();
     e.stopPropagation();
     if (e.altKey) { clearMeasure(); return; } // alt-click deletes drawings too
-    if (!beginMeasureDrag(grip, x, y)) return;
+    if (!beginMeasureDrag(grip, x, y, e.pointerType === "touch" ? 10 : 4)) return;
     measureHotKey = grip.key;
     elMain.style.cursor = grip.cursor;
     try { elMain.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1462,9 +1494,6 @@
   // whole gesture belongs to the tool, TradingView-style.
   elMain.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || e.isPrimary === false) return;
-    // a tap clears a completed measurement (TV behaviour); an armed tool still
-    // places its own point in the same gesture
-    if (measure && tool !== "measure") clearMeasure();
     if (e.altKey && !tool) { deleteNearest(e); return; }
     if (!tool) return;
     e.preventDefault();
@@ -1553,6 +1582,7 @@
   $("btn-clear").addEventListener("click", () => {
     drawings[key()] = [];
     saveDrawings();
+    clearMeasure();
     invalidateOverlay();
   });
 
