@@ -337,6 +337,17 @@ class SessionRegistry {
 	}
 
 	/**
+	 * The live session registered under this id, if any — ready children AND
+	 * ones still starting (a resume registers its id up front). Used by
+	 * chat.ts's session move to decide whether a transcript has to be
+	 * unbound from a running `pi` child (and re-homed afterwards) before the
+	 * file moves between project folders.
+	 */
+	liveFor(sessionId: string): LiveSession | null {
+		return this.entries.get(sessionId) ?? null;
+	}
+
+	/**
 	 * Get an existing live session by id, or spawn a fresh one. This is
 	 * the single entry point for both initial connect and reconnect — a
 	 * reconnect whose `init.sessionId` is still live returns the running

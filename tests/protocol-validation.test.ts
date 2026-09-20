@@ -87,6 +87,24 @@ describe("parseClientMessage", () => {
 		).toThrow("base64");
 	});
 
+	it("accepts a session move and rejects it without both ids", () => {
+		expect(
+			parseClientMessage({ type: "moveSession", sessionId: "abc", projectId: "k3f9x1" }),
+		).toEqual({
+			type: "moveSession",
+			sessionId: "abc",
+			projectId: "k3f9x1",
+		});
+		// The server re-files a transcript from these two ids alone, so neither
+		// may be missing — and the id charset stays restricted.
+		expect(() => parseClientMessage({ type: "moveSession", sessionId: "abc" })).toThrow(
+			"projectId",
+		);
+		expect(() =>
+			parseClientMessage({ type: "moveSession", sessionId: "abc", projectId: "../../etc" }),
+		).toThrow("projectId");
+	});
+
 	it("bounds names, project arrays, and fork counts", () => {
 		expect(() => parseClientMessage({ type: "renameSession", name: "x".repeat(501) })).toThrow();
 		expect(() =>

@@ -8,7 +8,7 @@
  * summaries and reads back the right messages.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -479,6 +479,114 @@ describe("deletePiSession", () => {
 		expect(listPiSessions(cwd)).toEqual([]);
 		// Second delete is a clean miss (file already gone, no cache hit).
 		expect(deletePiSession(cwd, "aaa")).toBe(false);
+	});
+});
+
+describe("movePiSession", () => {
+	it("relocates the JSONL into the target cwd's dir and rewrites the header cwd", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["first prompt"],
+			[JSON.stringify({ type: "session_info", id: "aaa", name: "renamed" })],
+		);
+		const { listPiSessions, movePiSession, readFirstLine } = await import(
+			"../src/server/session-list.js"
+		);
+		const target = "/home/other/project";
+
+		expect(movePiSession(cwd, "aaa", target)).toBe("moved");
+
+		// The old file is gone from its original cwd's directory...
+		expect(listPiSessions(cwd)).toEqual([]);
+		// ...and the target cwd lists it, which requires the header cwd match.
+		const moved = listPiSessions(target);
+		expect(moved.map((s) => s.id)).toEqual(["aaa"]);
+		expect(moved[0].cwd).toBe(target);
+		const movedFile = join(root!, "--home-other-project--", "2026-06-15T10-00-00_aaa.jsonl");
+		expect(existsSync(movedFile)).toBe(true);
+		const header = JSON.parse(readFirstLine(movedFile)!);
+		expect(header.cwd).toBe(target);
+		// Non-header lines survive untouched (pi's append-only entry tree).
+		expect(moved[0].title).toBe("renamed");
+		expect(moved[0].messageCount).toBe(2);
+	});
+
+	it("creates the target session directory when the project has none yet", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["first prompt"],
+		);
+		const { movePiSession } = await import("../src/server/session-list.js");
+		const fresh = "/home/test/brand-new-project";
+		expect(movePiSession(cwd, "aaa", fresh)).toBe("moved");
+		expect(
+			existsSync(join(root!, "--home-test-brand-new-project--", "2026-06-15T10-00-00_aaa.jsonl")),
+		).toBe(true);
+	});
+
+	it("reports no-op / missing outcomes instead of touching the wrong files", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["first prompt"],
+		);
+		const { movePiSession } = await import("../src/server/session-list.js");
+		// Same project (even when spelled differently) is a no-op, not a move.
+		expect(movePiSession(cwd, "aaa", "/home/test/project")).toBe("same-project");
+		expect(movePiSession(cwd, "nope", "/home/other/project")).toBe("not-found");
+		// Still where it started.
+		expect(existsSync(join(root!, "--home-test-project--", "2026-06-15T10-00-00_aaa.jsonl"))).toBe(
+			true,
+		);
+	});
+
+	it("refuses to overwrite a same-named file already in the target dir", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["first prompt"],
+		);
+		// A pre-existing file occupying the destination name.
+		const targetFile = join(root!, "--home-other-project--", "2026-06-15T10-00-00_aaa.jsonl");
+		writeFileSync(targetFile, "{}\n");
+		const { movePiSession } = await import("../src/server/session-list.js");
+
+		expect(movePiSession(cwd, "aaa", "/home/other/project")).toBe("conflict");
+		// Both sides untouched — the session is still in its original folder and
+		// the destination file was not clobbered.
+		expect(readFileSync(targetFile, "utf8")).toBe("{}\n");
+		expect(existsSync(join(root!, "--home-test-project--", "2026-06-15T10-00-00_aaa.jsonl"))).toBe(
+			true,
+		);
+	});
+
+	it("invalidates the id→cwd index so resume follows the session to its new project", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["first prompt"],
+		);
+		const { findSessionCwd, movePiSession } = await import("../src/server/session-list.js");
+		const target = "/home/other/project";
+		// Populate the root-wide index with the pre-move cwd.
+		expect(findSessionCwd("aaa", [])).toBe(cwd);
+
+		expect(movePiSession(cwd, "aaa", target)).toBe("moved");
+
+		// A stale index would still point pi at the old folder.
+		expect(findSessionCwd("aaa", [])).toBe(target);
 	});
 });
 

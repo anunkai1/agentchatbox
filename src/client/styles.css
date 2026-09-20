@@ -441,6 +441,18 @@ body.sidebar-resizing iframe {
 	filter: none;
 	opacity: 1;
 }
+/* Move-to-project folder button — same hit target as the other row actions.
+ * The emoji is a full-colour glyph, so keep it subdued (like the basket)
+ * until the user points at it. */
+.session-action.move {
+	filter: grayscale(0.8);
+	opacity: 0.6;
+}
+.session-action.move:hover {
+	background: var(--surface-active);
+	filter: none;
+	opacity: 1;
+}
 .session-more {
 	display: none;
 	flex: 0 0 auto;
