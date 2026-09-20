@@ -314,6 +314,15 @@ export interface SessionSearchHit {
 }
 
 /**
+ * Live progress of the server's background index sweep. `null` when no sweep
+ * is running; otherwise the sidebar reports how far through it is.
+ */
+export interface SearchProgress {
+	done: number;
+	total: number;
+}
+
+/**
  * Semantic search across saved session transcripts. Returns messages whose
  * meaning is closest to `query`, regardless of exact wording. Only available
  * when the server reports `search: true` in /api/health.
@@ -322,7 +331,12 @@ export async function searchSessions(
 	query: string,
 	limit = 10,
 	refresh = true,
-): Promise<{ results: SessionSearchHit[]; indexing: boolean; error: string | null }> {
+): Promise<{
+	results: SessionSearchHit[];
+	indexing: boolean;
+	error: string | null;
+	progress: SearchProgress | null;
+}> {
 	const url = `${BASE}/api/sessions/search?q=${encodeURIComponent(query)}&limit=${limit}&refresh=${refresh ? "1" : "0"}`;
 	const res = await fetch(url);
 	if (!res.ok) throw new Error(`search failed: ${res.status}`);
