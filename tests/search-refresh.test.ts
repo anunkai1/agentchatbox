@@ -35,7 +35,28 @@ it("reconciles all projects and deletions on every refresh", async () => {
 	await search.refreshSearchIndex();
 	expect(mocks.index).toHaveBeenCalledWith({ id: "updated" });
 	expect(mocks.load).toHaveBeenCalledTimes(1);
-	expect(search.searchStatus()).toEqual({ indexing: false, error: null });
+	expect(search.searchStatus()).toEqual({ indexing: false, error: null, progress: null });
+});
+
+it("reports sweep progress while indexing and clears it after", async () => {
+	const search = await import("../src/server/search/index.js");
+	mocks.list.mockReturnValue([{ id: "a" }, { id: "b" }, { id: "c" }]);
+	const seen: Array<{ done: number; total: number } | null> = [];
+	mocks.index.mockImplementation(async () => {
+		// Snapshot: the sweep mutates one progress object in place, so a stored
+		// reference would read its final value at assertion time.
+		const p = search.searchStatus().progress;
+		seen.push(p ? { ...p } : null);
+	});
+	const sweep = search.refreshSearchIndex();
+	await sweep;
+	// The first session is indexed before any counter moves: 0 of 3, then 1, 2.
+	expect(seen).toEqual([
+		{ done: 0, total: 3 },
+		{ done: 1, total: 3 },
+		{ done: 2, total: 3 },
+	]);
+	expect(search.searchStatus().progress).toBeNull();
 });
 
 it("reports per-session indexing failures rather than silently hiding them", async () => {

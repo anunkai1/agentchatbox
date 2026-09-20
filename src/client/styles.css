@@ -523,6 +523,146 @@ body.sidebar-resizing iframe {
 	text-align: center;
 }
 
+/* ---------- semantic search progress ---------- */
+/* The pane's placeholder while a search is in flight. The first query loads
+   the local embedding model (several seconds) and a first-run index sweep can
+   hold the pane far longer, so the point is visible movement: a spinner, a
+   sweeping bar, skeleton result cards and a live elapsed count. The clock is
+   the piece that survives prefers-reduced-motion, where the animations stop. */
+.search-progress {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
+	padding: 18px 12px;
+}
+.search-progress-head {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--text-secondary);
+}
+.search-progress-clock {
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-muted);
+}
+/* Longer explanation, revealed after ~3s. Smaller and dimmer than the status
+   line so the pane does not look like it is shouting. */
+.search-progress-hint {
+	max-width: 220px;
+	font-size: 11px;
+	line-height: 1.45;
+	color: var(--text-muted);
+}
+.search-progress-hint[hidden] {
+	display: none;
+}
+/* Shared ring used by the search placeholder and the index-status row;
+   same treatment as the speak-button spinner. */
+.search-spinner {
+	display: inline-block;
+	flex: 0 0 auto;
+	width: 13px;
+	height: 13px;
+	border: 2px solid var(--border-strong);
+	border-top-color: var(--accent);
+	border-radius: 50%;
+	animation: speak-spin 0.7s linear infinite;
+}
+/* Indeterminate sweep — movement without claiming a completion percentage. */
+.search-progress-bar {
+	position: relative;
+	width: 100%;
+	max-width: 190px;
+	height: 2px;
+	border-radius: 1px;
+	background: var(--border-strong);
+	overflow: hidden;
+}
+.search-progress-bar > span {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 40%;
+	border-radius: 1px;
+	background: var(--accent);
+	animation: search-sweep 1.15s ease-in-out infinite;
+}
+@keyframes search-sweep {
+	from {
+		transform: translateX(-120%);
+	}
+	to {
+		transform: translateX(320%);
+	}
+}
+/* Placeholder result cards: the pane looks like it is about to have content,
+   which reads as loading rather than empty. */
+.search-skeleton {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	width: 100%;
+}
+.search-skeleton-card {
+	position: relative;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+}
+.search-skeleton-line {
+	height: 8px;
+	border-radius: 4px;
+	background: var(--surface-hover);
+}
+.search-skeleton-line.is-title {
+	width: 62%;
+	height: 9px;
+}
+.search-skeleton-line.is-short {
+	width: 38%;
+}
+.search-skeleton-card::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	transform: translateX(-100%);
+	background: linear-gradient(90deg, transparent, var(--surface-active), transparent);
+	opacity: 0.6;
+	animation: search-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes search-shimmer {
+	to {
+		transform: translateX(100%);
+	}
+}
+/* Status line above the results while the index sweep is still running. */
+.search-status-stack {
+	display: flex;
+	flex-direction: column;
+}
+.search-index-note {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	padding: 10px 12px;
+	font-size: 11px;
+	line-height: 1.45;
+}
+.search-index-note.is-error {
+	color: var(--c-warn);
+}
+
 /* ---------- main column ---------- */
 
 .main {

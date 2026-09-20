@@ -2684,6 +2684,125 @@ let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 let searchGeneration = 0;
 let lastSessions: SessionSummary[] = [];
 
+/**
+ * Elapsed clock for the in-flight search. Exactly one search owns the pane at
+ * a time (the previous one is cancelled by the generation counter), so a
+ * single module-level ticker is enough — it is stopped whenever a newer search
+ * takes over, when a response lands, and when the box is cleared.
+ */
+let searchTicker: ReturnType<typeof setInterval> | null = null;
+let searchStartedAt = 0;
+
+function stopSearchTicker(): void {
+	if (searchTicker) clearInterval(searchTicker);
+	searchTicker = null;
+}
+
+/**
+ * Fill the sidebar pane with the "searching" placeholder while a semantic
+ * search is in flight.
+ *
+ * A plain "Searching…" line reads as a stall: the very first query loads the
+ * local MiniLM model (several seconds) before anything can be ranked, and a
+ * first-run index sweep can hold the pane for much longer. Movement is what
+ * separates "working" from "stuck", so this shows a spinner, a sweeping
+ * progress bar and skeleton result cards, states a live elapsed count, and
+ * swaps in a longer explanation once the wait outlives a glance. The clock is
+ * the load-bearing part: it keeps counting under prefers-reduced-motion, where
+ * the animations are disabled.
+ */
+function renderSearchingState(container: HTMLElement): void {
+	stopSearchTicker();
+	searchStartedAt = Date.now();
+
+	const label = el("span", { class: "search-progress-label" }, "Searching your chats…");
+	const clock = el("span", { class: "search-progress-clock", "aria-hidden": "true" });
+	// Revealed only once the wait outlives a glance. Kept separate from the
+	// status line so nothing reflows above it while the clock is running.
+	const hint = el(
+		"div",
+		{ class: "search-progress-hint", hidden: true },
+		"Still working — the first search loads the local model, later ones are instant.",
+	);
+	const skeleton = el("div", { class: "search-skeleton", "aria-hidden": "true" });
+	for (let i = 0; i < 3; i++) {
+		skeleton.append(
+			el(
+				"div",
+				{ class: "search-skeleton-card" },
+				el("span", { class: "search-skeleton-line is-title" }),
+				el("span", { class: "search-skeleton-line" }),
+				el("span", { class: "search-skeleton-line is-short" }),
+			),
+		);
+	}
+
+	const box = el(
+		"div",
+		{ class: "sidebar-empty search-progress", role: "status", "aria-live": "polite" },
+		el(
+			"div",
+			{ class: "search-progress-head" },
+			el("span", { class: "search-spinner", "aria-hidden": "true" }),
+			label,
+			clock,
+		),
+		el("div", { class: "search-progress-bar", "aria-hidden": "true" }, el("span")),
+		hint,
+		skeleton,
+	);
+	container.innerHTML = "";
+	container.append(box);
+
+	const tick = () => {
+		const seconds = Math.round((Date.now() - searchStartedAt) / 1000);
+		clock.textContent = seconds >= 1 ? `${seconds}s` : "";
+		// Only a first-run wait reaches this far; say why so it reads as expected work.
+		if (seconds >= 3) hint.hidden = false;
+	};
+	tick();
+	searchTicker = setInterval(tick, 500);
+}
+
+/**
+ * Status rows above the search results while the background index sweep is
+ * still running (and/or when part of the index could not be built). The
+ * spinner carries the motion between the 1.5s poll redraws, and the sweep's
+ * own counters turn a long first-run wait into visible progress.
+ */
+function searchIndexNotice(data: {
+	indexing?: boolean;
+	error?: string | null;
+	progress?: { done: number; total: number } | null;
+}): HTMLElement {
+	const stack = el("div", { class: "search-status-stack", role: "status", "aria-live": "polite" });
+	if (data.indexing) {
+		const progress = data.progress;
+		stack.append(
+			el(
+				"div",
+				{ class: "sidebar-empty search-index-note" },
+				el("span", { class: "search-spinner", "aria-hidden": "true" }),
+				el(
+					"span",
+					{},
+					progress
+						? `Indexing ${progress.done} of ${progress.total} conversations…`
+						: "Updating search index — results may be incomplete…",
+				),
+			),
+		);
+	}
+	// A failed index is reported alongside (not instead of) a running sweep, so
+	// the user still sees which conversations are missing from the results.
+	if (data.error) {
+		stack.append(
+			el("div", { class: "sidebar-empty search-index-note is-error" }, `⚠ ${data.error}`),
+		);
+	}
+	return stack;
+}
+
 function onSidebarSearchInput(q: string, refresh = true): void {
 	const generation = ++searchGeneration;
 	if (searchDebounce) clearTimeout(searchDebounce);
@@ -2691,6 +2810,7 @@ function onSidebarSearchInput(q: string, refresh = true): void {
 		const trimmed = q.trim();
 		if (!trimmed) {
 			state.searchActive = false;
+			stopSearchTicker();
 			setSidebarSearchMode(false);
 			renderSidebarSessions(lastSessions);
 			return;
@@ -2699,27 +2819,23 @@ function onSidebarSearchInput(q: string, refresh = true): void {
 		// are hidden via the .search-active class so results get full height.
 		setSidebarSearchMode(true);
 		const container = document.getElementById("sidebar-sessions-pane");
-		if (container && refresh) {
-			container.innerHTML = "";
-			container.append(el("div", { class: "sidebar-empty" }, "Searching…"));
-		}
+		// A refresh=true pass is the one the user is waiting on. The 1.5s index
+		// re-polls (refresh=false) render straight into the results instead.
+		if (container && refresh) renderSearchingState(container);
 		try {
 			const data = await searchSessions(trimmed, 10, refresh);
-			if (generation !== searchGeneration || !container?.isConnected) return;
+			// Generation check first: a newer keystroke now owns the pane *and* its
+			// ticker, so this response must leave both alone.
+			if (generation !== searchGeneration) return;
+			stopSearchTicker();
+			if (!container?.isConnected) return;
 			state.searchActive = true;
 			renderSidebarSearchResults(data.results);
-			if (data.indexing || data.error) {
-				container.prepend(
-					el(
-						"div",
-						{ class: "sidebar-empty" },
-						data.error ?? "Updating search index — results may be incomplete…",
-					),
-				);
-			}
+			if (data.indexing || data.error) container.prepend(searchIndexNotice(data));
 			if (data.indexing) searchDebounce = setTimeout(() => onSidebarSearchInput(q, false), 1500);
 		} catch {
 			if (generation !== searchGeneration) return;
+			stopSearchTicker();
 			if (container) {
 				container.innerHTML = "";
 				container.append(el("div", { class: "sidebar-empty" }, "Search failed."));
