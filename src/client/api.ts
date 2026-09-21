@@ -116,6 +116,10 @@ export interface HealthInfo {
 	ttsEngine?: string;
 	/** Server-default TTS voice. */
 	ttsVoice?: string;
+	/** This server's /api/tts and /api/tts/stream accept an optional `speed`,
+	 * which the engine applies as phoneme-duration scaling (natural pitch). When
+	 * absent (older server) the client falls back to resampling playbackRate. */
+	ttsSpeedParam?: boolean;
 	/** Configured spoken-rewrite model override from /api/health
 	 * ("provider/modelId"), used so the TTS banner names the model actually
 	 * doing the rewrite, not the session model. */
@@ -173,19 +177,25 @@ export async function getModels(): Promise<ModelInfo[]> {
 }
 
 /**
- * Local TTS via /api/tts. Returns the WAV bytes. Caller is responsible
- * for turning them into playable audio (we use a single shared <audio>
- * element in the renderer to avoid multiple voices overlapping).
+ * Local TTS via /api/tts. Returns the WAV bytes. Caller is responsible for
+ * turning them into playable audio (the renderer schedules them on a shared Web
+ * Audio timeline to avoid multiple voices overlapping).
+ *
+ * `speed` is forwarded to the engine as a synthesis parameter (Kokoro scales
+ * phoneme durations, keeping the voice's natural pitch) and is only sent when
+ * /api/health advertises ttsSpeedParam; otherwise omit it and let the caller
+ * resample via playbackRate.
  */
 export async function synthesizeSpeech(
 	text: string,
 	voice?: string,
 	signal?: AbortSignal,
+	speed?: number,
 ): Promise<Blob> {
 	const res = await fetch(`${BASE}/api/tts`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ text, voice }),
+		body: JSON.stringify({ text, voice, speed }),
 		signal,
 	});
 	if (!res.ok) {
@@ -208,18 +218,19 @@ export async function synthesizeSpeech(
  *     0x00 END  → clean end of stream
  *     0x80 ERR  → payload = UTF-8 error message
  *
- * Throws on a non-OK HTTP status (caller falls back to synthesizeSpeech)
- * or on an ERR frame arriving mid-stream.
+ * Throws on a non-OK HTTP status (caller falls back to synthesizeSpeech) or on
+ * an ERR frame arriving mid-stream. `speed` behaves as in synthesizeSpeech.
  */
 export async function* streamSynthesizeSpeech(
 	text: string,
 	voice?: string,
 	signal?: AbortSignal,
+	speed?: number,
 ): AsyncGenerator<Blob> {
 	const res = await fetch(`${BASE}/api/tts/stream`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ text, voice }),
+		body: JSON.stringify({ text, voice, speed }),
 		signal,
 	});
 	if (!res.ok) {

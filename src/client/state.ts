@@ -222,6 +222,13 @@ export interface AppState {
 	/** Server-default TTS voice from /api/health (used as the banner label
 	 * when the user hasn't picked a specific voice). */
 	ttsDefaultVoice: string | null;
+	/** True when /api/health advertises ttsSpeedParam, i.e. this server's TTS
+	 * routes take a `speed` and the engine applies it by scaling phoneme
+	 * durations. The browser then asks the server for the chosen rate and leaves
+	 * Web Audio's playbackRate at 1 — resampling the rate shifts pitch up, which
+	 * is audible on the default 1.25x. False until the health probe lands (and on
+	 * a server that predates the parameter), where the old resampling is used. */
+	ttsSpeedParam: boolean;
 	/** Configured spoken-rewrite model override ("provider/modelId") from
 	 * /api/health — the model the pi-voice-reply extension actually uses for
 	 * the text-rewrite phase. null = rewrite falls back to the session model. */
@@ -241,7 +248,9 @@ export interface AppState {
 	} | null;
 	/** Whether the Gemini key is configured for pi-web-access. Display-only. */
 	geminiKey: boolean;
-	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). */
+	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). Applied
+	 * by the TTS engine when ttsSpeedParam is set, otherwise by resampling the
+	 * AudioBufferSourceNode's playbackRate (which raises the pitch). */
 	ttsSpeed: number;
 	/** Number of TTS requests in flight (for the status bar indicator). */
 	ttsInFlight: number;
@@ -378,6 +387,7 @@ export const state: AppState = {
 	ttsVoice: null,
 	ttsEngine: null,
 	ttsDefaultVoice: null,
+	ttsSpeedParam: false,
 	voiceRewriteModel: null,
 	whisperModel: null,
 	imageModel: null,

@@ -1739,6 +1739,7 @@ async function boot(): Promise<void> {
 			refreshSidebarSearchVisibility();
 			state.ttsEngine = h.ttsEngine ?? null;
 			state.ttsDefaultVoice = h.ttsVoice ?? null;
+			state.ttsSpeedParam = h.ttsSpeedParam ?? false;
 			state.voiceRewriteModel = h.voiceRewriteModel ?? null;
 			state.whisperModel = h.whisperModel ?? null;
 			state.imageModel = h.imageModel ?? null;

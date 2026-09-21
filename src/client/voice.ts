@@ -102,6 +102,18 @@ let liveNodes: AudioBufferSourceNode[] = [];
 let nextStartAt = 0;
 
 /**
+ * Playback rate Web Audio applies to the current utterance, and the speed the
+ * current utterance was synthesized at (undefined = engine default). Exactly one
+ * of the two does the speeding up: when the server takes a `speed`
+ * (state.ttsSpeedParam), the engine stretches the audio itself — it scales
+ * phoneme durations, so the voice keeps its natural pitch — and the rate stays 1;
+ * otherwise we resample with Web Audio's playbackRate, which has no
+ * pitch-preserving mode and so raises the pitch (audibly, at the 1.25x default).
+ */
+let activePlaybackRate = 1;
+let activeSynthSpeed: number | undefined;
+
+/**
  * True once the current utterance's stream has closed, i.e. no more chunks
  * will ever be scheduled. Only then can the last node's `ended` event finalize
  * the utterance — before that, an empty queue is a temporary underflow
@@ -118,6 +130,15 @@ let streamEnded = false;
 function declarePlaybackAudioSession(): void {
 	const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
 	if (session) session.type = "playback";
+}
+
+/**
+ * Speed to ask the engine for, clamped to what it accepts. The picker only
+ * offers 1–2x, so this only matters for a persisted pref from an older build or
+ * a hand-edited one — which would otherwise come back as a 400.
+ */
+function clampSynthSpeed(rate: number): number {
+	return Math.min(2, Math.max(0.5, rate));
 }
 
 /**
@@ -201,6 +222,15 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 		? `${label} · synthesizing via ${engine} (${voice})…`
 		: `${label} · synthesizing via ${engine}…`;
 	showTtsBanner(synthHead, ttsPreview(spoken));
+	// Decide who does the speeding up for this utterance (see the state comment
+	// on ttsSpeedParam): the engine when it takes a speed, else Web Audio's rate.
+	if (state.ttsSpeedParam) {
+		activeSynthSpeed = clampSynthSpeed(state.ttsSpeed);
+		activePlaybackRate = 1;
+	} else {
+		activeSynthSpeed = undefined;
+		activePlaybackRate = state.ttsSpeed;
+	}
 	// Mark the initiating button as "synthesizing…" so the user sees a
 	// spinner during the (potentially long) TTS round-trip, then flip to
 	// the playing (⏹) state once audio actually starts. Auto-speak calls
@@ -266,6 +296,7 @@ async function playStreamed(
 			spoken,
 			state.ttsVoice ?? undefined,
 			controller.signal,
+			activeSynthSpeed,
 		)) {
 			if (gen !== speakGeneration) return; // stopped or superseded mid-stream
 			await scheduleChunk(ctx, gen, wav);
@@ -329,14 +360,14 @@ async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise
 	if (gen !== speakGeneration) return; // superseded while decoding
 	const node = ctx.createBufferSource();
 	node.buffer = decoded;
-	node.playbackRate.value = state.ttsSpeed;
+	node.playbackRate.value = activePlaybackRate;
 	node.connect(ctx.destination);
 	// Start where the previous chunk ends. If synthesis fell behind playback the
 	// timeline has already passed, so start now rather than in the past (which the
 	// audio clock would silently skip).
 	const startAt = Math.max(ctx.currentTime + TTS_SCHEDULE_LEAD, nextStartAt);
 	node.start(startAt);
-	nextStartAt = startAt + decoded.duration / state.ttsSpeed;
+	nextStartAt = startAt + decoded.duration / activePlaybackRate;
 	liveNodes.push(node);
 	node.onended = () => onChunkEnded(gen, node);
 	if (liveNodes.length === 1) {
@@ -428,7 +459,12 @@ async function playWholeBlob(
 	gen: number,
 	controller: AbortController,
 ): Promise<void> {
-	const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined, controller.signal);
+	const blob = await synthesizeSpeech(
+		spoken,
+		state.ttsVoice ?? undefined,
+		controller.signal,
+		activeSynthSpeed,
+	);
 	if (gen !== speakGeneration) return;
 	// No more chunks will ever arrive, so this node's `ended` finalizes.
 	streamEnded = true;

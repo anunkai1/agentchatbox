@@ -54,7 +54,7 @@ describe("parseTtsBody", () => {
 
 	it("accepts normal text and returns it with voice undefined when absent", () => {
 		const out = parseTtsBody(req({ text: "hello world" }));
-		expect(out).toEqual({ text: "hello world", voice: undefined });
+		expect(out).toEqual({ text: "hello world", voice: undefined, speed: 1 });
 	});
 
 	it("keeps whitespace-only text rejected but preserves real text as-is", () => {
@@ -64,7 +64,7 @@ describe("parseTtsBody", () => {
 
 	it("returns the voice when a non-empty string is supplied", () => {
 		const out = parseTtsBody(req({ text: "hi", voice: "af_heart" }));
-		expect(out).toEqual({ text: "hi", voice: "af_heart" });
+		expect(out).toEqual({ text: "hi", voice: "af_heart", speed: 1 });
 	});
 
 	it("treats an empty-string voice as 'unset' (undefined)", () => {
@@ -84,5 +84,31 @@ describe("parseTtsBody", () => {
 		const edge = "a".repeat(30_000);
 		const out = parseTtsBody(req({ text: edge }));
 		expect("text" in out && out.text.length).toBe(30_000);
+	});
+
+	// speed is a synthesis parameter (Kokoro scales phoneme durations, keeping
+	// the voice's natural pitch). It is optional, defaults to 1, and is bounded
+	// by what pi-voice-server itself accepts so a bad value fails here with a
+	// clear message rather than as an opaque upstream 400.
+	it("defaults speed to 1 when absent or null", () => {
+		expect(parseTtsBody(req({ text: "hi" }))).toMatchObject({ speed: 1 });
+		expect(parseTtsBody(req({ text: "hi", speed: null }))).toMatchObject({ speed: 1 });
+	});
+
+	it("accepts in-range speeds, including the bounds", () => {
+		for (const speed of [0.5, 1, 1.25, 1.4, 1.5, 2]) {
+			expect(parseTtsBody(req({ text: "hi", speed }))).toMatchObject({ speed });
+		}
+	});
+
+	it("rejects out-of-range, non-numeric and coerced speeds with 400", () => {
+		for (const speed of [0.4, 2.01, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(parseTtsBody(req({ text: "hi", speed }))).toEqual({
+				error: "speed must be a number from 0.5 to 2",
+				status: 400,
+			});
+		}
+		// A string is rejected rather than parsed — no implicit coercion.
+		expect(parseTtsBody(req({ text: "hi", speed: "1.5" }))).toMatchObject({ status: 400 });
 	});
 });
