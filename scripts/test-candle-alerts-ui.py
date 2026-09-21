@@ -124,8 +124,8 @@ assert js('window.__historyRequests.length') == 9
 # The countdown to the current candle's close renders on its own wall-clock
 # tick, so wait for the first one after the load. This Android-size viewport is
 # narrow enough that the legend reaches the right gutter, so the countdown must
-# fall back to the bottom-right gutter above the time axis instead of colliding
-# with it.
+# drop to the bottom of the price-scale column — right aligned with the price
+# labels, clear of them and of the legend — instead of colliding with it.
 countdown = """(() => {
   const el = document.querySelector('.candle-countdown');
   if (!el) return JSON.stringify({missing:true});
@@ -133,6 +133,7 @@ countdown = """(() => {
     l = document.querySelector('#legend').getBoundingClientRect();
   const overlap = !(r.right < l.left || r.left > l.right || r.bottom < l.top || r.top > l.bottom);
   return JSON.stringify({hidden:el.hidden, text:el.textContent, right:r.right, top:r.top, bottom:r.bottom,
+    width:r.width, fontSize:getComputedStyle(el).fontSize,
     overlapsLegend:l.width > 0 && overlap, mainRight:m.right, mainTop:m.top, mainBottom:m.bottom});
 })()"""
 wait_until("(() => { const el = document.querySelector('.candle-countdown');"
@@ -140,10 +141,15 @@ wait_until("(() => { const el = document.querySelector('.candle-countdown');"
 cd = json.loads(js(countdown))
 assert cd.get('hidden') is False, cd
 assert re.fullmatch(r'15m closes in\d+:\d\d', cd['text']), cd
-assert cd['right'] <= cd['mainRight'] and cd['bottom'] <= cd['mainBottom'] - 20, cd
+# Inside the price-scale column: 6px off the right edge, and narrow enough that
+# a day reading still fits the 56px column the badge is sized for.
+assert 0 < cd['mainRight'] - cd['right'] <= 8, cd
+assert cd['width'] <= 50, cd
+assert cd['fontSize'] == '10px', cd
+assert cd['bottom'] <= cd['mainBottom'] - 20, cd
 assert cd['overlapsLegend'] is False, cd
 assert js("!!document.querySelector('#main-chart > .candle-countdown')") is True
-print('PASS: candle-close countdown tracks the 15m bar and keeps to the bottom-right gutter when the legend is wide.')
+print('PASS: candle-close countdown tracks the 15m bar and drops into the price-scale column when the legend is wide.')
 
 # On a desktop-width chart the legend leaves the top-right corner free, and the
 # countdown moves up to sit level with it.
@@ -152,11 +158,14 @@ wait_until("(() => { const el = document.querySelector('.candle-countdown');"
            " return !!el && !el.hidden && el.style.top !== '' && el.style.bottom === ''; })()")
 cd = json.loads(js(countdown))
 assert cd['right'] <= cd['mainRight'] and 0 <= cd['top'] - cd['mainTop'] <= 30, cd
+# The desktop reading keeps to the gutter beside the scale, not over it.
+assert cd['mainRight'] - cd['right'] >= 56, cd
 assert cd['overlapsLegend'] is False, cd
 print('PASS: candle-close countdown moves to the top-right corner at desktop width.')
 cdp('Emulation.setDeviceMetricsOverride', width=412, height=860, deviceScaleFactor=1, mobile=True)
 wait_until("(() => { const el = document.querySelector('.candle-countdown');"
-           " return !!el && !el.hidden && el.style.bottom !== '' && el.style.top === ''; })()")
+           " return !!el && !el.hidden && el.style.bottom !== '' && el.style.top === ''"
+           " && parseFloat(el.style.right) <= 8; })()")
 
 # Explicit market changes reset backoff and cancel pending retries.
 js("window.__historyMode='fail'; document.querySelector('#symbol').value='ETH'; document.querySelector('#symbol').dispatchEvent(new Event('change'))")

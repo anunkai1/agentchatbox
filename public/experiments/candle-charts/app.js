@@ -2176,16 +2176,21 @@
 
   // Keep clear of the price scale, whose width tracks the printed precision.
   // Top-right is the default, level with the legend. On narrow screens the
-  // legend spans nearly the full width, so drop back to the gutter above the
-  // time axis instead of overlapping it.
+  // legend spans nearly the full width and there is no free corner, so the
+  // reading drops to the bottom of the price-scale column instead, right
+  // aligned with the price labels. That strip is empty at every zoom: the
+  // scale's own labels stop above it and the chart's right offset keeps bars
+  // out of it, which is why the badge can sit inside the column rather than in
+  // the gutter beside it.
   function placeCountdown() {
     let scale = 0, axis = 0;
     try { scale = chart.priceScale("right").width() || 0; } catch (_) { /* older library */ }
     try { axis = chart.timeScale().height() || 0; } catch (_) { /* older library */ }
-    const right = `${Math.round(Math.max(scale, 56) + 10)}px`;
+    const gutter = Math.round(Math.max(scale, 56) + 10);
     const mainRect = elMain.getBoundingClientRect(), legendRect = elLegend.getBoundingClientRect();
     const legendRight = legendRect.width ? legendRect.right - mainRect.left : 0;
-    const fitsTop = legendRight + 8 + elCountdown.offsetWidth <= elMain.clientWidth - Math.max(scale, 56) - 10;
+    const fitsTop = legendRight + 8 + elCountdown.offsetWidth <= elMain.clientWidth - gutter;
+    const right = `${fitsTop ? gutter : 6}px`;
     const top = fitsTop ? 8 : null;
     const bottom = fitsTop ? null : Math.round(Math.max(axis, 26) + 6);
     const key = `${right}|${top ?? ""}|${bottom ?? ""}`;
