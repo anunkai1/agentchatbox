@@ -31,6 +31,7 @@ import {
 	showTtsBanner,
 } from "./render.js";
 import { state } from "./state.js";
+import { trimChunkSilence } from "./tts-trim.js";
 
 /**
  * Soft cap on what we send to TTS. Kept just under the server's hard cap
@@ -279,10 +280,11 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
  * one on the Web Audio timeline as it arrives, so sound starts after the FIRST
  * chunk instead of after the whole message has been synthesized — a long reply
  * costs one chunk of latency rather than all of them. Chunks are decoded in
- * arrival order and scheduled back-to-back, which is what makes the joins
- * inaudible — the previous implementation swapped each WAV into a media element
- * instead and left a gap whenever the next chunk wasn't ready when the current
- * one ended.
+ * arrival order, trimmed of the engine's per-chunk silence padding (tts-trim.ts),
+ * and scheduled back-to-back. Both halves matter for a seamless join: the
+ * previous implementation swapped each WAV into a media element and left a gap
+ * whenever the next chunk wasn't ready when the current one ended, while today
+ * the scheduling is sample-accurate and the seam is padding, not timing.
  */
 async function playStreamed(
 	spoken: string,
@@ -350,8 +352,10 @@ async function ensureAudioRunning(): Promise<AudioContext> {
 }
 
 /**
- * Decode one synthesized WAV chunk and place it on the timeline immediately
- * after the previous one. Decoding is awaited in stream order, so chunks are
+ * Decode one synthesized WAV chunk, trim the model's silent padding off its
+ * edges, and place it on the timeline immediately after the previous one (see
+ * tts-trim.ts for why the padding, not the scheduling, is what a listener hears
+ * as a pause between chunks). Decoding is awaited in stream order, so chunks are
  * always scheduled in playback order even though decodeAudioData's promises can
  * settle out of order.
  */
@@ -362,12 +366,24 @@ async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise
 	node.buffer = decoded;
 	node.playbackRate.value = activePlaybackRate;
 	node.connect(ctx.destination);
+	// Trim the model's per-chunk padding before scheduling: Kokoro surrounds every
+	// synthesized chunk with silence, and since a chunk boundary is (mostly) also a
+	// sentence boundary, the two pads meeting on the timeline are what a listener
+	// hears as a pause between chunks. Only the LEADING pad is dropped outright;
+	// the trailing one is cut back to a breath, so sentences aren't run together.
+	// See tts-trim.ts.
+	const { offset, duration } = trimChunkSilence(decoded);
+	const playSeconds = duration / activePlaybackRate;
 	// Start where the previous chunk ends. If synthesis fell behind playback the
 	// timeline has already passed, so start now rather than in the past (which the
 	// audio clock would silently skip).
 	const startAt = Math.max(ctx.currentTime + TTS_SCHEDULE_LEAD, nextStartAt);
-	node.start(startAt);
-	nextStartAt = startAt + decoded.duration / activePlaybackRate;
+	// `offset` skips the leading silence inside the buffer; the stop() is what
+	// removes the excess trailing silence, and it also fires this node's `ended`
+	// at the trimmed end so the queue advances on the audible finish.
+	node.start(startAt, offset);
+	node.stop(startAt + playSeconds);
+	nextStartAt = startAt + playSeconds;
 	liveNodes.push(node);
 	node.onended = () => onChunkEnded(gen, node);
 	if (liveNodes.length === 1) {
