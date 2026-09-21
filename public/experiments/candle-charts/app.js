@@ -2141,8 +2141,8 @@
   // ============================== candle close countdown ==============================
   // Time left on the newest bar. It is derived from that bar's own open time
   // (not from when the page loaded), so interval switches, market closures and
-  // irregular monthly bars all stay correct. It lives in the empty right-hand
-  // gutter just above the time axis, clear of candles and the price scale.
+  // irregular monthly bars all stay correct. It lives in the top-right corner,
+  // in the empty right-hand gutter, clear of candles and the price scale.
   const elCountdown = document.createElement("div");
   elCountdown.className = "candle-countdown";
   elCountdown.title = "Time until the current candle closes";
@@ -2174,18 +2174,26 @@
     return `${mins}:${pad(total % 60)}`;
   }
 
-  // Keep clear of the price scale (its width tracks the printed precision) and
-  // of the time axis.
+  // Keep clear of the price scale, whose width tracks the printed precision.
+  // Top-right is the default, level with the legend. On narrow screens the
+  // legend spans nearly the full width, so drop back to the gutter above the
+  // time axis instead of overlapping it.
   function placeCountdown() {
     let scale = 0, axis = 0;
     try { scale = chart.priceScale("right").width() || 0; } catch (_) { /* older library */ }
     try { axis = chart.timeScale().height() || 0; } catch (_) { /* older library */ }
     const right = `${Math.round(Math.max(scale, 56) + 10)}px`;
-    const bottom = `${Math.round(Math.max(axis, 26) + 6)}px`;
-    if (`${right}|${bottom}` === countdownOffset) return;
-    countdownOffset = `${right}|${bottom}`;
+    const mainRect = elMain.getBoundingClientRect(), legendRect = elLegend.getBoundingClientRect();
+    const legendRight = legendRect.width ? legendRect.right - mainRect.left : 0;
+    const fitsTop = legendRight + 8 + elCountdown.offsetWidth <= elMain.clientWidth - Math.max(scale, 56) - 10;
+    const top = fitsTop ? 8 : null;
+    const bottom = fitsTop ? null : Math.round(Math.max(axis, 26) + 6);
+    const key = `${right}|${top ?? ""}|${bottom ?? ""}`;
+    if (key === countdownOffset) return;
+    countdownOffset = key;
     elCountdown.style.right = right;
-    elCountdown.style.bottom = bottom;
+    elCountdown.style.top = top === null ? "" : `${top}px`;
+    elCountdown.style.bottom = bottom === null ? "" : `${bottom}px`;
   }
 
   function renderCountdown() {
