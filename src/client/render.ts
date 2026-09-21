@@ -302,6 +302,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 				() => m.voiceLong ?? "",
 				() => m.voiceMedium ?? "",
 				() => m.voiceShort ?? "",
+				() => voiceHintFor(m.text),
 			),
 		);
 		// Read-along box for the medium/short spoken variants (long is
@@ -309,6 +310,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		// until a variant exists.
 		const voiceBox = makeVoiceTextBox();
 		updateVoiceTextBox(voiceBox, m);
+		voiceBoxByMessage.set(m, voiceBox);
 		body.append(voiceBox);
 		body.append(makeAssistantActionBar(() => m));
 		wrap.append(body);
@@ -405,27 +407,6 @@ export function syncSteerBadges(): void {
 }
 
 /**
- * Resolve the spoken variant of the LAST assistant message in state.
- * Used by the live-streaming placeholder's Long/Short buttons, which
- * are created before the message object exists; they read the variant
- * lazily at click time so they pick up values the voice-reply handler
- * mutates onto the message after generation. /voice-last always voices
- * the last assistant message, so this matches that semantics.
- */
-function lastAssistantVoice(variant: "long" | "medium" | "short"): string {
-	for (let i = state.messages.length - 1; i >= 0; i--) {
-		const m = state.messages[i];
-		if (m.kind === "assistant") {
-			return (
-				(variant === "long" ? m.voiceLong : variant === "medium" ? m.voiceMedium : m.voiceShort) ??
-				""
-			);
-		}
-	}
-	return "";
-}
-
-/**
  * Show the spinning indicator on a speak button (generate/synthesize
  * phase). Captures the idle label the first time so it can be restored.
  */
@@ -440,6 +421,36 @@ function setBtnLoading(btn: HTMLElement): void {
 interface VoiceTextSource {
 	voiceMedium?: string;
 	voiceShort?: string;
+}
+
+/**
+ * Read-along box per assistant message, so a voice-reply arriving for a
+ * SPECIFIC message (the one a --match hint named) can update that message's box
+ * rather than whichever row happens to be last. A WeakMap keyed by the message
+ * object: rows are rebuilt on re-render, and stale entries are ignored by
+ * voiceBoxForMessage() when their element is no longer in the document.
+ */
+const voiceBoxByMessage = new WeakMap<object, HTMLElement>();
+
+/** The read-along box rendered for `message`, if it is still in the document. */
+export function voiceBoxForMessage(message: object): HTMLElement | null {
+	const box = voiceBoxByMessage.get(message);
+	return box?.isConnected ? box : null;
+}
+
+/**
+ * The read-along box of the assistant row whose text matches `hint` — a
+ * DOM-based fallback for voiceBoxForMessage(), for when the message object the
+ * variant was merged onto isn't the one its row was rendered from.
+ */
+export function voiceBoxForHint(hint: string): HTMLElement | null {
+	for (const row of document.querySelectorAll<HTMLElement>("#messages .row-assistant")) {
+		const text = row.querySelector(".text")?.textContent ?? "";
+		if (matchesVoiceHint(text, hint)) {
+			return row.querySelector<HTMLElement>(".voice-text");
+		}
+	}
+	return null;
 }
 
 /**
@@ -471,6 +482,7 @@ function makeVoiceActions(
 	getLongText: () => string,
 	getMediumText: () => string,
 	getShortText: () => string,
+	getHint: () => string,
 ): HTMLElement {
 	const actions = el("div", {
 		class: "voice-actions",
@@ -479,11 +491,36 @@ function makeVoiceActions(
 	});
 	actions.append(
 		makeImmediateVoiceButton(getImmediateText),
-		makeVoiceVariantButton("long", getLongText, "Speak the detailed spoken version"),
-		makeVoiceVariantButton("medium", getMediumText, "Speak a summary of the answer"),
-		makeVoiceVariantButton("short", getShortText, "Speak a brief summary of the answer"),
+		makeVoiceVariantButton("long", getLongText, "Speak the detailed spoken version", getHint),
+		makeVoiceVariantButton("medium", getMediumText, "Speak a summary of the answer", getHint),
+		makeVoiceVariantButton("short", getShortText, "Speak a brief summary of the answer", getHint),
 	);
 	return actions;
+}
+
+/**
+ * Collapse whitespace — the one normalisation both ends of the --match hint
+ * agree on (rendered text and raw session text wrap differently).
+ */
+export function normaliseVoiceText(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The hint identifying which reply a variant press is about: the opening words
+ * of that message, whitespace-collapsed, quotes stripped (it travels inside a
+ * slash-command argument). /voice-last otherwise always voices the NEWEST
+ * reply, so pressing Short on an older message used to summarise the newest one
+ * and display it under the newest row — the text never appeared where the
+ * button was pressed.
+ */
+export function voiceHintFor(text: string): string {
+	return normaliseVoiceText(text).replace(/"/g, "").slice(0, 60).trimEnd();
+}
+
+/** Does `text` (a candidate reply) match a hint sent with a voice-reply? */
+export function matchesVoiceHint(text: string, hint: string): boolean {
+	return normaliseVoiceText(text).toLowerCase().startsWith(hint.toLowerCase());
 }
 
 function makeVoiceTextSection(label: string, text: string): HTMLElement {
@@ -549,6 +586,7 @@ export function makeVoiceVariantButton(
 	variant: "long" | "medium" | "short",
 	getText: () => string,
 	title: string,
+	getHint: () => string,
 ): HTMLElement {
 	const icon = variant === "long" ? "🗣️" : variant === "medium" ? "📝" : "💬";
 	const label = variant === "long" ? "Long" : variant === "medium" ? "Med" : "Short";
@@ -578,8 +616,13 @@ export function makeVoiceVariantButton(
 		setBtnLoading(btn);
 		state.pendingVoiceVariant = variant;
 		state.pendingVoiceBtn = btn;
+		// Tell the extension WHICH reply this press is about, so a press on an
+		// older row voices that row instead of the newest one; the hint comes
+		// back on the variant and the handler merges onto the same message.
+		const hint = getHint();
+		state.pendingVoiceHint = hint || null;
 		showTtsBanner(`${variantName} · generating spoken text via ${voiceRewriteLabel()}…`);
-		services.sendSlashCommand?.(`/voice-last ${variant}`);
+		services.sendSlashCommand?.(`/voice-last ${variant}${hint ? ` --match "${hint}"` : ""}`);
 	});
 	return btn;
 }
@@ -1147,14 +1190,19 @@ export function appendAssistantPlaceholder(
 	body.append(
 		makeVoiceActions(
 			() => state.lastAssistantText,
-			() => lastAssistantVoice("long"),
-			() => lastAssistantVoice("medium"),
-			() => lastAssistantVoice("short"),
+			// This row's own message, not "the last assistant message": once a
+			// newer turn exists the row is no longer last, and resolving by
+			// position would then play/read some other reply's variant.
+			() => message.voiceLong ?? "",
+			() => message.voiceMedium ?? "",
+			() => message.voiceShort ?? "",
+			() => voiceHintFor(message.text),
 		),
 	);
 	// Read-along box (hidden until a medium/short variant lands). Returned
 	// so the voice-reply handler can populate it live without a re-render.
 	const voiceBox = makeVoiceTextBox();
+	voiceBoxByMessage.set(message, voiceBox);
 	body.append(voiceBox);
 	// Capture this row's message, not the latest assistant at click time.
 	// Streaming mutates the same object, so text and seq stay up to date.
