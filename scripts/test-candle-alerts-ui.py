@@ -121,15 +121,19 @@ js("window.__historyMode='success'; void window.__tick(30000)")
 wait_until("document.querySelector('#last-price').textContent !== '—' && window.__sockets.length === 1")
 assert js('window.__historyRequests.length') == 9
 
-# The countdown to the current candle's close lives in the bottom-right gutter
-# of the main chart, clear of the time axis. It renders on its own wall-clock
-# tick, so wait for the first one after the load.
+# The countdown to the current candle's close renders on its own wall-clock
+# tick, so wait for the first one after the load. This Android-size viewport is
+# narrow enough that the legend reaches the right gutter, so the countdown must
+# fall back to the bottom-right gutter above the time axis instead of colliding
+# with it.
 countdown = """(() => {
   const el = document.querySelector('.candle-countdown');
   if (!el) return JSON.stringify({missing:true});
-  const r = el.getBoundingClientRect(), m = document.querySelector('#main-chart').getBoundingClientRect();
-  return JSON.stringify({hidden:el.hidden, text:el.textContent, right:r.right, bottom:r.bottom,
-    mainRight:m.right, mainBottom:m.bottom});
+  const r = el.getBoundingClientRect(), m = document.querySelector('#main-chart').getBoundingClientRect(),
+    l = document.querySelector('#legend').getBoundingClientRect();
+  const overlap = !(r.right < l.left || r.left > l.right || r.bottom < l.top || r.top > l.bottom);
+  return JSON.stringify({hidden:el.hidden, text:el.textContent, right:r.right, top:r.top, bottom:r.bottom,
+    overlapsLegend:l.width > 0 && overlap, mainRight:m.right, mainTop:m.top, mainBottom:m.bottom});
 })()"""
 wait_until("(() => { const el = document.querySelector('.candle-countdown');"
            " return !!el && !el.hidden && /^15m closes in\\d+:\\d\\d$/.test(el.textContent); })()")
@@ -137,8 +141,22 @@ cd = json.loads(js(countdown))
 assert cd.get('hidden') is False, cd
 assert re.fullmatch(r'15m closes in\d+:\d\d', cd['text']), cd
 assert cd['right'] <= cd['mainRight'] and cd['bottom'] <= cd['mainBottom'] - 20, cd
+assert cd['overlapsLegend'] is False, cd
 assert js("!!document.querySelector('#main-chart > .candle-countdown')") is True
-print('PASS: candle-close countdown renders in the bottom-right gutter and tracks the 15m bar.')
+print('PASS: candle-close countdown tracks the 15m bar and keeps to the bottom-right gutter when the legend is wide.')
+
+# On a desktop-width chart the legend leaves the top-right corner free, and the
+# countdown moves up to sit level with it.
+cdp('Emulation.setDeviceMetricsOverride', width=1000, height=800, deviceScaleFactor=1, mobile=False)
+wait_until("(() => { const el = document.querySelector('.candle-countdown');"
+           " return !!el && !el.hidden && el.style.top !== '' && el.style.bottom === ''; })()")
+cd = json.loads(js(countdown))
+assert cd['right'] <= cd['mainRight'] and 0 <= cd['top'] - cd['mainTop'] <= 30, cd
+assert cd['overlapsLegend'] is False, cd
+print('PASS: candle-close countdown moves to the top-right corner at desktop width.')
+cdp('Emulation.setDeviceMetricsOverride', width=412, height=860, deviceScaleFactor=1, mobile=True)
+wait_until("(() => { const el = document.querySelector('.candle-countdown');"
+           " return !!el && !el.hidden && el.style.bottom !== '' && el.style.top === ''; })()")
 
 # Explicit market changes reset backoff and cancel pending retries.
 js("window.__historyMode='fail'; document.querySelector('#symbol').value='ETH'; document.querySelector('#symbol').dispatchEvent(new Event('change'))")

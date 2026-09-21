@@ -238,7 +238,7 @@ body {
   .legend .src { display: none; }
 }
 #main-chart { flex: 1; min-height: 0; }
-/* candle close countdown — bottom-right gutter of the main chart */
+/* candle close countdown — top-right corner of the main chart */
 .candle-countdown {
   position: absolute;
   z-index: 9;
