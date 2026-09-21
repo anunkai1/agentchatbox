@@ -30,6 +30,20 @@ import { createCachedProbe } from "./health-cache.js";
  */
 const MAX_TEXT_CHARS = 30_000;
 
+/** Shared TTL for the cached engine probes (health, voice list). */
+const HEALTH_CACHE_MS = 60 * 1000;
+
+/**
+ * How long to wait for the upstream's FIRST chunk before declaring it hung.
+ * This only bounds the wait for response headers: once the stream is open the
+ * only thing that aborts it is the browser going away, because a long reply
+ * legitimately streams for minutes. A first chunk takes ~2-3s warm, ~12s if a
+ * full 500-char chunk has to be synthesized under load, so this is a hang
+ * detector rather than a budget. Overridable so the timeout path can be
+ * exercised without waiting a minute.
+ */
+const STREAM_TTFB_TIMEOUT_MS = Number(process.env.KOKORO_TTFB_TIMEOUT_MS) || 60_000;
+
 type Engine = "kokoro";
 
 /**
@@ -151,6 +165,14 @@ export function createTtsRouter(): Router {
 			// aborting an already-finished fetch is a harmless no-op.
 			const clientGone = new AbortController();
 			res.on("close", () => clientGone.abort());
+			// The same controller covers a hung upstream: if no first chunk arrives,
+			// abort rather than leave the browser's spinner turning forever. Cleared
+			// as soon as headers land so it can never cut a healthy stream short.
+			let timedOut = false;
+			const ttfbTimer = setTimeout(() => {
+				timedOut = true;
+				clientGone.abort();
+			}, STREAM_TTFB_TIMEOUT_MS);
 
 			let upstream: globalThis.Response;
 			try {
@@ -161,9 +183,20 @@ export function createTtsRouter(): Router {
 					signal: clientGone.signal,
 				});
 			} catch (e) {
+				if (timedOut) {
+					res.status(504).json({
+						error: `kokoro tts/stream produced no first chunk within ${STREAM_TTFB_TIMEOUT_MS}ms at ${KOKORO_BASE}`,
+					});
+					return;
+				}
+				// The browser left before the engine answered — there is nobody to
+				// report to, and writing to a dead socket is pointless.
+				if (clientGone.signal.aborted) return;
 				const message = e instanceof Error ? e.message : String(e);
 				res.status(502).json({ error: `kokoro tts unreachable at ${KOKORO_BASE}: ${message}` });
 				return;
+			} finally {
+				clearTimeout(ttfbTimer);
 			}
 			// Pre-stream upstream failure (e.g. 503 model not loaded): relay as JSON
 			// so the client can fall back to the whole-blob endpoint.
@@ -236,11 +269,25 @@ async function synthKokoro(
 	speed: number,
 	res: Response,
 ): Promise<void> {
+	// Same disconnect handling as the streaming route: this route only responds
+	// once the WHOLE utterance is synthesized, so a browser that goes away
+	// mid-synthesis (stop pressed during the fallback path, navigation) would
+	// otherwise leave Kokoro burning CPU — minutes of it, at the 30k-char cap —
+	// on audio nobody will ever hear.
+	//
+	// Deliberately no timeout alongside it: the upstream response carries every
+	// chunk, so for a large request there is legitimately nothing to read for
+	// minutes. A deadline here would break real requests instead of protecting
+	// anything; the streaming route (which responds per chunk) is where a hang
+	// detector belongs, and it has one.
+	const clientGone = new AbortController();
+	res.on("close", () => clientGone.abort());
 	try {
 		const upstream = await fetch(`${KOKORO_BASE}/tts`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed }),
+			signal: clientGone.signal,
 		});
 		if (!upstream.ok) {
 			const errText = (await upstream.text()).slice(0, 300);
@@ -255,6 +302,8 @@ async function synthKokoro(
 		res.setHeader("Cache-Control", "no-store");
 		res.send(wav);
 	} catch (e) {
+		// An aborted fetch means the browser left; there is nobody to answer.
+		if (clientGone.signal.aborted) return;
 		const message = e instanceof Error ? e.message : String(e);
 		res.status(502).json({
 			error: `kokoro tts unreachable at ${KOKORO_BASE}: ${message}`,
@@ -262,18 +311,22 @@ async function synthKokoro(
 	}
 }
 
-async function kokoroVoices(): Promise<string[]> {
+/**
+ * Voice list, cached like the health probe: it is static per release (28 voices),
+ * while the picker can be opened repeatedly by any browser. Failures are not
+ * cached — only the resolved list is — so a restarted engine repopulates on the
+ * next call rather than being pinned out for the TTL.
+ */
+const kokoroVoices = createCachedProbe(HEALTH_CACHE_MS, async (): Promise<string[]> => {
 	const res = await fetch(`${KOKORO_BASE}/voices`, { signal: AbortSignal.timeout(3000) });
 	if (!res.ok) throw new Error(`upstream ${res.status}`);
 	const data = (await res.json()) as { voices?: string[] };
 	return data.voices ?? [];
-}
+});
 
 // ---------------------------------------------------------------------------
 // Health probe (used by /api/health)
 // ---------------------------------------------------------------------------
-
-const HEALTH_CACHE_MS = 60 * 1000;
 
 export const checkTtsAvailable = createCachedProbe(HEALTH_CACHE_MS, computeTtsAvailable);
 

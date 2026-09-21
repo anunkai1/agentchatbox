@@ -748,7 +748,20 @@ let mediaRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let recordingStart = 0;
 
+/**
+ * True while a finished recording is being transcribed. The mic button flips
+ * back to 🎙 the moment recording stops, but the transcription round-trip takes
+ * seconds, and a recording started in that window would insert a second
+ * transcript (the older one landing last, if it finishes last) while both fight
+ * over the status line. The button is also disabled so the state is visible.
+ */
+let transcribing = false;
+
 export async function handleVoiceRecord(): Promise<void> {
+	if (transcribing) {
+		setStatusMessage("still transcribing the previous recording…");
+		return;
+	}
 	if (mediaRecorder && mediaRecorder.state === "recording") {
 		mediaRecorder.stop();
 		// Flip the button back to the mic icon immediately so the user
@@ -769,13 +782,17 @@ export async function handleVoiceRecord(): Promise<void> {
 			// Canonical teardown: ensure the mic button reverts to its
 			// idle icon no matter how recording stopped (button click,
 			// an OS/permission revoke, etc.).
-			$<HTMLButtonElement>("#voice-btn").textContent = "🎙";
+			const btn = $<HTMLButtonElement>("#voice-btn");
+			btn.textContent = "🎙";
 			stream.getTracks().forEach((t) => {
 				t.stop();
 			});
 			const blob = new Blob(recordedChunks, { type: "audio/webm" });
 			const secs = (Date.now() - recordingStart) / 1000;
 			setStatusMessage(`transcribing ${secs.toFixed(1)}s of audio…`);
+			// Hold the mic until this lands, so a second recording can't race it.
+			transcribing = true;
+			btn.disabled = true;
 			try {
 				const text = await transcribeAudio(blob);
 				// Insert the transcript at the cursor, preserving any text
@@ -798,6 +815,9 @@ export async function handleVoiceRecord(): Promise<void> {
 				setStatusMessage(`transcribed (${text.length} chars). Press Enter to send.`);
 			} catch (err) {
 				appendError(`transcription failed: ${err instanceof Error ? err.message : String(err)}`);
+			} finally {
+				transcribing = false;
+				btn.disabled = false;
 			}
 		};
 		recordingStart = Date.now();
