@@ -260,6 +260,10 @@ export interface AppState {
 	 * Set only by the explicit pause button — NOT by the <audio> 'pause'
 	 * event, which also fires between chunks and on stop. */
 	audioPaused: boolean;
+	/** Opening words of the reply a pending /voice-last press targets, sent as
+	 * --match so the extension voices THAT message; cleared when the variant
+	 * arrives. null when nothing is pending (or the press had no target). */
+	pendingVoiceHint: string | null;
 	/**
 	 * When a 🗣️ Long / 💬 Short button is pressed BEFORE its spoken variant
 	 * has been generated, these record which variant to auto-play and the
@@ -398,6 +402,7 @@ export const state: AppState = {
 	audioPlaying: false,
 	audioPaused: false,
 	pendingVoiceVariant: null,
+	pendingVoiceHint: null,
 	pendingVoiceBtn: null,
 	lastAssistantText: "",
 	lastAssistantSeq: null,

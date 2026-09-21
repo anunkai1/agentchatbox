@@ -47,6 +47,7 @@ import {
 	isAtBottom,
 	jumpToPrevUserMessage,
 	lastAssistantVoiceBox,
+	matchesVoiceHint,
 	refreshSidebarSearchVisibility,
 	refreshStatus,
 	refreshWelcomeSuggestions,
@@ -65,6 +66,8 @@ import {
 	updateJumpFabState,
 	updateJumpToBottomFabState,
 	updateVoiceTextBox,
+	voiceBoxForHint,
+	voiceBoxForMessage,
 } from "./render.js";
 import { services, setServices } from "./services.js";
 import {
@@ -756,31 +759,52 @@ function onEvent(event: Record<string, unknown>): void {
 				refreshStatus();
 				if (e.message.customType === "voice-reply") {
 					const details =
-						(e.message as { details?: { long?: string; medium?: string; short?: string } })
-							.details ?? {};
+						(
+							e.message as {
+								details?: { long?: string; medium?: string; short?: string; match?: string };
+							}
+						).details ?? {};
+					// Which reply is this variant about? The extension voices the
+					// message a --match hint names (the row whose button was pressed)
+					// and echoes the hint back; without one (keyword trigger, or an
+					// older extension) it is the newest reply, as before.
+					const hint = typeof details.match === "string" ? details.match : "";
 					// Merge only the variant(s) this message carries, so
 					// per-button /voice-last calls accumulate onto one
 					// assistant message without wiping a previously-generated
 					// variant. The already-rendered buttons read these lazily.
 					let updated = false;
+					let target: (typeof state.messages)[number] | null = null;
 					for (let j = state.messages.length - 1; j >= 0; j--) {
 						const prev = state.messages[j];
-						if (prev.kind === "assistant") {
-							if (details.long !== undefined) prev.voiceLong = details.long;
-							if (details.medium !== undefined) prev.voiceMedium = details.medium;
-							if (details.short !== undefined) prev.voiceShort = details.short;
-							// Refresh the target message's read-along box live.
-							// lastAssistantDom is a streaming-scoped handle that is
-							// null by the time this /voice-last turn delivers its
-							// custom message (turn_start clears it first), so fall
-							// back to querying the last assistant row's .voice-text —
-							// which is exactly the message we just merged onto.
-							const voiceBox = lastAssistantDom?.voiceTextBox ?? lastAssistantVoiceBox();
-							if (voiceBox) updateVoiceTextBox(voiceBox, prev);
-							updated = true;
-							break;
-						}
+						if (prev.kind !== "assistant") continue;
+						// Skip newer replies when a hint points at an older one; the
+						// first match (or the first assistant without a hint) wins.
+						if (hint && !matchesVoiceHint(prev.text, hint)) continue;
+						if (details.long !== undefined) prev.voiceLong = details.long;
+						if (details.medium !== undefined) prev.voiceMedium = details.medium;
+						if (details.short !== undefined) prev.voiceShort = details.short;
+						target = prev;
+						updated = true;
+						break;
 					}
+					if (target && updated) {
+						// Refresh THAT message's read-along box. The registered box
+						// wins: `lastAssistantDom` is only cleared by turn_start, and a
+						// voice-reply arrives without one, so it can still point at a
+						// NEWER row than the variant belongs to — preferring it would
+						// put the text under the wrong reply (which is how this bug
+						// looked). The hint lookup then covers a box rendered from a
+						// different message object, and the last row is the last resort.
+						const box =
+							voiceBoxForMessage(target) ??
+							(hint ? voiceBoxForHint(hint) : null) ??
+							lastAssistantVoiceBox();
+						if (box) updateVoiceTextBox(box, target);
+					}
+					// Clear the press's hint once consumed, alongside the variant it went
+					// with.
+					state.pendingVoiceHint = null;
 					// Auto-play. If a button initiated this (the variant wasn't
 					// generated yet at press time), honor the variant it picked
 					// and drive THAT button's label (spin → ⏹) via toggleSpeak
