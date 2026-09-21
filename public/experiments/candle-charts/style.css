@@ -260,7 +260,9 @@ body {
 .candle-countdown .cd-left { color: var(--text); font-weight: 600; }
 .candle-countdown.closing .cd-left { color: var(--accent); }
 @media (max-width: 520px) {
-  .candle-countdown { font-size: 11px; padding: 2px 6px; }
+  /* Narrow screens put the reading in the price-scale column, which is about
+     56px wide, so the digits are sized to keep a day reading inside it. */
+  .candle-countdown { font-size: 10px; padding: 2px 4px; }
   .candle-countdown .cd-what { display: none; }
 }
 #rsi-chart.rsi-pane { height: 110px; border-top: 1px solid var(--border); position: relative; }
