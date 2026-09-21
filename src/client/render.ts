@@ -1962,11 +1962,16 @@ export function renderShell(): void {
 			"renderShell called before registerShellHandlers — main.ts must wire the UI handlers first",
 		);
 	}
-	// Reset transient audio state BEFORE wiping the DOM. The shared
-	// <audio> element is about to be removed (its `pause` event won't
-	// fire), so without this, `state.audioPlaying` stays `true` and the
-	// status bar keeps showing "♪ playing" after the audio element is
-	// gone (until the next renderShell or page load).
+	// Reset transient audio state BEFORE wiping the DOM. TTS playback lives on
+	// the client's shared AudioContext (voice.ts) and is NOT torn down by
+	// removing DOM nodes, so a re-render (session switch, reconnect) has to stop
+	// it explicitly — otherwise audio would keep playing against a page whose
+	// message is gone, while the status bar still claimed "♪ playing". Guarded
+	// on there being something to stop: at boot the shell doesn't exist yet, and
+	// stopping would repaint a status bar that has no elements.
+	if (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0) {
+		shellHandlers.stopAllVoice();
+	}
 	state.audioPlaying = false;
 	state.audioPaused = false;
 	state.ttsInFlight = 0;
@@ -2432,27 +2437,6 @@ export function renderShell(): void {
 		}
 	});
 	main.append(statusBar);
-	// Hidden audio element for TTS playback. One shared element so a new
-	// speak request stops the current one.
-	const audio = el("audio", { id: "tts-audio", hidden: true, preload: "auto" });
-	audio.addEventListener("play", () => {
-		state.audioPlaying = true;
-		state.audioPaused = false; // playing ⇒ not paused
-		refreshStatus();
-	});
-	audio.addEventListener("ended", () => {
-		state.audioPlaying = false;
-		refreshStatus();
-	});
-	audio.addEventListener("pause", () => {
-		state.audioPlaying = false;
-		refreshStatus();
-	});
-	audio.addEventListener("error", () => {
-		state.audioPlaying = false;
-		refreshStatus();
-	});
-	main.append(audio);
 
 	// Toast — fixed overlay for transient extension notifications
 	// (e.g. voice-model fallback warnings). Click dismisses.
