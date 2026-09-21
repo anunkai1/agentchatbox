@@ -10,8 +10,8 @@
  * sole configured engine in production for a long time; Piper was dead code.)
  *
  * Two routes, same contract to the browser:
- *   POST /api/tts        { text, voice? } → audio/wav (whole blob)
- *   POST /api/tts/stream { text, voice? } → binary frame stream (chunked)
+ *   POST /api/tts        { text, voice?, speed? } → audio/wav (whole blob)
+ *   POST /api/tts/stream { text, voice?, speed? } → binary frame stream (chunked)
  *   GET  /api/tts/voices { default, available: string[] }
  *
  * The browser never knows the engine — it just plays the WAV / frames.
@@ -33,20 +33,48 @@ const MAX_TEXT_CHARS = 30_000;
 type Engine = "kokoro";
 
 /**
- * Validate the shared { text, voice? } body for POST / and POST /stream.
- * Extracted so both routes apply the identical checks (non-empty text,
- * length cap) in one place.
+ * Speed bounds for the optional `speed` field. Mirrors what pi-voice-server
+ * itself accepts (lib/http-utils.mjs), so an out-of-range value is rejected here
+ * with a clear message instead of surfacing as an opaque upstream 400.
  */
-type TtsInput = { text: string; voice: string | undefined };
+const MIN_SPEED = 0.5;
+const MAX_SPEED = 2;
+
+/**
+ * Validate the shared { text, voice?, speed? } body for POST / and POST /stream.
+ * Extracted so both routes apply the identical checks (non-empty text, length
+ * cap, speed range) in one place.
+ *
+ * `speed` is a *synthesis* parameter, not a playback rate: Kokoro scales phoneme
+ * durations, so the voice keeps its natural pitch. The browser asks for it when
+ * /api/health advertises ttsSpeedParam, and then leaves Web Audio's playbackRate
+ * at 1 — resampling the rate shifts pitch up instead.
+ */
+type TtsInput = { text: string; voice: string | undefined; speed: number };
 export function parseTtsBody(req: Request): TtsInput | { error: string; status: number } {
-	const body = req.body as { text?: unknown; voice?: unknown } | undefined;
+	const body = req.body as { text?: unknown; voice?: unknown; speed?: unknown } | undefined;
 	const text = typeof body?.text === "string" ? body.text : "";
 	if (!text.trim()) return { error: "no text (field name: 'text')", status: 400 };
 	if (text.length > MAX_TEXT_CHARS) {
 		return { error: `text too long (max ${MAX_TEXT_CHARS} chars)`, status: 413 };
 	}
 	const voice = typeof body?.voice === "string" && body.voice.length > 0 ? body.voice : undefined;
-	return { text, voice };
+	// Absent (or null) means "no preference" → normal speed. Anything else must be
+	// a real number in range; strings are rejected rather than coerced.
+	let speed = 1;
+	const rawSpeed = body?.speed;
+	if (rawSpeed !== undefined && rawSpeed !== null) {
+		if (
+			typeof rawSpeed !== "number" ||
+			!Number.isFinite(rawSpeed) ||
+			rawSpeed < MIN_SPEED ||
+			rawSpeed > MAX_SPEED
+		) {
+			return { error: `speed must be a number from ${MIN_SPEED} to ${MAX_SPEED}`, status: 400 };
+		}
+		speed = rawSpeed;
+	}
+	return { text, voice, speed };
 }
 
 /**
@@ -88,8 +116,8 @@ export function createTtsRouter(): Router {
 				res.status(parsed.status).json({ error: parsed.error });
 				return;
 			}
-			const { text, voice } = parsed;
-			await synthKokoro(text, voice, res);
+			const { text, voice, speed } = parsed;
+			await synthKokoro(text, voice, speed, res);
 		}),
 	);
 
@@ -115,7 +143,7 @@ export function createTtsRouter(): Router {
 				res.status(parsed.status).json({ error: parsed.error });
 				return;
 			}
-			const { text, voice } = parsed;
+			const { text, voice, speed } = parsed;
 
 			// Abort upstream the moment the browser goes away (stop button,
 			// navigation) so pi-voice-server stops spending CPU on chunks no one
@@ -129,7 +157,7 @@ export function createTtsRouter(): Router {
 				upstream = await fetch(`${KOKORO_BASE}/tts/stream`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed: 1 }),
+					body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed }),
 					signal: clientGone.signal,
 				});
 			} catch (e) {
@@ -202,12 +230,17 @@ export function createTtsRouter(): Router {
 
 // ── Kokoro: HTTP proxy to pi-voice-server ──────────────────────────
 
-async function synthKokoro(text: string, voice: string | undefined, res: Response): Promise<void> {
+async function synthKokoro(
+	text: string,
+	voice: string | undefined,
+	speed: number,
+	res: Response,
+): Promise<void> {
 	try {
 		const upstream = await fetch(`${KOKORO_BASE}/tts`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed: 1 }),
+			body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed }),
 		});
 		if (!upstream.ok) {
 			const errText = (await upstream.text()).slice(0, 300);
