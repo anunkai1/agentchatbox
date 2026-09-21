@@ -21,8 +21,8 @@ import {
 	appendNode,
 	openProjectEditor,
 	refreshStatus,
-	showToast,
 	renderShell,
+	showToast,
 	syncDisplayPreferences,
 	toggleCapabilitiesPopover,
 } from "./render.js";
@@ -934,8 +934,14 @@ type PinnedModel = { id: string; provider: string };
 function getPinnedModels(): PinnedModel[] {
 	try {
 		const raw = JSON.parse(localStorage.getItem(PINNED_MODELS_KEY) ?? "[]");
-		return Array.isArray(raw) ? raw.filter((m) => m && typeof m.id === "string" && typeof m.provider === "string").slice(0, MAX_PINNED_MODELS) : [];
-	} catch { return []; }
+		return Array.isArray(raw)
+			? raw
+					.filter((m) => m && typeof m.id === "string" && typeof m.provider === "string")
+					.slice(0, MAX_PINNED_MODELS)
+			: [];
+	} catch {
+		return [];
+	}
 }
 function isPinnedModel(m: ModelOption): boolean {
 	return getPinnedModels().some((p) => p.id === m.id && p.provider === m.provider);
@@ -945,7 +951,10 @@ function togglePinnedModel(box: HTMLElement, m: ModelOption): void {
 	const index = pins.findIndex((p) => p.id === m.id && p.provider === m.provider);
 	if (index >= 0) pins.splice(index, 1);
 	else if (pins.length < MAX_PINNED_MODELS) pins.push({ id: m.id, provider: m.provider });
-	else { showToast(`You can pin up to ${MAX_PINNED_MODELS} models`); return; }
+	else {
+		showToast(`You can pin up to ${MAX_PINNED_MODELS} models`);
+		return;
+	}
 	localStorage.setItem(PINNED_MODELS_KEY, JSON.stringify(pins));
 	box.closest(".modal-overlay")?.remove();
 	openModelPicker();
