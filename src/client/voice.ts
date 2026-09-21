@@ -1,7 +1,9 @@
 /**
  * Voice (TTS) and file/voice recording. The browser still owns these:
  *
- *   - speakText(): POST to /api/tts, play the WAV in the shared <audio>
+ *   - speakText(): POST to /api/tts/stream, decode each arriving WAV chunk
+ *     and schedule it on a Web Audio timeline, so playback starts as soon as
+ *     the FIRST chunk is synthesized (not after the whole reply)
  *   - toggleSpeak(): per-message Long/Short button: play/stop the chosen
  *     message's audio
  *   - handleFileAttach(): POST to /api/upload, remember structured image
@@ -15,7 +17,7 @@ import {
 	MAX_PROMPT_IMAGE_TOTAL_BYTES,
 	MAX_PROMPT_IMAGES,
 } from "../shared/limits.js";
-import { synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
+import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
 import {
@@ -74,11 +76,49 @@ let speakGeneration = 0;
 let activeController: AbortController | null = null;
 
 /**
- * The currently-active object URL feeding the <audio> element, tracked
- * so we can revoke it safely on swap or end without racing a newer URL.
- * null when nothing is loaded.
+ * Shared Web Audio context for all TTS playback. Created lazily on the first
+ * speak — inside the click that started it, so browsers that require a user
+ * gesture for audio (Safari/iOS) accept the resume — and then reused for the
+ * life of the page. Chrome caps a page at a handful of contexts and one is all
+ * we need, because utterances are serialized. Never closed.
  */
-let activeObjectUrl: string | null = null;
+let audioCtx: AudioContext | null = null;
+
+/**
+ * Scheduling lead (seconds) for each chunk: chunks are placed slightly in the
+ * future so consecutive ones butt up seamlessly instead of racing the audio
+ * clock. Small enough to be inaudible.
+ */
+const TTS_SCHEDULE_LEAD = 0.08;
+
+/**
+ * The gapless queue: chunks of the current utterance that are scheduled but
+ * haven't finished playing, plus the context time the NEXT chunk should start
+ * at. Playback begins as soon as the first chunk is synthesized and each later
+ * chunk is appended to the running timeline, rather than swapped into a media
+ * element — which is what used to leave an audible gap between chunks.
+ */
+let liveNodes: AudioBufferSourceNode[] = [];
+let nextStartAt = 0;
+
+/**
+ * True once the current utterance's stream has closed, i.e. no more chunks
+ * will ever be scheduled. Only then can the last node's `ended` event finalize
+ * the utterance — before that, an empty queue is a temporary underflow
+ * (synthesis behind playback) and the next arriving chunk resumes it.
+ */
+let streamEnded = false;
+
+/**
+ * Tell Safari/iOS this page is playing *media* rather than ambient audio. Web
+ * Audio is silenced by the hardware mute switch by default; the media elements
+ * we used to play through weren't. Unsupported elsewhere — harmless no-op in
+ * Chrome and Firefox.
+ */
+function declarePlaybackAudioSession(): void {
+	const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+	if (session) session.type = "playback";
+}
 
 /**
  * True when the USER has paused playback via the status-bar pause button
@@ -161,7 +201,6 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 		? `${label} · synthesizing via ${engine} (${voice})…`
 		: `${label} · synthesizing via ${engine}…`;
 	showTtsBanner(synthHead, ttsPreview(spoken));
-	const audio = $<HTMLAudioElement>("#tts-audio");
 	// Mark the initiating button as "synthesizing…" so the user sees a
 	// spinner during the (potentially long) TTS round-trip, then flip to
 	// the playing (⏹) state once audio actually starts. Auto-speak calls
@@ -169,34 +208,32 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 	setSpeakBtnState(currentSpeakSrc, "loading");
 	state.ttsInFlight++;
 	refreshStatus();
-	// Capture this request's generation token and AbortController. If
-	// stopAllVoice() fires while we await synthesis (a slow Kokoro round
-	// trip can take a second or two), the generation check below drops
-	// the blob silently and the abort frees the connection early.
+	// A new utterance supersedes everything about the previous one: bumping the
+	// generation token makes the old stream loop's late-arriving chunks (and any
+	// audio it had already scheduled) no-ops, and haltPlayback() silences what is
+	// still on the timeline. Without both, two overlapping speaks would talk over
+	// each other and the loser would reset the winner's button.
+	speakGeneration++;
 	const gen = speakGeneration;
+	activeController?.abort();
+	haltPlayback();
 	const controller = new AbortController();
 	activeController = controller;
 
-	// Use the whole-utterance endpoint rather than streaming individual WAV
-	// chunks. Kokoro still chunks internally to stay within its context window,
-	// but the server concatenates those chunks before returning one WAV. This
-	// avoids browser source-swaps and queue-underflow gaps during long replies,
-	// at the cost of waiting for the full synthesis before playback starts.
 	// Clear any leftover user-pause intent from a previous utterance so this
 	// one starts playing immediately.
 	userPaused = false;
 
 	try {
-		await playWholeBlob(audio, spoken, gen, controller);
+		await playStreamed(spoken, gen, controller);
 	} catch (err) {
-		// stopAllVoice() aborted synthesis on purpose — reset quietly.
-		if (err instanceof DOMException && err.name === "AbortError") {
-			setSpeakBtnState(currentSpeakSrc, "idle");
-			currentSpeakSrc = null;
-			hideToast();
-			return;
+		// Nothing to reset if a newer utterance superseded this one, or if
+		// stopAllVoice() already did the resetting when it bumped the generation
+		// (which is what an AbortError here means in practice).
+		if (gen !== speakGeneration) return;
+		if (!(err instanceof DOMException && err.name === "AbortError")) {
+			appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
-		appendError(`tts failed: ${err instanceof Error ? err.message : String(err)}`);
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
 		hideToast();
@@ -208,54 +245,209 @@ export async function speakText(text: string, label = "🔊 TTS"): Promise<void>
 }
 
 /**
- * Whole-utterance playback: synthesize the entire text in one /api/tts
- * request and play the resulting single WAV on the shared <audio>. Kokoro
- * still chunks internally, but the browser receives one continuous asset.
+ * Streaming playback: pull synthesized chunks from /api/tts/stream and put each
+ * one on the Web Audio timeline as it arrives, so sound starts after the FIRST
+ * chunk instead of after the whole message has been synthesized — a long reply
+ * costs one chunk of latency rather than all of them. Chunks are decoded in
+ * arrival order and scheduled back-to-back, which is what makes the joins
+ * inaudible — the previous implementation swapped each WAV into a media element
+ * instead and left a gap whenever the next chunk wasn't ready when the current
+ * one ended.
+ */
+async function playStreamed(
+	spoken: string,
+	gen: number,
+	controller: AbortController,
+): Promise<void> {
+	const ctx = await ensureAudioRunning();
+	let scheduled = false;
+	try {
+		for await (const wav of streamSynthesizeSpeech(
+			spoken,
+			state.ttsVoice ?? undefined,
+			controller.signal,
+		)) {
+			if (gen !== speakGeneration) return; // stopped or superseded mid-stream
+			await scheduleChunk(ctx, gen, wav);
+			scheduled = true;
+		}
+	} catch (err) {
+		if (err instanceof DOMException && err.name === "AbortError") throw err;
+		if (scheduled || liveNodes.length > 0) {
+			// Audio is already playing. Let what we have play out rather than
+			// cutting the user off mid-sentence, but say the reply is truncated.
+			const detail = err instanceof Error ? err.message : String(err);
+			appendError(`tts stream interrupted: ${detail}`);
+		} else {
+			// Nothing was scheduled, so the streaming route failed outright (an
+			// older pi-voice-server without /tts/stream, or a pre-stream 502).
+			// Fall back to one whole-utterance synthesis on the same timeline.
+			await playWholeBlob(ctx, spoken, gen, controller);
+		}
+	}
+	if (gen !== speakGeneration) return;
+	streamEnded = true;
+	// An empty queue here means the stream produced nothing at all; otherwise the
+	// last chunk's `ended` event finalizes the utterance.
+	if (liveNodes.length === 0) finishUtterance();
+}
+
+/**
+ * Get the shared AudioContext running. Called before the first chunk is
+ * scheduled; because speakText's prologue runs synchronously from the click
+ * handler, this resume happens inside the user gesture that asked for playback
+ * (which Safari/iOS require). The race guards against a resume() promise that
+ * never settles (iOS, no gesture): scheduling against a frozen clock is still
+ * correct, and playback begins whenever the context actually starts.
+ */
+async function ensureAudioRunning(): Promise<AudioContext> {
+	declarePlaybackAudioSession();
+	if (!audioCtx) audioCtx = new AudioContext();
+	const ctx = audioCtx;
+	// Read the state into a local first: comparing ctx.state directly here would
+	// narrow it for the check after the race, which needs the post-resume truth.
+	const initial: AudioContextState = ctx.state;
+	if (initial === "running") return ctx;
+	await Promise.race([
+		ctx.resume().catch(() => undefined),
+		new Promise((resolve) => setTimeout(resolve, 1000)),
+	]);
+	if (ctx.state !== "running") {
+		appendError("audio is blocked by the browser — tap the page and try again.");
+	}
+	return ctx;
+}
+
+/**
+ * Decode one synthesized WAV chunk and place it on the timeline immediately
+ * after the previous one. Decoding is awaited in stream order, so chunks are
+ * always scheduled in playback order even though decodeAudioData's promises can
+ * settle out of order.
+ */
+async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise<void> {
+	const decoded = await ctx.decodeAudioData(await wav.arrayBuffer());
+	if (gen !== speakGeneration) return; // superseded while decoding
+	const node = ctx.createBufferSource();
+	node.buffer = decoded;
+	node.playbackRate.value = state.ttsSpeed;
+	node.connect(ctx.destination);
+	// Start where the previous chunk ends. If synthesis fell behind playback the
+	// timeline has already passed, so start now rather than in the past (which the
+	// audio clock would silently skip).
+	const startAt = Math.max(ctx.currentTime + TTS_SCHEDULE_LEAD, nextStartAt);
+	node.start(startAt);
+	nextStartAt = startAt + decoded.duration / state.ttsSpeed;
+	liveNodes.push(node);
+	node.onended = () => onChunkEnded(gen, node);
+	if (liveNodes.length === 1) {
+		// First chunk on the timeline: flip the button from its spinner to ⏹ and
+		// drop the synthesis banner in favour of the status bar's "♪ playing".
+		state.audioPlaying = true;
+		state.audioPaused = false;
+		setSpeakBtnState(currentSpeakSrc, "playing");
+		hideToast();
+		refreshStatus();
+	}
+}
+
+/**
+ * A scheduled chunk played to its end. When the last one ends after the stream
+ * closed, the utterance is over. An empty queue with the stream still open is a
+ * temporary underflow (synthesis behind playback) — the next chunk resumes the
+ * queue, and until then the status bar's "synthesizing…" is the truth.
+ */
+function onChunkEnded(gen: number, node: AudioBufferSourceNode): void {
+	if (gen !== speakGeneration) return;
+	liveNodes = liveNodes.filter((n) => n !== node);
+	node.disconnect();
+	if (liveNodes.length > 0) return;
+	if (!streamEnded) {
+		state.audioPlaying = false;
+		refreshStatus();
+		return;
+	}
+	finishUtterance();
+}
+
+/**
+ * Playback of the current utterance is over: reset the timeline, the owning
+ * button (spinner/⏹ → idle) and the status-bar voice indicator.
+ */
+function finishUtterance(): void {
+	nextStartAt = 0;
+	streamEnded = false;
+	userPaused = false;
+	state.audioPlaying = false;
+	state.audioPaused = false;
+	if (currentSpeakSrc !== null) {
+		setSpeakBtnState(currentSpeakSrc, "idle");
+		currentSpeakSrc = null;
+	}
+	hideToast();
+	refreshStatus();
+}
+
+/**
+ * Silence the current utterance: stop and detach every scheduled chunk and clear
+ * the timeline. Audio only — button and banner state are the caller's job
+ * (stopAllVoice resets the owning button; a new utterance sets its own). Also
+ * lifts a pause, so the next speak isn't stuck in a suspended context. Safe to
+ * call when nothing is scheduled.
+ */
+function haltPlayback(): void {
+	for (const node of liveNodes) {
+		node.onended = null; // stopping fires `ended`; it must not finalize
+		try {
+			node.stop();
+		} catch {
+			/* already ended, or never got to start */
+		}
+		node.disconnect();
+	}
+	liveNodes = [];
+	nextStartAt = 0;
+	streamEnded = false;
+	state.audioPlaying = false;
+	state.audioPaused = false;
+	if (audioCtx?.state === "suspended") {
+		void audioCtx.resume().catch(() => {
+			/* the next speak resumes it again if this fails */
+		});
+	}
+}
+
+/**
+ * Whole-utterance fallback: synthesize the entire text in one /api/tts request
+ * and put the single WAV on the same timeline. Used only when the streaming
+ * route is unavailable, where it costs the full synthesis before the first sound
+ * — better than failing outright, and the server still exposes both routes.
  */
 async function playWholeBlob(
-	audio: HTMLAudioElement,
+	ctx: AudioContext,
 	spoken: string,
 	gen: number,
 	controller: AbortController,
 ): Promise<void> {
 	const blob = await synthesizeSpeech(spoken, state.ttsVoice ?? undefined, controller.signal);
 	if (gen !== speakGeneration) return;
-	const previousUrl = activeObjectUrl;
-	const url = URL.createObjectURL(blob);
-	activeObjectUrl = url;
-	audio.pause();
-	audio.currentTime = 0;
-	audio.src = url;
-	audio.playbackRate = state.ttsSpeed;
-	if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
-	await audio.play();
-	if (gen !== speakGeneration) return;
-	setSpeakBtnState(currentSpeakSrc, "playing");
-	audio.onended = () => {
-		if (gen !== speakGeneration) return;
-		if (activeObjectUrl === url) {
-			URL.revokeObjectURL(url);
-			activeObjectUrl = null;
-		}
-		audio.onended = null;
-		setSpeakBtnState(currentSpeakSrc, "idle");
-		currentSpeakSrc = null;
-	};
+	// No more chunks will ever arrive, so this node's `ended` finalizes.
+	streamEnded = true;
+	await scheduleChunk(ctx, gen, blob);
 }
 
 /**
- * Stop all voice playback and cancel any in-flight TTS synthesis — the
- * global "stop everything" the status-bar button calls. No matter which
- * message's speak button kicked off playback, this halts it: bumps the
- * generation token (so a blob arriving from a still-pending /api/tts
- * request is discarded), aborts that request, pauses the shared
- * <audio>, revokes its object URL, and resets the owning message's
- * speak button back to idle. Safe to call when nothing is playing.
+ * Stop all voice playback and cancel any in-flight TTS synthesis — the global
+ * "stop everything" the status-bar button calls. No matter which message's speak
+ * button kicked off playback, this halts it: bumps the generation token (so
+ * chunks arriving from a still-pending /api/tts/stream request are discarded and
+ * scheduled audio ignores its own `ended` events), aborts that request, stops
+ * every scheduled chunk, and resets the owning message's speak button back to
+ * idle. Safe to call when nothing is playing.
  */
 export function stopAllVoice(): void {
-	// First, invalidate any in-flight synthesis so its late-arriving blob
-	// is dropped by the generation check in speakText(), and abort the
-	// fetch so the connection doesn't linger.
+	// Bump first: the in-flight stream loop and every scheduled node check this
+	// token, so from here they are all no-ops. Then abort, so neither the
+	// connection nor the synthesis CPU work lingers on audio nobody will hear.
 	speakGeneration++;
 	activeController?.abort();
 	activeController = null;
@@ -263,68 +455,54 @@ export function stopAllVoice(): void {
 	// Clear the TTS banner if one is up (a stop is a full reset).
 	hideToast();
 
-	// Clear any user-pause intent — a stop is a full reset, so a subsequent
-	// speak shouldn't start in a paused state, and the status-bar control
-	// must not keep showing "paused" once audio is gone.
+	// A stop is a full reset, so a subsequent speak must not start paused and the
+	// status-bar control must not keep showing "paused" once the audio is gone.
 	userPaused = false;
-	state.audioPaused = false;
 
-	const audio = $<HTMLAudioElement>("#tts-audio");
-	if (!audio.paused) {
-		audio.pause();
-		audio.currentTime = 0;
-	}
-	if (activeObjectUrl) {
-		URL.revokeObjectURL(activeObjectUrl);
-		activeObjectUrl = null;
-	}
+	haltPlayback();
+
 	if (currentSpeakSrc !== null) {
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
 	}
+	refreshStatus();
 }
 
 /**
- * Pause the currently-playing TTS playback, freezing position within the
- * current chunk. Chunks still arriving from an open /api/tts/stream queue
- * up but the chunk pump won't advance them until resumeVoice(). Safe to
- * call when nothing is playing or when already paused (no-op).
+ * Pause TTS playback. Suspending the AudioContext freezes its clock, so every
+ * scheduled chunk keeps its position and playback continues from exactly where
+ * it stopped when resumeVoice() lifts the suspension — including mid-chunk.
+ * Chunks still being synthesized keep arriving (decodeAudioData works while
+ * suspended) and are simply scheduled further along the frozen timeline.
  *
- * Sets an explicit `userPaused` flag rather than just calling audio.pause()
- * because the chunk pump needs to know NOT to advance while paused, and the
- * <audio> 'paused' property alone can't distinguish a user pause from the
- * natural between-chunks gap. The status-bar control flips to a ▶ resume
- * button via state.audioPaused.
+ * Sets an explicit `userPaused` flag rather than reading the context state,
+ * because a new speak must be able to clear the pause before the context has
+ * caught up. Safe to call when nothing is playing or when already paused.
  */
 export function pauseVoice(): void {
-	const audio = $<HTMLAudioElement>("#tts-audio");
-	// Nothing to pause: already paused, no src loaded, or playback ended.
-	if (userPaused || audio.paused || !audio.src) return;
+	if (!audioCtx || userPaused || audioCtx.state !== "running") return;
+	if (liveNodes.length === 0) return; // nothing scheduled yet — nothing to pause
 	userPaused = true;
-	audio.pause();
-	// Flip state optimistically so the status bar shows the resume button
-	// immediately; the 'pause' event listener also clears audioPlaying.
+	void audioCtx.suspend().catch((err) => {
+		appendError(`tts pause failed: ${err instanceof Error ? err.message : String(err)}`);
+	});
 	state.audioPaused = true;
 	state.audioPlaying = false;
 	refreshStatus();
 }
 
 /**
- * Resume playback from where pauseVoice() froze it — continues the current
- * chunk, and once it ends the chunk pump drains any chunks that queued up
- * while paused. No-op if not currently paused.
+ * Resume playback from where pauseVoice() froze it — mid-chunk, with any chunks
+ * that were synthesized meanwhile already queued behind it. No-op if not
+ * currently paused.
  */
 export function resumeVoice(): void {
-	const audio = $<HTMLAudioElement>("#tts-audio");
-	// Nothing to resume: not paused, no src, or the loaded chunk already
-	// played to its end (a resume here would do nothing useful).
-	if (!userPaused || !audio.src || audio.ended) return;
+	if (!audioCtx || !userPaused || audioCtx.state !== "suspended") return;
 	userPaused = false;
-	void audio.play().catch((err) => {
-		if (err instanceof DOMException && err.name === "AbortError") return;
+	void audioCtx.resume().catch((err) => {
 		appendError(`tts resume failed: ${err instanceof Error ? err.message : String(err)}`);
 	});
-	// Flip state optimistically; the 'play' event confirms audioPlaying=true.
+	// Flip state optimistically; the resumed context confirms it by playing.
 	state.audioPaused = false;
 	state.audioPlaying = true;
 	refreshStatus();
@@ -339,22 +517,22 @@ export function resumeVoice(): void {
  * press always starts fresh.
  */
 export function toggleSpeak(text: string, src: unknown): void {
-	const audio = $<HTMLAudioElement>("#tts-audio");
-	// If this exact source is what's currently playing, the second
-	// press is a "stop" — pause and reset, mirroring the auto-speak
-	// off-path. Otherwise start (or switch to) this message.
-	if (!audio.paused && currentSpeakSrc === src) {
-		audio.pause();
-		audio.currentTime = 0;
-		currentSpeakSrc = null;
-		setSpeakBtnState(src, "idle");
+	const ownsCurrent =
+		currentSpeakSrc === src && (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0);
+	// Second press on the button that owns the current utterance — playing,
+	// paused, or still synthesizing — is a stop. Anything else starts (or
+	// switches to) this message.
+	if (ownsCurrent) {
+		stopAllVoice();
 		return;
 	}
 	// Switching source: clear the previous button's stop indicator.
-	if (currentSpeakSrc !== null) setSpeakBtnState(currentSpeakSrc, "idle");
+	if (currentSpeakSrc !== null && currentSpeakSrc !== src) {
+		setSpeakBtnState(currentSpeakSrc, "idle");
+	}
 	currentSpeakSrc = src;
-	// Don't flip to playing yet — speakText() will show a spinner while
-	// synthesizing, then flip to ⏹ once playback actually starts.
+	// Don't flip to playing yet — speakText() shows a spinner while the first
+	// chunk is synthesized, then flips to ⏹ once audio actually starts.
 	void speakText(text, speakLabelFromSrc(src));
 }
 

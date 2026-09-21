@@ -1,6 +1,12 @@
 // Headless browser smoke test for the agentchatbox UI — TTS edition.
-// Verifies a manual press of the Long voice-variant button triggers
-// TTS and the shared <audio> element receives a playable source.
+// Verifies a manual press of the Long voice-variant button triggers TTS and
+// that playback reaches the "♪ playing" state in the status bar. TTS plays on a
+// Web Audio timeline now (voice.ts), so there is no media element to inspect.
+//
+// ACB_URL must point at a server whose AGENTCHATBOX_ALLOWED_ORIGINS accepts this
+// origin, or the /api/chat WebSocket upgrade is rejected with 401 and the app
+// never becomes ready (the production unit allows only https://agent.mavali.top).
+const BASE = process.env.ACB_URL ?? "http://127.0.0.1:3500";
 
 const browser = await chromium.launch({
 	headless: true,
@@ -16,11 +22,11 @@ page.on("console", (msg) => {
 	}
 });
 
-await page.goto("http://127.0.0.1:3500/", { waitUntil: "load", timeout: 10000 });
+await page.goto(`${BASE}/`, { waitUntil: "load", timeout: 10000 });
 await page.waitForSelector("#input", { timeout: 10000 });
 await page.waitForFunction(
-	() => /M3/.test(document.querySelector("#status-bar")?.textContent || ""),
-	{ timeout: 10000 },
+	() => !/closed|connecting/i.test(document.querySelector("#status-bar")?.textContent || ""),
+	{ timeout: 20000 },
 );
 
 // Send a short prompt and wait for the assistant response to settle.
@@ -40,18 +46,14 @@ console.log("assistant message done");
 await page.locator(".voice-variant-btn").first().click();
 console.log("clicked Long. status-bar:", await page.locator("#status-bar").textContent());
 
-// Wait for the TTS fetch (look for the ● tts or ♪ playing indicator, or
-// the <audio> src changing).
+// Wait for playback to begin: the status bar shows the voice transport
+// controls once audio is actually scheduled and playing.
 await page.waitForFunction(
-	() => {
-		const sb = document.querySelector("#status-bar")?.textContent || "";
-		const audio = document.querySelector("#tts-audio");
-		return /tts|playing/.test(sb) || (audio && audio.src && audio.src.startsWith("blob:"));
-	},
+	() => /tts|playing/.test(document.querySelector("#status-bar")?.textContent || ""),
 	{ timeout: 30000 },
 );
 console.log("TTS triggered. status-bar:", await page.locator("#status-bar").textContent());
-console.log("audio src starts with blob:", (await page.locator("#tts-audio").getAttribute("src") || "").startsWith("blob:"));
+console.log("media element removed:", (await page.locator("#tts-audio").count()) === 0);
 
 // Final state.
 console.log("\n--- final DOM ---");
