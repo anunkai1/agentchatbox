@@ -206,6 +206,15 @@ export async function synthesizeSpeech(
 }
 
 /**
+ * Largest single stream frame we will accept. One frame is one synthesized WAV
+ * chunk: a steady-cap chunk (~29s of 24 kHz mono) is well under 2 MB, so a
+ * header past this is a broken or hostile upstream rather than a long chunk. The
+ * length field is a uint32, so without this check `ensure()` below would happily
+ * try to buffer up to 4 GB on one bogus header.
+ */
+const MAX_FRAME_BYTES = 10 * 1024 * 1024;
+
+/**
  * Streaming TTS via /api/tts/stream. Yields one WAV Blob per synthesized
  * text chunk, in playback order, the instant each is ready — so the caller
  * can start playing the first chunk while later chunks are still being
@@ -262,6 +271,11 @@ export async function* streamSynthesizeSpeech(
 			if (!(await ensure(5))) return; // need the 5-byte frame header
 			const type = buf[0]!;
 			const len = (buf[1]! | (buf[2]! << 8) | (buf[3]! << 16) | (buf[4]! << 24)) >>> 0;
+			if (len > MAX_FRAME_BYTES) {
+				throw new Error(
+					`tts stream frame too large: ${len} bytes (max ${MAX_FRAME_BYTES}) — upstream protocol error`,
+				);
+			}
 			if (!(await ensure(5 + len))) return; // need the full payload
 			const payload = buf.subarray(5, 5 + len);
 			buf = buf.subarray(5 + len);
