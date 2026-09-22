@@ -2,11 +2,49 @@
 (function () {
   // ============================== config ==============================
   const INTERVALS = [
-    ["1m", 60], ["5m", 300], ["15m", 900], ["30m", 1800], ["1h", 3600],
+    ["1m", 60], ["5m", 300], ["15m", 900], ["30m", 1800], ["1h", 3600], ["2h", 7200],
     ["4h", 14400], ["12h", 43200], ["1d", 86400], ["1w", 604800],
-    ["1M", 2629800],
+    ["1M", 2629800], ["3M", 7889400], ["6M", 15778800], ["12M", 31557600],
   ];
   const INTERVAL_SEC = Object.fromEntries(INTERVALS);
+  // The month intervals, as the number of calendar months one bar covers. Only
+  // 1M is a feed interval; 3M/6M/12M are folded from the weekly series (see
+  // foldSource), so their bars open on a quarter, half-year or year boundary and
+  // their countdown ends on the next one.
+  const MONTH_SPAN = { "1M": 1, "3M": 3, "6M": 6, "12M": 12 };
+  const FOLD_SPAN = { "3M": 3, "6M": 6, "12M": 12 };
+  const FOLD_BASE = "1w";
+  const WEEKS_PER_MONTH = 30.44 / 7; // how many weeks a request per bar needs
+  // A fold reads at most 19 years of weeks — 76 quarters, 38 halves or 19 years
+  // — and Hyperliquid rejects a window old enough to ask for much more.
+  const FOLD_MAX_WEEKS = 1000;
+
+  function monthBucketStart(sec, span) {
+    const d = new Date(sec * 1000);
+    return Math.floor(Date.UTC(d.getUTCFullYear(), Math.floor(d.getUTCMonth() / span) * span, 1) / 1000);
+  }
+  // Fold ascending weekly bars onto month-span buckets: a bucket opens at its
+  // first week, carries the extreme high and low of every week it covers,
+  // closes on the last one's close and sums their volume.
+  function foldWeeks(rows, span) {
+    const out = [];
+    for (const row of rows) {
+      const time = monthBucketStart(row.time, span);
+      const last = out[out.length - 1];
+      if (last && last.time === time) {
+        last.high = Math.max(last.high, row.high);
+        last.low = Math.min(last.low, row.low);
+        last.close = row.close;
+        last.volume += row.volume;
+        continue;
+      }
+      out.push({
+        time, open: row.open, high: row.high, low: row.low,
+        close: row.close, volume: row.volume,
+      });
+    }
+    return out;
+  }
   const SPOT_SYMBOLS = ["BTC", "ETH", "SOL", "DOGE", "BNB", "ADA", "LINK"];
   // The Hyperliquid and xyz tabs list the live top 30 markets by 24h notional
   // volume, ranked from the feed that also labels the ticker list. These seeds
@@ -169,6 +207,56 @@
     },
   };
 
+  // Neither feed serves a 3M/6M/12M candle, so those three intervals read the
+  // weekly series instead and fold it. The folding lives here, inside the
+  // source, so history, the watchdog's REST poll and the live stream all keep
+  // asking for the interval the chart is on and get its own bars back. The raw
+  // weeks of the newest bucket are kept until that bucket closes, so a live
+  // weekly bar folds together with the rest of its bucket rather than standing
+  // in for the whole of it.
+  function foldSource(src) {
+    const weeksByKey = new Map(); // `${symbol}|${span}` -> weekly bars of the newest bucket
+    const keyOf = (symbol, span) => symbol + "|" + span;
+    return {
+      ...src,
+      fetchKlines: async (symbol, interval, limit, signal) => {
+        const span = FOLD_SPAN[interval];
+        if (!span) return src.fetchKlines(symbol, interval, limit, signal);
+        const bars = limit || REST_LIMIT;
+        const weeks = Math.min(Math.ceil(bars * span * WEEKS_PER_MONTH), FOLD_MAX_WEEKS);
+        const rows = await src.fetchKlines(symbol, FOLD_BASE, weeks, signal);
+        if (!rows.length) return [];
+        const newest = monthBucketStart(rows[rows.length - 1].time, span);
+        weeksByKey.set(keyOf(symbol, span), rows.filter((r) => monthBucketStart(r.time, span) === newest));
+        const folded = foldWeeks(rows, span);
+        // The oldest bucket in the window is cut short by the request rather
+        // than by the market, so it is dropped instead of charted as a bar that
+        // never traded those months.
+        return folded.length > 1 ? folded.slice(1) : folded;
+      },
+      openSocket: (symbol, interval, onKline) => {
+        const span = FOLD_SPAN[interval];
+        if (!span) return src.openSocket(symbol, interval, onKline);
+        return src.openSocket(symbol, FOLD_BASE, (week) => {
+          const key = keyOf(symbol, span);
+          const bucket = monthBucketStart(week.time, span);
+          const kept = (weeksByKey.get(key) || []).filter((w) => monthBucketStart(w.time, span) === bucket);
+          const last = kept[kept.length - 1];
+          // The newest week is the one still trading, so it is replaced when it
+          // ticks again and appended once it has moved on. An older week is a
+          // replay of a bar the bucket already folded in.
+          if (!last || week.time > last.time) kept.push(week);
+          else if (week.time === last.time) kept[kept.length - 1] = week;
+          weeksByKey.set(key, kept);
+          const bar = foldWeeks(kept, span).pop();
+          if (bar) onKline(bar);
+        });
+      },
+    };
+  }
+
+  for (const sourceKey of Object.keys(SOURCES)) SOURCES[sourceKey] = foldSource(SOURCES[sourceKey]);
+
   // Which volume feed ranks each tab's list, and which tabs share a feed. The
   // two xyz keys rank one builder DEX, so they share a single cached fetch.
   const RANKED_TABS = {
@@ -297,7 +385,7 @@
   }
   function formatTimeTick(time) {
     const d = dateForChartTime(time);
-    if (settings.interval === "1M") return timeFormatters.month.format(d);
+    if (MONTH_SPAN[settings.interval]) return timeFormatters.month.format(d);
     if (settings.interval === "1d" || settings.interval === "1w") return timeFormatters.date.format(d);
     return timeFormatters.intraday.format(d);
   }
@@ -652,7 +740,12 @@
     const l1 = logicalForTime(measure.a.time), l2 = logicalForTime(measure.b.time);
     const bars = Math.abs(Math.round(l2 - l1));
     const secs = Math.abs(measure.b.time - measure.a.time);
-    const dur = settings.interval === "1M" ? bars + " months" : humanDuration(secs);
+    const span = MONTH_SPAN[settings.interval] || 0;
+    const months = bars * span;
+    const dur = span === 0 ? humanDuration(secs)
+      : months >= 12 && months % 12 === 0
+        ? (months / 12) + (months === 12 ? " year" : " years")
+        : months + " months";
     const sign = dPrice > 0 ? "+" : dPrice < 0 ? "−" : "";
     const lines = [
       sign + fmtPrice(Math.abs(dPrice)) + " (" + (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%)",
@@ -2156,20 +2249,26 @@
     const last = candles[candles.length - 1];
     if (!last || !Number.isFinite(last.time)) return null;
     const openMs = last.time * 1000;
-    if (settings.interval === "1M") {
+    const span = MONTH_SPAN[settings.interval];
+    if (span) {
+      // Month bars close on a calendar boundary, whatever length their months
+      // were.
       const d = new Date(openMs);
-      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + span, 1);
     }
     return openMs + INTERVAL_SEC[settings.interval] * 1000;
   }
 
-  function formatCountdown(ms) {
+  function formatCountdown(ms, span) {
     const total = Math.max(0, Math.round(ms / 1000));
     const pad = (n) => String(n).padStart(2, "0");
     const days = Math.floor(total / 86400);
+    // Month buckets run for weeks at a time, so they read in whole days until
+    // the final day; that also keeps the badge narrow enough for the column it
+    // sits in on a phone.
+    if (span && days) return `${days}d`;
     const hours = Math.floor((total % 86400) / 3600);
     const mins = Math.floor((total % 3600) / 60);
-    if (days) return `${days}d ${pad(hours)}:${pad(mins)}:${pad(total % 60)}`;
     if (hours) return `${hours}:${pad(mins)}:${pad(total % 60)}`;
     return `${mins}:${pad(total % 60)}`;
   }
@@ -2212,7 +2311,7 @@
     elCountdown.hidden = false;
     placeCountdown();
     const left = close - Date.now();
-    const text = formatCountdown(left);
+    const text = formatCountdown(left, MONTH_SPAN[settings.interval]);
     if (text !== countdownText) { countdownText = text; elCdLeft.textContent = text; }
     const label = `${settings.interval} closes in`;
     if (label !== countdownLabel) { countdownLabel = label; elCdWhat.textContent = label; }
