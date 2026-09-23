@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import registerLocalAi from "../extensions/local-ai/index.js";
-import { localAiLabel, parseLocalAiState } from "../extensions/local-ai/lib.js";
+import {
+	LTX_MODEL_LABEL,
+	localAiLabel,
+	parseLocalAiState,
+	QWEN_MODEL_LABEL,
+} from "../extensions/local-ai/lib.js";
 
 describe("local AI status", () => {
 	it("recognises the Qwen backend", () => {
 		expect(parseLocalAiState("Qwen API  : ready\nFLUX API  : unavailable")).toBe("qwen");
-		expect(localAiLabel("qwen")).toBe("Qwen active");
+		expect(localAiLabel("qwen")).toBe(`${QWEN_MODEL_LABEL} active`);
 	});
 
 	it("recognises the image backend", () => {
@@ -25,7 +30,9 @@ describe("local AI status", () => {
 
 type LocalCommand = (args: string, ctx: LocalContext) => Promise<void>;
 type LocalContext = {
-	modelRegistry: { find: (provider: string, id: string) => { provider: string; id: string } | undefined };
+	modelRegistry: {
+		find: (provider: string, id: string) => { provider: string; id: string } | undefined;
+	};
 	ui: {
 		notify: (message: string, level: string) => void;
 		select: (title: string, options: string[]) => Promise<string | undefined>;
@@ -34,7 +41,10 @@ type LocalContext = {
 };
 
 function localAiHarness(
-	setModelResult: { provider: string; id: string } | false = { provider: "local", id: "qwen3.8-27b-ud-q3" },
+	setModelResult: { provider: string; id: string } | false = {
+		provider: "local",
+		id: "qwen3.8-27b-ud-q3",
+	},
 ) {
 	let command: LocalCommand | undefined;
 	const notify = vi.fn();
@@ -73,7 +83,7 @@ describe("local AI extension", () => {
 			expect.anything(),
 		);
 		expect(h.notify).toHaveBeenCalledWith("Qwen local is ready and selected.", "info");
-		expect(h.setStatus).toHaveBeenLastCalledWith("local-ai", "Qwen active");
+		expect(h.setStatus).toHaveBeenLastCalledWith("local-ai", `${QWEN_MODEL_LABEL} active`);
 	});
 
 	it("reports a model-selection failure instead of claiming Qwen is active", async () => {
@@ -90,7 +100,7 @@ describe("local AI extension", () => {
 			expect.arrayContaining(["server4", "local-ai", "video"]),
 			expect.anything(),
 		);
-		expect(h.notify).toHaveBeenCalledWith("LTX-2.5 video is ready on :8188.", "info");
-		expect(h.setStatus).toHaveBeenLastCalledWith("local-ai", "Video active");
+		expect(h.notify).toHaveBeenCalledWith(`${LTX_MODEL_LABEL} is ready on :8188.`, "info");
+		expect(h.setStatus).toHaveBeenLastCalledWith("local-ai", `${LTX_MODEL_LABEL} active`);
 	});
 });
