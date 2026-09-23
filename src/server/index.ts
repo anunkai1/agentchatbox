@@ -383,10 +383,9 @@ app.get(
 			providers: [...readPiAuth().keys()],
 			whisper: whisper.available,
 			whisperReason: whisper.available ? undefined : whisper.reason,
-			// Whisper model id in use. faster-whisper's script default is "medium"
-			// (see scripts/transcribe.py); WHISPER_MODEL env overrides it. Surfaced
-			// for the Models & services panel — display only, not a secret.
-			whisperModel: process.env.WHISPER_MODEL?.trim() || "medium",
+			// STT engine/model in use, reported by the resident pi-stt-server
+			// daemons (see src/server/transcribe.ts). Display only, not a secret.
+			whisperModel: whisper.model || (whisper.available ? "pi-stt-server" : undefined),
 			tts: tts.available,
 			ttsEngine: tts.engine,
 			ttsReason: tts.available ? undefined : tts.reason,

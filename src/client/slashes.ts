@@ -1390,10 +1390,10 @@ export function openModelsPanel(): void {
 
 	box.append(
 		svcRow(
-			"Speech-to-text (Whisper)",
-			"Transcribes your mic / voice notes. Local, CPU.",
-			modelLine(pill("env", "set"), `faster-whisper · ${state.whisperModel ?? "medium"}`),
-			hint("change → ", kbd("WHISPER_MODEL"), " (tiny/base/small/medium/large)"),
+			"Speech-to-text",
+			"Transcribes your mic / voice notes. Local, resident daemon (pi-stt-server).",
+			modelLine(pill("env", "set"), `pi-stt-server · ${state.whisperModel ?? "qwen3_asr"}`),
+			hint("change → ", kbd("STT_PRIMARY_URL"), " / ", kbd("STT_FALLBACK_URL")),
 		),
 	);
 

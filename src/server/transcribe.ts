@@ -1,47 +1,108 @@
 /**
- * Voice note transcription.
+ * Voice-note transcription endpoint.
  *
- * Accepts a multipart audio upload, runs it through a local `faster-whisper`
- * model on CPU, and returns the transcript. The browser then sends the
- * transcript as a regular text prompt to the agent.
+ * Proxies to the resident pi-stt-server daemons instead of shelling out to a
+ * per-request faster-whisper process (the old path reloaded the model from
+ * disk for every voice note). Engine selection lives inside the daemons;
+ * this router owns only the ORDER:
  *
- * Why local: the user does not want to use the OpenAI API (no key, local-first
- * stance, CPU-only box). faster-whisper runs in Python; we shell out to a
- * small Python helper script that reads the audio from a temp file and prints
- * the transcript on stdout. Model auto-downloads on first call (the `medium`
- * model is ~1.5GB; runs slower than real-time on CPU but with much better
- * accuracy than `small`). Override via the `WHISPER_MODEL` env var.
+ *   STT_PRIMARY_URL   default http://127.0.0.1:8183 — Lappy's GPU whisper
+ *                     (large-v3-turbo, int8_float16) via lappy-stt-tunnel
+ *   STT_FALLBACK_URL  default http://127.0.0.1:8182 — this host's CPU
+ *                     pi-stt-server (qwen3-asr-0.6B int8, whisper small)
  *
- * The Python helper is at `scripts/transcribe.py` and is invoked via
- * `python3 scripts/transcribe.py <path>`. We capture stdout and JSON-parse
- * { text, language, duration, modelLoadMs }.
+ * A Lappy sleep/deploy degrades to the CPU daemon transparently; both failing
+ * returns 502 to the browser, same visible behaviour as the old helper
+ * failing. See /home/lepton/pi-stt-server for the daemon contract:
+ *   POST /transcribe  raw audio bytes → { text, engine, model, ... }
+ *   GET  /health      → capability/residency metadata
+ *
+ * Two routes, one contract:
+ *   POST /api/transcribe  multipart field "audio" → { text } JSON
+ *
+ * The browser never knows the engine — it just gets the transcript.
  */
 
-import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import express, { type Router } from "express";
+import express, { type Request, type Response, type Router } from "express";
 import multer from "multer";
-import type { TranscribeResponse } from "../shared/protocol.js";
 import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
-import { projectRoot } from "./paths.js";
-import { DEFAULT_PYTHON_TIMEOUT_MS, runPython } from "./python-runner.js";
 
 const upload = multer({
 	storage: multer.memoryStorage(),
 	limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB cap on audio
 });
 
-// Resolve the Python helper relative to the project root, not the
-// process's working directory. The server may be started from anywhere.
-const HELPER_PATH = resolve(projectRoot, "scripts/transcribe.py");
+/** Defaults; read per-call in sttChain() so tests and .env overrides apply. */
+const DEFAULT_PRIMARY_URL = "http://127.0.0.1:8183";
+const DEFAULT_FALLBACK_URL = "http://127.0.0.1:8182";
 
-interface HelperOutput {
-	text: string;
+/** Bounded wait for a daemon answer — transcription is seconds, not minutes. */
+const STT_TIMEOUT_MS = Number(process.env.STT_CLIENT_TIMEOUT_MS) || 120_000;
+
+const HEALTH_CACHE_MS = 60 * 1000;
+
+interface SttDaemonResponse {
+	text?: string;
+	engine?: string;
+	model?: string;
 	language?: string;
 	duration?: number;
+	error?: string;
+}
+
+interface SttAttempt {
+	url: string;
+	name: string;
+}
+
+/**
+ * The ordered daemon chain for one transcription. Kept as data so the route
+ * handler and the health probe share one source of truth for what is primary.
+ */
+export function sttChain(): SttAttempt[] {
+	// Unset → default URL; empty string → fallback disabled (Lappy has no
+	// second daemon to fall back to).
+	const primary = process.env.STT_PRIMARY_URL?.trim() || DEFAULT_PRIMARY_URL;
+	const fallbackRaw = process.env.STT_FALLBACK_URL;
+	const fallback = fallbackRaw === undefined ? DEFAULT_FALLBACK_URL : fallbackRaw.trim();
+	const chain: SttAttempt[] = [{ url: primary, name: "primary" }];
+	if (fallback && fallback !== primary) {
+		chain.push({ url: fallback, name: "fallback" });
+	}
+	return chain;
+}
+
+async function postToDaemon(
+	url: string,
+	audio: Buffer,
+): Promise<{ ok: true; body: SttDaemonResponse } | { ok: false; error: string }> {
+	let response: globalThis.Response;
+	try {
+		response = await fetch(`${url}/transcribe`, {
+			method: "POST",
+			headers: { "Content-Type": "application/octet-stream" },
+			body: new Uint8Array(audio),
+			signal: AbortSignal.timeout(STT_TIMEOUT_MS),
+		});
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		return { ok: false, error: `stt daemon unreachable at ${url}: ${message}` };
+	}
+	const text = await response.text().catch(() => "");
+	let body: SttDaemonResponse;
+	try {
+		body = JSON.parse(text) as SttDaemonResponse;
+	} catch {
+		return { ok: false, error: `stt daemon at ${url} returned non-JSON ${response.status}: ${text.slice(0, 200)}` };
+	}
+	if (!response.ok || typeof body.text !== "string") {
+		return {
+			ok: false,
+			error: `stt daemon at ${url} failed (${response.status}): ${body.error ?? body.text?.slice(0, 200) ?? "no transcript"}`,
+		};
+	}
+	return { ok: true, body };
 }
 
 export function createTranscribeRouter(): Router {
@@ -50,64 +111,24 @@ export function createTranscribeRouter(): Router {
 	router.post(
 		"/",
 		upload.single("audio"),
-		asyncHandler(async (req, res) => {
+		asyncHandler(async (req: Request, res: Response) => {
 			const file = (req as express.Request & { file?: Express.Multer.File }).file;
 			if (!file) {
 				res.status(400).json({ error: "no audio uploaded (field name: 'audio')" });
 				return;
 			}
 
-			// Stage the audio to a temp dir (faster-whisper wants a real path).
-			// We sanitize the filename to a safe stem so the temp path can't
-			// escape the dir via a malicious originalname.
-			let dir: string | undefined;
-			try {
-				dir = await mkdtemp(join(tmpdir(), "agentchatbox-transcribe-"));
-				const safeStem = (file.originalname || "voice.webm").replace(/[^\w.-]+/g, "_").slice(0, 64);
-				const audioPath = join(dir, safeStem || "voice.webm");
-				await writeFile(audioPath, file.buffer);
-
-				const { stdout, stderr, code, timedOut } = await runPython({
-					bin: process.env.PYTHON_BIN || "python3",
-					helperPath: HELPER_PATH,
-					helperArgs: [audioPath],
-					timeoutMs: DEFAULT_PYTHON_TIMEOUT_MS,
-				});
-
-				if (timedOut) {
-					res.status(504).json({
-						error: `transcribe.py timed out after ${DEFAULT_PYTHON_TIMEOUT_MS}ms`,
-					});
+			const failures: string[] = [];
+			for (const attempt of sttChain()) {
+				const result = await postToDaemon(attempt.url, file.buffer);
+				if (result.ok) {
+					const transcript: SttDaemonResponse = { text: result.body.text };
+					res.json(transcript);
 					return;
 				}
-				if (code !== 0) {
-					res.status(500).json({
-						error: `transcribe.py exited ${code}: ${stderr.slice(0, 500)}`,
-					});
-					return;
-				}
-
-				let parsed: HelperOutput;
-				try {
-					parsed = JSON.parse(stdout) as HelperOutput;
-				} catch {
-					res.status(500).json({
-						error: `transcribe.py: malformed JSON output: ${stdout.slice(0, 200)}`,
-					});
-					return;
-				}
-
-				const response: TranscribeResponse = { text: parsed.text };
-				res.json(response);
-			} finally {
-				// Always clean up the temp dir — even if the handler throws
-				// (the asyncHandler + jsonErrorHandler backstop catches that).
-				if (dir) {
-					rm(dir, { recursive: true, force: true }).catch(() => {
-						/* best-effort */
-					});
-				}
+				failures.push(result.error);
 			}
+			res.status(502).json({ error: `all stt daemons failed: ${failures.join("; ")}` });
 		}),
 	);
 
@@ -115,43 +136,51 @@ export function createTranscribeRouter(): Router {
 }
 
 // ---------------------------------------------------------------------------
-// Used by /api/health to report whether the local Whisper is available.
-// Cached for `HEALTH_CACHE_MS` (via createCachedProbe) so the health check
-// doesn't spawn a Python process (and trigger a faster-whisper model
-// load) on every browser poll.
+// Used by /api/health to report whether voice-note transcription is available.
+// Cached (createCachedProbe) so the browser's frequent polls never hit the
+// daemons more than once a minute. A daemon's /health is cheap (no model
+// loading is triggered by a probe), so probing both is fine.
 // ---------------------------------------------------------------------------
-
-const HEALTH_CACHE_MS = 60 * 1000; // 60 s
 
 export const checkWhisperAvailable = createCachedProbe(HEALTH_CACHE_MS, computeWhisperAvailable);
 
-async function computeWhisperAvailable(): Promise<{ available: boolean; reason?: string }> {
-	let result: { available: boolean; reason?: string };
-	try {
-		// Fast path: if the helper script isn't even on disk, fail
-		// immediately. Saves a process spawn when the server's deploy
-		// tree is missing the python scripts (e.g. partial install).
-		if (!existsSync(HELPER_PATH)) {
-			result = {
-				available: false,
-				reason: `helper not found at ${HELPER_PATH}`,
-			};
-		} else {
-			const { stdout, code, timedOut } = await runPython({
-				bin: process.env.PYTHON_BIN || "python3",
-				helperPath: HELPER_PATH,
-				helperArgs: ["--self-test"],
-				timeoutMs: 30_000,
+async function computeWhisperAvailable(): Promise<{
+	available: boolean;
+	reason?: string;
+	engine?: string;
+	model?: string;
+}> {
+	const failures: string[] = [];
+	for (const attempt of sttChain()) {
+		try {
+			const response = await fetch(`${attempt.url}/health`, {
+				signal: AbortSignal.timeout(3000),
 			});
-			if (timedOut) result = { available: false, reason: "self-test timed out" };
-			else if (code !== 0) result = { available: false, reason: stdout || "unknown" };
-			else result = { available: true };
+			if (!response.ok) {
+				failures.push(`${attempt.name}: upstream ${response.status}`);
+				continue;
+			}
+			const body = (await response.json()) as {
+				modelAvailable?: boolean;
+				status?: string;
+				engines?: Record<string, { model?: string }>;
+			};
+			if (body.modelAvailable === true && body.status === "ok") {
+				// Engine metadata is display-only; the daemon reports its own engine.
+				const engines = body.engines ?? {};
+				const engineName = Object.keys(engines)[0];
+				return {
+					available: true,
+					engine: engineName,
+					model: engines[engineName]?.model,
+				};
+			}
+			failures.push(`${attempt.name}: model unavailable`);
+		} catch (e) {
+			failures.push(
+				`${attempt.name}: unreachable (${e instanceof Error ? e.message : String(e)})`,
+			);
 		}
-	} catch (e) {
-		result = {
-			available: false,
-			reason: e instanceof Error ? e.message : String(e),
-		};
 	}
-	return result;
+	return { available: false, reason: failures.join("; ") };
 }
