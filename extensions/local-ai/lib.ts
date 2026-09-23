@@ -2,6 +2,7 @@ export const LOCAL_AI_STATUS_KEY = "local-ai";
 export const LOCAL_PROVIDER = "local";
 export const LOCAL_MODEL_ID = "qwen3.8-27b-ud-q3";
 export const QWEN_MODEL_LABEL = "Qwen3.8-27B (UD-Q3_K_XL)";
+export const LTX_MODEL_LABEL = "LTX-2.5 video (w4a4 DiT)";
 
 export type LocalAiState = "qwen" | "image" | "video" | "stopped" | "offline";
 
@@ -21,7 +22,7 @@ export function localAiLabel(state: LocalAiState): string {
 		case "image":
 			return "Image active";
 		case "video":
-			return "Video active";
+			return `${LTX_MODEL_LABEL} active`;
 		case "offline":
 			return "Server4 offline";
 		case "stopped":

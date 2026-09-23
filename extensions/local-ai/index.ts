@@ -7,6 +7,7 @@ import {
 	localAiLabel,
 	parseLocalAiState,
 	QWEN_MODEL_LABEL,
+	LTX_MODEL_LABEL,
 } from "./lib.js";
 
 const SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
@@ -69,7 +70,7 @@ async function startQwen(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void>
 
 async function startVideo(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	publishStatus(ctx, "stopped");
-	ctx.ui.setStatus(LOCAL_AI_STATUS_KEY, "Starting LTX video…");
+	ctx.ui.setStatus(LOCAL_AI_STATUS_KEY, `Starting ${LTX_MODEL_LABEL}…`);
 	ctx.ui.notify("Starting LTX-2.5 video on server4…", "info");
 
 	const result = await ssh(pi, ["local-ai", "video"], 180_000);
@@ -78,7 +79,7 @@ async function startVideo(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void
 		throw new Error(outputOf(result).slice(-500) || "server4 did not start LTX video");
 	}
 	publishStatus(ctx, "video");
-	ctx.ui.notify("LTX-2.5 video is ready on :8188.", "info");
+	ctx.ui.notify(`${LTX_MODEL_LABEL} is ready on :8188.`, "info");
 }
 
 async function stopLocalAi(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
@@ -99,7 +100,10 @@ async function openMenu(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 		state === "qwen"
 			? `✓ ${QWEN_MODEL_LABEL} active — use locally`
 			: `Use ${QWEN_MODEL_LABEL} locally`;
-	const useVideo = state === "video" ? "✓ LTX video active" : "Use LTX video locally";
+	const useVideo =
+		state === "video"
+			? `✓ ${LTX_MODEL_LABEL} active`
+			: `Use ${LTX_MODEL_LABEL} locally`;
 	const stop = state === "stopped" ? "✓ Local AI stopped" : "Stop local AI";
 	const refresh = "Refresh status";
 	const selected = await ctx.ui.select("Server4 local AI", [useQwen, useVideo, stop, refresh]);
