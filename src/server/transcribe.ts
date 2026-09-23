@@ -94,7 +94,10 @@ async function postToDaemon(
 	try {
 		body = JSON.parse(text) as SttDaemonResponse;
 	} catch {
-		return { ok: false, error: `stt daemon at ${url} returned non-JSON ${response.status}: ${text.slice(0, 200)}` };
+		return {
+			ok: false,
+			error: `stt daemon at ${url} returned non-JSON ${response.status}: ${text.slice(0, 200)}`,
+		};
 	}
 	if (!response.ok || typeof body.text !== "string") {
 		return {
@@ -177,9 +180,7 @@ async function computeWhisperAvailable(): Promise<{
 			}
 			failures.push(`${attempt.name}: model unavailable`);
 		} catch (e) {
-			failures.push(
-				`${attempt.name}: unreachable (${e instanceof Error ? e.message : String(e)})`,
-			);
+			failures.push(`${attempt.name}: unreachable (${e instanceof Error ? e.message : String(e)})`);
 		}
 	}
 	return { available: false, reason: failures.join("; ") };
