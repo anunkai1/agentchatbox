@@ -4,10 +4,10 @@ import {
 	LOCAL_MODEL_ID,
 	LOCAL_PROVIDER,
 	type LocalAiState,
+	LTX_MODEL_LABEL,
 	localAiLabel,
 	parseLocalAiState,
 	QWEN_MODEL_LABEL,
-	LTX_MODEL_LABEL,
 } from "./lib.js";
 
 const SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
@@ -101,9 +101,7 @@ async function openMenu(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 			? `✓ ${QWEN_MODEL_LABEL} active — use locally`
 			: `Use ${QWEN_MODEL_LABEL} locally`;
 	const useVideo =
-		state === "video"
-			? `✓ ${LTX_MODEL_LABEL} active`
-			: `Use ${LTX_MODEL_LABEL} locally`;
+		state === "video" ? `✓ ${LTX_MODEL_LABEL} active` : `Use ${LTX_MODEL_LABEL} locally`;
 	const stop = state === "stopped" ? "✓ Local AI stopped" : "Stop local AI";
 	const refresh = "Refresh status";
 	const selected = await ctx.ui.select("Server4 local AI", [useQwen, useVideo, stop, refresh]);
