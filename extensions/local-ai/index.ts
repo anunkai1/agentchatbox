@@ -6,6 +6,7 @@ import {
 	type LocalAiState,
 	localAiLabel,
 	parseLocalAiState,
+	QWEN_MODEL_LABEL,
 } from "./lib.js";
 
 const SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
@@ -54,8 +55,8 @@ async function selectQwen(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void
 
 async function startQwen(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	publishStatus(ctx, "stopped");
-	ctx.ui.setStatus(LOCAL_AI_STATUS_KEY, "Starting Qwen…");
-	ctx.ui.notify("Starting Qwen on server4…", "info");
+	ctx.ui.setStatus(LOCAL_AI_STATUS_KEY, `Starting ${QWEN_MODEL_LABEL}…`);
+	ctx.ui.notify(`Starting ${QWEN_MODEL_LABEL} on server4…`, "info");
 
 	const result = await ssh(pi, ["local-ai", "text"], START_TIMEOUT_MS);
 	if ((result.code ?? 1) !== 0) {
@@ -94,7 +95,10 @@ async function stopLocalAi(pi: ExtensionAPI, ctx: ExtensionContext): Promise<voi
 
 async function openMenu(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	const state = await readState(pi, ctx);
-	const useQwen = state === "qwen" ? "✓ Qwen active — use locally" : "Use Qwen locally";
+	const useQwen =
+		state === "qwen"
+			? `✓ ${QWEN_MODEL_LABEL} active — use locally`
+			: `Use ${QWEN_MODEL_LABEL} locally`;
 	const useVideo = state === "video" ? "✓ LTX video active" : "Use LTX video locally";
 	const stop = state === "stopped" ? "✓ Local AI stopped" : "Stop local AI";
 	const refresh = "Refresh status";

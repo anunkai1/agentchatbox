@@ -1,6 +1,7 @@
 export const LOCAL_AI_STATUS_KEY = "local-ai";
 export const LOCAL_PROVIDER = "local";
 export const LOCAL_MODEL_ID = "qwen3.8-27b-ud-q3";
+export const QWEN_MODEL_LABEL = "Qwen3.8-27B (UD-Q3_K_XL)";
 
 export type LocalAiState = "qwen" | "image" | "video" | "stopped" | "offline";
 
@@ -16,7 +17,7 @@ export function parseLocalAiState(output: string, exitCode = 0): LocalAiState {
 export function localAiLabel(state: LocalAiState): string {
 	switch (state) {
 		case "qwen":
-			return "Qwen active";
+			return `${QWEN_MODEL_LABEL} active`;
 		case "image":
 			return "Image active";
 		case "video":
