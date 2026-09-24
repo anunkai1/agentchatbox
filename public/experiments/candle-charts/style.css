@@ -51,14 +51,12 @@ body {
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
-  scroll-snap-type: x proximity;
   touch-action: none;
   padding: 1px 0 3px;
 }
 .favourites-scroll::-webkit-scrollbar { display: none; }
 .favourite-chip {
   flex: 0 0 auto;
-  scroll-snap-align: start;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: #1e2329;
