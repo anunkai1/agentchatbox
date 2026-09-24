@@ -558,11 +558,11 @@ const server = app.listen(config.port, config.host, () => {
 		log.warn("upload storage is above the warning threshold", { ...uploadUsage });
 	}
 
-	// Warm the Whisper + TTS health caches in the background. The first
-	// /api/health call would otherwise block for seconds (faster-whisper
-	// model load); pre-running the probes at boot means
-	// the browser's first poll returns instantly from cache. Fire-and-forget
-	// — failure here just means the cache fills lazily on first request.
+	// Warm the STT + TTS health caches in the background. The first
+	// /api/health call would otherwise wait on the daemon /health probes;
+	// pre-running them at boot means the browser's first poll returns
+	// instantly from cache. Fire-and-forget — failure here just means the
+	// cache fills lazily on first request.
 	void checkWhisperAvailable().then((w) =>
 		log.info("whisper probe ready", { available: w.available, reason: w.reason }),
 	);

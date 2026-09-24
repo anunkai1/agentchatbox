@@ -7,7 +7,7 @@
  *
  * This file is kept around for the bits that are NOT the chat agent:
  *   - /api/upload — file attachments
- *   - /api/transcribe — voice notes (server runs local faster-whisper)
+ *   - /api/transcribe — voice notes (proxied to pi-stt-server daemons)
  *   - /api/health — server liveness + configured providers
  */
 

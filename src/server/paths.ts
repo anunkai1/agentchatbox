@@ -4,8 +4,8 @@
  *
  * The server may be started from any directory (e.g. systemd with no
  * `WorkingDirectory=` set, or a supervisor that drops you in `/`).
- * Hardcoding `process.cwd()` in path resolution means helpers like
- * `scripts/transcribe.py` silently fail in those environments.
+ * Hardcoding `process.cwd()` in path resolution means helpers resolved
+ * from the wrong tree silently fail in those environments.
  *
  * The fix: derive the project root from the location of this file. The
  * compiled output lives at `<project>/dist/server/paths.js`, so the
