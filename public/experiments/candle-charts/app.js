@@ -341,6 +341,7 @@
   let measureDrag = null;        // pointer state while a placed measurement is moved/resized
   let measureHotKey = null;      // measurement grip under the pointer (highlight + cursor)
   let favouriteGesture = null;   // pointer state for favourite scrolling/reordering
+  let favouriteScrollEaseFrame = 0; // rAF handle for eased finger-follow scrolling
   let favouriteMomentumFrame = 0;
   let symbolListStale = false;   // a re-rank arrived while the picker was open
   let suppressFavouriteClick = false;
@@ -1774,6 +1775,29 @@
     if (favouriteMomentumFrame) cancelAnimationFrame(favouriteMomentumFrame);
     favouriteMomentumFrame = 0;
   }
+  // Instead of jumping scrollLeft straight to the finger on each pointermove
+  // (which stutters when events arrive irregularly), ease toward the target
+  // position every frame so the strip glides smoothly under the finger.
+  function startFavouriteScrollEase() {
+    if (favouriteScrollEaseFrame) return;
+    let lastTime = performance.now();
+    const step = (now) => {
+      const gesture = favouriteGesture;
+      if (!gesture || !gesture.scrolling) { favouriteScrollEaseFrame = 0; return; }
+      const elapsed = Math.min(48, now - lastTime);
+      lastTime = now;
+      const current = elFavourites.scrollLeft;
+      const next = current + (gesture.targetScroll - current) * (1 - Math.exp(-elapsed / 40));
+      elFavourites.scrollLeft = next;
+      if (Math.abs(gesture.targetScroll - elFavourites.scrollLeft) < 0.5) {
+        elFavourites.scrollLeft = gesture.targetScroll;
+        favouriteScrollEaseFrame = 0;
+        return;
+      }
+      favouriteScrollEaseFrame = requestAnimationFrame(step);
+    };
+    favouriteScrollEaseFrame = requestAnimationFrame(step);
+  }
   function startFavouriteMomentum(initialVelocity) {
     stopFavouriteMomentum();
     let velocity = initialVelocity;
@@ -1867,6 +1891,7 @@
     favouriteGesture = {
       chip, pointerId, startX: event.clientX, startY: event.clientY,
       startScroll: elFavourites.scrollLeft, lastScroll: elFavourites.scrollLeft,
+      targetScroll: elFavourites.scrollLeft,
       lastMoveAt: performance.now(), velocity: 0,
       dragging: false, scrolling: false, pressTimer: null,
     };
@@ -1886,12 +1911,14 @@
         gesture.scrolling = true;
       }
       if (gesture.scrolling) {
+        const max = Math.max(0, elFavourites.scrollWidth - elFavourites.clientWidth);
+        gesture.targetScroll = Math.max(0, Math.min(max, gesture.startScroll - dx));
         const now = performance.now();
-        elFavourites.scrollLeft = gesture.startScroll - dx;
         const elapsed = Math.max(1, now - gesture.lastMoveAt);
-        gesture.velocity = (elFavourites.scrollLeft - gesture.lastScroll) / elapsed;
-        gesture.lastScroll = elFavourites.scrollLeft;
+        gesture.velocity = (gesture.targetScroll - gesture.lastScroll) / elapsed;
+        gesture.lastScroll = gesture.targetScroll;
         gesture.lastMoveAt = now;
+        startFavouriteScrollEase();
       }
     }
     if (gesture.dragging) moveFavouriteChip(event.clientX);
