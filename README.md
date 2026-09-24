@@ -17,7 +17,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - **Codex Fast control** — a header button and Settings row open the pi extension’s Fast/Standard picker; Settings mirrors the extension-reported current state while persistence and the `service_tier` rewrite remain extension-owned
 - **Keyboard, screen-reader, and touch friendly** — labelled controls, trapped/restored modal focus, keyboard-operable pickers and project folders, and 44px mobile action targets
 - **Shareable session links** — every chat lives at `/s/<session-id>`. Bookmark it, copy it (`/link` or the Settings menu), or open it on another device to resume the same conversation
-- Local TTS (Kokoro, 1.4× playback) and STT (faster-whisper) — no paid cloud APIs
+- Local TTS (Kokoro, 1.4× playback) and STT (pi-stt-server daemons: Lappy GPU whisper, CPU fallback) — no paid cloud APIs
 - Slash commands, model switching mid-conversation, session history / resume / rename
 - Session list / transcript replay via `/api/sessions`
 
@@ -83,7 +83,7 @@ src/
     uploads.ts            # /api/upload
     uploads-serving.ts    # safe raster preview / forced attachment delivery
     files.ts              # /api/file (no-follow regular-file download)
-    transcribe.ts         # /api/transcribe (faster-whisper)
+    transcribe.ts         # /api/transcribe (proxies to pi-stt-server daemons)
     tts.ts                # /api/tts (Kokoro)
     search/               # Optional semantic session search
                           #   (see "Semantic session search" below; disabled
@@ -141,7 +141,8 @@ Non-secret server settings go through `.env`; chat-provider availability comes f
 | `PI_BIN`                       | `pi`                          | Path to the `pi` CLI binary (overridable for tests) |
 | `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
 | `AGENTCHATBOX_TRUSTED_EXTERNAL_PROJECTS` | (unset)             | Exact `id:/canonical/path` external repos; non-deletable by ACB |
-| `PYTHON_BIN`                   | `python3`                     | Python binary for faster-whisper (STT)           |
+| `STT_PRIMARY_URL`              | `http://127.0.0.1:8183`       | Primary STT daemon (Lappy GPU whisper via lappy-stt-tunnel) |
+| `STT_FALLBACK_URL`             | `http://127.0.0.1:8182`       | Fallback STT daemon (this host's CPU pi-stt-server); empty string disables |
 | `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
 | `AUTO_TITLE_MODEL`             | active session model          | Optional `provider/modelId` used for automatic first-turn session titles |
 | `*_API_KEY`                    | (unset)                       | Optional: env keys for non-chat tools (e.g. `VENICE_API_KEY` for pi-venice-image, `GEMINI_API_KEY` for YouTube transcripts). Chat auth itself is NOT configured here — see below. |
@@ -156,7 +157,7 @@ Chat-model providers are authenticated via `pi` itself: run `pi auth login <prov
 |--------|-----------------------|--------------------------------------------------------|
 | POST   | `/api/upload`         | Multipart file upload                                  |
 | GET    | `/uploads/:filename`  | Download a previously uploaded file                    |
-| POST   | `/api/transcribe`     | Audio → text (faster-whisper)                          |
+| POST   | `/api/transcribe`     | Audio → text (pi-stt-server daemon chain)              |
 | POST   | `/api/tts`            | Text → audio (Kokoro)                                  |
 | GET    | `/api/health`         | `{ status, commit, providers, whisper, tts, ttsVoice }` |
 | GET    | `/api/models`         | List of available models (only configured providers)   |
