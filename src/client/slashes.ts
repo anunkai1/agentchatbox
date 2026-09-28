@@ -1536,6 +1536,20 @@ export function openOverflowMenu(): void {
 			),
 		);
 	}
+	// Claude Code delegation is extension-owned: the row only forwards
+	// `/claude menu` to pi, which owns the mode file and the delegated tool.
+	if (
+		state.capabilities?.some((command) => command.name === "claude" && command.source !== "skill")
+	) {
+		chatRows.push(
+			actionRow(
+				"Claude Code",
+				state.extensionStatusLabels["claude-delegate"] ?? "Off",
+				closeThen(() => services.sendSlashCommand?.("/claude menu")),
+				"Choose Claude Code delegation model (Off, Opus, Sonnet, Haiku)",
+			),
+		);
+	}
 	box.append(section("Chat", ...chatRows));
 	box.append(
 		section(
