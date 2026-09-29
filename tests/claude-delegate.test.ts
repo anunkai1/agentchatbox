@@ -19,22 +19,18 @@ import {
 	FileDelegationStore,
 	normaliseToolArgs,
 	parseDelegationMode,
-	parseEffortLevel,
 	prettyModelName,
-	progressTail,
-	resolveEffort,
 	type StreamEvent,
 	StreamParser,
 } from "../extensions/claude-delegate/lib.js";
 
 describe("claude-delegate mode parsing", () => {
-	it("accepts canonical modes and aliases", () => {
-		expect(parseDelegationMode("off")).toBe("off");
-		expect(parseDelegationMode("0")).toBe("off");
+	it("accepts only the three model names", () => {
 		expect(parseDelegationMode("opus")).toBe("opus");
 		expect(parseDelegationMode("SONNET")).toBe("sonnet");
 		expect(parseDelegationMode("haiku")).toBe("haiku");
-		expect(parseDelegationMode("on")).toBe("sonnet");
+		expect(parseDelegationMode("off")).toBeUndefined();
+		expect(parseDelegationMode("on")).toBeUndefined();
 		expect(parseDelegationMode("nonsense")).toBeUndefined();
 	});
 });
@@ -74,26 +70,21 @@ describe("claude stream parser", () => {
 		);
 		expect(second).toEqual([
 			{ kind: "text", text: "working on it", model: undefined },
-			{ kind: "result", text: "done", isError: false, usage: undefined, models: undefined },
+			{ kind: "result", text: "done", isError: false },
 		]);
 	});
 
-	it("reports the model from init, assistant and modelUsage events", () => {
+	it("reports the model from init and assistant events", () => {
 		const parser = new StreamParser();
 		const events = parser.feed(
 			[
 				'{"type":"system","subtype":"init","session_id":"s-2","model":"claude-opus-5-5"}',
 				'{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}',
-				'{"type":"result","subtype":"success","result":"ok","is_error":false,"modelUsage":{"claude-opus-5-5":{"canonicalModel":"claude-opus-5-5"},"claude-haiku-4-5-20251001":{"canonicalModel":"claude-haiku-4-5-20251001"}}}',
 				"",
 			].join("\n"),
 		);
 		expect(events[0]).toEqual({ kind: "init", claudeSessionId: "s-2", model: "claude-opus-5-5" });
 		expect(events[1]).toEqual({ kind: "text", text: "hi", model: "claude-opus-5-5" });
-		expect(events[2]).toMatchObject({
-			kind: "result",
-			models: ["claude-opus-5-5", "claude-haiku-4-5-20251001"],
-		});
 	});
 
 	it("parses thinking, tool calls and tool results", () => {
@@ -119,11 +110,6 @@ describe("claude stream parser", () => {
 		const parser = new StreamParser();
 		expect(parser.feed("not json at all\n")).toEqual([]);
 	});
-
-	it("caps progress tail length", () => {
-		expect(progressTail("x".repeat(50), 10)).toBe(`…${"x".repeat(10)}`);
-		expect(progressTail("short", 10)).toBe("short");
-	});
 });
 
 describe("model version labels", () => {
@@ -148,22 +134,6 @@ describe("effort levels", () => {
 		expect(DEFAULT_EFFORT.opus).toBe("high");
 		expect(DEFAULT_EFFORT.sonnet).toBe("high");
 		expect(DEFAULT_EFFORT.haiku).toBeUndefined();
-		expect(DEFAULT_EFFORT.off).toBeUndefined();
-	});
-
-	it("resolves an override over the default", () => {
-		expect(resolveEffort("opus")).toBe("high");
-		expect(resolveEffort("sonnet", "auto")).toBe("high");
-		expect(resolveEffort("opus", "xhigh")).toBe("xhigh");
-		expect(resolveEffort("haiku", "high")).toBe("high");
-		expect(resolveEffort("off", "max")).toBeUndefined();
-	});
-
-	it("parses level names and auto", () => {
-		expect(parseEffortLevel("HIGH")).toBe("high");
-		expect(parseEffortLevel("xhigh")).toBe("xhigh");
-		expect(parseEffortLevel("auto")).toBe("auto");
-		expect(parseEffortLevel("nonsense")).toBeUndefined();
 	});
 
 	it("passes --effort only when a level applies", () => {
@@ -184,13 +154,11 @@ describe("claude-delegate store", () => {
 		const modePath = `/tmp/claude-delegate-test-${process.pid}`;
 		const sessionsPath = `${modePath}-sessions.json`;
 		const store = new FileDelegationStore(modePath, sessionsPath);
-		expect(store.readMode()).toBe("off");
+		expect(store.readMode()).toBe("sonnet");
 		store.writeMode("haiku");
 		expect(store.readMode()).toBe("haiku");
 		store.writeClaudeSession("chat-1", "s-42");
 		expect(store.readClaudeSession("chat-1")).toBe("s-42");
-		store.clearClaudeSession("chat-1");
-		expect(store.readClaudeSession("chat-1")).toBeUndefined();
 	});
 
 	it("remembers the resolved model per mode", () => {
@@ -205,23 +173,6 @@ describe("claude-delegate store", () => {
 		store.writeModel("haiku", "claude-haiku-4-5-20251001");
 		expect(store.readModel("opus")).toBe("claude-opus-5-5");
 		expect(store.readModel("haiku")).toBe("claude-haiku-4-5-20251001");
-		expect(store.readModel("off")).toBeUndefined();
-	});
-
-	it("stores per-mode effort overrides", () => {
-		const base = `/tmp/claude-delegate-effort-${process.pid}`;
-		const store = new FileDelegationStore(
-			`${base}-mode`,
-			`${base}-sessions.json`,
-			`${base}-models.json`,
-			`${base}-effort.json`,
-		);
-		expect(store.readEffort("opus")).toBeUndefined();
-		expect(resolveEffort("opus", store.readEffort("opus"))).toBe("high");
-		store.writeEffort("opus", "max");
-		expect(resolveEffort("opus", store.readEffort("opus"))).toBe("max");
-		store.writeEffort("opus", "auto");
-		expect(resolveEffort("opus", store.readEffort("opus"))).toBe("high");
 	});
 });
 
@@ -238,23 +189,18 @@ describe("delegated prompt", () => {
 type CommandHandler = (args: string, ctx: unknown, ...rest: unknown[]) => Promise<void>;
 
 function harness(
-	mode = "off",
+	mode = "sonnet",
 	knownModels: Record<string, string> = {},
-	probe?: (forMode: string) => Promise<string | undefined>,
-	runTask?: (
-		args: string[],
-		options?: { env: Record<string, string> },
-	) => Promise<{
+	runTask?: (args: string[]) => Promise<{
 		resultText?: string;
 		isError: boolean;
 		claudeSessionId?: string;
-		models: string[];
+		model?: string;
 	}>,
 	entries: Array<{ type: string; customType?: string; data?: unknown }> = [],
 ) {
 	let current = mode;
 	const sessions: Record<string, string> = {};
-	const effortByMode: Record<string, string> = {};
 	const store = {
 		readMode: () => current as never,
 		writeMode: (next: string) => {
@@ -264,18 +210,12 @@ function harness(
 		writeClaudeSession: (key: string, id: string) => {
 			sessions[key] = id;
 		},
-		clearClaudeSession: () => undefined,
 		readModel: (forMode: string) => knownModels[forMode],
 		writeModel: (forMode: string, modelId: string) => {
 			knownModels[forMode] = modelId;
 		},
-		readEffort: (forMode: string) => effortByMode[forMode],
-		writeEffort: (forMode: string, setting: string) => {
-			effortByMode[forMode] = setting;
-		},
 	};
 	const handlers: Record<string, CommandHandler> = {};
-	let activeTools = ["read", "bash"];
 	let sessionStart: ((event: unknown, ctx: unknown) => void) | undefined;
 	let input: ((event: unknown, ctx: unknown) => { action: string }) | undefined;
 	const notify = vi.fn();
@@ -284,29 +224,20 @@ function harness(
 	const appendEntry = vi.fn((customType: string, data: unknown) => {
 		entries.push({ type: "custom", customType, data });
 	});
-	const registered: Array<{ name: string; execute?: unknown }> = [];
 	const delegate = registerClaudeDelegate(
 		{
 			registerCommand(name: string, options: { handler: CommandHandler }) {
 				handlers[name] = options.handler;
 			},
-			registerTool(definition: { name: string; execute?: unknown }) {
-				registered.push(definition);
-			},
 			on(event: string, handler: (event: unknown, ctx: unknown) => void) {
 				if (event === "session_start") sessionStart = handler;
 				if (event === "input") input = handler as never;
-			},
-			getActiveTools: () => [...activeTools],
-			setActiveTools: (names: string[]) => {
-				activeTools = names;
 			},
 			sendMessage,
 			appendEntry,
 		} as never,
 		store as never,
 		"/tmp/claude-delegate-workspace",
-		probe,
 		runTask as never,
 	);
 	const ui = {
@@ -323,9 +254,6 @@ function harness(
 		get mode() {
 			return current;
 		},
-		get activeTools() {
-			return activeTools;
-		},
 		command: handlers.claude!,
 		cc: handlers.cc!,
 		sessionStart: () => sessionStart?.({}, uiCtx),
@@ -335,7 +263,6 @@ function harness(
 		appendEntry,
 		sessions,
 		entries,
-		registered,
 		ui,
 		uiCtx,
 		sendMessage,
@@ -344,89 +271,29 @@ function harness(
 }
 
 describe("claude-delegate registration", () => {
-	it("starts off with the tool inactive and reports the label", async () => {
-		const h = harness("off");
-		await h.command("report", h.uiCtx);
-		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Off");
-	});
-
-	it("enables the tool when a mode is selected", async () => {
-		const h = harness("off");
-		await h.command("opus", h.uiCtx);
-		expect(h.mode).toBe("opus");
-		expect(h.activeTools).toContain("claude_code_task");
-		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus · high");
-	});
-
-	it("removes the tool when disabled", async () => {
-		const h = harness("sonnet");
-		await h.command("off", h.uiCtx);
-		expect(h.mode).toBe("off");
-		expect(h.activeTools).not.toContain("claude_code_task");
-	});
-
-	it("syncs availability on session start", async () => {
-		const h = harness("haiku");
+	it("reports the default model label, with its version once known", async () => {
+		const h = harness("opus", { opus: "claude-opus-5-5" });
 		h.sessionStart();
-		expect(h.activeTools).toContain("claude_code_task");
-	});
-
-	it("resolves every alias version with /claude probe", async () => {
-		const seen: string[] = [];
-		const models = {
-			haiku: "claude-haiku-4-5-20251001",
-			sonnet: "claude-sonnet-5",
-			opus: "claude-opus-5-5",
-		};
-		const h = harness("opus", {}, async (forMode) => {
-			seen.push(forMode);
-			return models[forMode as keyof typeof models];
-		});
-		await h.command("probe", h.uiCtx);
-		expect(seen).toEqual(["haiku", "sonnet", "opus"]);
-		const message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
-		expect(message).toContain("Haiku 4.5 (claude-haiku-4-5-20251001)");
-		expect(message).toContain("Sonnet 5 (claude-sonnet-5)");
-		expect(message).toContain("Opus 5.5 (claude-opus-5-5)");
 		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5 · high");
 	});
 
-	it("keeps going when one alias probe fails", async () => {
-		const h = harness("off", {}, async (forMode) => {
-			if (forMode === "sonnet") throw new Error("no access");
-			return "claude-haiku-4-5-20251001";
-		});
-		await h.command("versions", h.uiCtx);
-		const message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
-		expect(message).toContain("Haiku 4.5");
-		expect(message).toContain("Sonnet: failed (no access)");
-	});
-
-	it("sets effort for the active mode and reports the default", async () => {
-		const h = harness("opus", { opus: "claude-opus-5-5" });
-		await h.command("effort", h.uiCtx);
-		let message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
-		expect(message).toContain("Opus effort: high (default)");
-
-		await h.command("effort xhigh", h.uiCtx);
-		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5 · xhigh");
-		message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
-		expect(message).toContain("Opus effort set to xhigh");
-	});
-
-	it("rejects an unknown effort and requires a mode", async () => {
+	it("sets the default model with /claude", async () => {
 		const h = harness("sonnet");
-		await h.command("effort turbo", h.uiCtx);
-		expect(h.ui.notify).toHaveBeenLastCalledWith(
-			expect.stringContaining("Unknown effort"),
-			"warning",
+		await h.command("opus", h.uiCtx);
+		expect(h.mode).toBe("opus");
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus · high");
+		await h.command("off", h.uiCtx);
+		expect(h.ui.notify).toHaveBeenLastCalledWith(expect.stringContaining("Usage"), "warning");
+		expect(h.mode).toBe("opus");
+	});
+
+	it("labels the menu entries with versions and still selects the model", async () => {
+		const h = harness("sonnet", { opus: "claude-opus-5-5" });
+		h.ui.select.mockImplementation(async (_title: string, options: string[]) =>
+			options.find((option) => option.includes("Opus 5.5")),
 		);
-		const off = harness("off");
-		await off.command("effort high", off.uiCtx);
-		expect(off.ui.notify).toHaveBeenLastCalledWith(
-			expect.stringContaining("Select a delegation mode"),
-			"warning",
-		);
+		await h.command("menu", h.uiCtx);
+		expect(h.mode).toBe("opus");
 	});
 
 	it("parses /cc arguments with an optional model token", () => {
@@ -439,19 +306,19 @@ describe("claude-delegate registration", () => {
 		});
 		// A bare alias with no task is treated as the task, not a mode.
 		expect(parseCcArgs("haiku")).toEqual({ task: "haiku" });
-		// `off` is not a delegation mode.
+		// `off` is not a model.
 		expect(parseCcArgs("off do something")).toEqual({ task: "off do something" });
 	});
 
 	it("sends a task straight to Claude Code with /cc", async () => {
 		const seen: string[][] = [];
-		const h = harness("sonnet", { sonnet: "claude-sonnet-5-5" }, undefined, async (args) => {
+		const h = harness("sonnet", { sonnet: "claude-sonnet-5-5" }, async (args) => {
 			seen.push(args);
 			return {
 				resultText: "registered ok",
 				isError: false,
 				claudeSessionId: "s-cc",
-				models: ["claude-sonnet-5-5"],
+				model: "claude-sonnet-5-5",
 			};
 		});
 		await h.cc("register an account at example.com", h.uiCtx);
@@ -474,29 +341,23 @@ describe("claude-delegate registration", () => {
 		expect(String(message.content)).toContain("Sonnet 5.5");
 	});
 
-	it("honours the model prefix and refuses when delegation is off", async () => {
+	it("uses the default model unless the task names one", async () => {
 		const seen: string[][] = [];
-		const h = harness("off", {}, undefined, async (args) => {
+		const h = harness("haiku", {}, async (args) => {
 			seen.push(args);
-			return { resultText: "ok", isError: false, models: ["claude-opus-5-5"] };
+			return { resultText: "ok", isError: false, model: "claude-opus-5-5" };
 		});
 		await h.cc("do a thing", h.uiCtx);
-		expect(h.ui.notify).toHaveBeenLastCalledWith(
-			expect.stringContaining("Claude Code delegation is off"),
-			"warning",
-		);
-		expect(seen).toHaveLength(0);
-
+		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("haiku");
 		await h.cc("opus do a thing", h.uiCtx);
-		expect(seen).toHaveLength(1);
-		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("opus");
+		expect(seen[1][seen[1].indexOf("--model") + 1]).toBe("opus");
 	});
 
 	it("reports a failed /cc run as an error but keeps the prompt", async () => {
-		const h = harness("haiku", {}, undefined, async () => ({
+		const h = harness("haiku", {}, async () => ({
 			resultText: "captcha wall",
 			isError: true,
-			models: ["claude-haiku-4-5-20251001"],
+			model: "claude-haiku-4-5-20251001",
 		}));
 		await h.cc("summarise inbox", h.uiCtx);
 		expect(h.ui.notify).toHaveBeenLastCalledWith("captcha wall", "error");
@@ -505,34 +366,18 @@ describe("claude-delegate registration", () => {
 	});
 
 	it("keys Claude session continuity by the chat's own session id", async () => {
-		const h = harness("sonnet", {}, undefined, async () => ({
+		const h = harness("sonnet", {}, async () => ({
 			resultText: "ok",
 			isError: false,
 			claudeSessionId: "claude-s1",
-			models: [],
 		}));
 		await h.cc("first", h.uiCtx);
 		expect(h.sessions).toEqual({ "chat-1": "claude-s1" });
 	});
-
-	it("shows the resolved version in the status label", async () => {
-		const h = harness("opus", { opus: "claude-opus-5-5" });
-		await h.command("report", h.uiCtx);
-		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5 · high");
-	});
-
-	it("labels the menu entries with versions and still selects the mode", async () => {
-		const h = harness("off", { opus: "claude-opus-5-5" });
-		h.ui.select.mockImplementation(async (_title: string, options: string[]) =>
-			options.find((option) => option.includes("Opus 5.5")),
-		);
-		await h.command("menu", h.uiCtx);
-		expect(h.mode).toBe("opus");
-	});
 });
 
 describe("claude-delegate sticky mode", () => {
-	const ok = async () => ({ resultText: "done", isError: false, models: ["claude-opus-5-5"] });
+	const ok = async () => ({ resultText: "done", isError: false, model: "claude-opus-5-5" });
 
 	it("parses only the bare on/off/status controls", () => {
 		expect(parseCcControl("on")).toEqual({ kind: "on" });
@@ -558,20 +403,20 @@ describe("claude-delegate sticky mode", () => {
 	});
 
 	it("leaves ordinary messages with pi until /cc on", () => {
-		const h = harness("opus", {}, undefined, ok);
+		const h = harness("opus", {}, ok);
 		expect(h.input("hello")).toEqual({ action: "continue" });
 		expect(h.sendMessage).not.toHaveBeenCalled();
 	});
 
 	it("diverts every typed message to Claude Code while on, and stops at /cc off", async () => {
 		const seen: string[][] = [];
-		const h = harness("off", { opus: "claude-opus-5-5" }, undefined, async (args) => {
+		const h = harness("sonnet", { opus: "claude-opus-5-5" }, async (args) => {
 			seen.push(args);
 			return ok();
 		});
 		await h.cc("on opus", h.uiCtx);
 		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "opus" });
-		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Off");
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Sonnet · high");
 		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-sticky", "Opus 5.5 · high");
 
 		expect(h.input("check my inbox")).toEqual({ action: "handled" });
@@ -590,7 +435,7 @@ describe("claude-delegate sticky mode", () => {
 	});
 
 	it("mirrors each reply as an assistant message so pi saves the chat", async () => {
-		const h = harness("opus", {}, undefined, ok);
+		const h = harness("opus", {}, ok);
 		await h.cc("on", h.uiCtx);
 		expect(h.input("check my inbox")).toEqual({ action: "handled" });
 		await h.whenIdle();
@@ -612,7 +457,7 @@ describe("claude-delegate sticky mode", () => {
 		) => Promise<{
 			resultText?: string;
 			isError: boolean;
-			models: string[];
+			model?: string;
 		}>;
 		const run: Run = async (_args, options) => {
 			for (const event of [
@@ -625,9 +470,9 @@ describe("claude-delegate sticky mode", () => {
 			] as StreamEvent[]) {
 				options?.onEvent?.(event);
 			}
-			return { resultText: "done", isError: false, models: ["claude-opus-5-5"] };
+			return { resultText: "done", isError: false, model: "claude-opus-5-5" };
 		};
-		const h = harness("opus", {}, undefined, run as never);
+		const h = harness("opus", {}, run as never);
 		await h.cc("on", h.uiCtx);
 		h.input("read it");
 		await h.whenIdle();
@@ -662,10 +507,9 @@ describe("claude-delegate sticky mode", () => {
 	});
 
 	it("mirrors a failed run too, so the chat still saves", async () => {
-		const h = harness("opus", {}, undefined, async () => ({
+		const h = harness("opus", {}, async () => ({
 			isError: true,
 			resultText: "boom",
-			models: [],
 		}));
 		await h.cc("on", h.uiCtx);
 		h.input("try this");
@@ -673,17 +517,14 @@ describe("claude-delegate sticky mode", () => {
 		expect(h.appendMessage.mock.calls[0][0].content[0].text).toBe("⚠ boom");
 	});
 
-	it("uses the global model for a bare /cc on, falling back to Sonnet", async () => {
-		const h = harness("haiku", {}, undefined, ok);
+	it("uses the default model for a bare /cc on", async () => {
+		const h = harness("haiku", {}, ok);
 		await h.cc("on", h.uiCtx);
 		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "haiku" });
-		const off = harness("off", {}, undefined, ok);
-		await off.cc("on", off.uiCtx);
-		expect(off.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "sonnet" });
 	});
 
 	it("passes extension prompts, slash input and steering through to pi", async () => {
-		const h = harness("opus", {}, undefined, ok);
+		const h = harness("opus", {}, ok);
 		await h.cc("on", h.uiCtx);
 		expect(h.input("hi", { source: "extension" })).toEqual({ action: "continue" });
 		expect(h.input("/skill:foo")).toEqual({ action: "continue" });
@@ -692,7 +533,7 @@ describe("claude-delegate sticky mode", () => {
 	});
 
 	it("restores sticky mode for the chat on session start", async () => {
-		const h = harness("off", {}, undefined, ok, [
+		const h = harness("sonnet", {}, ok, [
 			{ type: "custom", customType: STICKY_ENTRY_TYPE, data: { mode: "sonnet" } },
 		]);
 		h.sessionStart();
@@ -717,7 +558,7 @@ describe("tool display helpers", () => {
 });
 
 describe("runClaudeTask", () => {
-	it("has no default time limit, but honours an explicit one", async () => {
+	it("has no time limit", async () => {
 		const spy = vi.spyOn(globalThis, "setTimeout");
 		try {
 			await runClaudeTask(["-e", "process.exit(0)"], {
@@ -729,13 +570,6 @@ describe("runClaudeTask", () => {
 		} finally {
 			spy.mockRestore();
 		}
-		const outcome = await runClaudeTask(["-e", "setTimeout(()=>{}, 20000)"], {
-			cwd: process.cwd(),
-			env: {},
-			bin: process.execPath,
-			timeoutMs: 200,
-		});
-		expect(outcome.isError).toBe(true);
 	});
 
 	it("reports every parsed event through onEvent", async () => {
@@ -753,24 +587,21 @@ describe("runClaudeTask", () => {
 		expect(kinds).toEqual(["tool_use", "result"]);
 	});
 
-	it("streams text and returns the final result", async () => {
+	it("returns the final result and session id", async () => {
 		const script = [
 			'process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"s-9"})+"\\n");',
 			'process.stdout.write(JSON.stringify({type:"assistant",message:{content:[{type:"text",text:"step one"}]}})+"\\n");',
 			'process.stdout.write(JSON.stringify({type:"result",subtype:"success",result:"all done",is_error:false})+"\\n");',
 		].join("\n");
-		const updates: string[] = [];
 		const outcome = await runClaudeTask(["-e", script], {
 			cwd: process.cwd(),
 			env: {},
 			bin: process.execPath,
-			onText: (tail) => updates.push(tail),
 		});
 		expect(outcome.claudeSessionId).toBe("s-9");
 		expect(outcome.resultText).toBe("all done");
 		expect(outcome.isError).toBe(false);
-		expect(updates).toEqual(["step one"]);
-		expect(outcome.models).toEqual([]);
+		expect(outcome.model).toBeUndefined();
 	});
 
 	it("marks a failing run as an error", async () => {
