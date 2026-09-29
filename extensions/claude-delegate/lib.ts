@@ -13,6 +13,27 @@ export const MODE_LABELS: Record<DelegationMode, string> = {
 	haiku: "Haiku",
 };
 
+/**
+ * Turn a wire model id into a short human label: `claude-opus-5-5` →
+ * `Opus 5.5`, `claude-haiku-4-5-20251001` → `Haiku 4.5`.
+ */
+export function prettyModelName(id: string): string {
+	const raw = id.replace(/^claude-/, "");
+	const parts = raw.split("-");
+	const family = parts.shift() ?? raw;
+	const version = parts.filter((part) => /^\d+$/.test(part) && part.length <= 2);
+	const label = family.length > 0 ? family.charAt(0).toUpperCase() + family.slice(1) : raw;
+	return version.length > 0 ? `${label} ${version.join(".")}` : label;
+}
+
+/** Status text ACB shows, including the resolved model version when known. */
+export function delegationLabel(mode: DelegationMode, modelId?: string): string {
+	const base = MODE_LABELS[mode];
+	if (!modelId) return base;
+	const pretty = prettyModelName(modelId);
+	return pretty.toLowerCase().startsWith(base.toLowerCase()) ? pretty : `${base} (${pretty})`;
+}
+
 /** Claude Code accepts these short aliases for --model. */
 export function modelAlias(mode: DelegationMode): "opus" | "sonnet" | "haiku" {
 	switch (mode) {
@@ -39,6 +60,9 @@ export interface DelegationStore {
 	readClaudeSession(key: string): string | undefined;
 	writeClaudeSession(key: string, claudeSessionId: string): void;
 	clearClaudeSession(key: string): void;
+	/** Last model id seen for a mode, so labels keep the version between runs. */
+	readModel(mode: DelegationMode): string | undefined;
+	writeModel(mode: DelegationMode, modelId: string): void;
 }
 
 export const DEFAULT_MODE_FILE = join(homedir(), ".config", "acb", "claude-delegate");
@@ -48,6 +72,7 @@ export const DEFAULT_SESSIONS_FILE = join(
 	"acb",
 	"claude-delegate-sessions.json",
 );
+export const DEFAULT_MODELS_FILE = join(homedir(), ".config", "acb", "claude-delegate-models.json");
 
 interface SessionMap {
 	[key: string]: { claudeSessionId: string; updatedAt: string };
@@ -56,10 +81,16 @@ interface SessionMap {
 export class FileDelegationStore implements DelegationStore {
 	private readonly modePath: string;
 	private readonly sessionsPath: string;
+	private readonly modelsPath: string;
 
-	constructor(modePath = DEFAULT_MODE_FILE, sessionsPath = DEFAULT_SESSIONS_FILE) {
+	constructor(
+		modePath = DEFAULT_MODE_FILE,
+		sessionsPath = DEFAULT_SESSIONS_FILE,
+		modelsPath = DEFAULT_MODELS_FILE,
+	) {
 		this.modePath = modePath;
 		this.sessionsPath = sessionsPath;
+		this.modelsPath = modelsPath;
 	}
 
 	readMode(): DelegationMode {
@@ -110,6 +141,38 @@ export class FileDelegationStore implements DelegationStore {
 		const map = this.readSessions();
 		delete map[key];
 		this.writeSessions(map);
+	}
+
+	readModel(mode: DelegationMode): string | undefined {
+		if (mode === "off") return undefined;
+		try {
+			const raw = JSON.parse(readFileSync(this.modelsPath, "utf8")) as Record<string, unknown>;
+			const value = raw?.[mode];
+			return typeof value === "string" && value.length > 0 ? value : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	writeModel(mode: DelegationMode, modelId: string): void {
+		if (mode === "off" || !modelId) return;
+		let map: Record<string, string> = {};
+		try {
+			const raw = JSON.parse(readFileSync(this.modelsPath, "utf8")) as Record<string, unknown>;
+			for (const [key, value] of Object.entries(raw ?? {})) {
+				if (typeof value === "string") map[key] = value;
+			}
+		} catch {
+			map = {};
+		}
+		map[mode] = modelId;
+		mkdirSync(dirname(this.modelsPath), { recursive: true });
+		const temporary = `${this.modelsPath}.${process.pid}.${Date.now()}.tmp`;
+		writeFileSync(temporary, `${JSON.stringify(map, null, "\t")}\n`, {
+			encoding: "utf8",
+			mode: 0o644,
+		});
+		renameSync(temporary, this.modelsPath);
 	}
 }
 
@@ -177,18 +240,26 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 }
 
 export type StreamEvent =
-	| { kind: "init"; claudeSessionId: string }
-	| { kind: "text"; text: string }
-	| { kind: "result"; text?: string; isError: boolean; usage?: Record<string, unknown> };
+	| { kind: "init"; claudeSessionId: string; model?: string }
+	| { kind: "text"; text: string; model?: string }
+	| {
+			kind: "result";
+			text?: string;
+			isError: boolean;
+			usage?: Record<string, unknown>;
+			models?: string[];
+	  };
 
 interface RawStreamEvent {
 	type?: string;
 	subtype?: string;
 	session_id?: unknown;
-	message?: { content?: Array<{ type?: string; text?: unknown }> };
+	model?: unknown;
+	message?: { model?: unknown; content?: Array<{ type?: string; text?: unknown }> };
 	result?: unknown;
 	is_error?: unknown;
 	usage?: unknown;
+	modelUsage?: unknown;
 }
 
 /** Incremental parser for `claude -p --output-format stream-json --verbose` stdout. */
@@ -220,7 +291,11 @@ export class StreamParser {
 			return undefined; // Non-JSON noise (banners, warnings) is ignored.
 		}
 		if (raw.type === "system" && raw.subtype === "init" && typeof raw.session_id === "string") {
-			return { kind: "init", claudeSessionId: raw.session_id };
+			return {
+				kind: "init",
+				claudeSessionId: raw.session_id,
+				model: typeof raw.model === "string" ? raw.model : undefined,
+			};
 		}
 		if (raw.type === "assistant" && Array.isArray(raw.message?.content)) {
 			const text = raw.message.content
@@ -228,7 +303,9 @@ export class StreamParser {
 				.map((block) => String(block.text))
 				.join("\n")
 				.trim();
-			if (text) return { kind: "text", text };
+			const model = typeof raw.message?.model === "string" ? raw.message.model : undefined;
+			if (text) return { kind: "text", text, model };
+			if (model) return { kind: "text", text: "", model };
 			return undefined;
 		}
 		if (raw.type === "result") {
@@ -240,10 +317,27 @@ export class StreamParser {
 					raw.usage && typeof raw.usage === "object"
 						? (raw.usage as Record<string, unknown>)
 						: undefined,
+				models: resultModels(raw.modelUsage),
 			};
 		}
 		return undefined;
 	}
+}
+
+/** Collect the model ids reported in a result event's `modelUsage` map. */
+function resultModels(modelUsage: unknown): string[] | undefined {
+	if (modelUsage === null || typeof modelUsage !== "object" || Array.isArray(modelUsage)) {
+		return undefined;
+	}
+	const models = new Set<string>();
+	for (const [key, value] of Object.entries(modelUsage as Record<string, unknown>)) {
+		const canonical =
+			value !== null && typeof value === "object"
+				? (value as Record<string, unknown>).canonicalModel
+				: undefined;
+		models.add(typeof canonical === "string" && canonical.length > 0 ? canonical : key);
+	}
+	return models.size > 0 ? [...models] : undefined;
 }
 
 /** Cap streamed progress text so onUpdate payloads stay small. */
