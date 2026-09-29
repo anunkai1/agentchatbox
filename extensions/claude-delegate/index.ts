@@ -12,6 +12,7 @@ import {
 	type DelegationStore,
 	delegationLabel,
 	EFFORT_LEVELS,
+	type EffortLevel,
 	FileDelegationStore,
 	MODE_LABELS,
 	PROBE_MODES,
@@ -31,6 +32,79 @@ export const PROBE_TIMEOUT_MS = 2 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
 
 export const DEFAULT_WORKSPACE = join(homedir(), ".config", "browser-harness", "agent-workspace");
+
+/** Parse `/cc [opus|sonnet|haiku] <task>`; the model token is optional. */
+export function parseCcArgs(raw: string): { mode?: DelegationMode; task: string } {
+	const trimmed = raw.trim();
+	const [first, ...rest] = trimmed.split(/\s+/);
+	const asMode = first ? parseDelegationMode(first.toLowerCase()) : undefined;
+	if (asMode && asMode !== "off" && rest.length > 0) {
+		return { mode: asMode, task: rest.join(" ") };
+	}
+	return { task: trimmed };
+}
+
+export interface DelegationRequest {
+	task: string;
+	mode: Exclude<DelegationMode, "off">;
+	fresh?: boolean;
+	signal?: AbortSignal;
+	onText?: (tail: string) => void;
+}
+
+export interface DelegationOutcome {
+	outcome: SpawnOutcome;
+	effort?: EffortLevel;
+	label: string;
+}
+
+/**
+ * Shared delegation core: session continuity, effort, spawn, and the
+ * model/session bookkeeping. Used by the claude_code_task tool and by the
+ * `/cc` passthrough command.
+ */
+export async function performDelegation(
+	store: DelegationStore,
+	workspace: string,
+	runTask: typeof runClaudeTask,
+	request: DelegationRequest,
+): Promise<DelegationOutcome> {
+	const key = sessionKey();
+	const resumeId = request.fresh === true ? undefined : store.readClaudeSession(key);
+	const newSessionId = resumeId ? undefined : randomUUID();
+	mkdirSync(workspace, { recursive: true });
+
+	const mode = request.mode;
+	const effort = resolveEffort(mode, store.readEffort(mode));
+	const plan = buildClaudeSpawn({
+		task: request.task,
+		mode,
+		resumeSessionId: resumeId,
+		newSessionId,
+		effort,
+	});
+
+	const outcome = await runTask(plan.args, {
+		cwd: plan.cwd,
+		env: {
+			...plan.env,
+			BH_TAB_SCOPE: `claude:${key}`,
+			PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
+		},
+		signal: request.signal,
+		onText: request.onText,
+	});
+
+	if (outcome.claudeSessionId) store.writeClaudeSession(key, outcome.claudeSessionId);
+	const primaryModel = outcome.models[0];
+	if (primaryModel) store.writeModel(mode, primaryModel);
+
+	return {
+		outcome,
+		effort,
+		label: delegationLabel(mode, primaryModel ?? store.readModel(mode), effort),
+	};
+}
 
 interface SpawnOutcome {
 	resultText?: string;
@@ -165,6 +239,7 @@ export function registerClaudeDelegate(
 	store: DelegationStore,
 	workspace = DEFAULT_WORKSPACE,
 	runProbe?: ProbeRunner,
+	runTask: typeof runClaudeTask = runClaudeTask,
 ): void {
 	// Labels mirror codex-fast: ACB reads extensionStatusLabels["claude-delegate"].
 	// The text includes the resolved model version once a run has reported it.
@@ -235,39 +310,16 @@ export function registerClaudeDelegate(
 			const task = String(params.task ?? "").trim();
 			if (!task) throw new Error("A non-empty task is required.");
 
-			const key = sessionKey();
-			const resumeId = params.fresh === true ? undefined : store.readClaudeSession(key);
-			const newSessionId = resumeId ? undefined : randomUUID();
-
-			mkdirSync(workspace, { recursive: true });
-
-			const effort = resolveEffort(mode, store.readEffort(mode));
-			const plan = buildClaudeSpawn({
-				task,
-				mode,
-				resumeSessionId: resumeId,
-				newSessionId,
-				effort,
-			});
-
 			onUpdate?.({
-				content: [
-					{
-						type: "text",
-						text: `Delegating to Claude Code (${statusText(mode)})…`,
-					},
-				],
+				content: [{ type: "text", text: `Delegating to Claude Code (${statusText(mode)})…` }],
 				details: {},
 			});
 
 			let lastUpdate = 0;
-			const outcome = await runClaudeTask(plan.args, {
-				cwd: plan.cwd,
-				env: {
-					...plan.env,
-					BH_TAB_SCOPE: `claude:${key}`,
-					PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
-				},
+			const { outcome, effort } = await performDelegation(store, workspace, runTask, {
+				task,
+				mode,
+				fresh: params.fresh === true,
 				signal: signal ?? undefined,
 				onText: (tail) => {
 					const now = Date.now();
@@ -277,15 +329,7 @@ export function registerClaudeDelegate(
 				},
 			});
 
-			if (outcome.claudeSessionId) {
-				store.writeClaudeSession(key, outcome.claudeSessionId);
-			}
-
-			// Record the resolved model so the ACB status label (and the next
-			// "Delegating to…" line) can show the exact version.
-			const primaryModel = outcome.models[0];
-			if (primaryModel) {
-				store.writeModel(mode, primaryModel);
+			if (outcome.models[0]) {
 				const ui = (ctx as unknown as StatusContext | undefined)?.ui;
 				if (ui) ui.setStatus("claude-delegate", statusText(mode));
 			}
@@ -294,6 +338,7 @@ export function registerClaudeDelegate(
 				throw new Error(outcome.resultText ?? "Delegated task failed.");
 			}
 
+			const primaryModel = outcome.models[0];
 			const resultText =
 				outcome.resultText ??
 				"Delegated task finished but produced no summary text. Check the Claude session files for details.";
@@ -313,6 +358,63 @@ export function registerClaudeDelegate(
 				content: [{ type: "text", text: `${resultText}${modelNote}` }],
 				details,
 			} satisfies ToolResult;
+		},
+	});
+
+	// Direct passthrough: the prompt goes to headless Claude Code without a
+	// driver-model turn deciding whether to delegate.
+	pi.registerCommand("cc", {
+		description: "send a task straight to headless Claude Code: /cc [opus|sonnet|haiku] <task>",
+		handler: async (rawArgs, ctx) => {
+			const { mode: requested, task } = parseCcArgs(rawArgs);
+			if (!task) {
+				ctx.ui.notify("Usage: /cc [opus|sonnet|haiku] <task>", "warning");
+				return;
+			}
+			const mode = requested ?? store.readMode();
+			if (mode === "off") {
+				ctx.ui.notify(
+					"Claude Code delegation is off. Pick a model with /claude, or prefix the task: /cc sonnet <task>.",
+					"warning",
+				);
+				return;
+			}
+
+			const label = statusText(mode);
+			ctx.ui.notify(`Sending to Claude Code (${label})…`, "info");
+			try {
+				const { outcome, label: resolved } = await performDelegation(store, workspace, runTask, {
+					task,
+					mode,
+					onText: (tail) =>
+						ctx.ui.setStatus("claude-delegate", `${label} · ${tail.split("\n")[0].slice(0, 60)}`),
+				});
+				// Restore the steady-state label (now with the resolved version).
+				ctx.ui.setStatus(
+					"claude-delegate",
+					delegationLabel(mode, store.readModel(mode), resolveEffort(mode, store.readEffort(mode))),
+				);
+				if (outcome.isError) {
+					ctx.ui.notify(outcome.resultText ?? "Delegated task failed.", "error");
+					return;
+				}
+				const primaryModel = outcome.models[0];
+				const footer = primaryModel ? `\n\n— ${resolved} (\`${primaryModel}\`)` : "";
+				// ACB renders extension display notes for customType "note"
+				// (display:true, no triggerTurn); other custom types are
+				// counted in context but never drawn.
+				pi.sendMessage({
+					customType: "note",
+					content: `${outcome.resultText ?? "Task finished with no summary text."}${footer}`,
+					display: true,
+				});
+			} catch (error) {
+				ctx.ui.setStatus(
+					"claude-delegate",
+					delegationLabel(mode, store.readModel(mode), resolveEffort(mode, store.readEffort(mode))),
+				);
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+			}
 		},
 	});
 
