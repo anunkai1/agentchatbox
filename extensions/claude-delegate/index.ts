@@ -11,13 +11,16 @@ import {
 	type DelegationMode,
 	type DelegationStore,
 	delegationLabel,
+	EFFORT_LEVELS,
 	FileDelegationStore,
 	MODE_LABELS,
 	PROBE_MODES,
 	PROBE_TASK,
 	parseDelegationMode,
+	parseEffortLevel,
 	prettyModelName,
 	progressTail,
+	resolveEffort,
 	StreamParser,
 } from "./lib.js";
 
@@ -165,7 +168,8 @@ export function registerClaudeDelegate(
 ): void {
 	// Labels mirror codex-fast: ACB reads extensionStatusLabels["claude-delegate"].
 	// The text includes the resolved model version once a run has reported it.
-	const statusText = (mode: DelegationMode) => delegationLabel(mode, store.readModel(mode));
+	const statusText = (mode: DelegationMode) =>
+		delegationLabel(mode, store.readModel(mode), resolveEffort(mode, store.readEffort(mode)));
 	const setStatus = (mode: DelegationMode, ctx: StatusContext) => {
 		ctx.ui.setStatus("claude-delegate", statusText(mode));
 	};
@@ -179,7 +183,11 @@ export function registerClaudeDelegate(
 
 	// One cheap throwaway run per alias; only the reported model id is kept.
 	const defaultProbe: ProbeRunner = async (mode) => {
-		const plan = buildClaudeSpawn({ task: PROBE_TASK, mode });
+		const plan = buildClaudeSpawn({
+			task: PROBE_TASK,
+			mode,
+			effort: resolveEffort(mode, store.readEffort(mode)),
+		});
 		const outcome = await runClaudeTask(plan.args, {
 			cwd: plan.cwd,
 			env: {
@@ -233,18 +241,20 @@ export function registerClaudeDelegate(
 
 			mkdirSync(workspace, { recursive: true });
 
+			const effort = resolveEffort(mode, store.readEffort(mode));
 			const plan = buildClaudeSpawn({
 				task,
 				mode,
 				resumeSessionId: resumeId,
 				newSessionId,
+				effort,
 			});
 
 			onUpdate?.({
 				content: [
 					{
 						type: "text",
-						text: `Delegating to Claude Code (${delegationLabel(mode, store.readModel(mode))})…`,
+						text: `Delegating to Claude Code (${statusText(mode)})…`,
 					},
 				],
 				details: {},
@@ -288,14 +298,15 @@ export function registerClaudeDelegate(
 				outcome.resultText ??
 				"Delegated task finished but produced no summary text. Check the Claude session files for details.";
 			const modelNote = primaryModel
-				? `\n\n— Claude Code model: **${prettyModelName(primaryModel)}** (\`${primaryModel}\`)`
+				? `\n\n— Claude Code model: **${prettyModelName(primaryModel)}** (\`${primaryModel}\`)${effort ? ` at \`${effort}\` effort` : ""}`
 				: "";
 			const details: Record<string, unknown> = {
 				mode: MODE_LABELS[mode],
-				label: delegationLabel(mode, primaryModel),
+				label: delegationLabel(mode, primaryModel, effort),
 				claudeSessionId: outcome.claudeSessionId,
 			};
 			if (primaryModel) details.model = primaryModel;
+			if (effort) details.effort = effort;
 			if (outcome.models.length > 1) details.models = outcome.models;
 			if (outcome.usage) details.usage = outcome.usage;
 			return {
@@ -306,13 +317,53 @@ export function registerClaudeDelegate(
 	});
 
 	pi.registerCommand("claude", {
-		description: "toggle Claude Code delegation (off/opus/sonnet/haiku)",
+		description:
+			"toggle Claude Code delegation (off/opus/sonnet/haiku), /claude effort to set reasoning effort",
 		handler: async (rawArgs, ctx) => {
 			const command = rawArgs.trim().toLowerCase();
 			const current = store.readMode();
 
 			if (command === "report") {
 				setStatus(current, ctx);
+				return;
+			}
+
+			// /claude effort [level|auto] — per-mode override of the built-in default.
+			if (command === "effort" || command.startsWith("effort ")) {
+				if (current === "off") {
+					ctx.ui.notify("Select a delegation mode before setting effort.", "warning");
+					return;
+				}
+				const arg = command.slice("effort".length).trim();
+				const stored = store.readEffort(current);
+				if (!arg) {
+					const effective = resolveEffort(current, stored);
+					const source = stored && stored !== "auto" ? "override" : "default";
+					ctx.ui.notify(
+						effective
+							? `${MODE_LABELS[current]} effort: ${effective} (${source}). Levels: ${EFFORT_LEVELS.join(", ")}, or auto.`
+							: `${MODE_LABELS[current]} has no effort parameter (its model does not support effort).`,
+						"info",
+					);
+					return;
+				}
+				const setting = parseEffortLevel(arg);
+				if (!setting) {
+					ctx.ui.notify(
+						`Unknown effort "${arg}". Use ${EFFORT_LEVELS.join(", ")}, or auto.`,
+						"warning",
+					);
+					return;
+				}
+				store.writeEffort(current, setting);
+				setStatus(current, ctx);
+				const effective = resolveEffort(current, setting);
+				ctx.ui.notify(
+					effective
+						? `${MODE_LABELS[current]} effort set to ${effective}${setting === "auto" ? " (default)" : ""}.`
+						: `${MODE_LABELS[current]} does not support effort; the setting is stored but unused.`,
+					"info",
+				);
 				return;
 			}
 
@@ -364,7 +415,10 @@ export function registerClaudeDelegate(
 			} else {
 				next = parseDelegationMode(command);
 				if (!next) {
-					ctx.ui.notify("Usage: /claude [off|opus|sonnet|haiku|status|menu|probe]", "warning");
+					ctx.ui.notify(
+						"Usage: /claude [off|opus|sonnet|haiku|status|menu|probe|effort <level>]",
+						"warning",
+					);
 					return;
 				}
 			}
