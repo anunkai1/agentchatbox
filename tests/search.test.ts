@@ -89,6 +89,16 @@ describe("semantic search store", () => {
 		expect(calls[0]).toHaveLength(3);
 	});
 
+	it("bounds each embed call to the batch size", async () => {
+		const calls: number[] = [];
+		const many = Array.from({ length: 20 }, (_, i) => passage(i));
+		await store.indexSession(meta("big"), many, async (texts) => {
+			calls.push(texts.length);
+			return texts.map(() => vector());
+		});
+		expect(calls).toEqual([8, 8, 4]);
+	});
+
 	it("does not commit embeddings if the source changes or disappears", async () => {
 		await store.indexSession(
 			meta("deleted"),
