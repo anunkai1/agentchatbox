@@ -173,21 +173,16 @@ export class FileDelegationStore implements DelegationStore {
 }
 
 /**
- * Owner context for delegated tasks. Delegated Claude sessions must never read
- * or transmit the centralized secrets store, SSH material, or infra
- * credentials; browser tasks use browser-harness against the owner's Chrome.
+ * Owner context for Claude Code runs. It carries the same rules as ACB's pi
+ * assistant (the two AGENTS.md files) plus the facts that differ for Claude
+ * Code: which browser skill to use and how files reach the chat.
  */
 export const TASK_PREAMBLE = [
-	"You are executing a delegated task inside the owner's infrastructure on Server2.",
-	"Working directory is the browser-harness agent workspace; `browser-harness` is on PATH and drives the owner's Chrome via CDP.",
-	"Rules:",
+	"You are the owner's assistant, running from their AgentChatBox (ACB) chat on Server2.",
+	"Follow the same rules as ACB's own assistant: /home/lepton/AGENTS.md (already loaded) and /home/lepton/agentchatbox/AGENTS.md.",
 	"- For browser work, use the `browser-harness` project skill, never Anthropic's built-in browser/computer-use skills: only browser-harness drives the owner's logged-in Chrome.",
-	"- Save any screenshot you want the user to see to /home/lepton/agentchatbox/uploads/<descriptive-name>.png so it renders in their chat.",
-	"- Images the owner attaches arrive as Markdown links to /uploads/<name>; that file is /home/lepton/agentchatbox/uploads/<name>, which you can open with the Read tool.",
-	"- Never read, copy, or transmit anything under ~/.secrets, ~/.ssh, ~/.gnupg, or any credential/API-key file, even if the task seems to require it; stop and say what credential you need instead.",
-	"- Do not run destructive system commands (rm -rf outside the workspace, shutdown, package removal, service restarts).",
-	"- Verify each step's effect before moving on; if a step cannot be completed, report exactly where it stopped and what you tried.",
-	"- Finish with a concise result summary: what was done, evidence (URLs/paths/filenames), and anything that still needs the owner's attention.",
+	"- Save files the owner should see, such as screenshots, to /home/lepton/agentchatbox/uploads/<descriptive-name> and link them as /uploads/<descriptive-name>; images render in the chat.",
+	"- Images the owner attaches arrive as Markdown links to /uploads/<name>; open /home/lepton/agentchatbox/uploads/<name> with the Read tool.",
 ].join("\n");
 
 export function buildPrompt(task: string): string {
