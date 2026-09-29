@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	ACTIVITY_STATUS_KEY,
+	formatElapsed,
 	MIRROR_PROVIDER,
 	PROMPT_MESSAGE_TYPE,
 	parseCcArgs,
@@ -15,11 +17,13 @@ import {
 	DEFAULT_EFFORT,
 	delegationLabel,
 	FileDelegationStore,
+	normaliseToolArgs,
 	parseDelegationMode,
 	parseEffortLevel,
 	prettyModelName,
 	progressTail,
 	resolveEffort,
+	type StreamEvent,
 	StreamParser,
 } from "../extensions/claude-delegate/lib.js";
 
@@ -44,6 +48,7 @@ describe("claude-delegate spawn plan", () => {
 		expect(plan.args[plan.args.indexOf("--model") + 1]).toBe("opus");
 		expect(plan.args[plan.args.indexOf("--session-id") + 1]).toBe("uuid-1");
 		expect(plan.args).not.toContain("--resume");
+		expect(plan.args[plan.args.indexOf("--settings") + 1]).toBe('{"showThinkingSummaries":true}');
 		expect(plan.args[1]).toContain("do a thing");
 		expect(plan.args[1]).toContain("~/.secrets");
 		expect(plan.env.BH_DOMAIN_SKILLS).toBe("1");
@@ -89,6 +94,25 @@ describe("claude stream parser", () => {
 			kind: "result",
 			models: ["claude-opus-5-5", "claude-haiku-4-5-20251001"],
 		});
+	});
+
+	it("parses thinking, tool calls and tool results", () => {
+		const parser = new StreamParser();
+		const events = parser.feed(
+			[
+				'{"type":"assistant","message":{"model":"m","content":[{"type":"thinking","thinking":"plan it"}]}}',
+				'{"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}',
+				'{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"a.txt"}],"is_error":false}]}}',
+				"",
+			].join("\n"),
+		);
+		expect(events).toEqual([
+			{ kind: "thinking", text: "plan it" },
+			{ kind: "text", text: "", model: "m" },
+			{ kind: "text", text: "", model: "m" },
+			{ kind: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+			{ kind: "tool_result", id: "t1", text: "a.txt", isError: false },
+		]);
 	});
 
 	it("ignores non-JSON noise", () => {
@@ -581,6 +605,53 @@ describe("claude-delegate sticky mode", () => {
 		expect(mirrored.content[0].text).toContain("done");
 	});
 
+	it("shows and saves Claude Code's thinking and tool calls like any model", async () => {
+		type Run = (
+			args: string[],
+			options?: { onEvent?: (event: StreamEvent) => void },
+		) => Promise<{
+			resultText?: string;
+			isError: boolean;
+			models: string[];
+		}>;
+		const run: Run = async (_args, options) => {
+			for (const event of [
+				{ kind: "init", claudeSessionId: "s", model: "claude-opus-5-5" },
+				{ kind: "thinking", text: "look first" },
+				{ kind: "tool_use", id: "t1", name: "Read", input: { file_path: "/x/y.ts" } },
+				{ kind: "tool_result", id: "t1", text: "contents", isError: false },
+				{ kind: "thinking", text: "now answer" },
+				{ kind: "text", text: "done", model: "claude-opus-5-5" },
+			] as StreamEvent[]) {
+				options?.onEvent?.(event);
+			}
+			return { resultText: "done", isError: false, models: ["claude-opus-5-5"] };
+		};
+		const h = harness("opus", {}, undefined, run as never);
+		await h.cc("on", h.uiCtx);
+		h.input("read it");
+		await h.whenIdle();
+
+		const saved = h.appendMessage.mock.calls.map((call) => call[0]);
+		expect(saved.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
+		expect(saved[0].stopReason).toBe("toolUse");
+		expect(saved[0].content.map((b: { type: string }) => b.type)).toEqual(["thinking", "toolCall"]);
+		expect(saved[0].content[1].arguments).toMatchObject({ path: "/x/y.ts" });
+		expect(saved[1]).toMatchObject({ toolCallId: "t1", toolName: "Read", isError: false });
+		expect(saved[2].content.map((b: { type: string }) => b.type)).toEqual(["thinking", "text"]);
+
+		const live = h.ui.setStatus.mock.calls
+			.filter(([key]: [string]) => key === ACTIVITY_STATUS_KEY)
+			.map(([, text]: [string, string]) => JSON.parse(text));
+		expect(live.map((p: { t: string }) => p.t)).toEqual([
+			"thinking",
+			"tool",
+			"tool_end",
+			"thinking",
+		]);
+		expect(live[2]).toMatchObject({ id: "t1", text: "contents", saved: 2 });
+	});
+
 	it("mirrors a failed run too, so the chat still saves", async () => {
 		const h = harness("opus", {}, undefined, async () => ({
 			isError: true,
@@ -621,7 +692,58 @@ describe("claude-delegate sticky mode", () => {
 	});
 });
 
+describe("tool display helpers", () => {
+	it("mirrors file_path to path and caps long strings", () => {
+		const args = normaliseToolArgs({ file_path: "/a/b.ts", content: "x".repeat(50) }, 10);
+		expect(args.path).toBe("/a/b.ts");
+		expect(args.content).toBe(`${"x".repeat(10)}… [40 more characters]`);
+		expect(normaliseToolArgs(undefined)).toEqual({});
+	});
+
+	it("formats elapsed time compactly", () => {
+		expect(formatElapsed(45_000)).toBe("45s");
+		expect(formatElapsed(192_000)).toBe("3m12s");
+		expect(formatElapsed(3_900_000)).toBe("1h05m");
+	});
+});
+
 describe("runClaudeTask", () => {
+	it("has no default time limit, but honours an explicit one", async () => {
+		const spy = vi.spyOn(globalThis, "setTimeout");
+		try {
+			await runClaudeTask(["-e", "process.exit(0)"], {
+				cwd: process.cwd(),
+				env: {},
+				bin: process.execPath,
+			});
+			expect(spy.mock.calls.filter(([, delay]) => (delay ?? 0) >= 60_000)).toEqual([]);
+		} finally {
+			spy.mockRestore();
+		}
+		const outcome = await runClaudeTask(["-e", "setTimeout(()=>{}, 20000)"], {
+			cwd: process.cwd(),
+			env: {},
+			bin: process.execPath,
+			timeoutMs: 200,
+		});
+		expect(outcome.isError).toBe(true);
+	});
+
+	it("reports every parsed event through onEvent", async () => {
+		const script = [
+			'process.stdout.write(JSON.stringify({type:"assistant",message:{content:[{type:"tool_use",id:"t",name:"Read",input:{}}]}})+"\\n");',
+			'process.stdout.write(JSON.stringify({type:"result",result:"ok",is_error:false})+"\\n");',
+		].join("\n");
+		const kinds: string[] = [];
+		await runClaudeTask(["-e", script], {
+			cwd: process.cwd(),
+			env: {},
+			bin: process.execPath,
+			onEvent: (event) => kinds.push(event.kind),
+		});
+		expect(kinds).toEqual(["tool_use", "result"]);
+	});
+
 	it("streams text and returns the final result", async () => {
 		const script = [
 			'process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"s-9"})+"\\n");',

@@ -7,6 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
 	buildClaudeSpawn,
+	capToolResult,
 	DELEGATION_MODES,
 	type DelegationMode,
 	type DelegationStore,
@@ -15,6 +16,7 @@ import {
 	type EffortLevel,
 	FileDelegationStore,
 	MODE_LABELS,
+	normaliseToolArgs,
 	PROBE_MODES,
 	PROBE_TASK,
 	parseDelegationMode,
@@ -22,6 +24,7 @@ import {
 	prettyModelName,
 	progressTail,
 	resolveEffort,
+	type StreamEvent,
 	StreamParser,
 } from "./lib.js";
 
@@ -33,10 +36,24 @@ const TOOL_NAME = "claude_code_task";
 export const PROMPT_MESSAGE_TYPE = "claude-prompt";
 /** Session entry recording this chat's sticky mode; the last entry wins. */
 export const STICKY_ENTRY_TYPE = "claude-sticky";
-export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 /** Alias probes are trivial; keep them from hanging a user-initiated refresh. */
 export const PROBE_TIMEOUT_MS = 2 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
+/** How often the status label refreshes during a delegated run. */
+const HEARTBEAT_MS = 5000;
+/** Silence on the stream beyond this is flagged in the status label. */
+const QUIET_WARNING_MS = 2 * 60 * 1000;
+
+/** `45s`, `3m12s`, `1h05m`. */
+export function formatElapsed(ms: number): string {
+	const total = Math.max(0, Math.floor(ms / 1000));
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const sec = total % 60;
+	if (h > 0) return `${h}h${String(m).padStart(2, "0")}m`;
+	if (m > 0) return `${m}m${String(sec).padStart(2, "0")}s`;
+	return `${sec}s`;
+}
 
 export const DEFAULT_WORKSPACE = join(homedir(), ".config", "browser-harness", "agent-workspace");
 
@@ -93,6 +110,8 @@ export interface DelegationRequest {
 	fresh?: boolean;
 	signal?: AbortSignal;
 	onText?: (tail: string) => void;
+	/** Every parsed stream event (thinking, tool calls and results included). */
+	onEvent?: (event: StreamEvent) => void;
 }
 
 export interface DelegationOutcome {
@@ -136,6 +155,7 @@ export async function performDelegation(
 		},
 		signal: request.signal,
 		onText: request.onText,
+		onEvent: request.onEvent,
 	});
 
 	if (outcome.claudeSessionId) store.writeClaudeSession(key, outcome.claudeSessionId);
@@ -175,7 +195,10 @@ function killTree(child: ReturnType<typeof spawn>): void {
 
 /**
  * Run one headless `claude -p` task. Streamed assistant text is forwarded
- * through onText so ACB shows live progress while Claude works.
+ * through onText and every parsed event through onEvent, so ACB shows live
+ * progress while Claude works. There is no default time limit: long
+ * sessions are expected, and only an explicit timeoutMs (probes) or the
+ * abort signal stops a run.
  */
 export function runClaudeTask(
 	args: string[],
@@ -185,6 +208,7 @@ export function runClaudeTask(
 		signal?: AbortSignal;
 		timeoutMs?: number;
 		onText?: (tail: string) => void;
+		onEvent?: (event: StreamEvent) => void;
 		/** Override the executable (tests use a stub that emits stream-json). */
 		bin?: string;
 	},
@@ -198,7 +222,10 @@ export function runClaudeTask(
 		});
 
 		const parser = new StreamParser();
-		const timeout = setTimeout(() => killTree(child), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+		const timeout =
+			options.timeoutMs === undefined
+				? undefined
+				: setTimeout(() => killTree(child), options.timeoutMs);
 
 		let stderr = "";
 		let lastText = "";
@@ -218,6 +245,7 @@ export function runClaudeTask(
 		child.stdout?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk: string) => {
 			for (const event of parser.feed(chunk)) {
+				options.onEvent?.(event);
 				if (event.kind === "init") {
 					claudeSessionId = event.claudeSessionId;
 					noteModel(event.model);
@@ -240,13 +268,13 @@ export function runClaudeTask(
 		});
 
 		child.on("error", (error) => {
-			clearTimeout(timeout);
+			if (timeout) clearTimeout(timeout);
 			options.signal?.removeEventListener("abort", abortHandler);
 			reject(new Error(`Failed to start claude: ${error.message}`));
 		});
 
 		child.on("close", (code, signalName) => {
-			clearTimeout(timeout);
+			if (timeout) clearTimeout(timeout);
 			options.signal?.removeEventListener("abort", abortHandler);
 			if (options.signal?.aborted === true) {
 				reject(new Error("Delegated task cancelled."));
@@ -288,33 +316,170 @@ interface MirrorSink {
 	appendMessage(message: unknown): unknown;
 }
 
+const ZERO_USAGE = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function appendToSession(ctx: StatusContext, message: unknown): void {
+	const sink = ctx.sessionManager as Partial<MirrorSink> | undefined;
+	if (typeof sink?.appendMessage !== "function") return;
+	sink.appendMessage(message);
+}
+
+function assistantMessage(content: unknown[], model: string, stopReason: "stop" | "toolUse") {
+	return {
+		role: "assistant",
+		content,
+		api: MIRROR_PROVIDER,
+		provider: MIRROR_PROVIDER,
+		model,
+		usage: ZERO_USAGE,
+		stopReason,
+		timestamp: Date.now(),
+	};
+}
+
 /**
  * Pi writes a chat's session file only once it holds an assistant message, and
  * Claude Code mode never produces one (pi is bypassed), so the prompts and
  * notes would vanish on reload. Recording each Claude Code reply as an
  * assistant message makes pi flush the whole chat. Pi hands extensions the
- * read-only session view, but the object is the real manager.
+ * read-only session view, but the object is the real manager. Thinking that
+ * arrived after the last tool step rides along on the reply.
  */
-export function mirrorReplyToSession(ctx: StatusContext, text: string, model: string): void {
-	const sink = ctx.sessionManager as Partial<MirrorSink> | undefined;
-	if (typeof sink?.appendMessage !== "function") return;
-	sink.appendMessage({
-		role: "assistant",
-		content: [{ type: "text", text }],
-		api: MIRROR_PROVIDER,
-		provider: MIRROR_PROVIDER,
-		model,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-		timestamp: Date.now(),
-	});
+export function mirrorReplyToSession(
+	ctx: StatusContext,
+	text: string,
+	model: string,
+	thinking: string[] = [],
+): void {
+	appendToSession(
+		ctx,
+		assistantMessage(
+			[...thinking.map((t) => ({ type: "thinking", thinking: t })), { type: "text", text }],
+			model,
+			"stop",
+		),
+	);
+}
+
+/** Status key carrying live activity events to ACB's browser client. */
+export const ACTIVITY_STATUS_KEY = "claude-activity";
+const THINKING_LIVE_LIMIT = 8000;
+
+/** One-line description of a tool call, for the status label. */
+function describeTool(name: string, args: Record<string, unknown>): string {
+	const detail =
+		typeof args.command === "string"
+			? args.command
+			: typeof args.path === "string"
+				? args.path
+				: typeof args.url === "string"
+					? args.url
+					: "";
+	return `${name}${detail ? `: ${detail.replace(/\s+/g, " ").slice(0, 40)}` : ""}`;
+}
+
+/**
+ * Turns one run's stream events into what ACB shows for any other model:
+ * live thinking blocks and tool cards (ephemeral status events the browser
+ * paints), and the same steps saved to the chat as assistant/toolResult
+ * messages so a reload rebuilds them. A step is saved when its first tool
+ * result arrives, matching how pi orders assistant and toolResult messages.
+ */
+export class RunTrace {
+	private thinking: string[] = [];
+	private text = "";
+	private tools: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
+	private names = new Map<string, string>();
+	private pending = new Map<string, string>();
+	private seq = 0;
+	private model: string;
+	lastEventAt = Date.now();
+	steps = 0;
+
+	constructor(
+		private readonly ctx: StatusContext,
+		fallbackModel: string,
+	) {
+		this.model = fallbackModel;
+	}
+
+	/** Tool calls started but not yet answered, oldest first. */
+	get pendingTools(): string[] {
+		return [...this.pending.values()];
+	}
+
+	/** Thinking not yet attached to a saved step; goes on the final reply. */
+	get trailingThinking(): string[] {
+		return this.thinking;
+	}
+
+	private live(payload: Record<string, unknown>): void {
+		this.seq += 1;
+		this.ctx.ui.setStatus(ACTIVITY_STATUS_KEY, JSON.stringify({ seq: this.seq, ...payload }));
+	}
+
+	handle(event: StreamEvent): void {
+		if (event.kind === "result") return;
+		this.lastEventAt = Date.now();
+		if (event.kind === "init") {
+			if (event.model) this.model = event.model;
+		} else if (event.kind === "text") {
+			if (event.model) this.model = event.model;
+			if (event.text) this.text = event.text;
+		} else if (event.kind === "thinking") {
+			this.thinking.push(event.text);
+			this.live({ t: "thinking", text: event.text.slice(0, THINKING_LIVE_LIMIT) });
+		} else if (event.kind === "tool_use") {
+			const args = normaliseToolArgs(event.input);
+			this.tools.push({ id: event.id, name: event.name, args });
+			this.names.set(event.id, event.name);
+			this.pending.set(event.id, describeTool(event.name, args));
+			this.live({ t: "tool", id: event.id, name: event.name, args });
+		} else if (event.kind === "tool_result") {
+			const saved = this.flushStep() + 1;
+			const text = capToolResult(event.text);
+			this.pending.delete(event.id);
+			this.steps += 1;
+			// `saved` lets the browser keep its fork ordinal in step with the
+			// session messages written behind its back.
+			this.live({ t: "tool_end", id: event.id, text, isError: event.isError, saved });
+			appendToSession(this.ctx, {
+				role: "toolResult",
+				toolCallId: event.id,
+				toolName: this.names.get(event.id) ?? "tool",
+				content: [{ type: "text", text }],
+				isError: event.isError,
+				timestamp: Date.now(),
+			});
+		}
+	}
+
+	/** Save the assistant message (thinking, commentary, tool calls) so far. */
+	private flushStep(): number {
+		if (this.tools.length === 0) return 0;
+		const content: unknown[] = [
+			...this.thinking.map((t) => ({ type: "thinking", thinking: t })),
+			...(this.text ? [{ type: "text", text: this.text }] : []),
+			...this.tools.map((tool) => ({
+				type: "toolCall",
+				id: tool.id,
+				name: tool.name,
+				arguments: tool.args,
+			})),
+		];
+		appendToSession(this.ctx, assistantMessage(content, this.model, "toolUse"));
+		this.thinking = [];
+		this.text = "";
+		this.tools = [];
+		return 1;
+	}
 }
 
 /** Resolves one probe run; injectable so tests do not spawn Claude. */
@@ -478,19 +643,35 @@ export function registerClaudeDelegate(
 		});
 		const run = async () => {
 			ctx.ui.notify(`Sending to Claude Code (${label})…`, "info");
+			const trace = new RunTrace(ctx, mode);
+			const startedAt = Date.now();
+			// The status label doubles as a heartbeat: elapsed time, the tool in
+			// flight and how long the stream has been quiet, so a stuck run is
+			// visibly different from a busy one (there is no time limit).
+			const beat = () => {
+				const elapsed = formatElapsed(Date.now() - startedAt);
+				const quiet = Date.now() - trace.lastEventAt;
+				const doing = trace.pendingTools[0] ?? "working";
+				const warn = quiet >= QUIET_WARNING_MS ? ` · ⚠ quiet ${formatElapsed(quiet)}` : "";
+				ctx.ui.setStatus("claude-delegate", `${label} · ${doing} · ${elapsed}${warn}`);
+			};
+			const heartbeat = setInterval(beat, HEARTBEAT_MS);
+			beat();
 			try {
 				const { outcome, label: resolved } = await performDelegation(store, workspace, runTask, {
 					task,
 					mode,
 					sessionKey: key,
-					onText: (tail) =>
-						ctx.ui.setStatus("claude-delegate", `${label} · ${tail.split("\n")[0].slice(0, 60)}`),
+					onEvent: (event) => {
+						trace.handle(event);
+						beat();
+					},
 				});
 				const primaryModel = outcome.models[0];
 				if (outcome.isError) {
 					const failure = outcome.resultText ?? "Delegated task failed.";
 					ctx.ui.notify(failure, "error");
-					mirrorReplyToSession(ctx, `⚠ ${failure}`, primaryModel ?? mode);
+					mirrorReplyToSession(ctx, `⚠ ${failure}`, primaryModel ?? mode, trace.trailingThinking);
 					return;
 				}
 				const footer = primaryModel ? `\n\n— ${resolved} (\`${primaryModel}\`)` : "";
@@ -499,12 +680,13 @@ export function registerClaudeDelegate(
 				// (display:true, no triggerTurn). The assistant mirror right after
 				// it is what persists the chat; ACB's history drops the note then.
 				pi.sendMessage({ customType: "note", content: reply, display: true });
-				mirrorReplyToSession(ctx, reply, primaryModel ?? mode);
+				mirrorReplyToSession(ctx, reply, primaryModel ?? mode, trace.trailingThinking);
 			} catch (error) {
 				const failure = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(failure, "error");
-				mirrorReplyToSession(ctx, `⚠ ${failure}`, mode);
+				mirrorReplyToSession(ctx, `⚠ ${failure}`, mode, trace.trailingThinking);
 			} finally {
+				clearInterval(heartbeat);
 				// Restore the steady-state label (now with the resolved version).
 				restoreStatus(ctx);
 			}

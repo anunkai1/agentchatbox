@@ -330,6 +330,43 @@ let extensionUiResponder: ExtensionUiResponder | null = null;
  */
 let liveMessageSeq = 0;
 
+interface ClaudeActivity {
+	t?: string;
+	text?: string;
+	id?: string;
+	name?: string;
+	args?: unknown;
+	isError?: boolean;
+	saved?: number;
+}
+
+/**
+ * Paint one live step of a /cc run. The claude-delegate extension sends these
+ * as JSON status events (thinking, tool start, tool end); they reuse the
+ * renderer's thinking block and tool cards so Claude Code looks like any other
+ * model. `saved` counts the session messages the extension wrote for the step,
+ * keeping the fork ordinal aligned with the transcript.
+ */
+function handleClaudeActivity(raw: string): void {
+	let a: ClaudeActivity;
+	try {
+		a = JSON.parse(raw) as ClaudeActivity;
+	} catch {
+		return;
+	}
+	if (a.t === "thinking" && typeof a.text === "string") {
+		const msg: PersistedMessage = { kind: "assistant", text: "", thinking: a.text, ts: Date.now() };
+		state.messages.push(msg);
+		appendNode(renderMessageNode(msg));
+	} else if (a.t === "tool" && typeof a.id === "string" && typeof a.name === "string") {
+		state.messages.push({ kind: "tool", name: a.name, args: a.args });
+		appendToolCall(a.name, a.args, a.id);
+	} else if (a.t === "tool_end" && typeof a.id === "string") {
+		finalizeToolCall(a.id, a.name ?? "", a.text, a.isError === true);
+		if (typeof a.saved === "number") liveMessageSeq += a.saved;
+	}
+}
+
 /**
  * Collect a small upload reference for every image attached to the composer.
  * The server resolves each reference from its private upload store, avoiding
@@ -1193,7 +1230,13 @@ function onEvent(event: Record<string, unknown>): void {
 			// `notify` is fire-and-forget (no response expected) — handled
 			// inline here. Dialog methods (select/confirm/input) are handled
 			// by the extension-ui module, which calls the responder.
-			if (e.method === "setStatus" && typeof e.statusKey === "string") {
+			if (e.method === "setStatus" && e.statusKey === "claude-activity") {
+				// Live step from a /cc run (claude-delegate extension): painted
+				// with the same thinking block and tool cards as any other model.
+				// Ephemeral, so it never joins the status labels; the extension
+				// also saves each step to the session for reloads.
+				if (typeof e.statusText === "string") handleClaudeActivity(e.statusText);
+			} else if (e.method === "setStatus" && typeof e.statusKey === "string") {
 				if (typeof e.statusText === "string") {
 					state.extensionStatusLabels[e.statusKey] = e.statusText;
 				} else {
