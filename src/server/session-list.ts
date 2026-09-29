@@ -154,6 +154,21 @@ function firstUserTextFromLine(line: string): string | null {
 	}
 }
 
+/** The prompt text of a claude-delegate `/cc` turn. pi stores it as a
+ * `custom_message` (customType "claude-prompt") rather than a user message, so
+ * a chat driven only through /cc has no user-role line to title it from. */
+function claudePromptTextFromLine(line: string): string | null {
+	if (!/"customType"\s*:\s*"claude-prompt"/.test(line)) return null;
+	const encoded = line.match(/"content"\s*:\s*("(?:\\.|[^"\\])*")/)?.[1];
+	if (!encoded) return null;
+	try {
+		const text = JSON.parse(encoded) as unknown;
+		return typeof text === "string" && text.trim().length > 0 ? text : null;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Default root for `pi`'s session storage. Overridable via the
  * PI_CODING_AGENT_SESSION_DIR env var (the env var `pi` itself reads).
@@ -190,7 +205,7 @@ export interface SessionSummary {
 	 * Display title. Preference order: (1) the name the user set via
 	 * `set_session_name` (pi persists this as a `session_info` line —
 	 * the last one wins, so renames take effect), (2) the first user
-	 * message text, truncated, (3) "(empty session)".
+	 * message text (or /cc prompt), truncated, (3) "(empty session)".
 	 */
 	title: string;
 	/** Number of `message` entries in the JSONL. */
@@ -239,7 +254,7 @@ interface CachedSessionSummary {
  * mismatch is parsed again.
  */
 const sessionFileCache = new Map<string, CachedSessionSummary>();
-const SESSION_SUMMARY_CACHE_VERSION = 1;
+const SESSION_SUMMARY_CACHE_VERSION = 2;
 let summaryCacheLoaded = false;
 let summaryCacheDirty = false;
 let summaryCacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -350,6 +365,8 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 			if (type === "message") {
 				messageCount++;
 				if (firstUserText === null) firstUserText = firstUserTextFromLine(trimmed);
+			} else if (type === "custom_message") {
+				if (firstUserText === null) firstUserText = claudePromptTextFromLine(trimmed);
 			} else if (type === "session_info") {
 				try {
 					const e = JSON.parse(trimmed) as Record<string, unknown>;

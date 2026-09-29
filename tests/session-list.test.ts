@@ -196,6 +196,28 @@ describe("listPiSessions", () => {
 		expect(sessions[0].title).toBe("first prompt");
 	});
 
+	it("titles a /cc-only chat from its claude-prompt custom message", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_ccc.jsonl",
+			"ccc",
+			"2026-06-15T10:00:00.000Z",
+			[],
+			[
+				JSON.stringify({
+					type: "custom_message",
+					customType: "claude-prompt",
+					content: "fix the \"login\" bug",
+					display: true,
+					details: { target: "sonnet" },
+				}),
+				JSON.stringify({ type: "custom_message", customType: "note", content: "done" }),
+			],
+		);
+		const { listPiSessions } = await import("../src/server/session-list.js");
+		expect(listPiSessions(cwd)[0].title).toBe('fix the "login" bug');
+	});
+
 	it("marks sessions pinned according to the pins sidecar", async () => {
 		writeSession(
 			"--home-test-project--",
