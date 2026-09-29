@@ -2223,24 +2223,18 @@ body.sidebar-resizing iframe {
 /* ------------------------------------------------------------------ */
 
 .status-bar {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 14px;
-	/* This is a flex item in the column layout. `height` alone still lets
-	   flexbox shrink it, and auto side-margins make its width intrinsic to
-	   its changing text. On mobile that reflows the status lines while the
-	   IME is open, which makes the composer appear to jump. Keep both axes
-	   stable while the status contents are repainted. */
-	flex: 0 0 33px;
+	/* Same approach as the mobile layout: a FIXED two-line box whose slots
+	   flow inline and wrap, so the full status (model · think · tokens ·
+	   active tool · cost) is readable instead of ellipsised on one line.
+	   The height is hard-fixed, so the composer above can never be pushed
+	   around when the text changes length or wraps. Anything past two
+	   lines (a very long retry error or tool command) clips. */
+	display: block;
+	flex: 0 0 44px;
 	width: min(100%, var(--chat-max));
-	/* Hard-fixed height: the bar can never grow or shrink, so the composer
-	   above it can never be pushed around — no matter what appears or
-	   disappears in the slots (the old auto-height paragraph wrapped to a
-	   new line whenever a changing number crossed the width threshold,
-	   shoving the composer up and down every second). */
-	height: 33px;
-	min-height: 33px;
+	height: 44px;
+	min-height: 44px;
+	overflow: hidden;
 	padding: 4px 20px 8px;
 	color: var(--text-muted);
 	font-size: 11px;
@@ -2249,34 +2243,22 @@ body.sidebar-resizing iframe {
 	font-family: var(--font-mono);
 	letter-spacing: 0.01em;
 	line-height: 1.35;
+	text-align: center;
+	overflow-wrap: anywhere;
 	/* Digits render at a constant width, so per-second ticks (elapsed time,
 	   retry countdown) never shift the text around. */
 	font-variant-numeric: tabular-nums;
 }
-/* One-line slots: content truncates with "…" instead of wrapping, so the
-   bar can never grow a second line. Hovering shows the full value via the
-   title set by refreshStatus(). */
+/* Slots flow inline and wrap inside the fixed box. Hovering shows the full
+   value via the title set by refreshStatus(). */
 .status-slot {
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+	display: inline;
+	white-space: normal;
 	min-width: 0;
 }
-/* Stable info (model · think · tokens). Takes the leftover space and
-   truncates first, so the important part of the bar never forces the
-   transient stuff off-screen. */
-.status-core {
-	flex: 1 1 auto;
-}
-/* Voice transport controls: never truncated — the stop button must always
-   be reachable, so this slot refuses to shrink. */
-.status-voice {
-	flex: 0 0 auto;
-}
-/* Transient info (streaming timer, retry, cost, queued, connection): hugs
-   the right edge and truncates if the window is narrow. */
-.status-dynamic {
-	flex: 0 1 auto;
+/* Separate the slots when they share a line. */
+.status-slot + .status-slot:not(:empty) {
+	margin-left: 14px;
 }
 .status-voice:empty,
 .status-dynamic:empty {
