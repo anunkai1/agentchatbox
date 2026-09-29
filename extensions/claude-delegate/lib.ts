@@ -198,6 +198,8 @@ export function buildPrompt(task: string): string {
 
 export interface ClaudeSpawnPlan {
 	args: string[];
+	/** First stdin message; follow-ups are written to the same stdin mid-run. */
+	prompt: string;
 	cwd: string;
 	env: Record<string, string>;
 }
@@ -211,13 +213,20 @@ export interface SpawnOptions {
 	effort?: EffortLevel;
 }
 
-/** Compose the headless `claude -p` invocation for one delegated task. */
+/**
+ * Compose the headless `claude -p` invocation for one delegated task. Input is
+ * stream-json so follow-ups can be written to stdin while the run is live:
+ * Claude Code folds each one in at its next step, like pi's steering. Replayed
+ * user messages show when a follow-up has been picked up.
+ */
 export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 	const args = [
 		"-p",
-		buildPrompt(options.task),
+		"--input-format",
+		"stream-json",
 		"--output-format",
 		"stream-json",
+		"--replay-user-messages",
 		"--verbose",
 		"--dangerously-skip-permissions",
 		// Without this the API returns thinking blocks with empty text, so
@@ -236,7 +245,12 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 	} else if (options.newSessionId) {
 		args.push("--session-id", options.newSessionId);
 	}
-	return { args, cwd: DEFAULT_WORKSPACE, env: { BH_DOMAIN_SKILLS: "1" } };
+	return {
+		args,
+		prompt: buildPrompt(options.task),
+		cwd: DEFAULT_WORKSPACE,
+		env: { BH_DOMAIN_SKILLS: "1" },
+	};
 }
 
 export type StreamEvent =
@@ -245,7 +259,14 @@ export type StreamEvent =
 	| { kind: "thinking"; text: string }
 	| { kind: "tool_use"; id: string; name: string; input: unknown }
 	| { kind: "tool_result"; id: string; text: string; isError: boolean }
+	/** Claude Code echoing a stdin user message it has just taken in. */
+	| { kind: "prompt"; text: string }
 	| { kind: "result"; text?: string; isError: boolean };
+
+/** One stream-json stdin line carrying a user message. */
+export function stdinUserMessage(text: string): string {
+	return `${JSON.stringify({ type: "user", message: { role: "user", content: text } })}\n`;
+}
 
 interface RawStreamEvent {
 	type?: string;
@@ -255,6 +276,7 @@ interface RawStreamEvent {
 	message?: { model?: unknown; content?: unknown };
 	result?: unknown;
 	is_error?: unknown;
+	isReplay?: unknown;
 }
 
 /** Incremental parser for `claude -p --output-format stream-json --verbose` stdout. */
@@ -317,6 +339,16 @@ export class StreamParser {
 				}
 			}
 			return events;
+		}
+		if (raw.type === "user" && raw.isReplay === true) {
+			const content = raw.message?.content;
+			const text =
+				typeof content === "string"
+					? content
+					: Array.isArray(content)
+						? toolResultText(content)
+						: "";
+			return [{ kind: "prompt", text }];
 		}
 		if (raw.type === "user" && Array.isArray(raw.message?.content)) {
 			const events: StreamEvent[] = [];
