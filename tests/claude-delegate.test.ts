@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	MIRROR_PROVIDER,
 	PROMPT_MESSAGE_TYPE,
 	parseCcArgs,
 	parseCcControl,
 	registerClaudeDelegate,
 	restoreStickyMode,
-	STICKY_ENTRY_TYPE,
 	runClaudeTask,
+	STICKY_ENTRY_TYPE,
 } from "../extensions/claude-delegate/index.js";
 import {
 	buildClaudeSpawn,
@@ -289,7 +290,11 @@ function harness(
 		select: vi.fn(async (_title: string, options: string[]) => options[1]),
 		setStatus,
 	};
-	const uiCtx = { ui, sessionManager: { getSessionId: () => "chat-1", getEntries: () => entries } };
+	const appendMessage = vi.fn();
+	const uiCtx = {
+		ui,
+		sessionManager: { getSessionId: () => "chat-1", getEntries: () => entries, appendMessage },
+	};
 	return {
 		get mode() {
 			return current;
@@ -310,6 +315,7 @@ function harness(
 		ui,
 		uiCtx,
 		sendMessage,
+		appendMessage,
 	};
 }
 
@@ -557,6 +563,34 @@ describe("claude-delegate sticky mode", () => {
 		expect(h.input("back to pi")).toEqual({ action: "continue" });
 		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "off" });
 		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-sticky", undefined);
+	});
+
+	it("mirrors each reply as an assistant message so pi saves the chat", async () => {
+		const h = harness("opus", {}, undefined, ok);
+		await h.cc("on", h.uiCtx);
+		expect(h.input("check my inbox")).toEqual({ action: "handled" });
+		await h.whenIdle();
+		expect(h.appendMessage).toHaveBeenCalledTimes(1);
+		const mirrored = h.appendMessage.mock.calls[0][0];
+		expect(mirrored).toMatchObject({
+			role: "assistant",
+			provider: MIRROR_PROVIDER,
+			model: "claude-opus-5-5",
+			stopReason: "stop",
+		});
+		expect(mirrored.content[0].text).toContain("done");
+	});
+
+	it("mirrors a failed run too, so the chat still saves", async () => {
+		const h = harness("opus", {}, undefined, async () => ({
+			isError: true,
+			resultText: "boom",
+			models: [],
+		}));
+		await h.cc("on", h.uiCtx);
+		h.input("try this");
+		await h.whenIdle();
+		expect(h.appendMessage.mock.calls[0][0].content[0].text).toBe("⚠ boom");
 	});
 
 	it("uses the global model for a bare /cc on, falling back to Sonnet", async () => {

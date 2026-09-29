@@ -126,6 +126,10 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 				ts: promptMsg.timestamp,
 				via: promptMsg.details?.target ?? "Claude Code",
 			});
+		} else if (cm.customType === "note" && isMirroredByAssistant(messages, i)) {
+			// The claude-delegate extension saves each Claude Code reply as an
+			// assistant message so pi persists the chat; that row already shows
+			// the reply, so drop the live note that sits beside it.
 		} else if (cm.customType === "note") {
 			// Extension-emitted display note (e.g. /imggen image result).
 			// Reconstruct as a renderable note row (mirrors the live
@@ -136,6 +140,13 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 		}
 	}
 	return out;
+}
+
+/** True when a claude-code assistant mirror sits next to the note at `index`. */
+function isMirroredByAssistant(messages: Message[], index: number): boolean {
+	return [messages[index - 1], messages[index + 1]].some(
+		(m) => m?.role === "assistant" && (m as { provider?: string }).provider === "claude-code",
+	);
 }
 
 function extractThinking(content: unknown): string {
