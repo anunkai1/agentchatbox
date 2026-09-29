@@ -166,6 +166,24 @@ describe("projectTranscript", () => {
 		expect(out[1]).toMatchObject({ kind: "note", text: "booked" });
 	});
 
+	it("shows a Claude Code reply once when its assistant mirror is saved", () => {
+		const note = { role: "custom", customType: "note", content: "booked" } as unknown as Message;
+		const mirror = {
+			role: "assistant",
+			provider: "claude-code",
+			content: [{ type: "text", text: "booked" }],
+		} as unknown as Message;
+		for (const order of [
+			[note, mirror],
+			[mirror, note],
+		]) {
+			const out = projectTranscript(order);
+			expect(out.map((row) => row.kind)).toEqual(["assistant"]);
+		}
+		// Without a mirror (live session, pi not yet saved) the note stays.
+		expect(projectTranscript([note]).map((row) => row.kind)).toEqual(["note"]);
+	});
+
 	it("returns an empty array for an empty transcript", () => {
 		expect(projectTranscript([])).toEqual([]);
 	});

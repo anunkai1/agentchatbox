@@ -278,6 +278,43 @@ interface ToolResult {
 /** Only the status label matters here; the rest stays pi's own context type. */
 interface StatusContext {
 	ui: { setStatus(key: string, text: string | undefined): void };
+	sessionManager?: unknown;
+}
+
+/** Provider tag on the assistant messages that mirror a Claude Code reply. */
+export const MIRROR_PROVIDER = "claude-code";
+
+interface MirrorSink {
+	appendMessage(message: unknown): unknown;
+}
+
+/**
+ * Pi writes a chat's session file only once it holds an assistant message, and
+ * Claude Code mode never produces one (pi is bypassed), so the prompts and
+ * notes would vanish on reload. Recording each Claude Code reply as an
+ * assistant message makes pi flush the whole chat. Pi hands extensions the
+ * read-only session view, but the object is the real manager.
+ */
+export function mirrorReplyToSession(ctx: StatusContext, text: string, model: string): void {
+	const sink = ctx.sessionManager as Partial<MirrorSink> | undefined;
+	if (typeof sink?.appendMessage !== "function") return;
+	sink.appendMessage({
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: MIRROR_PROVIDER,
+		provider: MIRROR_PROVIDER,
+		model,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	});
 }
 
 /** Resolves one probe run; injectable so tests do not spawn Claude. */
@@ -449,21 +486,24 @@ export function registerClaudeDelegate(
 					onText: (tail) =>
 						ctx.ui.setStatus("claude-delegate", `${label} · ${tail.split("\n")[0].slice(0, 60)}`),
 				});
+				const primaryModel = outcome.models[0];
 				if (outcome.isError) {
-					ctx.ui.notify(outcome.resultText ?? "Delegated task failed.", "error");
+					const failure = outcome.resultText ?? "Delegated task failed.";
+					ctx.ui.notify(failure, "error");
+					mirrorReplyToSession(ctx, `⚠ ${failure}`, primaryModel ?? mode);
 					return;
 				}
-				const primaryModel = outcome.models[0];
 				const footer = primaryModel ? `\n\n— ${resolved} (\`${primaryModel}\`)` : "";
+				const reply = `${outcome.resultText ?? "Task finished with no summary text."}${footer}`;
 				// ACB renders extension display notes for customType "note"
-				// (display:true, no triggerTurn).
-				pi.sendMessage({
-					customType: "note",
-					content: `${outcome.resultText ?? "Task finished with no summary text."}${footer}`,
-					display: true,
-				});
+				// (display:true, no triggerTurn). The assistant mirror right after
+				// it is what persists the chat; ACB's history drops the note then.
+				pi.sendMessage({ customType: "note", content: reply, display: true });
+				mirrorReplyToSession(ctx, reply, primaryModel ?? mode);
 			} catch (error) {
-				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				const failure = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(failure, "error");
+				mirrorReplyToSession(ctx, `⚠ ${failure}`, mode);
 			} finally {
 				// Restore the steady-state label (now with the resolved version).
 				restoreStatus(ctx);
