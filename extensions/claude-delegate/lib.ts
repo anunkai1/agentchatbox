@@ -320,9 +320,10 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 		"--verbose",
 		"--dangerously-skip-permissions",
 		// Without this the API returns thinking blocks with empty text, so
-		// there would be nothing to show in ACB's thinking rows.
-		"--settings",
-		'{"showThinkingSummaries":true}',
+		// there would be nothing to show in ACB's thinking rows. The
+		// showThinkingSummaries setting does not apply to headless -p runs.
+		"--thinking-display",
+		"summarized",
 		"--model",
 		modelAlias(options.mode),
 	];

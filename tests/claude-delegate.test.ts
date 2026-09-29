@@ -48,7 +48,7 @@ describe("claude-delegate spawn plan", () => {
 		expect(plan.args[plan.args.indexOf("--model") + 1]).toBe("opus");
 		expect(plan.args[plan.args.indexOf("--session-id") + 1]).toBe("uuid-1");
 		expect(plan.args).not.toContain("--resume");
-		expect(plan.args[plan.args.indexOf("--settings") + 1]).toBe('{"showThinkingSummaries":true}');
+		expect(plan.args[plan.args.indexOf("--thinking-display") + 1]).toBe("summarized");
 		expect(plan.args[1]).toContain("do a thing");
 		expect(plan.args[1]).toContain("~/.secrets");
 		expect(plan.env.BH_DOMAIN_SKILLS).toBe("1");
