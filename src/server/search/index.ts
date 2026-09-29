@@ -53,8 +53,8 @@ function ensureInit(): Promise<void> {
 }
 
 /**
- * Longest a single sweep pass may run before yielding to the next pass. The
- * embedder works on the main thread, so an unbounded pass starves HTTP/WS.
+ * Longest a single sweep pass may run before yielding to the next pass, so the
+ * cache and SQLite work that stays on the main thread comes in bounded slices.
  */
 export const SEARCH_SWEEP_BUDGET_MS = 15_000;
 
