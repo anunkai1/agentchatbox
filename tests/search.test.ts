@@ -52,14 +52,18 @@ describe("semantic search passages", () => {
 describe("semantic search store", () => {
 	it("filters before limiting, deduplicates conversations and updates metadata", async () => {
 		await store.loadCache();
-		await store.indexSession(meta("one"), [passage(0), passage(1)], async () => vector());
-		await store.indexSession(meta("two", "/b"), [passage(0)], async () => vector(0.8));
+		await store.indexSession(meta("one"), [passage(0), passage(1)], async (texts: string[]) =>
+			texts.map(() => vector()),
+		);
+		await store.indexSession(meta("two", "/b"), [passage(0)], async (texts: string[]) =>
+			texts.map(() => vector(0.8)),
+		);
 		expect(store.searchVectors(vector(), 10).map((h) => h.sessionId)).toEqual(["one", "two"]);
 		expect(store.searchVectors(vector(), 1, "/b")[0].sessionId).toBe("two");
 		await store.indexSession(
 			{ ...meta("one", "/a", "2"), title: "Renamed" },
 			[passage(0, "updated")],
-			async () => vector(),
+			async (texts: string[]) => texts.map(() => vector()),
 		);
 		expect(store.searchVectors(vector(), 1)[0]).toMatchObject({
 			title: "Renamed",
@@ -71,11 +75,25 @@ describe("semantic search store", () => {
 		await store.deleteSession("one");
 		expect(store.searchVectors(vector(), 10).map((h) => h.sessionId)).toEqual(["two"]);
 	});
+	it("embeds a session's passages in one batched call", async () => {
+		const calls: string[][] = [];
+		await store.indexSession(
+			meta("batched"),
+			[passage(0), passage(1), passage(2)],
+			async (texts) => {
+				calls.push([...texts]);
+				return texts.map(() => vector());
+			},
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toHaveLength(3);
+	});
+
 	it("does not commit embeddings if the source changes or disappears", async () => {
 		await store.indexSession(
 			meta("deleted"),
 			[passage(0)],
-			async () => vector(),
+			async (texts: string[]) => texts.map(() => vector()),
 			() => false,
 		);
 		expect(await store.isIndexed("deleted", "1")).toBe(false);

@@ -215,18 +215,20 @@ export async function isIndexed(sessionId: string, mtimeIso: string): Promise<bo
 export async function indexSession(
 	meta: IndexedSessionMeta,
 	messages: Array<{ msgIdx: number; role: string; text: string; createdAt: string }>,
-	embedFn: (text: string) => Promise<Float32Array>,
+	embedMany: (texts: string[]) => Promise<Float32Array[]>,
 	stillCurrent: () => boolean = () => true,
 ): Promise<void> {
 	const database = await getDb();
 
-	// Embed up-front (outside any transaction — ONNX is not transactional).
-	// Skip empty messages: they add noise to the index.
+	// Embed up-front (outside any transaction — ONNX is not transactional),
+	// in one batched call. Skip empty messages: they add noise to the index.
+	const pending = messages.filter((m) => m.text?.trim());
+	const embedded = await embedMany(pending.map((m) => m.text));
 	const vectors = new Map<number, Float32Array>();
-	for (const m of messages) {
-		if (!m.text?.trim()) continue;
-		vectors.set(m.msgIdx, await embedFn(m.text));
-	}
+	pending.forEach((m, i) => {
+		const vector = embedded[i];
+		if (vector) vectors.set(m.msgIdx, vector);
+	});
 
 	if (!stillCurrent()) return;
 
