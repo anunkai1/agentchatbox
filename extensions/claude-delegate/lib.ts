@@ -319,6 +319,10 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 		"stream-json",
 		"--verbose",
 		"--dangerously-skip-permissions",
+		// Without this the API returns thinking blocks with empty text, so
+		// there would be nothing to show in ACB's thinking rows.
+		"--settings",
+		'{"showThinkingSummaries":true}',
 		"--model",
 		modelAlias(options.mode),
 	];
@@ -341,6 +345,9 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 export type StreamEvent =
 	| { kind: "init"; claudeSessionId: string; model?: string }
 	| { kind: "text"; text: string; model?: string }
+	| { kind: "thinking"; text: string }
+	| { kind: "tool_use"; id: string; name: string; input: unknown }
+	| { kind: "tool_result"; id: string; text: string; isError: boolean }
 	| {
 			kind: "result";
 			text?: string;
@@ -354,7 +361,7 @@ interface RawStreamEvent {
 	subtype?: string;
 	session_id?: unknown;
 	model?: unknown;
-	message?: { model?: unknown; content?: Array<{ type?: string; text?: unknown }> };
+	message?: { model?: unknown; content?: unknown };
 	result?: unknown;
 	is_error?: unknown;
 	usage?: unknown;
@@ -373,54 +380,138 @@ export class StreamParser {
 		while (newline !== -1) {
 			const line = this.buffer.slice(0, newline).trim();
 			this.buffer = this.buffer.slice(newline + 1);
-			if (line) {
-				const event = this.parseLine(line);
-				if (event) events.push(event);
-			}
+			if (line) events.push(...this.parseLine(line));
 			newline = this.buffer.indexOf("\n");
 		}
 		return events;
 	}
 
-	parseLine(line: string): StreamEvent | undefined {
+	parseLine(line: string): StreamEvent[] {
 		let raw: RawStreamEvent;
 		try {
 			raw = JSON.parse(line) as RawStreamEvent;
 		} catch {
-			return undefined; // Non-JSON noise (banners, warnings) is ignored.
+			return []; // Non-JSON noise (banners, warnings) is ignored.
 		}
 		if (raw.type === "system" && raw.subtype === "init" && typeof raw.session_id === "string") {
-			return {
-				kind: "init",
-				claudeSessionId: raw.session_id,
-				model: typeof raw.model === "string" ? raw.model : undefined,
-			};
+			return [
+				{
+					kind: "init",
+					claudeSessionId: raw.session_id,
+					model: typeof raw.model === "string" ? raw.model : undefined,
+				},
+			];
 		}
 		if (raw.type === "assistant" && Array.isArray(raw.message?.content)) {
-			const text = raw.message.content
+			const blocks = raw.message.content as ContentBlock[];
+			const events: StreamEvent[] = [];
+			for (const block of blocks) {
+				if (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
+					events.push({ kind: "thinking", text: block.thinking });
+				}
+			}
+			const text = blocks
 				.filter((block) => block?.type === "text" && typeof block.text === "string")
 				.map((block) => String(block.text))
 				.join("\n")
 				.trim();
 			const model = typeof raw.message?.model === "string" ? raw.message.model : undefined;
-			if (text) return { kind: "text", text, model };
-			if (model) return { kind: "text", text: "", model };
-			return undefined;
+			if (text || model) events.push({ kind: "text", text, model });
+			for (const block of blocks) {
+				if (block?.type === "tool_use" && typeof block.id === "string") {
+					events.push({
+						kind: "tool_use",
+						id: block.id,
+						name: typeof block.name === "string" ? block.name : "tool",
+						input: block.input,
+					});
+				}
+			}
+			return events;
+		}
+		if (raw.type === "user" && Array.isArray(raw.message?.content)) {
+			const events: StreamEvent[] = [];
+			for (const block of raw.message.content as ContentBlock[]) {
+				if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
+					events.push({
+						kind: "tool_result",
+						id: block.tool_use_id,
+						text: toolResultText(block.content),
+						isError: block.is_error === true,
+					});
+				}
+			}
+			return events;
 		}
 		if (raw.type === "result") {
-			return {
-				kind: "result",
-				text: typeof raw.result === "string" ? raw.result : undefined,
-				isError: raw.is_error === true,
-				usage:
-					raw.usage && typeof raw.usage === "object"
-						? (raw.usage as Record<string, unknown>)
-						: undefined,
-				models: resultModels(raw.modelUsage),
-			};
+			return [
+				{
+					kind: "result",
+					text: typeof raw.result === "string" ? raw.result : undefined,
+					isError: raw.is_error === true,
+					usage:
+						raw.usage && typeof raw.usage === "object"
+							? (raw.usage as Record<string, unknown>)
+							: undefined,
+					models: resultModels(raw.modelUsage),
+				},
+			];
 		}
-		return undefined;
+		return [];
 	}
+}
+
+interface ContentBlock {
+	type?: string;
+	text?: unknown;
+	thinking?: unknown;
+	id?: unknown;
+	name?: unknown;
+	input?: unknown;
+	tool_use_id?: unknown;
+	content?: unknown;
+	is_error?: unknown;
+}
+
+/** Flatten a tool_result's content (a string or a list of text blocks). */
+function toolResultText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			const block = part as ContentBlock | undefined;
+			if (block?.type === "text" && typeof block.text === "string") return block.text;
+			return block?.type === "image" ? "[image]" : "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
+
+/**
+ * Shape a Claude Code tool input for ACB's tool cards: they key on `command`
+ * and `path`, so `file_path` is mirrored to `path`; long strings are capped so
+ * a big Write does not bloat the chat.
+ */
+export function normaliseToolArgs(input: unknown, limit = 2000): Record<string, unknown> {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		return input === undefined ? {} : { value: input };
+	}
+	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+		out[key] =
+			typeof value === "string" && value.length > limit
+				? `${value.slice(0, limit)}… [${value.length - limit} more characters]`
+				: value;
+	}
+	if (typeof out.path !== "string" && typeof out.file_path === "string") out.path = out.file_path;
+	return out;
+}
+
+/** Cap a persisted/live tool result so a huge dump cannot bloat the chat. */
+export const TOOL_RESULT_LIMIT = 4000;
+export function capToolResult(text: string, limit = TOOL_RESULT_LIMIT): string {
+	if (text.length <= limit) return text;
+	return `${text.slice(0, limit)}\n… [${text.length - limit} more characters truncated]`;
 }
 
 /** Collect the model ids reported in a result event's `modelUsage` map. */
