@@ -51,7 +51,8 @@ describe("claude-delegate spawn plan", () => {
 		expect(plan.args).toContain("--replay-user-messages");
 		expect(plan.args.join(" ")).not.toContain("do a thing");
 		expect(plan.prompt).toContain("do a thing");
-		expect(plan.prompt).toContain("~/.secrets");
+		expect(plan.prompt).toContain("/home/lepton/AGENTS.md");
+		expect(plan.prompt).not.toContain("~/.secrets");
 	});
 
 	it("resumes a stored session and maps sonnet by default", () => {
@@ -199,10 +200,11 @@ describe("claude-delegate store", () => {
 });
 
 describe("delegated prompt", () => {
-	it("forbids credential access and asks for a summary", () => {
+	it("applies the ACB assistant's rules and adds only Claude Code facts", () => {
 		const prompt = buildPrompt("register an account");
 		expect(prompt).toContain("register an account");
-		expect(prompt).toContain("Never read, copy, or transmit");
+		expect(prompt).toContain("/home/lepton/agentchatbox/AGENTS.md");
+		expect(prompt).not.toContain("Never read, copy, or transmit");
 		expect(prompt).toContain("/home/lepton/agentchatbox/uploads/");
 		expect(prompt).toContain("never Anthropic's built-in browser/computer-use skills");
 	});
