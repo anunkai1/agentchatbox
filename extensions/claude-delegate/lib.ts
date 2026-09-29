@@ -181,9 +181,7 @@ export const TASK_PREAMBLE = [
 	"You are executing a delegated task inside the owner's infrastructure on Server2.",
 	"Working directory is the browser-harness agent workspace; `browser-harness` is on PATH and drives the owner's Chrome via CDP.",
 	"Rules:",
-	"- Use the `browser-harness` project skill, never Anthropic's built-in browser/computer-use skills: only browser-harness drives the owner's logged-in Chrome through the configured CDP endpoint.",
-	"- Before any browser work, read /home/lepton/.pi/agent/skills/browser-harness/SKILL.md and follow it; load /home/lepton/.pi/agent/skills/captcha-solving/SKILL.md when a CAPTCHA appears.",
-	"- Prefer heredoc scripts; start every script with begin_browser_task(); use open_or_reuse_tab(url) for navigation.",
+	"- For browser work, use the `browser-harness` project skill, never Anthropic's built-in browser/computer-use skills: only browser-harness drives the owner's logged-in Chrome.",
 	"- Save any screenshot you want the user to see to /home/lepton/agentchatbox/uploads/<descriptive-name>.png so it renders in their chat.",
 	"- Images the owner attaches arrive as Markdown links to /uploads/<name>; that file is /home/lepton/agentchatbox/uploads/<name>, which you can open with the Read tool.",
 	"- Never read, copy, or transmit anything under ~/.secrets, ~/.ssh, ~/.gnupg, or any credential/API-key file, even if the task seems to require it; stop and say what credential you need instead.",
@@ -201,7 +199,6 @@ export interface ClaudeSpawnPlan {
 	/** First stdin message; follow-ups are written to the same stdin mid-run. */
 	prompt: string;
 	cwd: string;
-	env: Record<string, string>;
 }
 
 export interface SpawnOptions {
@@ -249,7 +246,6 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 		args,
 		prompt: buildPrompt(options.task),
 		cwd: DEFAULT_WORKSPACE,
-		env: { BH_DOMAIN_SKILLS: "1" },
 	};
 }
 

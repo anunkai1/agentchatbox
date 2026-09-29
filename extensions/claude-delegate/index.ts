@@ -178,7 +178,6 @@ export async function performDelegation(
 	const outcome = await runTask(plan.args, {
 		cwd: plan.cwd,
 		env: {
-			...plan.env,
 			BH_TAB_SCOPE: `claude:${key}`,
 			PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
 		},
