@@ -3,8 +3,10 @@ import { registerClaudeDelegate, runClaudeTask } from "../extensions/claude-dele
 import {
 	buildClaudeSpawn,
 	buildPrompt,
+	delegationLabel,
 	FileDelegationStore,
 	parseDelegationMode,
+	prettyModelName,
 	progressTail,
 	StreamParser,
 } from "../extensions/claude-delegate/lib.js";
@@ -54,9 +56,27 @@ describe("claude stream parser", () => {
 			'ant","message":{"content":[{"type":"text","text":"working on it"}]}}\n{"type":"result","subtype":"success","result":"done","is_error":false}\n',
 		);
 		expect(second).toEqual([
-			{ kind: "text", text: "working on it" },
-			{ kind: "result", text: "done", isError: false, usage: undefined },
+			{ kind: "text", text: "working on it", model: undefined },
+			{ kind: "result", text: "done", isError: false, usage: undefined, models: undefined },
 		]);
+	});
+
+	it("reports the model from init, assistant and modelUsage events", () => {
+		const parser = new StreamParser();
+		const events = parser.feed(
+			[
+				'{"type":"system","subtype":"init","session_id":"s-2","model":"claude-opus-5-5"}',
+				'{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}',
+				'{"type":"result","subtype":"success","result":"ok","is_error":false,"modelUsage":{"claude-opus-5-5":{"canonicalModel":"claude-opus-5-5"},"claude-haiku-4-5-20251001":{"canonicalModel":"claude-haiku-4-5-20251001"}}}',
+				"",
+			].join("\n"),
+		);
+		expect(events[0]).toEqual({ kind: "init", claudeSessionId: "s-2", model: "claude-opus-5-5" });
+		expect(events[1]).toEqual({ kind: "text", text: "hi", model: "claude-opus-5-5" });
+		expect(events[2]).toMatchObject({
+			kind: "result",
+			models: ["claude-opus-5-5", "claude-haiku-4-5-20251001"],
+		});
 	});
 
 	it("ignores non-JSON noise", () => {
@@ -67,6 +87,23 @@ describe("claude stream parser", () => {
 	it("caps progress tail length", () => {
 		expect(progressTail("x".repeat(50), 10)).toBe(`…${"x".repeat(10)}`);
 		expect(progressTail("short", 10)).toBe("short");
+	});
+});
+
+describe("model version labels", () => {
+	it("prettifies wire model ids", () => {
+		expect(prettyModelName("claude-opus-5-5")).toBe("Opus 5.5");
+		expect(prettyModelName("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+		expect(prettyModelName("claude-sonnet-5")).toBe("Sonnet 5");
+		expect(prettyModelName("claude-fable-5-1")).toBe("Fable 5.1");
+	});
+
+	it("labels a mode with its resolved version", () => {
+		expect(delegationLabel("opus")).toBe("Opus");
+		expect(delegationLabel("opus", "claude-opus-5-5")).toBe("Opus 5.5");
+		expect(delegationLabel("haiku", "claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+		// A cross-family alias still names both halves.
+		expect(delegationLabel("opus", "claude-fable-5-1")).toBe("Opus (Fable 5.1)");
 	});
 });
 
@@ -83,6 +120,21 @@ describe("claude-delegate store", () => {
 		store.clearClaudeSession("chat-1");
 		expect(store.readClaudeSession("chat-1")).toBeUndefined();
 	});
+
+	it("remembers the resolved model per mode", () => {
+		const modePath = `/tmp/claude-delegate-models-${process.pid}`;
+		const store = new FileDelegationStore(
+			`${modePath}-mode`,
+			`${modePath}-sessions.json`,
+			`${modePath}-models.json`,
+		);
+		expect(store.readModel("opus")).toBeUndefined();
+		store.writeModel("opus", "claude-opus-5-5");
+		store.writeModel("haiku", "claude-haiku-4-5-20251001");
+		expect(store.readModel("opus")).toBe("claude-opus-5-5");
+		expect(store.readModel("haiku")).toBe("claude-haiku-4-5-20251001");
+		expect(store.readModel("off")).toBeUndefined();
+	});
 });
 
 describe("delegated prompt", () => {
@@ -97,7 +149,7 @@ describe("delegated prompt", () => {
 
 type CommandHandler = (args: string, ctx: unknown) => Promise<void>;
 
-function harness(mode = "off") {
+function harness(mode = "off", knownModels: Record<string, string> = {}) {
 	let current = mode;
 	const store = {
 		readMode: () => current as never,
@@ -107,6 +159,10 @@ function harness(mode = "off") {
 		readClaudeSession: () => undefined,
 		writeClaudeSession: () => undefined,
 		clearClaudeSession: () => undefined,
+		readModel: (forMode: string) => knownModels[forMode],
+		writeModel: (forMode: string, modelId: string) => {
+			knownModels[forMode] = modelId;
+		},
 	};
 	let commandHandler: CommandHandler | undefined;
 	let activeTools = ["read", "bash"];
@@ -181,6 +237,21 @@ describe("claude-delegate registration", () => {
 		h.sessionStart();
 		expect(h.activeTools).toContain("claude_code_task");
 	});
+
+	it("shows the resolved version in the status label", async () => {
+		const h = harness("opus", { opus: "claude-opus-5-5" });
+		await h.command("report", h.uiCtx);
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5");
+	});
+
+	it("labels the menu entries with versions and still selects the mode", async () => {
+		const h = harness("off", { opus: "claude-opus-5-5" });
+		h.ui.select.mockImplementation(async (_title: string, options: string[]) =>
+			options.find((option) => option.includes("Opus 5.5")),
+		);
+		await h.command("menu", h.uiCtx);
+		expect(h.mode).toBe("opus");
+	});
 });
 
 describe("runClaudeTask", () => {
@@ -201,6 +272,7 @@ describe("runClaudeTask", () => {
 		expect(outcome.resultText).toBe("all done");
 		expect(outcome.isError).toBe(false);
 		expect(updates).toEqual(["step one"]);
+		expect(outcome.models).toEqual([]);
 	});
 
 	it("marks a failing run as an error", async () => {

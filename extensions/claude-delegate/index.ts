@@ -10,9 +10,11 @@ import {
 	DELEGATION_MODES,
 	type DelegationMode,
 	type DelegationStore,
+	delegationLabel,
 	FileDelegationStore,
 	MODE_LABELS,
 	parseDelegationMode,
+	prettyModelName,
 	progressTail,
 	StreamParser,
 } from "./lib.js";
@@ -28,6 +30,8 @@ interface SpawnOutcome {
 	isError: boolean;
 	claudeSessionId?: string;
 	usage?: Record<string, unknown>;
+	/** Every model id Claude Code reported for the run, primary first. */
+	models: string[];
 }
 
 function sessionKey(): string {
@@ -71,6 +75,12 @@ export function runClaudeTask(
 		let claudeSessionId: string | undefined;
 		let finalUsage: Record<string, unknown> | undefined;
 		let resultEvent: { text?: string; isError: boolean } | undefined;
+		// Primary model first (init/assistant), then any extra models reported
+		// by modelUsage (for example a Haiku subagent).
+		const models: string[] = [];
+		const noteModel = (model: string | undefined) => {
+			if (model && !models.includes(model)) models.push(model);
+		};
 
 		const abortHandler = () => killTree(child);
 		options.signal?.addEventListener("abort", abortHandler, { once: true });
@@ -80,12 +90,17 @@ export function runClaudeTask(
 			for (const event of parser.feed(chunk)) {
 				if (event.kind === "init") {
 					claudeSessionId = event.claudeSessionId;
+					noteModel(event.model);
 				} else if (event.kind === "text") {
-					lastText = event.text;
-					options.onText?.(progressTail(event.text));
+					noteModel(event.model);
+					if (event.text) {
+						lastText = event.text;
+						options.onText?.(progressTail(event.text));
+					}
 				} else if (event.kind === "result") {
 					resultEvent = { text: event.text, isError: event.isError };
 					if (event.usage) finalUsage = event.usage;
+					for (const model of event.models ?? []) noteModel(model);
 				}
 			}
 		});
@@ -112,6 +127,7 @@ export function runClaudeTask(
 				isError: resultEvent?.isError === true || (code !== 0 && !resultEvent),
 				claudeSessionId,
 				usage: finalUsage,
+				models,
 			};
 			if (outcome.isError && !outcome.resultText) {
 				const reason = signalName
@@ -140,8 +156,10 @@ export function registerClaudeDelegate(
 	workspace = DEFAULT_WORKSPACE,
 ): void {
 	// Labels mirror codex-fast: ACB reads extensionStatusLabels["claude-delegate"].
+	// The text includes the resolved model version once a run has reported it.
+	const statusText = (mode: DelegationMode) => delegationLabel(mode, store.readModel(mode));
 	const setStatus = (mode: DelegationMode, ctx: StatusContext) => {
-		ctx.ui.setStatus("claude-delegate", MODE_LABELS[mode]);
+		ctx.ui.setStatus("claude-delegate", statusText(mode));
 	};
 
 	const syncToolAvailability = (mode: DelegationMode) => {
@@ -179,7 +197,7 @@ export function registerClaudeDelegate(
 			},
 			required: ["task"],
 		},
-		async execute(_toolCallId, params, signal, onUpdate) {
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const mode = store.readMode();
 			if (mode === "off") {
 				throw new Error("Claude Code delegation is off. Enable it with /claude first.");
@@ -201,7 +219,12 @@ export function registerClaudeDelegate(
 			});
 
 			onUpdate?.({
-				content: [{ type: "text", text: `Delegating to Claude Code (${MODE_LABELS[mode]})…` }],
+				content: [
+					{
+						type: "text",
+						text: `Delegating to Claude Code (${delegationLabel(mode, store.readModel(mode))})…`,
+					},
+				],
 				details: {},
 			});
 
@@ -226,6 +249,15 @@ export function registerClaudeDelegate(
 				store.writeClaudeSession(key, outcome.claudeSessionId);
 			}
 
+			// Record the resolved model so the ACB status label (and the next
+			// "Delegating to…" line) can show the exact version.
+			const primaryModel = outcome.models[0];
+			if (primaryModel) {
+				store.writeModel(mode, primaryModel);
+				const ui = (ctx as unknown as StatusContext | undefined)?.ui;
+				if (ui) ui.setStatus("claude-delegate", statusText(mode));
+			}
+
 			if (outcome.isError) {
 				throw new Error(outcome.resultText ?? "Delegated task failed.");
 			}
@@ -233,13 +265,19 @@ export function registerClaudeDelegate(
 			const resultText =
 				outcome.resultText ??
 				"Delegated task finished but produced no summary text. Check the Claude session files for details.";
+			const modelNote = primaryModel
+				? `\n\n— Claude Code model: **${prettyModelName(primaryModel)}** (\`${primaryModel}\`)`
+				: "";
 			const details: Record<string, unknown> = {
 				mode: MODE_LABELS[mode],
+				label: delegationLabel(mode, primaryModel),
 				claudeSessionId: outcome.claudeSessionId,
 			};
+			if (primaryModel) details.model = primaryModel;
+			if (outcome.models.length > 1) details.models = outcome.models;
 			if (outcome.usage) details.usage = outcome.usage;
 			return {
-				content: [{ type: "text", text: resultText }],
+				content: [{ type: "text", text: `${resultText}${modelNote}` }],
 				details,
 			} satisfies ToolResult;
 		},
@@ -258,15 +296,21 @@ export function registerClaudeDelegate(
 
 			let next: DelegationMode | undefined;
 			if (!command || command === "menu") {
-				const options = DELEGATION_MODES.map(
-					(mode) => `${mode === current ? "✓ " : ""}${MODE_LABELS[mode]}`,
+				// Menu entries carry the resolved version, so map them back by index
+				// rather than re-parsing the label text.
+				const entries = DELEGATION_MODES.map((mode) => ({
+					mode,
+					label: `${mode === current ? "✓ " : ""}${delegationLabel(mode, store.readModel(mode))}`,
+				}));
+				const selected = await ctx.ui.select(
+					"Claude Code delegation",
+					entries.map((entry) => entry.label),
 				);
-				const selected = await ctx.ui.select("Claude Code delegation", options);
 				if (!selected) return;
-				next = parseDelegationMode(selected.replace("✓ ", "").toLowerCase());
+				next = entries.find((entry) => entry.label === selected)?.mode;
 			} else if (command === "status") {
 				ctx.ui.notify(
-					`Claude Code delegation is ${current === "off" ? "off" : MODE_LABELS[current]}.`,
+					`Claude Code delegation is ${current === "off" ? "off" : statusText(current)}.`,
 					"info",
 				);
 				return;
@@ -285,7 +329,7 @@ export function registerClaudeDelegate(
 			ctx.ui.notify(
 				next === "off"
 					? "Claude Code delegation disabled — pi handles everything itself."
-					: `Claude Code delegation set to ${MODE_LABELS[next]} — claude_code_task is available for browser-heavy work.`,
+					: `Claude Code delegation set to ${statusText(next)} — claude_code_task is available for browser-heavy work.`,
 				"info",
 			);
 		},
