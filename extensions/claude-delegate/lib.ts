@@ -19,6 +19,41 @@ export const MODE_LABELS: Record<DelegationMode, string> = {
 	haiku: "Haiku",
 };
 
+/** Effort levels Claude Code accepts via --effort (model support varies). */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/**
+ * Effort defaults per mode. Claude Code's own defaults are `medium` on both
+ * Opus 5.5 and Sonnet 5.5; the owner wants `high` for agentic browser work.
+ * Haiku 4.5 has no effort parameter, so it stays undefined.
+ */
+export const DEFAULT_EFFORT: Record<DelegationMode, EffortLevel | undefined> = {
+	off: undefined,
+	opus: "high",
+	sonnet: "high",
+	haiku: undefined,
+};
+
+/** A per-mode override; `auto` means "use the built-in default". */
+export type EffortSetting = EffortLevel | "auto";
+
+export function parseEffortLevel(raw: string): EffortSetting | undefined {
+	const value = raw.trim().toLowerCase();
+	if (value === "auto" || value === "default") return "auto";
+	return EFFORT_LEVELS.find((level) => level === value);
+}
+
+/** Effective effort for a mode: an explicit override wins over the default. */
+export function resolveEffort(
+	mode: DelegationMode,
+	override?: EffortSetting,
+): EffortLevel | undefined {
+	if (mode === "off") return undefined;
+	if (override && override !== "auto") return override;
+	return DEFAULT_EFFORT[mode];
+}
+
 /**
  * Turn a wire model id into a short human label: `claude-opus-5-5` →
  * `Opus 5.5`, `claude-haiku-4-5-20251001` → `Haiku 4.5`.
@@ -32,12 +67,19 @@ export function prettyModelName(id: string): string {
 	return version.length > 0 ? `${label} ${version.join(".")}` : label;
 }
 
-/** Status text ACB shows, including the resolved model version when known. */
-export function delegationLabel(mode: DelegationMode, modelId?: string): string {
+/** Status text ACB shows: resolved version, plus effort when one applies. */
+export function delegationLabel(
+	mode: DelegationMode,
+	modelId?: string,
+	effort?: EffortLevel,
+): string {
 	const base = MODE_LABELS[mode];
-	if (!modelId) return base;
-	const pretty = prettyModelName(modelId);
-	return pretty.toLowerCase().startsWith(base.toLowerCase()) ? pretty : `${base} (${pretty})`;
+	const versioned = (() => {
+		if (!modelId) return base;
+		const pretty = prettyModelName(modelId);
+		return pretty.toLowerCase().startsWith(base.toLowerCase()) ? pretty : `${base} (${pretty})`;
+	})();
+	return effort ? `${versioned} · ${effort}` : versioned;
 }
 
 /** Claude Code accepts these short aliases for --model. */
@@ -69,6 +111,9 @@ export interface DelegationStore {
 	/** Last model id seen for a mode, so labels keep the version between runs. */
 	readModel(mode: DelegationMode): string | undefined;
 	writeModel(mode: DelegationMode, modelId: string): void;
+	/** Per-mode effort override; undefined means "never set". */
+	readEffort(mode: DelegationMode): EffortSetting | undefined;
+	writeEffort(mode: DelegationMode, setting: EffortSetting): void;
 }
 
 export const DEFAULT_MODE_FILE = join(homedir(), ".config", "acb", "claude-delegate");
@@ -79,6 +124,7 @@ export const DEFAULT_SESSIONS_FILE = join(
 	"claude-delegate-sessions.json",
 );
 export const DEFAULT_MODELS_FILE = join(homedir(), ".config", "acb", "claude-delegate-models.json");
+export const DEFAULT_EFFORT_FILE = join(homedir(), ".config", "acb", "claude-delegate-effort.json");
 
 interface SessionMap {
 	[key: string]: { claudeSessionId: string; updatedAt: string };
@@ -88,15 +134,18 @@ export class FileDelegationStore implements DelegationStore {
 	private readonly modePath: string;
 	private readonly sessionsPath: string;
 	private readonly modelsPath: string;
+	private readonly effortPath: string;
 
 	constructor(
 		modePath = DEFAULT_MODE_FILE,
 		sessionsPath = DEFAULT_SESSIONS_FILE,
 		modelsPath = DEFAULT_MODELS_FILE,
+		effortPath = DEFAULT_EFFORT_FILE,
 	) {
 		this.modePath = modePath;
 		this.sessionsPath = sessionsPath;
 		this.modelsPath = modelsPath;
+		this.effortPath = effortPath;
 	}
 
 	readMode(): DelegationMode {
@@ -180,6 +229,38 @@ export class FileDelegationStore implements DelegationStore {
 		});
 		renameSync(temporary, this.modelsPath);
 	}
+
+	readEffort(mode: DelegationMode): EffortSetting | undefined {
+		if (mode === "off") return undefined;
+		try {
+			const raw = JSON.parse(readFileSync(this.effortPath, "utf8")) as Record<string, unknown>;
+			const value = raw?.[mode];
+			return typeof value === "string" ? parseEffortLevel(value) : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	writeEffort(mode: DelegationMode, setting: EffortSetting): void {
+		if (mode === "off") return;
+		let map: Record<string, string> = {};
+		try {
+			const raw = JSON.parse(readFileSync(this.effortPath, "utf8")) as Record<string, unknown>;
+			for (const [key, value] of Object.entries(raw ?? {})) {
+				if (typeof value === "string") map[key] = value;
+			}
+		} catch {
+			map = {};
+		}
+		map[mode] = setting;
+		mkdirSync(dirname(this.effortPath), { recursive: true });
+		const temporary = `${this.effortPath}.${process.pid}.${Date.now()}.tmp`;
+		writeFileSync(temporary, `${JSON.stringify(map, null, "\t")}\n`, {
+			encoding: "utf8",
+			mode: 0o644,
+		});
+		renameSync(temporary, this.effortPath);
+	}
 }
 
 /**
@@ -224,6 +305,8 @@ export interface SpawnOptions {
 	newSessionId?: string;
 	cwd?: string;
 	extraEnv?: Record<string, string>;
+	/** Passed as --effort; omitted for models without effort support. */
+	effort?: EffortLevel;
 }
 
 /** Compose the headless `claude -p` invocation for one delegated task. */
@@ -238,6 +321,9 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 		"--model",
 		modelAlias(options.mode),
 	];
+	if (options.effort) {
+		args.push("--effort", options.effort);
+	}
 	if (options.resumeSessionId) {
 		args.push("--resume", options.resumeSessionId);
 	} else if (options.newSessionId) {

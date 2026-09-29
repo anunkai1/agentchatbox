@@ -3,11 +3,14 @@ import { registerClaudeDelegate, runClaudeTask } from "../extensions/claude-dele
 import {
 	buildClaudeSpawn,
 	buildPrompt,
+	DEFAULT_EFFORT,
 	delegationLabel,
 	FileDelegationStore,
 	parseDelegationMode,
+	parseEffortLevel,
 	prettyModelName,
 	progressTail,
+	resolveEffort,
 	StreamParser,
 } from "../extensions/claude-delegate/lib.js";
 
@@ -107,6 +110,42 @@ describe("model version labels", () => {
 	});
 });
 
+describe("effort levels", () => {
+	it("defaults Opus and Sonnet to high, and leaves Haiku alone", () => {
+		expect(DEFAULT_EFFORT.opus).toBe("high");
+		expect(DEFAULT_EFFORT.sonnet).toBe("high");
+		expect(DEFAULT_EFFORT.haiku).toBeUndefined();
+		expect(DEFAULT_EFFORT.off).toBeUndefined();
+	});
+
+	it("resolves an override over the default", () => {
+		expect(resolveEffort("opus")).toBe("high");
+		expect(resolveEffort("sonnet", "auto")).toBe("high");
+		expect(resolveEffort("opus", "xhigh")).toBe("xhigh");
+		expect(resolveEffort("haiku", "high")).toBe("high");
+		expect(resolveEffort("off", "max")).toBeUndefined();
+	});
+
+	it("parses level names and auto", () => {
+		expect(parseEffortLevel("HIGH")).toBe("high");
+		expect(parseEffortLevel("xhigh")).toBe("xhigh");
+		expect(parseEffortLevel("auto")).toBe("auto");
+		expect(parseEffortLevel("nonsense")).toBeUndefined();
+	});
+
+	it("passes --effort only when a level applies", () => {
+		const withEffort = buildClaudeSpawn({ task: "t", mode: "opus", effort: "high" });
+		expect(withEffort.args[withEffort.args.indexOf("--effort") + 1]).toBe("high");
+		const withoutEffort = buildClaudeSpawn({ task: "t", mode: "haiku" });
+		expect(withoutEffort.args).not.toContain("--effort");
+	});
+
+	it("shows effort in the status label", () => {
+		expect(delegationLabel("opus", "claude-opus-5-5", "high")).toBe("Opus 5.5 · high");
+		expect(delegationLabel("opus", "claude-opus-5-5")).toBe("Opus 5.5");
+	});
+});
+
 describe("claude-delegate store", () => {
 	it("round-trips mode and session mapping", () => {
 		const modePath = `/tmp/claude-delegate-test-${process.pid}`;
@@ -135,6 +174,22 @@ describe("claude-delegate store", () => {
 		expect(store.readModel("haiku")).toBe("claude-haiku-4-5-20251001");
 		expect(store.readModel("off")).toBeUndefined();
 	});
+
+	it("stores per-mode effort overrides", () => {
+		const base = `/tmp/claude-delegate-effort-${process.pid}`;
+		const store = new FileDelegationStore(
+			`${base}-mode`,
+			`${base}-sessions.json`,
+			`${base}-models.json`,
+			`${base}-effort.json`,
+		);
+		expect(store.readEffort("opus")).toBeUndefined();
+		expect(resolveEffort("opus", store.readEffort("opus"))).toBe("high");
+		store.writeEffort("opus", "max");
+		expect(resolveEffort("opus", store.readEffort("opus"))).toBe("max");
+		store.writeEffort("opus", "auto");
+		expect(resolveEffort("opus", store.readEffort("opus"))).toBe("high");
+	});
 });
 
 describe("delegated prompt", () => {
@@ -155,6 +210,7 @@ function harness(
 	probe?: (forMode: string) => Promise<string | undefined>,
 ) {
 	let current = mode;
+	const effortByMode: Record<string, string> = {};
 	const store = {
 		readMode: () => current as never,
 		writeMode: (next: string) => {
@@ -166,6 +222,10 @@ function harness(
 		readModel: (forMode: string) => knownModels[forMode],
 		writeModel: (forMode: string, modelId: string) => {
 			knownModels[forMode] = modelId;
+		},
+		readEffort: (forMode: string) => effortByMode[forMode],
+		writeEffort: (forMode: string, setting: string) => {
+			effortByMode[forMode] = setting;
 		},
 	};
 	let commandHandler: CommandHandler | undefined;
@@ -227,7 +287,7 @@ describe("claude-delegate registration", () => {
 		await h.command("opus", h.uiCtx);
 		expect(h.mode).toBe("opus");
 		expect(h.activeTools).toContain("claude_code_task");
-		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus");
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus · high");
 	});
 
 	it("removes the tool when disabled", async () => {
@@ -260,7 +320,7 @@ describe("claude-delegate registration", () => {
 		expect(message).toContain("Haiku 4.5 (claude-haiku-4-5-20251001)");
 		expect(message).toContain("Sonnet 5 (claude-sonnet-5)");
 		expect(message).toContain("Opus 5.5 (claude-opus-5-5)");
-		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5");
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5 · high");
 	});
 
 	it("keeps going when one alias probe fails", async () => {
@@ -274,10 +334,37 @@ describe("claude-delegate registration", () => {
 		expect(message).toContain("Sonnet: failed (no access)");
 	});
 
+	it("sets effort for the active mode and reports the default", async () => {
+		const h = harness("opus", { opus: "claude-opus-5-5" });
+		await h.command("effort", h.uiCtx);
+		let message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
+		expect(message).toContain("Opus effort: high (default)");
+
+		await h.command("effort xhigh", h.uiCtx);
+		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-delegate", "Opus 5.5 · xhigh");
+		message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
+		expect(message).toContain("Opus effort set to xhigh");
+	});
+
+	it("rejects an unknown effort and requires a mode", async () => {
+		const h = harness("sonnet");
+		await h.command("effort turbo", h.uiCtx);
+		expect(h.ui.notify).toHaveBeenLastCalledWith(
+			expect.stringContaining("Unknown effort"),
+			"warning",
+		);
+		const off = harness("off");
+		await off.command("effort high", off.uiCtx);
+		expect(off.ui.notify).toHaveBeenLastCalledWith(
+			expect.stringContaining("Select a delegation mode"),
+			"warning",
+		);
+	});
+
 	it("shows the resolved version in the status label", async () => {
 		const h = harness("opus", { opus: "claude-opus-5-5" });
 		await h.command("report", h.uiCtx);
-		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5");
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5 · high");
 	});
 
 	it("labels the menu entries with versions and still selects the mode", async () => {
