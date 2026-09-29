@@ -33,6 +33,7 @@ import {
 	type StreamEvent,
 	StreamParser,
 } from "../extensions/claude-delegate/lib.js";
+import { buildCatchUp, foldClaudeSteps } from "../extensions/claude-delegate/transcript.js";
 
 describe("claude-delegate mode parsing", () => {
 	it("accepts only the three model names", () => {
@@ -295,7 +296,7 @@ function harness(
 		model?: string;
 	}>,
 	entries: Array<{ type: string; customType?: string; data?: unknown }> = [],
-	options: { maxRunMs?: number } = {},
+	options: { maxRunMs?: number; branch?: unknown[] } = {},
 ) {
 	let current = mode;
 	const sessions: Record<string, string> = {};
@@ -323,6 +324,7 @@ function harness(
 	let sessionStart: ((event: unknown, ctx: unknown) => void) | undefined;
 	let input: ((event: unknown, ctx: unknown) => { action: string }) | undefined;
 	let shutdown: (() => void) | undefined;
+	let context: ((event: { messages: unknown[] }) => { messages: unknown[] }) | undefined;
 	const runsDir = mkdtempSync(join(tmpdir(), "claude-delegate-runs-"));
 	// Every pid counts as a live Claude Code here; the stand-in runs have no real process.
 	const registry = new RunRegistry(runsDir, () => true);
@@ -341,6 +343,7 @@ function harness(
 				if (event === "session_start") sessionStart = handler;
 				if (event === "input") input = handler as never;
 				if (event === "session_shutdown") shutdown = handler as never;
+				if (event === "context") context = handler as never;
 			},
 			sendMessage,
 			appendEntry,
@@ -359,7 +362,13 @@ function harness(
 	const appendMessage = vi.fn();
 	const uiCtx = {
 		ui,
-		sessionManager: { getSessionId: () => "chat-1", getEntries: () => entries, appendMessage },
+		sessionManager: {
+			getSessionId: () => "chat-1",
+			getEntries: () => entries,
+			getBranch: () => options.branch ?? [],
+			getSessionFile: () => "/tmp/chat-1.jsonl",
+			appendMessage,
+		},
 	};
 	return {
 		get mode() {
@@ -372,6 +381,7 @@ function harness(
 			input?.({ type: "input", text, source: "rpc", ...extra }, uiCtx),
 		whenIdle: () => delegate.whenIdle(),
 		shutdown: () => shutdown?.(),
+		context: (messages: unknown[]) => context?.({ messages }),
 		registry,
 		runsDir,
 		appendEntry,
@@ -1121,6 +1131,277 @@ describe("conversation continuity", () => {
 		expect(parseCcControl("new")).toEqual({ kind: "new" });
 		expect(parseCcControl("stop the printer")).toBeUndefined();
 		expect(parseCcControl("new york flights")).toBeUndefined();
+	});
+});
+
+describe("chat history across pi and Claude Code", () => {
+	const user = (text: string) => ({
+		type: "message",
+		message: { role: "user", content: [{ type: "text", text }] },
+	});
+	const piReply = (text: string) => ({
+		type: "message",
+		message: { role: "assistant", provider: "venice", content: [{ type: "text", text }] },
+	});
+	const claudePrompt = (text: string) => ({
+		type: "custom_message",
+		customType: PROMPT_MESSAGE_TYPE,
+		content: text,
+	});
+	const claudeReply = (text: string, extra: unknown[] = []) => ({
+		type: "message",
+		message: {
+			role: "assistant",
+			provider: MIRROR_PROVIDER,
+			content: [...extra, { type: "text", text }],
+		},
+	});
+
+	it("gives a fresh Claude conversation the whole chat, labelled by who said it", () => {
+		const text = buildCatchUp(
+			[
+				user("what's the plan for the trip?"),
+				piReply("book flights first"),
+				claudePrompt("book them"),
+				claudeReply("booked"),
+			],
+			{ fresh: true, sessionFile: "/x/chat.jsonl" },
+		) as string;
+		expect(text).toContain("User: what's the plan for the trip?");
+		expect(text).toContain("Assistant: book flights first");
+		expect(text).toContain("User (to Claude Code): book them");
+		expect(text).toContain("Claude Code: booked");
+		expect(text).toContain("/x/chat.jsonl");
+		expect(text).toContain("act on the Task");
+	});
+
+	it("gives a resumed conversation only what pi said since Claude's last turn", () => {
+		const text = buildCatchUp(
+			[
+				user("old question"),
+				claudePrompt("first task"),
+				claudeReply("first done"),
+				user("new question for pi"),
+				piReply("pi's answer"),
+			],
+			{ fresh: false },
+		) as string;
+		expect(text).toContain("new question for pi");
+		expect(text).toContain("pi's answer");
+		expect(text).not.toContain("old question");
+		expect(text).not.toContain("first done");
+		expect(text).toContain("Since your last reply");
+	});
+
+	it("adds nothing when Claude Code has seen everything", () => {
+		expect(
+			buildCatchUp([user("q"), claudePrompt("task"), claudeReply("done")], { fresh: false }),
+		).toBeUndefined();
+		expect(buildCatchUp([], { fresh: true })).toBeUndefined();
+	});
+
+	it("keeps the newest messages when the history is too long", () => {
+		const entries = Array.from({ length: 50 }, (_, i) =>
+			user(`message number ${i} ${"x".repeat(100)}`),
+		);
+		const text = buildCatchUp(entries, { fresh: true, limit: 1500 }) as string;
+		expect(text).toContain("message number 49");
+		expect(text).not.toContain("message number 0 ");
+		expect(text).toMatch(/\[\d+ earlier messages omitted\]/);
+	});
+
+	it("summarises pi's tool calls and results, and treats compaction summaries as history", () => {
+		const text = buildCatchUp(
+			[
+				{ type: "compaction", summary: "we discussed the router" },
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						provider: "venice",
+						content: [{ type: "toolCall", id: "p1", name: "bash", arguments: { command: "ls" } }],
+					},
+				},
+				{
+					type: "message",
+					message: {
+						role: "toolResult",
+						toolCallId: "p1",
+						toolName: "bash",
+						content: [{ type: "text", text: "a.txt" }],
+					},
+				},
+			],
+			{ fresh: true },
+		) as string;
+		expect(text).toContain("we discussed the router");
+		expect(text).toContain('[Assistant tool call: bash {"command":"ls"}]');
+		expect(text).toContain("[tool result (bash): a.txt]");
+	});
+
+	it("puts the catch-up in the first prompt, before the task", async () => {
+		const prompts: string[] = [];
+		const h = harness(
+			"sonnet",
+			{},
+			async (_args, options) => {
+				prompts.push((options as unknown as { prompt: string }).prompt);
+				return { resultText: "ok", isError: false, claudeSessionId: "s-1" };
+			},
+			[],
+			{ branch: [user("we chose the blue one"), piReply("noted")] },
+		);
+		await h.cc("order it", h.uiCtx);
+		expect(prompts[0]).toContain("we chose the blue one");
+		expect(prompts[0]).toContain("Task: order it");
+		expect(prompts[0].indexOf("we chose the blue one")).toBeLessThan(prompts[0].indexOf("Task:"));
+	});
+
+	it("re-sends the whole chat when a stale conversation restarts fresh", async () => {
+		const prompts: string[] = [];
+		const h = harness(
+			"sonnet",
+			{},
+			async (args, options) => {
+				prompts.push((options as unknown as { prompt: string }).prompt);
+				if (args.includes("--resume")) return { isError: true, staleSession: true };
+				return { resultText: "ok", isError: false, claudeSessionId: "s-2" };
+			},
+			[],
+			{
+				branch: [user("early context"), claudePrompt("earlier task"), claudeReply("earlier done")],
+			},
+		);
+		h.sessions["chat-1"] = "s-gone";
+		await h.cc("carry on", h.uiCtx);
+		// The resumed attempt had nothing new; the fresh one needs the lot.
+		expect(prompts[0]).toBe("carry on");
+		expect(prompts[1]).toContain("early context");
+		expect(prompts[1]).toContain("Claude Code: earlier done");
+	});
+
+	it("marks the display notes so they can be told from the reply they repeat", async () => {
+		const h = harness("sonnet", {}, async () => ({ resultText: "done", isError: false }));
+		await h.cc("go", h.uiCtx);
+		const note = h.sendMessage.mock.calls.map((c) => c[0]).find((m) => m.customType === "note");
+		expect(note.details).toEqual({ source: "claude-delegate" });
+	});
+
+	describe("what pi's model reads after a switch back from /cc", () => {
+		function chat() {
+			const dir = mkdtempSync(join(tmpdir(), "acb-fold-"));
+			const manager = SessionManager.create(dir, dir);
+			const say = (role: "user" | "assistant", text: string, provider = "venice") =>
+				manager.appendMessage(
+					(role === "user"
+						? { role, content: [{ type: "text", text }], timestamp: 1 }
+						: {
+								role,
+								content: [{ type: "text", text }],
+								api: provider,
+								provider,
+								model: "m",
+								usage: {},
+								stopReason: "stop",
+								timestamp: 2,
+							}) as never,
+				);
+			return { manager, say };
+		}
+
+		it("shows each Claude Code reply once, with its tool steps folded into text", () => {
+			const { manager, say } = chat();
+			say("user", "hello pi");
+			say("assistant", "hello owner");
+			manager.appendCustomMessageEntry(PROMPT_MESSAGE_TYPE, "check my inbox", true, {});
+			// A tool step, its result, then the final reply (saved after its note).
+			manager.appendMessage({
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "private plan" },
+					{ type: "toolCall", id: "t1", name: "Bash", arguments: { command: "gog list" } },
+				],
+				api: MIRROR_PROVIDER,
+				provider: MIRROR_PROVIDER,
+				model: "claude-opus-5-5",
+				usage: {},
+				stopReason: "toolUse",
+				timestamp: 3,
+			} as never);
+			manager.appendMessage({
+				role: "toolResult",
+				toolCallId: "t1",
+				toolName: "Bash",
+				content: [{ type: "text", text: "3 unread" }],
+				isError: false,
+				timestamp: 4,
+			} as never);
+			manager.appendCustomMessageEntry("note", "You have 3 unread.", true, {
+				source: "claude-delegate",
+			});
+			say("assistant", "You have 3 unread.", MIRROR_PROVIDER);
+
+			const folded = foldClaudeSteps(manager.buildSessionContext().messages as never[]) as Array<{
+				role: string;
+				content: unknown;
+			}>;
+			const flat = JSON.stringify(folded);
+			// The duplicate note is gone; the reply appears once.
+			expect(flat.match(/You have 3 unread\./g)).toHaveLength(1);
+			// Claude's tool call is text pi can read, with its result; no tool_use left.
+			expect(flat).toContain("Claude Code ran Bash");
+			expect(flat).toContain("gog list");
+			expect(flat).toContain("3 unread");
+			expect(flat).not.toContain("toolCall");
+			expect(flat).not.toContain("private plan");
+			expect(folded.some((m) => m.role === "toolResult")).toBe(false);
+			// The prompt is marked as having gone to Claude Code, and the steps read as one turn.
+			expect(flat).toContain("[Sent to Claude Code] check my inbox");
+			expect(folded.map((m) => m.role)).toEqual(["user", "assistant", "custom", "assistant"]);
+		});
+
+		it("also drops duplicate notes from chats saved before notes were marked", () => {
+			const { manager, say } = chat();
+			manager.appendCustomMessageEntry("note", "old reply", true);
+			say("assistant", "old reply", MIRROR_PROVIDER);
+			const folded = foldClaudeSteps(manager.buildSessionContext().messages as never[]);
+			expect(JSON.stringify(folded).match(/old reply/g)).toHaveLength(1);
+		});
+
+		it("leaves ordinary chats and other extensions' notes alone", () => {
+			const { manager, say } = chat();
+			say("user", "hi");
+			manager.appendCustomMessageEntry("note", "something else", true);
+			say("assistant", "hey");
+			const messages = manager.buildSessionContext().messages as never[];
+			expect(foldClaudeSteps(messages)).toEqual(messages);
+		});
+
+		it("is wired into pi's context event", () => {
+			const h = harness("sonnet");
+			const result = h.context([
+				{
+					role: "custom",
+					customType: "note",
+					content: "r",
+					details: { source: "claude-delegate" },
+				},
+				{ role: "assistant", provider: MIRROR_PROVIDER, content: [{ type: "text", text: "r" }] },
+			]);
+			expect(result?.messages).toHaveLength(1);
+		});
+
+		it("gives the catch-up builder pi's real branch entries", () => {
+			const { manager, say } = chat();
+			say("user", "remember: the code is 4471");
+			say("assistant", "noted");
+			const text = buildCatchUp(manager.getBranch() as never[], {
+				fresh: true,
+				sessionFile: manager.getSessionFile(),
+			}) as string;
+			expect(text).toContain("User: remember: the code is 4471");
+			expect(text).toContain("Assistant: noted");
+		});
 	});
 });
 

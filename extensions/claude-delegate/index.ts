@@ -16,8 +16,11 @@ import {
 	delegationLabel,
 	descendantsOf,
 	FileDelegationStore,
+	MIRROR_PROVIDER,
 	MODE_LABELS,
+	NOTE_SOURCE,
 	normaliseToolArgs,
+	PROMPT_MESSAGE_TYPE,
 	parseDelegationMode,
 	type RunRecord,
 	RunRegistry,
@@ -27,11 +30,7 @@ import {
 	stdinUserMessage,
 	terminateRun,
 } from "./lib.js";
-/**
- * Custom message carrying the prompt the owner sent to Claude Code. ACB draws
- * it as a user bubble so /cc and sticky-mode prompts survive in the history.
- */
-export const PROMPT_MESSAGE_TYPE = "claude-prompt";
+import { buildCatchUp, type EntryLike, foldClaudeSteps } from "./transcript.js";
 /** Session entry recording this chat's sticky mode; the last entry wins. */
 export const STICKY_ENTRY_TYPE = "claude-sticky";
 
@@ -173,6 +172,12 @@ export interface DelegationRequest {
 	channel?: SteerChannel;
 	/** Every parsed stream event (thinking, tool calls and results included). */
 	onEvent?: (event: StreamEvent) => void;
+	/**
+	 * The chat history Claude Code has not seen, for the front of its prompt.
+	 * `fresh` is true when the run starts a new conversation, which needs the
+	 * whole chat rather than only what came after its last turn.
+	 */
+	catchUp?: (fresh: boolean) => string | undefined;
 	/** Aborting kills the run's whole process group. */
 	signal?: AbortSignal;
 	/** Called with Claude Code's pid as soon as it is running. */
@@ -203,6 +208,7 @@ export async function performDelegation(
 			task: request.task,
 			mode,
 			workspace,
+			catchUp: request.catchUp?.(!resumeId),
 			// A resumed chat stays on the model it started on, even after the
 			// alias moves to a newer version.
 			model: resumeId ? store.readPinnedModel(key, mode) : undefined,
@@ -415,8 +421,7 @@ interface StatusContext {
 	sessionManager?: unknown;
 }
 
-/** Provider tag on the assistant messages that mirror a Claude Code reply. */
-export const MIRROR_PROVIDER = "claude-code";
+export { MIRROR_PROVIDER, PROMPT_MESSAGE_TYPE };
 
 interface MirrorSink {
 	appendMessage(message: unknown): unknown;
@@ -430,6 +435,18 @@ const ZERO_USAGE = {
 	totalTokens: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+/** This chat's current branch and its log file, as pi holds them. */
+function chatHistory(ctx: StatusContext): { entries: EntryLike[]; file?: string } {
+	const manager = ctx.sessionManager as
+		| { getBranch?: () => EntryLike[]; getSessionFile?: () => string | undefined }
+		| undefined;
+	try {
+		return { entries: manager?.getBranch?.() ?? [], file: manager?.getSessionFile?.() };
+	} catch {
+		return { entries: [] };
+	}
+}
 
 let warnedMirrorGone = false;
 
@@ -716,6 +733,13 @@ export function registerClaudeDelegate(
 		key: string,
 	): Promise<void> => {
 		const label = statusText(mode);
+		// Worked out before this prompt joins the chat, which would otherwise
+		// count as Claude Code's latest turn. Both forms are built because
+		// whether the run resumes is only known when it starts.
+		const history = chatHistory(ctx);
+		const catchUp = (fresh: boolean) =>
+			buildCatchUp(history.entries, { fresh, sessionFile: history.file });
+		const catchUps = { resumed: catchUp(false), fresh: catchUp(true) };
 		pi.sendMessage({
 			customType: PROMPT_MESSAGE_TYPE,
 			content: task,
@@ -768,7 +792,12 @@ export function registerClaudeDelegate(
 					? `⏱ Stopped: the run hit the ${formatElapsed(maxRunMs)} time limit.`
 					: "⏹ Stopped.";
 				ctx.ui.notify(why, "warning");
-				pi.sendMessage({ customType: "note", content: why, display: true });
+				pi.sendMessage({
+					customType: "note",
+					content: why,
+					display: true,
+					details: { source: NOTE_SOURCE },
+				});
 				mirrorReplyToSession(ctx, why, model, trace.takeTrailingThinking());
 			};
 			const reply = (text: string | undefined, model: string | undefined, usage?: RunUsage) => {
@@ -783,7 +812,12 @@ export function registerClaudeDelegate(
 				// ACB renders extension display notes for customType "note"
 				// (display:true, no triggerTurn). The assistant mirror right after
 				// it is what persists the chat; ACB's history drops the note then.
-				pi.sendMessage({ customType: "note", content, display: true });
+				pi.sendMessage({
+					customType: "note",
+					content,
+					display: true,
+					details: { source: NOTE_SOURCE },
+				});
 				mirrorReplyToSession(ctx, content, model ?? mode, trace.takeTrailingThinking());
 			};
 			live = { key, mode, channel, beat, abort };
@@ -795,6 +829,7 @@ export function registerClaudeDelegate(
 					mode,
 					sessionKey: key,
 					channel,
+					catchUp: (fresh) => (fresh ? catchUps.fresh : catchUps.resumed),
 					signal: abort.signal,
 					onSpawn: (spawned) => {
 						// A retry after a vanished conversation is a second process.
@@ -1005,6 +1040,10 @@ export function registerClaudeDelegate(
 			ctx.ui.notify(`Default Claude Code model set to ${statusText(next)}.`, "info");
 		},
 	});
+
+	// What pi's model reads from the saved chat: Claude Code's turns reshaped so
+	// a switch back from /cc carries the whole thread across.
+	pi.on("context", (event) => ({ messages: foldClaudeSteps(event.messages) }));
 
 	pi.on("session_start", (_event, ctx) => {
 		sticky = restoreStickyMode(ctx.sessionManager?.getEntries?.() ?? []);
