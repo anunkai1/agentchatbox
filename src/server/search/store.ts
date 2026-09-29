@@ -19,7 +19,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { projectRoot } from "../paths.js";
-import { bufferToVector, EMBEDDING_DIM, vectorToBuffer } from "./embeddings.js";
+import { bufferToVector, EMBED_BATCH_SIZE, EMBEDDING_DIM, vectorToBuffer } from "./embeddings.js";
 
 export interface IndexedSessionMeta {
 	sessionId: string;
@@ -220,15 +220,21 @@ export async function indexSession(
 ): Promise<void> {
 	const database = await getDb();
 
-	// Embed up-front (outside any transaction — ONNX is not transactional),
-	// in one batched call. Skip empty messages: they add noise to the index.
+	// Embed up-front (outside any transaction — ONNX is not transactional) in
+	// bounded batches, yielding between them: each call blocks the main thread,
+	// so an unbounded batch would stall HTTP/WS for seconds.
+	// Skip empty messages: they add noise to the index.
 	const pending = messages.filter((m) => m.text?.trim());
-	const embedded = await embedMany(pending.map((m) => m.text));
 	const vectors = new Map<number, Float32Array>();
-	pending.forEach((m, i) => {
-		const vector = embedded[i];
-		if (vector) vectors.set(m.msgIdx, vector);
-	});
+	for (let start = 0; start < pending.length; start += EMBED_BATCH_SIZE) {
+		const slice = pending.slice(start, start + EMBED_BATCH_SIZE);
+		const embedded = await embedMany(slice.map((m) => m.text));
+		slice.forEach((m, i) => {
+			const vector = embedded[i];
+			if (vector) vectors.set(m.msgIdx, vector);
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
 
 	if (!stillCurrent()) return;
 

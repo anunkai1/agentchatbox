@@ -12,6 +12,13 @@ export const EMBEDDING_DIM = 384;
  */
 export const EMBED_THREADS = 2;
 
+/**
+ * Passages per embed() call. Each call blocks the main thread for its whole
+ * duration, so this bounds the worst-case request latency spike; larger
+ * batches only trade latency for marginally less per-call overhead.
+ */
+export const EMBED_BATCH_SIZE = 8;
+
 // Cached lazy-loaded pipeline. Loading takes ~5 s once (ONNX init); after that
 // every embed() call is cheap.
 type FeatureExtractionPipeline = (
