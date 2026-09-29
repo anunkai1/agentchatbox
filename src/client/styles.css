@@ -3949,10 +3949,11 @@ select:focus-visible,
 		justify-content: flex-end;
 		gap: 0;
 	}
-	/* Narrow columns keep the icons visually grouped; the full row height
-	 * still gives each one a 32px-tall tap target. */
+	/* Narrow columns keep the icons tightly grouped so the metadata text
+	 * keeps as much width as possible; the full row height still gives each
+	 * one a 32px-tall tap target. */
 	.session-item:not(.search-hit) .session-item-actions .session-action {
-		width: 26px;
+		width: 20px;
 		height: 32px;
 		font-size: 14px;
 	}
@@ -3987,7 +3988,7 @@ select:focus-visible,
 	.session-pin-indicator {
 		grid-column: 3;
 		grid-row: 2;
-		width: 26px;
+		width: 20px;
 		height: 32px;
 		font-size: 13px;
 	}
