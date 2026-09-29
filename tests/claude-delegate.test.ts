@@ -650,6 +650,15 @@ describe("claude-delegate sticky mode", () => {
 			"thinking",
 		]);
 		expect(live[2]).toMatchObject({ id: "t1", text: "contents", saved: 2 });
+
+		const progress = h.ui.setStatus.mock.calls.filter(
+			([key]: [string]) => key === "claude-progress",
+		);
+		expect(progress[0][1]).toMatch(/^Opus .* · working · 0s$/);
+		expect(
+			progress.some(([, text]: [string, string | undefined]) => text?.includes("Read: /x/y.ts")),
+		).toBe(true);
+		expect(progress.at(-1)?.[1]).toBeUndefined();
 	});
 
 	it("mirrors a failed run too, so the chat still saves", async () => {
