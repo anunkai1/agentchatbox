@@ -300,11 +300,11 @@ export function registerClaudeDelegate(
 	// Runs are serialised so follow-ups resume the same Claude session in order.
 	let queue: Promise<void> = Promise.resolve();
 
+	// "claude-sticky" is set only while this chat is on Claude Code, so ACB's
+	// settings toggle can show and flip the per-chat state.
 	const setStatus = (mode: DelegationMode, ctx: StatusContext) => {
-		ctx.ui.setStatus(
-			"claude-delegate",
-			sticky ? `${statusText(sticky)} · this chat → Claude Code` : statusText(mode),
-		);
+		ctx.ui.setStatus("claude-delegate", statusText(mode));
+		ctx.ui.setStatus("claude-sticky", sticky ? statusText(sticky) : undefined);
 	};
 	const restoreStatus = (ctx: StatusContext) => setStatus(store.readMode(), ctx);
 

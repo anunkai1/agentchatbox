@@ -1549,6 +1549,19 @@ export function openOverflowMenu(): void {
 				"Choose Claude Code delegation model (Off, Opus, Sonnet, Haiku)",
 			),
 		);
+		// Per-chat sticky mode (/cc on|off). The extension sets the
+		// "claude-sticky" label only while this chat routes to Claude Code.
+		const sticky = state.extensionStatusLabels["claude-sticky"];
+		chatRows.push(
+			actionRow(
+				"Chat → Claude Code",
+				sticky ? `On · ${sticky}` : "Off",
+				closeThen(() => services.sendSlashCommand?.(sticky ? "/cc off" : "/cc on")),
+				sticky
+					? "Send this chat's messages back to pi (/cc off)"
+					: "Send every message in this chat to Claude Code (/cc on)",
+			),
+		);
 	}
 	box.append(section("Chat", ...chatRows));
 	box.append(
