@@ -219,6 +219,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const row = el("div", { class: "row row-user" });
 		const bubble = el("div", { class: "bubble markdown" });
 		setUserRichText(bubble, m.text);
+		if (m.via) bubble.append(el("span", { class: "via-badge" }, `→ ${m.via}`));
 		if (m.ts !== undefined) bubble.append(makeTimestampEl(m.ts));
 		row.append(bubble);
 		const actions = el("div", { class: "message-actions user-message-actions" });

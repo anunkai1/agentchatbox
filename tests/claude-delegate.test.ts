@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	PROMPT_MESSAGE_TYPE,
 	parseCcArgs,
+	parseCcControl,
 	registerClaudeDelegate,
+	restoreStickyMode,
+	STICKY_ENTRY_TYPE,
 	runClaudeTask,
 } from "../extensions/claude-delegate/index.js";
 import {
@@ -212,22 +216,29 @@ function harness(
 	mode = "off",
 	knownModels: Record<string, string> = {},
 	probe?: (forMode: string) => Promise<string | undefined>,
-	runTask?: (args: string[]) => Promise<{
+	runTask?: (
+		args: string[],
+		options?: { env: Record<string, string> },
+	) => Promise<{
 		resultText?: string;
 		isError: boolean;
 		claudeSessionId?: string;
 		models: string[];
 	}>,
+	entries: Array<{ type: string; customType?: string; data?: unknown }> = [],
 ) {
 	let current = mode;
+	const sessions: Record<string, string> = {};
 	const effortByMode: Record<string, string> = {};
 	const store = {
 		readMode: () => current as never,
 		writeMode: (next: string) => {
 			current = next;
 		},
-		readClaudeSession: () => undefined,
-		writeClaudeSession: () => undefined,
+		readClaudeSession: (key: string) => sessions[key],
+		writeClaudeSession: (key: string, id: string) => {
+			sessions[key] = id;
+		},
 		clearClaudeSession: () => undefined,
 		readModel: (forMode: string) => knownModels[forMode],
 		writeModel: (forMode: string, modelId: string) => {
@@ -241,11 +252,15 @@ function harness(
 	const handlers: Record<string, CommandHandler> = {};
 	let activeTools = ["read", "bash"];
 	let sessionStart: ((event: unknown, ctx: unknown) => void) | undefined;
+	let input: ((event: unknown, ctx: unknown) => { action: string }) | undefined;
 	const notify = vi.fn();
 	const setStatus = vi.fn();
 	const sendMessage = vi.fn();
+	const appendEntry = vi.fn((customType: string, data: unknown) => {
+		entries.push({ type: "custom", customType, data });
+	});
 	const registered: Array<{ name: string; execute?: unknown }> = [];
-	registerClaudeDelegate(
+	const delegate = registerClaudeDelegate(
 		{
 			registerCommand(name: string, options: { handler: CommandHandler }) {
 				handlers[name] = options.handler;
@@ -255,12 +270,14 @@ function harness(
 			},
 			on(event: string, handler: (event: unknown, ctx: unknown) => void) {
 				if (event === "session_start") sessionStart = handler;
+				if (event === "input") input = handler as never;
 			},
 			getActiveTools: () => [...activeTools],
 			setActiveTools: (names: string[]) => {
 				activeTools = names;
 			},
 			sendMessage,
+			appendEntry,
 		} as never,
 		store as never,
 		"/tmp/claude-delegate-workspace",
@@ -272,7 +289,7 @@ function harness(
 		select: vi.fn(async (_title: string, options: string[]) => options[1]),
 		setStatus,
 	};
-	const uiCtx = { ui };
+	const uiCtx = { ui, sessionManager: { getSessionId: () => "chat-1", getEntries: () => entries } };
 	return {
 		get mode() {
 			return current;
@@ -283,6 +300,12 @@ function harness(
 		command: handlers.claude!,
 		cc: handlers.cc!,
 		sessionStart: () => sessionStart?.({}, uiCtx),
+		input: (text: string, extra: Record<string, unknown> = {}) =>
+			input?.({ type: "input", text, source: "rpc", ...extra }, uiCtx),
+		whenIdle: () => delegate.whenIdle(),
+		appendEntry,
+		sessions,
+		entries,
 		registered,
 		ui,
 		uiCtx,
@@ -406,8 +429,14 @@ describe("claude-delegate registration", () => {
 		expect(seen).toHaveLength(1);
 		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("sonnet");
 		expect(seen[0][seen[0].indexOf("--effort") + 1]).toBe("high");
-		expect(h.sendMessage).toHaveBeenCalledTimes(1);
-		const message = h.sendMessage.mock.calls[0][0];
+		expect(h.sendMessage).toHaveBeenCalledTimes(2);
+		// The prompt is recorded first so it stays in the chat history.
+		expect(h.sendMessage.mock.calls[0][0]).toMatchObject({
+			customType: PROMPT_MESSAGE_TYPE,
+			content: "register an account at example.com",
+			display: true,
+		});
+		const message = h.sendMessage.mock.calls[1][0];
 		// ACB only draws the "note" and "voice-reply" custom types.
 		expect(message.customType).toBe("note");
 		expect(message.display).toBe(true);
@@ -433,7 +462,7 @@ describe("claude-delegate registration", () => {
 		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("opus");
 	});
 
-	it("reports a failed /cc run as an error without posting a result message", async () => {
+	it("reports a failed /cc run as an error but keeps the prompt", async () => {
 		const h = harness("haiku", {}, undefined, async () => ({
 			resultText: "captcha wall",
 			isError: true,
@@ -441,7 +470,19 @@ describe("claude-delegate registration", () => {
 		}));
 		await h.cc("summarise inbox", h.uiCtx);
 		expect(h.ui.notify).toHaveBeenLastCalledWith("captcha wall", "error");
-		expect(h.sendMessage).not.toHaveBeenCalled();
+		expect(h.sendMessage).toHaveBeenCalledTimes(1);
+		expect(h.sendMessage.mock.calls[0][0].customType).toBe(PROMPT_MESSAGE_TYPE);
+	});
+
+	it("keys Claude session continuity by the chat's own session id", async () => {
+		const h = harness("sonnet", {}, undefined, async () => ({
+			resultText: "ok",
+			isError: false,
+			claudeSessionId: "claude-s1",
+			models: [],
+		}));
+		await h.cc("first", h.uiCtx);
+		expect(h.sessions).toEqual({ "chat-1": "claude-s1" });
 	});
 
 	it("shows the resolved version in the status label", async () => {
@@ -457,6 +498,93 @@ describe("claude-delegate registration", () => {
 		);
 		await h.command("menu", h.uiCtx);
 		expect(h.mode).toBe("opus");
+	});
+});
+
+describe("claude-delegate sticky mode", () => {
+	const ok = async () => ({ resultText: "done", isError: false, models: ["claude-opus-5-5"] });
+
+	it("parses only the bare on/off/status controls", () => {
+		expect(parseCcControl("on")).toEqual({ kind: "on" });
+		expect(parseCcControl("ON opus")).toEqual({ kind: "on", mode: "opus" });
+		expect(parseCcControl("off")).toEqual({ kind: "off" });
+		expect(parseCcControl("status")).toEqual({ kind: "status" });
+		// Longer text is an ordinary task, not a control.
+		expect(parseCcControl("on Monday book a table")).toBeUndefined();
+		expect(parseCcControl("off the top of your head")).toBeUndefined();
+		expect(parseCcControl("on off")).toBeUndefined();
+		expect(parseCcControl("on 1")).toBeUndefined();
+	});
+
+	it("restores the last sticky entry", () => {
+		const entries = [
+			{ type: "custom", customType: STICKY_ENTRY_TYPE, data: { mode: "opus" } },
+			{ type: "custom", customType: STICKY_ENTRY_TYPE, data: { mode: "haiku" } },
+		];
+		expect(restoreStickyMode(entries)).toBe("haiku");
+		entries.push({ type: "custom", customType: STICKY_ENTRY_TYPE, data: { mode: "off" } });
+		expect(restoreStickyMode(entries)).toBeUndefined();
+		expect(restoreStickyMode([])).toBeUndefined();
+	});
+
+	it("leaves ordinary messages with pi until /cc on", () => {
+		const h = harness("opus", {}, undefined, ok);
+		expect(h.input("hello")).toEqual({ action: "continue" });
+		expect(h.sendMessage).not.toHaveBeenCalled();
+	});
+
+	it("diverts every typed message to Claude Code while on, and stops at /cc off", async () => {
+		const seen: string[][] = [];
+		const h = harness("off", { opus: "claude-opus-5-5" }, undefined, async (args) => {
+			seen.push(args);
+			return ok();
+		});
+		await h.cc("on opus", h.uiCtx);
+		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "opus" });
+		expect(h.ui.setStatus).toHaveBeenLastCalledWith(
+			"claude-delegate",
+			"Opus 5.5 · high · this chat → Claude Code",
+		);
+
+		expect(h.input("check my inbox")).toEqual({ action: "handled" });
+		expect(h.input("and reply to Sam")).toEqual({ action: "handled" });
+		await h.whenIdle();
+		expect(seen).toHaveLength(2);
+		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("opus");
+		expect(seen[1][1]).toContain("and reply to Sam");
+		const types = h.sendMessage.mock.calls.map((call) => call[0].customType);
+		expect(types).toEqual([PROMPT_MESSAGE_TYPE, PROMPT_MESSAGE_TYPE, "note", "note"]);
+
+		await h.cc("off", h.uiCtx);
+		expect(h.input("back to pi")).toEqual({ action: "continue" });
+		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "off" });
+	});
+
+	it("uses the global model for a bare /cc on, falling back to Sonnet", async () => {
+		const h = harness("haiku", {}, undefined, ok);
+		await h.cc("on", h.uiCtx);
+		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "haiku" });
+		const off = harness("off", {}, undefined, ok);
+		await off.cc("on", off.uiCtx);
+		expect(off.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "sonnet" });
+	});
+
+	it("passes extension prompts, slash input and steering through to pi", async () => {
+		const h = harness("opus", {}, undefined, ok);
+		await h.cc("on", h.uiCtx);
+		expect(h.input("hi", { source: "extension" })).toEqual({ action: "continue" });
+		expect(h.input("/skill:foo")).toEqual({ action: "continue" });
+		expect(h.input("wait", { streamingBehavior: "steer" })).toEqual({ action: "continue" });
+		expect(h.sendMessage).not.toHaveBeenCalled();
+	});
+
+	it("restores sticky mode for the chat on session start", async () => {
+		const h = harness("off", {}, undefined, ok, [
+			{ type: "custom", customType: STICKY_ENTRY_TYPE, data: { mode: "sonnet" } },
+		]);
+		h.sessionStart();
+		expect(h.input("hello")).toEqual({ action: "handled" });
+		await h.whenIdle();
 	});
 });
 
