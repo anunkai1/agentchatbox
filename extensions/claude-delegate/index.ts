@@ -13,6 +13,8 @@ import {
 	delegationLabel,
 	FileDelegationStore,
 	MODE_LABELS,
+	PROBE_MODES,
+	PROBE_TASK,
 	parseDelegationMode,
 	prettyModelName,
 	progressTail,
@@ -21,6 +23,8 @@ import {
 
 const TOOL_NAME = "claude_code_task";
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+/** Alias probes are trivial; keep them from hanging a user-initiated refresh. */
+export const PROBE_TIMEOUT_MS = 2 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
 
 export const DEFAULT_WORKSPACE = join(homedir(), ".config", "browser-harness", "agent-workspace");
@@ -150,10 +154,14 @@ interface StatusContext {
 	ui: { setStatus(key: string, text: string | undefined): void };
 }
 
+/** Resolves one probe run; injectable so tests do not spawn Claude. */
+export type ProbeRunner = (mode: Exclude<DelegationMode, "off">) => Promise<string | undefined>;
+
 export function registerClaudeDelegate(
 	pi: ExtensionAPI,
 	store: DelegationStore,
 	workspace = DEFAULT_WORKSPACE,
+	runProbe?: ProbeRunner,
 ): void {
 	// Labels mirror codex-fast: ACB reads extensionStatusLabels["claude-delegate"].
 	// The text includes the resolved model version once a run has reported it.
@@ -167,6 +175,20 @@ export function registerClaudeDelegate(
 		if (mode === "off") active.delete(TOOL_NAME);
 		else active.add(TOOL_NAME);
 		pi.setActiveTools([...active]);
+	};
+
+	// One cheap throwaway run per alias; only the reported model id is kept.
+	const defaultProbe: ProbeRunner = async (mode) => {
+		const plan = buildClaudeSpawn({ task: PROBE_TASK, mode });
+		const outcome = await runClaudeTask(plan.args, {
+			cwd: plan.cwd,
+			env: {
+				...plan.env,
+				PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
+			},
+			timeoutMs: PROBE_TIMEOUT_MS,
+		});
+		return outcome.models[0];
 	};
 
 	pi.registerTool({
@@ -294,6 +316,31 @@ export function registerClaudeDelegate(
 				return;
 			}
 
+			if (command === "probe" || command === "versions") {
+				// Aliases resolve server-side, so the only way to learn which
+				// version an alias points at is to ask Claude Code for a cheap run.
+				const runner = runProbe ?? defaultProbe;
+				ctx.ui.notify("Probing Claude Code model aliases (haiku, sonnet, opus)…", "info");
+				const lines: string[] = [];
+				for (const mode of PROBE_MODES) {
+					try {
+						const model = await runner(mode);
+						if (model) {
+							store.writeModel(mode, model);
+							lines.push(`${MODE_LABELS[mode]}: ${prettyModelName(model)} (${model})`);
+						} else {
+							lines.push(`${MODE_LABELS[mode]}: unresolved`);
+						}
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						lines.push(`${MODE_LABELS[mode]}: failed (${message})`);
+					}
+				}
+				setStatus(current, ctx);
+				ctx.ui.notify(`Claude Code models — ${lines.join("; ")}`, "info");
+				return;
+			}
+
 			let next: DelegationMode | undefined;
 			if (!command || command === "menu") {
 				// Menu entries carry the resolved version, so map them back by index
@@ -317,7 +364,7 @@ export function registerClaudeDelegate(
 			} else {
 				next = parseDelegationMode(command);
 				if (!next) {
-					ctx.ui.notify("Usage: /claude [off|opus|sonnet|haiku|status|menu]", "warning");
+					ctx.ui.notify("Usage: /claude [off|opus|sonnet|haiku|status|menu|probe]", "warning");
 					return;
 				}
 			}

@@ -149,7 +149,11 @@ describe("delegated prompt", () => {
 
 type CommandHandler = (args: string, ctx: unknown) => Promise<void>;
 
-function harness(mode = "off", knownModels: Record<string, string> = {}) {
+function harness(
+	mode = "off",
+	knownModels: Record<string, string> = {},
+	probe?: (forMode: string) => Promise<string | undefined>,
+) {
 	let current = mode;
 	const store = {
 		readMode: () => current as never,
@@ -188,6 +192,7 @@ function harness(mode = "off", knownModels: Record<string, string> = {}) {
 		} as never,
 		store as never,
 		"/tmp/claude-delegate-workspace",
+		probe,
 	);
 	const ui = {
 		notify,
@@ -236,6 +241,37 @@ describe("claude-delegate registration", () => {
 		const h = harness("haiku");
 		h.sessionStart();
 		expect(h.activeTools).toContain("claude_code_task");
+	});
+
+	it("resolves every alias version with /claude probe", async () => {
+		const seen: string[] = [];
+		const models = {
+			haiku: "claude-haiku-4-5-20251001",
+			sonnet: "claude-sonnet-5",
+			opus: "claude-opus-5-5",
+		};
+		const h = harness("opus", {}, async (forMode) => {
+			seen.push(forMode);
+			return models[forMode as keyof typeof models];
+		});
+		await h.command("probe", h.uiCtx);
+		expect(seen).toEqual(["haiku", "sonnet", "opus"]);
+		const message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
+		expect(message).toContain("Haiku 4.5 (claude-haiku-4-5-20251001)");
+		expect(message).toContain("Sonnet 5 (claude-sonnet-5)");
+		expect(message).toContain("Opus 5.5 (claude-opus-5-5)");
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5");
+	});
+
+	it("keeps going when one alias probe fails", async () => {
+		const h = harness("off", {}, async (forMode) => {
+			if (forMode === "sonnet") throw new Error("no access");
+			return "claude-haiku-4-5-20251001";
+		});
+		await h.command("versions", h.uiCtx);
+		const message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
+		expect(message).toContain("Haiku 4.5");
+		expect(message).toContain("Sonnet: failed (no access)");
 	});
 
 	it("shows the resolved version in the status label", async () => {

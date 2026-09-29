@@ -6,6 +6,12 @@ export type DelegationMode = "off" | "opus" | "sonnet" | "haiku";
 
 export const DELEGATION_MODES: readonly DelegationMode[] = ["off", "opus", "sonnet", "haiku"];
 
+/**
+ * Alias order used to resolve wire model ids, cheapest first. `off` has no
+ * model, so the probe never includes it.
+ */
+export const PROBE_MODES: readonly Exclude<DelegationMode, "off">[] = ["haiku", "sonnet", "opus"];
+
 export const MODE_LABELS: Record<DelegationMode, string> = {
 	off: "Off",
 	opus: "Opus",
@@ -204,6 +210,12 @@ export interface ClaudeSpawnPlan {
 	cwd: string;
 	env: Record<string, string>;
 }
+
+/**
+ * Short, harmless task used to resolve which wire model an alias maps to.
+ * Output is discarded; only the reported model id is kept.
+ */
+export const PROBE_TASK = "Reply with exactly: ok";
 
 export interface SpawnOptions {
 	task: string;
