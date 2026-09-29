@@ -221,8 +221,7 @@ export async function indexSession(
 	const database = await getDb();
 
 	// Embed up-front (outside any transaction — ONNX is not transactional) in
-	// bounded batches, yielding between them: each call blocks the main thread,
-	// so an unbounded batch would stall HTTP/WS for seconds.
+	// bounded batches so a search query never queues behind a whole session.
 	// Skip empty messages: they add noise to the index.
 	const pending = messages.filter((m) => m.text?.trim());
 	const vectors = new Map<number, Float32Array>();
