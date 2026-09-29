@@ -2,57 +2,27 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type DelegationMode = "off" | "opus" | "sonnet" | "haiku";
+export const DEFAULT_WORKSPACE = join(homedir(), ".config", "browser-harness", "agent-workspace");
 
-export const DELEGATION_MODES: readonly DelegationMode[] = ["off", "opus", "sonnet", "haiku"];
+export type DelegationMode = "opus" | "sonnet" | "haiku";
 
-/**
- * Alias order used to resolve wire model ids, cheapest first. `off` has no
- * model, so the probe never includes it.
- */
-export const PROBE_MODES: readonly Exclude<DelegationMode, "off">[] = ["haiku", "sonnet", "opus"];
+export const DELEGATION_MODES: readonly DelegationMode[] = ["opus", "sonnet", "haiku"];
 
 export const MODE_LABELS: Record<DelegationMode, string> = {
-	off: "Off",
 	opus: "Opus",
 	sonnet: "Sonnet",
 	haiku: "Haiku",
 };
 
-/** Effort levels Claude Code accepts via --effort (model support varies). */
-export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
-export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+/** Claude Code's own default is `medium`; the owner wants `high` for agentic browser work. */
+export type EffortLevel = "high";
 
-/**
- * Effort defaults per mode. Claude Code's own defaults are `medium` on both
- * Opus 5.5 and Sonnet 5.5; the owner wants `high` for agentic browser work.
- * Haiku 4.5 has no effort parameter, so it stays undefined.
- */
+/** Haiku 4.5 has no effort parameter, so it stays undefined. */
 export const DEFAULT_EFFORT: Record<DelegationMode, EffortLevel | undefined> = {
-	off: undefined,
 	opus: "high",
 	sonnet: "high",
 	haiku: undefined,
 };
-
-/** A per-mode override; `auto` means "use the built-in default". */
-export type EffortSetting = EffortLevel | "auto";
-
-export function parseEffortLevel(raw: string): EffortSetting | undefined {
-	const value = raw.trim().toLowerCase();
-	if (value === "auto" || value === "default") return "auto";
-	return EFFORT_LEVELS.find((level) => level === value);
-}
-
-/** Effective effort for a mode: an explicit override wins over the default. */
-export function resolveEffort(
-	mode: DelegationMode,
-	override?: EffortSetting,
-): EffortLevel | undefined {
-	if (mode === "off") return undefined;
-	if (override && override !== "auto") return override;
-	return DEFAULT_EFFORT[mode];
-}
 
 /**
  * Turn a wire model id into a short human label: `claude-opus-5-5` →
@@ -82,38 +52,20 @@ export function delegationLabel(
 	return effort ? `${versioned} · ${effort}` : versioned;
 }
 
-/** Claude Code accepts these short aliases for --model. */
-export function modelAlias(mode: DelegationMode): "opus" | "sonnet" | "haiku" {
-	switch (mode) {
-		case "opus":
-			return "opus";
-		case "haiku":
-			return "haiku";
-		default:
-			return "sonnet";
-	}
-}
-
 export function parseDelegationMode(raw: string): DelegationMode | undefined {
 	const value = raw.trim().toLowerCase();
-	if (value === "0" || value === "off" || value === "disable" || value === "disabled") return "off";
-	if (value === "1" || value === "on" || value === "enable" || value === "enabled") return "sonnet";
-	const match = DELEGATION_MODES.find((mode) => mode === value);
-	return match;
+	return DELEGATION_MODES.find((mode) => mode === value);
 }
 
 export interface DelegationStore {
+	/** The model `/cc` uses when none is named; Sonnet until chosen. */
 	readMode(): DelegationMode;
 	writeMode(mode: DelegationMode): void;
 	readClaudeSession(key: string): string | undefined;
 	writeClaudeSession(key: string, claudeSessionId: string): void;
-	clearClaudeSession(key: string): void;
 	/** Last model id seen for a mode, so labels keep the version between runs. */
 	readModel(mode: DelegationMode): string | undefined;
 	writeModel(mode: DelegationMode, modelId: string): void;
-	/** Per-mode effort override; undefined means "never set". */
-	readEffort(mode: DelegationMode): EffortSetting | undefined;
-	writeEffort(mode: DelegationMode, setting: EffortSetting): void;
 }
 
 export const DEFAULT_MODE_FILE = join(homedir(), ".config", "acb", "claude-delegate");
@@ -124,7 +76,6 @@ export const DEFAULT_SESSIONS_FILE = join(
 	"claude-delegate-sessions.json",
 );
 export const DEFAULT_MODELS_FILE = join(homedir(), ".config", "acb", "claude-delegate-models.json");
-export const DEFAULT_EFFORT_FILE = join(homedir(), ".config", "acb", "claude-delegate-effort.json");
 
 interface SessionMap {
 	[key: string]: { claudeSessionId: string; updatedAt: string };
@@ -134,25 +85,22 @@ export class FileDelegationStore implements DelegationStore {
 	private readonly modePath: string;
 	private readonly sessionsPath: string;
 	private readonly modelsPath: string;
-	private readonly effortPath: string;
 
 	constructor(
 		modePath = DEFAULT_MODE_FILE,
 		sessionsPath = DEFAULT_SESSIONS_FILE,
 		modelsPath = DEFAULT_MODELS_FILE,
-		effortPath = DEFAULT_EFFORT_FILE,
 	) {
 		this.modePath = modePath;
 		this.sessionsPath = sessionsPath;
 		this.modelsPath = modelsPath;
-		this.effortPath = effortPath;
 	}
 
 	readMode(): DelegationMode {
 		try {
-			return parseDelegationMode(readFileSync(this.modePath, "utf8")) ?? "off";
+			return parseDelegationMode(readFileSync(this.modePath, "utf8")) ?? "sonnet";
 		} catch {
-			return "off";
+			return "sonnet";
 		}
 	}
 
@@ -192,14 +140,7 @@ export class FileDelegationStore implements DelegationStore {
 		this.writeSessions(map);
 	}
 
-	clearClaudeSession(key: string): void {
-		const map = this.readSessions();
-		delete map[key];
-		this.writeSessions(map);
-	}
-
 	readModel(mode: DelegationMode): string | undefined {
-		if (mode === "off") return undefined;
 		try {
 			const raw = JSON.parse(readFileSync(this.modelsPath, "utf8")) as Record<string, unknown>;
 			const value = raw?.[mode];
@@ -210,7 +151,7 @@ export class FileDelegationStore implements DelegationStore {
 	}
 
 	writeModel(mode: DelegationMode, modelId: string): void {
-		if (mode === "off" || !modelId) return;
+		if (!modelId) return;
 		let map: Record<string, string> = {};
 		try {
 			const raw = JSON.parse(readFileSync(this.modelsPath, "utf8")) as Record<string, unknown>;
@@ -228,38 +169,6 @@ export class FileDelegationStore implements DelegationStore {
 			mode: 0o644,
 		});
 		renameSync(temporary, this.modelsPath);
-	}
-
-	readEffort(mode: DelegationMode): EffortSetting | undefined {
-		if (mode === "off") return undefined;
-		try {
-			const raw = JSON.parse(readFileSync(this.effortPath, "utf8")) as Record<string, unknown>;
-			const value = raw?.[mode];
-			return typeof value === "string" ? parseEffortLevel(value) : undefined;
-		} catch {
-			return undefined;
-		}
-	}
-
-	writeEffort(mode: DelegationMode, setting: EffortSetting): void {
-		if (mode === "off") return;
-		let map: Record<string, string> = {};
-		try {
-			const raw = JSON.parse(readFileSync(this.effortPath, "utf8")) as Record<string, unknown>;
-			for (const [key, value] of Object.entries(raw ?? {})) {
-				if (typeof value === "string") map[key] = value;
-			}
-		} catch {
-			map = {};
-		}
-		map[mode] = setting;
-		mkdirSync(dirname(this.effortPath), { recursive: true });
-		const temporary = `${this.effortPath}.${process.pid}.${Date.now()}.tmp`;
-		writeFileSync(temporary, `${JSON.stringify(map, null, "\t")}\n`, {
-			encoding: "utf8",
-			mode: 0o644,
-		});
-		renameSync(temporary, this.effortPath);
 	}
 }
 
@@ -293,19 +202,11 @@ export interface ClaudeSpawnPlan {
 	env: Record<string, string>;
 }
 
-/**
- * Short, harmless task used to resolve which wire model an alias maps to.
- * Output is discarded; only the reported model id is kept.
- */
-export const PROBE_TASK = "Reply with exactly: ok";
-
 export interface SpawnOptions {
 	task: string;
 	mode: DelegationMode;
 	resumeSessionId?: string;
 	newSessionId?: string;
-	cwd?: string;
-	extraEnv?: Record<string, string>;
 	/** Passed as --effort; omitted for models without effort support. */
 	effort?: EffortLevel;
 }
@@ -325,7 +226,7 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 		"--thinking-display",
 		"summarized",
 		"--model",
-		modelAlias(options.mode),
+		options.mode,
 	];
 	if (options.effort) {
 		args.push("--effort", options.effort);
@@ -335,12 +236,7 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 	} else if (options.newSessionId) {
 		args.push("--session-id", options.newSessionId);
 	}
-	const workspace = options.cwd ?? join(homedir(), ".config", "browser-harness", "agent-workspace");
-	const env: Record<string, string> = {
-		...(options.extraEnv ?? {}),
-		BH_DOMAIN_SKILLS: "1",
-	};
-	return { args, cwd: workspace, env };
+	return { args, cwd: DEFAULT_WORKSPACE, env: { BH_DOMAIN_SKILLS: "1" } };
 }
 
 export type StreamEvent =
@@ -349,13 +245,7 @@ export type StreamEvent =
 	| { kind: "thinking"; text: string }
 	| { kind: "tool_use"; id: string; name: string; input: unknown }
 	| { kind: "tool_result"; id: string; text: string; isError: boolean }
-	| {
-			kind: "result";
-			text?: string;
-			isError: boolean;
-			usage?: Record<string, unknown>;
-			models?: string[];
-	  };
+	| { kind: "result"; text?: string; isError: boolean };
 
 interface RawStreamEvent {
 	type?: string;
@@ -365,8 +255,6 @@ interface RawStreamEvent {
 	message?: { model?: unknown; content?: unknown };
 	result?: unknown;
 	is_error?: unknown;
-	usage?: unknown;
-	modelUsage?: unknown;
 }
 
 /** Incremental parser for `claude -p --output-format stream-json --verbose` stdout. */
@@ -450,11 +338,6 @@ export class StreamParser {
 					kind: "result",
 					text: typeof raw.result === "string" ? raw.result : undefined,
 					isError: raw.is_error === true,
-					usage:
-						raw.usage && typeof raw.usage === "object"
-							? (raw.usage as Record<string, unknown>)
-							: undefined,
-					models: resultModels(raw.modelUsage),
 				},
 			];
 		}
@@ -513,27 +396,4 @@ export const TOOL_RESULT_LIMIT = 4000;
 export function capToolResult(text: string, limit = TOOL_RESULT_LIMIT): string {
 	if (text.length <= limit) return text;
 	return `${text.slice(0, limit)}\n… [${text.length - limit} more characters truncated]`;
-}
-
-/** Collect the model ids reported in a result event's `modelUsage` map. */
-function resultModels(modelUsage: unknown): string[] | undefined {
-	if (modelUsage === null || typeof modelUsage !== "object" || Array.isArray(modelUsage)) {
-		return undefined;
-	}
-	const models = new Set<string>();
-	for (const [key, value] of Object.entries(modelUsage as Record<string, unknown>)) {
-		const canonical =
-			value !== null && typeof value === "object"
-				? (value as Record<string, unknown>).canonicalModel
-				: undefined;
-		models.add(typeof canonical === "string" && canonical.length > 0 ? canonical : key);
-	}
-	return models.size > 0 ? [...models] : undefined;
-}
-
-/** Cap streamed progress text so onUpdate payloads stay small. */
-export function progressTail(text: string, limit = 1200): string {
-	const clean = text.trim();
-	if (clean.length <= limit) return clean;
-	return `…${clean.slice(-limit)}`;
 }

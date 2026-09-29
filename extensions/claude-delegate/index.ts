@@ -2,33 +2,24 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { join } from "node:path";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
 	buildClaudeSpawn,
 	capToolResult,
+	DEFAULT_EFFORT,
+	DEFAULT_WORKSPACE,
 	DELEGATION_MODES,
 	type DelegationMode,
 	type DelegationStore,
 	delegationLabel,
-	EFFORT_LEVELS,
-	type EffortLevel,
 	FileDelegationStore,
-	MODE_LABELS,
 	normaliseToolArgs,
-	PROBE_MODES,
-	PROBE_TASK,
 	parseDelegationMode,
-	parseEffortLevel,
-	prettyModelName,
-	progressTail,
-	resolveEffort,
 	type StreamEvent,
 	StreamParser,
 } from "./lib.js";
-
-const TOOL_NAME = "claude_code_task";
 /**
  * Custom message carrying the prompt the owner sent to Claude Code. ACB draws
  * it as a user bubble so /cc and sticky-mode prompts survive in the history.
@@ -36,9 +27,7 @@ const TOOL_NAME = "claude_code_task";
 export const PROMPT_MESSAGE_TYPE = "claude-prompt";
 /** Session entry recording this chat's sticky mode; the last entry wins. */
 export const STICKY_ENTRY_TYPE = "claude-sticky";
-/** Alias probes are trivial; keep them from hanging a user-initiated refresh. */
-export const PROBE_TIMEOUT_MS = 2 * 60 * 1000;
-const KILL_GRACE_MS = 5000;
+
 /** How often the progress heartbeat refreshes during a delegated run. */
 const HEARTBEAT_MS = 5000;
 /** Silence on the stream beyond this is flagged in the status label. */
@@ -55,21 +44,19 @@ export function formatElapsed(ms: number): string {
 	return `${sec}s`;
 }
 
-export const DEFAULT_WORKSPACE = join(homedir(), ".config", "browser-harness", "agent-workspace");
-
 /** Parse `/cc [opus|sonnet|haiku] <task>`; the model token is optional. */
 export function parseCcArgs(raw: string): { mode?: DelegationMode; task: string } {
 	const trimmed = raw.trim();
 	const [first, ...rest] = trimmed.split(/\s+/);
 	const asMode = first ? parseDelegationMode(first.toLowerCase()) : undefined;
-	if (asMode && asMode !== "off" && rest.length > 0) {
+	if (asMode && rest.length > 0) {
 		return { mode: asMode, task: rest.join(" ") };
 	}
 	return { task: trimmed };
 }
 
 export type CcControl =
-	| { kind: "on"; mode?: Exclude<DelegationMode, "off"> }
+	| { kind: "on"; mode?: DelegationMode }
 	| { kind: "off" }
 	| { kind: "status" };
 
@@ -84,66 +71,58 @@ export function parseCcControl(raw: string): CcControl | undefined {
 	if (words[0] !== "on" || words.length > 2) return undefined;
 	if (words.length === 1) return { kind: "on" };
 	const mode = parseDelegationMode(words[1]);
-	if (!mode || mode === "off" || words[1] !== mode) return undefined;
+	if (!mode) return undefined;
 	return { kind: "on", mode };
 }
 
 /** Read this chat's sticky mode back from its session entries. */
 export function restoreStickyMode(
 	entries: ReadonlyArray<{ type?: string; customType?: string; data?: unknown }>,
-): Exclude<DelegationMode, "off"> | undefined {
-	let sticky: Exclude<DelegationMode, "off"> | undefined;
+): DelegationMode | undefined {
+	let sticky: DelegationMode | undefined;
 	for (const entry of entries) {
 		if (entry.type !== "custom" || entry.customType !== STICKY_ENTRY_TYPE) continue;
 		const raw = (entry.data as { mode?: unknown } | undefined)?.mode;
 		const mode = typeof raw === "string" ? parseDelegationMode(raw) : undefined;
-		sticky = mode && mode !== "off" ? mode : undefined;
+		sticky = mode;
 	}
 	return sticky;
 }
 
 export interface DelegationRequest {
 	task: string;
-	mode: Exclude<DelegationMode, "off">;
+	mode: DelegationMode;
 	/** Chat the run belongs to; keys Claude session continuity. */
-	sessionKey?: string;
-	fresh?: boolean;
-	signal?: AbortSignal;
-	onText?: (tail: string) => void;
+	sessionKey: string;
 	/** Every parsed stream event (thinking, tool calls and results included). */
 	onEvent?: (event: StreamEvent) => void;
 }
 
 export interface DelegationOutcome {
 	outcome: SpawnOutcome;
-	effort?: EffortLevel;
 	label: string;
 }
 
-/**
- * Shared delegation core: session continuity, effort, spawn, and the
- * model/session bookkeeping. Used by the claude_code_task tool and by the
- * `/cc` passthrough command.
- */
+/** Run one delegation: session continuity, effort, spawn, and model/session bookkeeping. */
 export async function performDelegation(
 	store: DelegationStore,
 	workspace: string,
 	runTask: typeof runClaudeTask,
 	request: DelegationRequest,
 ): Promise<DelegationOutcome> {
-	const key = request.sessionKey ?? sessionKey();
-	const resumeId = request.fresh === true ? undefined : store.readClaudeSession(key);
+	const key = request.sessionKey;
+	const resumeId = store.readClaudeSession(key);
 	const newSessionId = resumeId ? undefined : randomUUID();
 	mkdirSync(workspace, { recursive: true });
 
 	const mode = request.mode;
-	const effort = resolveEffort(mode, store.readEffort(mode));
+
 	const plan = buildClaudeSpawn({
 		task: request.task,
 		mode,
 		resumeSessionId: resumeId,
 		newSessionId,
-		effort,
+		effort: DEFAULT_EFFORT[mode],
 	});
 
 	const outcome = await runTask(plan.args, {
@@ -153,19 +132,15 @@ export async function performDelegation(
 			BH_TAB_SCOPE: `claude:${key}`,
 			PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
 		},
-		signal: request.signal,
-		onText: request.onText,
 		onEvent: request.onEvent,
 	});
 
 	if (outcome.claudeSessionId) store.writeClaudeSession(key, outcome.claudeSessionId);
-	const primaryModel = outcome.models[0];
-	if (primaryModel) store.writeModel(mode, primaryModel);
+	if (outcome.model) store.writeModel(mode, outcome.model);
 
 	return {
 		outcome,
-		effort,
-		label: delegationLabel(mode, primaryModel ?? store.readModel(mode), effort),
+		label: delegationLabel(mode, outcome.model ?? store.readModel(mode), DEFAULT_EFFORT[mode]),
 	};
 }
 
@@ -173,41 +148,30 @@ interface SpawnOutcome {
 	resultText?: string;
 	isError: boolean;
 	claudeSessionId?: string;
-	usage?: Record<string, unknown>;
-	/** Every model id Claude Code reported for the run, primary first. */
-	models: string[];
+	/** The wire model id Claude Code reported for the run. */
+	model?: string;
 }
 
 /**
  * Pi exports PI_SESSION_ID only to bash children, not to extensions, so the
  * chat's own session id is the key whenever a context is available.
  */
-function sessionKey(ctx?: unknown): string {
+function sessionKey(ctx: unknown): string {
 	const manager = (ctx as { sessionManager?: { getSessionId?: () => string } } | undefined)
 		?.sessionManager;
 	return manager?.getSessionId?.() || process.env.PI_SESSION_ID || "default";
 }
 
-function killTree(child: ReturnType<typeof spawn>): void {
-	child.kill("SIGTERM");
-	setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
-}
-
 /**
- * Run one headless `claude -p` task. Streamed assistant text is forwarded
- * through onText and every parsed event through onEvent, so ACB shows live
- * progress while Claude works. There is no default time limit: long
- * sessions are expected, and only an explicit timeoutMs (probes) or the
- * abort signal stops a run.
+ * Run one headless `claude -p` task. Every parsed event goes through onEvent,
+ * so ACB shows live progress while Claude works. There is no time limit: long
+ * sessions are expected.
  */
 export function runClaudeTask(
 	args: string[],
 	options: {
 		cwd: string;
 		env: Record<string, string>;
-		signal?: AbortSignal;
-		timeoutMs?: number;
-		onText?: (tail: string) => void;
 		onEvent?: (event: StreamEvent) => void;
 		/** Override the executable (tests use a stub that emits stream-json). */
 		bin?: string;
@@ -222,25 +186,15 @@ export function runClaudeTask(
 		});
 
 		const parser = new StreamParser();
-		const timeout =
-			options.timeoutMs === undefined
-				? undefined
-				: setTimeout(() => killTree(child), options.timeoutMs);
 
 		let stderr = "";
 		let lastText = "";
 		let claudeSessionId: string | undefined;
-		let finalUsage: Record<string, unknown> | undefined;
-		let resultEvent: { text?: string; isError: boolean } | undefined;
-		// Primary model first (init/assistant), then any extra models reported
-		// by modelUsage (for example a Haiku subagent).
-		const models: string[] = [];
-		const noteModel = (model: string | undefined) => {
-			if (model && !models.includes(model)) models.push(model);
-		};
 
-		const abortHandler = () => killTree(child);
-		options.signal?.addEventListener("abort", abortHandler, { once: true });
+		let resultEvent: { text?: string; isError: boolean } | undefined;
+		// The first model reported (init/assistant) is the primary; later ones
+		// are subagents.
+		let model: string | undefined;
 
 		child.stdout?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk: string) => {
@@ -248,17 +202,12 @@ export function runClaudeTask(
 				options.onEvent?.(event);
 				if (event.kind === "init") {
 					claudeSessionId = event.claudeSessionId;
-					noteModel(event.model);
+					model ??= event.model;
 				} else if (event.kind === "text") {
-					noteModel(event.model);
-					if (event.text) {
-						lastText = event.text;
-						options.onText?.(progressTail(event.text));
-					}
+					model ??= event.model;
+					if (event.text) lastText = event.text;
 				} else if (event.kind === "result") {
 					resultEvent = { text: event.text, isError: event.isError };
-					if (event.usage) finalUsage = event.usage;
-					for (const model of event.models ?? []) noteModel(model);
 				}
 			}
 		});
@@ -268,24 +217,15 @@ export function runClaudeTask(
 		});
 
 		child.on("error", (error) => {
-			if (timeout) clearTimeout(timeout);
-			options.signal?.removeEventListener("abort", abortHandler);
 			reject(new Error(`Failed to start claude: ${error.message}`));
 		});
 
 		child.on("close", (code, signalName) => {
-			if (timeout) clearTimeout(timeout);
-			options.signal?.removeEventListener("abort", abortHandler);
-			if (options.signal?.aborted === true) {
-				reject(new Error("Delegated task cancelled."));
-				return;
-			}
 			const outcome: SpawnOutcome = {
 				resultText: resultEvent?.text ?? (lastText || undefined),
 				isError: resultEvent?.isError === true || (code !== 0 && !resultEvent),
 				claudeSessionId,
-				usage: finalUsage,
-				models,
+				model,
 			};
 			if (outcome.isError && !outcome.resultText) {
 				const reason = signalName
@@ -296,11 +236,6 @@ export function runClaudeTask(
 			resolve(outcome);
 		});
 	});
-}
-
-interface ToolResult {
-	content: Array<{ type: "text"; text: string }>;
-	details?: Record<string, unknown>;
 }
 
 /** Only the status label matters here; the rest stays pi's own context type. */
@@ -482,146 +417,28 @@ export class RunTrace {
 	}
 }
 
-/** Resolves one probe run; injectable so tests do not spawn Claude. */
-export type ProbeRunner = (mode: Exclude<DelegationMode, "off">) => Promise<string | undefined>;
-
 export function registerClaudeDelegate(
 	pi: ExtensionAPI,
 	store: DelegationStore,
 	workspace = DEFAULT_WORKSPACE,
-	runProbe?: ProbeRunner,
 	runTask: typeof runClaudeTask = runClaudeTask,
 ): { whenIdle(): Promise<void> } {
-	// Labels mirror codex-fast: ACB reads extensionStatusLabels["claude-delegate"].
+	// ACB reads extensionStatusLabels["claude-delegate"] for the default model.
 	// The text includes the resolved model version once a run has reported it.
 	const statusText = (mode: DelegationMode) =>
-		delegationLabel(mode, store.readModel(mode), resolveEffort(mode, store.readEffort(mode)));
+		delegationLabel(mode, store.readModel(mode), DEFAULT_EFFORT[mode]);
 	// This chat's sticky mode: while set, ordinary messages go to Claude Code
 	// instead of the driver model. Restored from session entries on start.
-	let sticky: Exclude<DelegationMode, "off"> | undefined;
+	let sticky: DelegationMode | undefined;
 	// Runs are serialised so follow-ups resume the same Claude session in order.
 	let queue: Promise<void> = Promise.resolve();
 
 	// "claude-sticky" is set only while this chat is on Claude Code, so ACB's
 	// settings toggle can show and flip the per-chat state.
-	const setStatus = (mode: DelegationMode, ctx: StatusContext) => {
-		ctx.ui.setStatus("claude-delegate", statusText(mode));
+	const restoreStatus = (ctx: StatusContext) => {
+		ctx.ui.setStatus("claude-delegate", statusText(store.readMode()));
 		ctx.ui.setStatus("claude-sticky", sticky ? statusText(sticky) : undefined);
 	};
-	const restoreStatus = (ctx: StatusContext) => setStatus(store.readMode(), ctx);
-
-	const syncToolAvailability = (mode: DelegationMode) => {
-		const active = new Set(pi.getActiveTools());
-		if (mode === "off") active.delete(TOOL_NAME);
-		else active.add(TOOL_NAME);
-		pi.setActiveTools([...active]);
-	};
-
-	// One cheap throwaway run per alias; only the reported model id is kept.
-	const defaultProbe: ProbeRunner = async (mode) => {
-		const plan = buildClaudeSpawn({
-			task: PROBE_TASK,
-			mode,
-			effort: resolveEffort(mode, store.readEffort(mode)),
-		});
-		const outcome = await runClaudeTask(plan.args, {
-			cwd: plan.cwd,
-			env: {
-				...plan.env,
-				PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
-			},
-			timeoutMs: PROBE_TIMEOUT_MS,
-		});
-		return outcome.models[0];
-	};
-
-	pi.registerTool({
-		name: TOOL_NAME,
-		label: "Claude Code",
-		description:
-			"Delegate a self-contained task to headless Claude Code (Anthropic Opus/Sonnet/Haiku, billed from the Claude plan). " +
-			"The delegated agent runs with filesystem and network access in the browser-harness workspace and drives browser-harness itself. " +
-			"Use for multi-step browser work (registrations, forms, scrapes) when the user asks for delegation or has enabled Claude Code mode via /claude.",
-		promptSnippet:
-			"Delegate a task to headless Claude Code (browser work, registrations, multi-step flows).",
-		promptGuidelines: [
-			"Use claude_code_task when the user explicitly asks to delegate to Claude/Opus, or when Claude Code delegation mode is enabled and the task is browser-heavy multi-step work.",
-			"Do not use claude_code_task for quick lookups, research, or simple single-page reads — do those directly.",
-		],
-		parameters: {
-			type: "object",
-			properties: {
-				task: {
-					type: "string",
-					description: "Complete, self-contained description of the task to delegate.",
-				},
-				fresh: {
-					type: "boolean",
-					description:
-						"Start a fresh Claude session instead of resuming this chat's previous delegated session (default false).",
-				},
-			},
-			required: ["task"],
-		},
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const mode = store.readMode();
-			if (mode === "off") {
-				throw new Error("Claude Code delegation is off. Enable it with /claude first.");
-			}
-			const task = String(params.task ?? "").trim();
-			if (!task) throw new Error("A non-empty task is required.");
-
-			onUpdate?.({
-				content: [{ type: "text", text: `Delegating to Claude Code (${statusText(mode)})…` }],
-				details: {},
-			});
-
-			let lastUpdate = 0;
-			const { outcome, effort } = await performDelegation(store, workspace, runTask, {
-				task,
-				mode,
-				fresh: params.fresh === true,
-				sessionKey: sessionKey(ctx),
-				signal: signal ?? undefined,
-				onText: (tail) => {
-					const now = Date.now();
-					if (now - lastUpdate < 1500) return;
-					lastUpdate = now;
-					onUpdate?.({ content: [{ type: "text", text: tail }], details: {} });
-				},
-			});
-
-			if (outcome.models[0]) {
-				const statusCtx = ctx as unknown as StatusContext | undefined;
-				if (statusCtx?.ui) restoreStatus(statusCtx);
-			}
-
-			if (outcome.isError) {
-				throw new Error(outcome.resultText ?? "Delegated task failed.");
-			}
-
-			const primaryModel = outcome.models[0];
-			const resultText =
-				outcome.resultText ??
-				"Delegated task finished but produced no summary text. Check the Claude session files for details.";
-			const modelNote = primaryModel
-				? `\n\n— Claude Code model: **${prettyModelName(primaryModel)}** (\`${primaryModel}\`)${effort ? ` at \`${effort}\` effort` : ""}`
-				: "";
-			const details: Record<string, unknown> = {
-				mode: MODE_LABELS[mode],
-				label: delegationLabel(mode, primaryModel, effort),
-				claudeSessionId: outcome.claudeSessionId,
-			};
-			if (primaryModel) details.model = primaryModel;
-			if (effort) details.effort = effort;
-			if (outcome.models.length > 1) details.models = outcome.models;
-			if (outcome.usage) details.usage = outcome.usage;
-			return {
-				content: [{ type: "text", text: `${resultText}${modelNote}` }],
-				details,
-			} satisfies ToolResult;
-		},
-	});
 
 	/**
 	 * Direct passthrough: the prompt goes to headless Claude Code without a
@@ -630,7 +447,7 @@ export function registerClaudeDelegate(
 	 */
 	const delegateDirect = (
 		task: string,
-		mode: Exclude<DelegationMode, "off">,
+		mode: DelegationMode,
 		ctx: StatusContext & { ui: { notify(message: string, type?: string): void } },
 		key: string,
 	): Promise<void> => {
@@ -667,20 +484,19 @@ export function registerClaudeDelegate(
 						beat();
 					},
 				});
-				const primaryModel = outcome.models[0];
 				if (outcome.isError) {
 					const failure = outcome.resultText ?? "Delegated task failed.";
 					ctx.ui.notify(failure, "error");
-					mirrorReplyToSession(ctx, `⚠ ${failure}`, primaryModel ?? mode, trace.trailingThinking);
+					mirrorReplyToSession(ctx, `⚠ ${failure}`, outcome.model ?? mode, trace.trailingThinking);
 					return;
 				}
-				const footer = primaryModel ? `\n\n— ${resolved} (\`${primaryModel}\`)` : "";
+				const footer = outcome.model ? `\n\n— ${resolved} (\`${outcome.model}\`)` : "";
 				const reply = `${outcome.resultText ?? "Task finished with no summary text."}${footer}`;
 				// ACB renders extension display notes for customType "note"
 				// (display:true, no triggerTurn). The assistant mirror right after
 				// it is what persists the chat; ACB's history drops the note then.
 				pi.sendMessage({ customType: "note", content: reply, display: true });
-				mirrorReplyToSession(ctx, reply, primaryModel ?? mode, trace.trailingThinking);
+				mirrorReplyToSession(ctx, reply, outcome.model ?? mode, trace.trailingThinking);
 			} catch (error) {
 				const failure = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(failure, "error");
@@ -719,8 +535,7 @@ export function registerClaudeDelegate(
 				return;
 			}
 			if (control?.kind === "on") {
-				const current = store.readMode();
-				const mode = control.mode ?? (current === "off" ? "sonnet" : current);
+				const mode = control.mode ?? store.readMode();
 				sticky = mode;
 				pi.appendEntry(STICKY_ENTRY_TYPE, { mode });
 				restoreStatus(ctx);
@@ -736,15 +551,7 @@ export function registerClaudeDelegate(
 				ctx.ui.notify("Usage: /cc [opus|sonnet|haiku] <task>, or /cc on|off|status", "warning");
 				return;
 			}
-			const mode = requested ?? sticky ?? store.readMode();
-			if (mode === "off") {
-				ctx.ui.notify(
-					"Claude Code delegation is off. Pick a model with /claude, or prefix the task: /cc sonnet <task>.",
-					"warning",
-				);
-				return;
-			}
-			await delegateDirect(task, mode, ctx, sessionKey(ctx));
+			await delegateDirect(task, requested ?? sticky ?? store.readMode(), ctx, sessionKey(ctx));
 		},
 	});
 
@@ -763,81 +570,12 @@ export function registerClaudeDelegate(
 		return { action: "handled" };
 	});
 
+	// Chooses the model `/cc` uses when none is named (Sonnet until chosen).
 	pi.registerCommand("claude", {
-		description:
-			"toggle Claude Code delegation (off/opus/sonnet/haiku), /claude effort to set reasoning effort",
+		description: "choose the default Claude Code model for /cc (opus/sonnet/haiku)",
 		handler: async (rawArgs, ctx) => {
 			const command = rawArgs.trim().toLowerCase();
 			const current = store.readMode();
-
-			if (command === "report") {
-				setStatus(current, ctx);
-				return;
-			}
-
-			// /claude effort [level|auto] — per-mode override of the built-in default.
-			if (command === "effort" || command.startsWith("effort ")) {
-				if (current === "off") {
-					ctx.ui.notify("Select a delegation mode before setting effort.", "warning");
-					return;
-				}
-				const arg = command.slice("effort".length).trim();
-				const stored = store.readEffort(current);
-				if (!arg) {
-					const effective = resolveEffort(current, stored);
-					const source = stored && stored !== "auto" ? "override" : "default";
-					ctx.ui.notify(
-						effective
-							? `${MODE_LABELS[current]} effort: ${effective} (${source}). Levels: ${EFFORT_LEVELS.join(", ")}, or auto.`
-							: `${MODE_LABELS[current]} has no effort parameter (its model does not support effort).`,
-						"info",
-					);
-					return;
-				}
-				const setting = parseEffortLevel(arg);
-				if (!setting) {
-					ctx.ui.notify(
-						`Unknown effort "${arg}". Use ${EFFORT_LEVELS.join(", ")}, or auto.`,
-						"warning",
-					);
-					return;
-				}
-				store.writeEffort(current, setting);
-				setStatus(current, ctx);
-				const effective = resolveEffort(current, setting);
-				ctx.ui.notify(
-					effective
-						? `${MODE_LABELS[current]} effort set to ${effective}${setting === "auto" ? " (default)" : ""}.`
-						: `${MODE_LABELS[current]} does not support effort; the setting is stored but unused.`,
-					"info",
-				);
-				return;
-			}
-
-			if (command === "probe" || command === "versions") {
-				// Aliases resolve server-side, so the only way to learn which
-				// version an alias points at is to ask Claude Code for a cheap run.
-				const runner = runProbe ?? defaultProbe;
-				ctx.ui.notify("Probing Claude Code model aliases (haiku, sonnet, opus)…", "info");
-				const lines: string[] = [];
-				for (const mode of PROBE_MODES) {
-					try {
-						const model = await runner(mode);
-						if (model) {
-							store.writeModel(mode, model);
-							lines.push(`${MODE_LABELS[mode]}: ${prettyModelName(model)} (${model})`);
-						} else {
-							lines.push(`${MODE_LABELS[mode]}: unresolved`);
-						}
-					} catch (error) {
-						const message = error instanceof Error ? error.message : String(error);
-						lines.push(`${MODE_LABELS[mode]}: failed (${message})`);
-					}
-				}
-				setStatus(current, ctx);
-				ctx.ui.notify(`Claude Code models — ${lines.join("; ")}`, "info");
-				return;
-			}
 
 			let next: DelegationMode | undefined;
 			if (!command || command === "menu") {
@@ -848,46 +586,31 @@ export function registerClaudeDelegate(
 					label: `${mode === current ? "✓ " : ""}${delegationLabel(mode, store.readModel(mode))}`,
 				}));
 				const selected = await ctx.ui.select(
-					"Claude Code delegation",
+					"Default Claude Code model",
 					entries.map((entry) => entry.label),
 				);
-				if (!selected) return;
 				next = entries.find((entry) => entry.label === selected)?.mode;
 			} else if (command === "status") {
-				ctx.ui.notify(
-					`Claude Code delegation is ${current === "off" ? "off" : statusText(current)}.`,
-					"info",
-				);
+				ctx.ui.notify(`Default Claude Code model is ${statusText(current)}.`, "info");
 				return;
 			} else {
 				next = parseDelegationMode(command);
 				if (!next) {
-					ctx.ui.notify(
-						"Usage: /claude [off|opus|sonnet|haiku|status|menu|probe|effort <level>]",
-						"warning",
-					);
+					ctx.ui.notify("Usage: /claude [opus|sonnet|haiku|status|menu]", "warning");
 					return;
 				}
 			}
 			if (!next) return;
 
 			store.writeMode(next);
-			setStatus(next, ctx);
-			syncToolAvailability(next);
-			ctx.ui.notify(
-				next === "off"
-					? "Claude Code delegation disabled — pi handles everything itself."
-					: `Claude Code delegation set to ${statusText(next)} — claude_code_task is available for browser-heavy work.`,
-				"info",
-			);
+			restoreStatus(ctx);
+			ctx.ui.notify(`Default Claude Code model set to ${statusText(next)}.`, "info");
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		const mode = store.readMode();
 		sticky = restoreStickyMode(ctx.sessionManager?.getEntries?.() ?? []);
 		restoreStatus(ctx);
-		syncToolAvailability(mode);
 	});
 
 	return { whenIdle: () => queue };

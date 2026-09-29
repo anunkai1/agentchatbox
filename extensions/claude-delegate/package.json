@@ -2,7 +2,7 @@
 	"name": "acb-claude-delegate",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Pi-owned Claude Code delegation for AgentChatBox: headless Opus/Sonnet/Haiku tasks billed from the Claude plan.",
+	"description": "Claude Code passthrough for AgentChatBox: /cc sends prompts to headless Opus/Sonnet/Haiku, billed from the Claude plan.",
 	"type": "module",
 	"keywords": [
 		"pi-package"
