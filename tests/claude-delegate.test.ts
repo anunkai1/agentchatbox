@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { registerClaudeDelegate, runClaudeTask } from "../extensions/claude-delegate/index.js";
+import {
+	parseCcArgs,
+	registerClaudeDelegate,
+	runClaudeTask,
+} from "../extensions/claude-delegate/index.js";
 import {
 	buildClaudeSpawn,
 	buildPrompt,
@@ -202,12 +206,18 @@ describe("delegated prompt", () => {
 	});
 });
 
-type CommandHandler = (args: string, ctx: unknown) => Promise<void>;
+type CommandHandler = (args: string, ctx: unknown, ...rest: unknown[]) => Promise<void>;
 
 function harness(
 	mode = "off",
 	knownModels: Record<string, string> = {},
 	probe?: (forMode: string) => Promise<string | undefined>,
+	runTask?: (args: string[]) => Promise<{
+		resultText?: string;
+		isError: boolean;
+		claudeSessionId?: string;
+		models: string[];
+	}>,
 ) {
 	let current = mode;
 	const effortByMode: Record<string, string> = {};
@@ -228,16 +238,17 @@ function harness(
 			effortByMode[forMode] = setting;
 		},
 	};
-	let commandHandler: CommandHandler | undefined;
+	const handlers: Record<string, CommandHandler> = {};
 	let activeTools = ["read", "bash"];
 	let sessionStart: ((event: unknown, ctx: unknown) => void) | undefined;
 	const notify = vi.fn();
 	const setStatus = vi.fn();
+	const sendMessage = vi.fn();
 	const registered: Array<{ name: string; execute?: unknown }> = [];
 	registerClaudeDelegate(
 		{
-			registerCommand(_name: string, options: { handler: CommandHandler }) {
-				commandHandler = options.handler;
+			registerCommand(name: string, options: { handler: CommandHandler }) {
+				handlers[name] = options.handler;
 			},
 			registerTool(definition: { name: string; execute?: unknown }) {
 				registered.push(definition);
@@ -249,10 +260,12 @@ function harness(
 			setActiveTools: (names: string[]) => {
 				activeTools = names;
 			},
+			sendMessage,
 		} as never,
 		store as never,
 		"/tmp/claude-delegate-workspace",
 		probe,
+		runTask as never,
 	);
 	const ui = {
 		notify,
@@ -267,11 +280,13 @@ function harness(
 		get activeTools() {
 			return activeTools;
 		},
-		command: commandHandler!,
+		command: handlers.claude!,
+		cc: handlers.cc!,
 		sessionStart: () => sessionStart?.({}, uiCtx),
 		registered,
 		ui,
 		uiCtx,
+		sendMessage,
 	};
 }
 
@@ -359,6 +374,74 @@ describe("claude-delegate registration", () => {
 			expect.stringContaining("Select a delegation mode"),
 			"warning",
 		);
+	});
+
+	it("parses /cc arguments with an optional model token", () => {
+		expect(parseCcArgs("opus register an account")).toEqual({
+			mode: "opus",
+			task: "register an account",
+		});
+		expect(parseCcArgs("summarise the last 5 emails")).toEqual({
+			task: "summarise the last 5 emails",
+		});
+		// A bare alias with no task is treated as the task, not a mode.
+		expect(parseCcArgs("haiku")).toEqual({ task: "haiku" });
+		// `off` is not a delegation mode.
+		expect(parseCcArgs("off do something")).toEqual({ task: "off do something" });
+	});
+
+	it("sends a task straight to Claude Code with /cc", async () => {
+		const seen: string[][] = [];
+		const h = harness("sonnet", { sonnet: "claude-sonnet-5-5" }, undefined, async (args) => {
+			seen.push(args);
+			return {
+				resultText: "registered ok",
+				isError: false,
+				claudeSessionId: "s-cc",
+				models: ["claude-sonnet-5-5"],
+			};
+		});
+		await h.cc("register an account at example.com", h.uiCtx);
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("sonnet");
+		expect(seen[0][seen[0].indexOf("--effort") + 1]).toBe("high");
+		expect(h.sendMessage).toHaveBeenCalledTimes(1);
+		const message = h.sendMessage.mock.calls[0][0];
+		// ACB only draws the "note" and "voice-reply" custom types.
+		expect(message.customType).toBe("note");
+		expect(message.display).toBe(true);
+		expect(String(message.content)).toContain("registered ok");
+		expect(String(message.content)).toContain("Sonnet 5.5");
+	});
+
+	it("honours the model prefix and refuses when delegation is off", async () => {
+		const seen: string[][] = [];
+		const h = harness("off", {}, undefined, async (args) => {
+			seen.push(args);
+			return { resultText: "ok", isError: false, models: ["claude-opus-5-5"] };
+		});
+		await h.cc("do a thing", h.uiCtx);
+		expect(h.ui.notify).toHaveBeenLastCalledWith(
+			expect.stringContaining("Claude Code delegation is off"),
+			"warning",
+		);
+		expect(seen).toHaveLength(0);
+
+		await h.cc("opus do a thing", h.uiCtx);
+		expect(seen).toHaveLength(1);
+		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("opus");
+	});
+
+	it("reports a failed /cc run as an error without posting a result message", async () => {
+		const h = harness("haiku", {}, undefined, async () => ({
+			resultText: "captcha wall",
+			isError: true,
+			models: ["claude-haiku-4-5-20251001"],
+		}));
+		await h.cc("summarise inbox", h.uiCtx);
+		expect(h.ui.notify).toHaveBeenLastCalledWith("captcha wall", "error");
+		expect(h.sendMessage).not.toHaveBeenCalled();
 	});
 
 	it("shows the resolved version in the status label", async () => {
