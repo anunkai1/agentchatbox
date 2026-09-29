@@ -379,7 +379,7 @@ describe("claude-delegate registration", () => {
 		expect(message).toContain("Opus effort: high (default)");
 
 		await h.command("effort xhigh", h.uiCtx);
-		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-delegate", "Opus 5.5 · xhigh");
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5 · xhigh");
 		message = h.ui.notify.mock.calls.map((call) => String(call[0])).join("\n");
 		expect(message).toContain("Opus effort set to xhigh");
 	});
@@ -541,10 +541,8 @@ describe("claude-delegate sticky mode", () => {
 		});
 		await h.cc("on opus", h.uiCtx);
 		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "opus" });
-		expect(h.ui.setStatus).toHaveBeenLastCalledWith(
-			"claude-delegate",
-			"Opus 5.5 · high · this chat → Claude Code",
-		);
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Off");
+		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-sticky", "Opus 5.5 · high");
 
 		expect(h.input("check my inbox")).toEqual({ action: "handled" });
 		expect(h.input("and reply to Sam")).toEqual({ action: "handled" });
@@ -558,6 +556,7 @@ describe("claude-delegate sticky mode", () => {
 		await h.cc("off", h.uiCtx);
 		expect(h.input("back to pi")).toEqual({ action: "continue" });
 		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "off" });
+		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-sticky", undefined);
 	});
 
 	it("uses the global model for a bare /cc on, falling back to Sonnet", async () => {
