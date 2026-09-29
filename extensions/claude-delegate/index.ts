@@ -19,6 +19,7 @@ import {
 	parseDelegationMode,
 	type StreamEvent,
 	StreamParser,
+	stdinUserMessage,
 } from "./lib.js";
 /**
  * Custom message carrying the prompt the owner sent to Claude Code. ACB draws
@@ -89,11 +90,60 @@ export function restoreStickyMode(
 	return sticky;
 }
 
+/**
+ * The stdin of a live run. Follow-ups written here reach Claude Code at its
+ * next step (after the tool in flight), like pi's steering. Replayed prompts
+ * count as consumed; once a turn ends with nothing pending the channel closes
+ * stdin so the run exits, and later messages start a new, resumed run.
+ */
+export class SteerChannel {
+	sent = 0;
+	consumed = 0;
+	private write?: (line: string) => void;
+	private end?: () => void;
+	private closed = false;
+
+	attach(write: (line: string) => void, end: () => void): void {
+		this.write = write;
+		this.end = end;
+	}
+
+	/** Messages written but not yet taken in by Claude Code. */
+	get pending(): number {
+		return Math.max(0, this.sent - this.consumed);
+	}
+
+	/** Pending follow-ups, not counting the run's own first prompt. */
+	get queuedFollowUps(): number {
+		return Math.max(0, this.sent - Math.max(this.consumed, 1));
+	}
+
+	send(text: string): boolean {
+		if (this.closed || !this.write) return false;
+		this.write(stdinUserMessage(text));
+		this.sent += 1;
+		return true;
+	}
+
+	/** A turn finished: close unless a follow-up still waits to be taken in. */
+	turnEnded(): void {
+		if (this.pending === 0) this.close();
+	}
+
+	close(): void {
+		if (this.closed) return;
+		this.closed = true;
+		this.end?.();
+	}
+}
+
 export interface DelegationRequest {
 	task: string;
 	mode: DelegationMode;
 	/** Chat the run belongs to; keys Claude session continuity. */
 	sessionKey: string;
+	/** Live stdin for follow-ups while this run is going. */
+	channel?: SteerChannel;
 	/** Every parsed stream event (thinking, tool calls and results included). */
 	onEvent?: (event: StreamEvent) => void;
 }
@@ -132,6 +182,8 @@ export async function performDelegation(
 			BH_TAB_SCOPE: `claude:${key}`,
 			PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
 		},
+		prompt: plan.prompt,
+		channel: request.channel,
 		onEvent: request.onEvent,
 	});
 
@@ -165,7 +217,8 @@ function sessionKey(ctx: unknown): string {
 /**
  * Run one headless `claude -p` task. Every parsed event goes through onEvent,
  * so ACB shows live progress while Claude works. There is no time limit: long
- * sessions are expected.
+ * sessions are expected. With a prompt, stdin stays open as a SteerChannel for
+ * follow-ups; the outcome carries the last turn's result.
  */
 export function runClaudeTask(
 	args: string[],
@@ -173,6 +226,9 @@ export function runClaudeTask(
 		cwd: string;
 		env: Record<string, string>;
 		onEvent?: (event: StreamEvent) => void;
+		/** First stream-json stdin message; without it stdin is closed. */
+		prompt?: string;
+		channel?: SteerChannel;
 		/** Override the executable (tests use a stub that emits stream-json). */
 		bin?: string;
 	},
@@ -182,8 +238,20 @@ export function runClaudeTask(
 		const child = spawn(bin, args, {
 			cwd: options.cwd,
 			env: { ...process.env, ...options.env },
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: [options.prompt === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 		});
+
+		const channel = options.channel ?? new SteerChannel();
+		if (options.prompt !== undefined && child.stdin) {
+			const stdin = child.stdin;
+			// A run that exits early must not crash pi on a late write.
+			stdin.on("error", () => channel.close());
+			channel.attach(
+				(line) => stdin.write(line),
+				() => stdin.end(),
+			);
+			channel.send(options.prompt);
+		}
 
 		const parser = new StreamParser();
 
@@ -206,8 +274,11 @@ export function runClaudeTask(
 				} else if (event.kind === "text") {
 					model ??= event.model;
 					if (event.text) lastText = event.text;
+				} else if (event.kind === "prompt") {
+					channel.consumed += 1;
 				} else if (event.kind === "result") {
 					resultEvent = { text: event.text, isError: event.isError };
+					channel.turnEnded();
 				}
 			}
 		});
@@ -217,10 +288,12 @@ export function runClaudeTask(
 		});
 
 		child.on("error", (error) => {
+			channel.close();
 			reject(new Error(`Failed to start claude: ${error.message}`));
 		});
 
 		child.on("close", (code, signalName) => {
+			channel.close();
 			const outcome: SpawnOutcome = {
 				resultText: resultEvent?.text ?? (lastText || undefined),
 				isError: resultEvent?.isError === true || (code !== 0 && !resultEvent),
@@ -340,7 +413,7 @@ export class RunTrace {
 
 	constructor(
 		private readonly ctx: StatusContext,
-		fallbackModel: string,
+		private readonly fallbackModel: string,
 	) {
 		this.model = fallbackModel;
 	}
@@ -350,9 +423,17 @@ export class RunTrace {
 		return [...this.pending.values()];
 	}
 
-	/** Thinking not yet attached to a saved step; goes on the final reply. */
-	get trailingThinking(): string[] {
-		return this.thinking;
+	/** Thinking not yet attached to a saved step; goes on the turn's reply. */
+	takeTrailingThinking(): string[] {
+		const thinking = this.thinking;
+		this.thinking = [];
+		this.text = "";
+		return thinking;
+	}
+
+	/** The model id Claude Code reported, once it has. */
+	get reportedModel(): string | undefined {
+		return this.model === this.fallbackModel ? undefined : this.model;
 	}
 
 	private live(payload: Record<string, unknown>): void {
@@ -430,7 +511,8 @@ export function registerClaudeDelegate(
 	// This chat's sticky mode: while set, ordinary messages go to Claude Code
 	// instead of the driver model. Restored from session entries on start.
 	let sticky: DelegationMode | undefined;
-	// Runs are serialised so follow-ups resume the same Claude session in order.
+	// Runs are serialised so messages that miss a live run resume the same
+	// Claude session in order.
 	let queue: Promise<void> = Promise.resolve();
 
 	// "claude-sticky" is set only while this chat is on Claude Code, so ACB's
@@ -440,10 +522,17 @@ export function registerClaudeDelegate(
 		ctx.ui.setStatus("claude-sticky", sticky ? statusText(sticky) : undefined);
 	};
 
+	// The run currently going, so a follow-up can join it instead of queueing.
+	let live:
+		| { key: string; mode: DelegationMode; channel: SteerChannel; beat: () => void }
+		| undefined;
+
 	/**
 	 * Direct passthrough: the prompt goes to headless Claude Code without a
 	 * driver-model turn. The prompt is recorded first (so it stays in the
-	 * history even if the run fails); the result follows as a note.
+	 * history even if the run fails); each turn's result follows as a note.
+	 * While a run for this chat and model is live, the prompt is written into
+	 * it as a follow-up, and Claude Code takes it in at its next step.
 	 */
 	const delegateDirect = (
 		task: string,
@@ -458,50 +547,84 @@ export function registerClaudeDelegate(
 			display: true,
 			details: { target: "Claude Code", label },
 		});
+		if (live && live.key === key && live.mode === mode && live.channel.send(task)) {
+			live.beat();
+			ctx.ui.notify(
+				"Added to the running Claude Code task; it picks this up at its next step.",
+				"info",
+			);
+			return Promise.resolve();
+		}
 		const run = async () => {
 			ctx.ui.notify(`Sending to Claude Code (${label})…`, "info");
 			const trace = new RunTrace(ctx, mode);
+			const channel = new SteerChannel();
 			const startedAt = Date.now();
+			let replies = 0;
 			// The status label doubles as a heartbeat: elapsed time, the tool in
-			// flight and how long the stream has been quiet, so a stuck run is
-			// visibly different from a busy one (there is no time limit).
+			// flight, follow-ups not yet taken in and how long the stream has been
+			// quiet, so a stuck run is visibly different from a busy one (there is
+			// no time limit).
 			const beat = () => {
 				const elapsed = formatElapsed(Date.now() - startedAt);
 				const quiet = Date.now() - trace.lastEventAt;
 				const doing = trace.pendingTools[0] ?? "working";
+				const waiting = channel.queuedFollowUps;
+				const queued = waiting > 0 ? ` · ⟳ ${waiting} queued` : "";
 				const warn = quiet >= QUIET_WARNING_MS ? ` · ⚠ quiet ${formatElapsed(quiet)}` : "";
-				ctx.ui.setStatus("claude-progress", `${label} · ${doing} · ${elapsed}${warn}`);
+				ctx.ui.setStatus("claude-progress", `${label} · ${doing} · ${elapsed}${queued}${warn}`);
 			};
-			const heartbeat = setInterval(beat, HEARTBEAT_MS);
-			beat();
-			try {
-				const { outcome, label: resolved } = await performDelegation(store, workspace, runTask, {
-					task,
+			const fail = (failure: string, model: string) => {
+				ctx.ui.notify(failure, "error");
+				mirrorReplyToSession(ctx, `⚠ ${failure}`, model, trace.takeTrailingThinking());
+			};
+			const reply = (text: string | undefined, model: string | undefined) => {
+				const resolved = delegationLabel(
 					mode,
-					sessionKey: key,
-					onEvent: (event) => {
-						trace.handle(event);
-						beat();
-					},
-				});
-				if (outcome.isError) {
-					const failure = outcome.resultText ?? "Delegated task failed.";
-					ctx.ui.notify(failure, "error");
-					mirrorReplyToSession(ctx, `⚠ ${failure}`, outcome.model ?? mode, trace.trailingThinking);
-					return;
-				}
-				const footer = outcome.model ? `\n\n— ${resolved} (\`${outcome.model}\`)` : "";
-				const reply = `${outcome.resultText ?? "Task finished with no summary text."}${footer}`;
+					model ?? store.readModel(mode),
+					DEFAULT_EFFORT[mode],
+				);
+				const footer = model ? `\n\n— ${resolved} (\`${model}\`)` : "";
+				const content = `${text ?? "Task finished with no summary text."}${footer}`;
 				// ACB renders extension display notes for customType "note"
 				// (display:true, no triggerTurn). The assistant mirror right after
 				// it is what persists the chat; ACB's history drops the note then.
-				pi.sendMessage({ customType: "note", content: reply, display: true });
-				mirrorReplyToSession(ctx, reply, outcome.model ?? mode, trace.trailingThinking);
+				pi.sendMessage({ customType: "note", content, display: true });
+				mirrorReplyToSession(ctx, content, model ?? mode, trace.takeTrailingThinking());
+			};
+			live = { key, mode, channel, beat };
+			const heartbeat = setInterval(beat, HEARTBEAT_MS);
+			beat();
+			try {
+				const { outcome } = await performDelegation(store, workspace, runTask, {
+					task,
+					mode,
+					sessionKey: key,
+					channel,
+					onEvent: (event) => {
+						trace.handle(event);
+						// A follow-up taken in after a turn ended starts another
+						// turn, so every turn's result gets its own reply.
+						if (event.kind === "result") {
+							replies += 1;
+							if (event.isError)
+								fail(event.text ?? "Delegated task failed.", trace.reportedModel ?? mode);
+							else reply(event.text, trace.reportedModel);
+						}
+						beat();
+					},
+				});
+				if (replies > 0) return;
+				if (outcome.isError) {
+					fail(outcome.resultText ?? "Delegated task failed.", outcome.model ?? mode);
+					return;
+				}
+				reply(outcome.resultText, outcome.model);
 			} catch (error) {
-				const failure = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(failure, "error");
-				mirrorReplyToSession(ctx, `⚠ ${failure}`, mode, trace.trailingThinking);
+				fail(error instanceof Error ? error.message : String(error), mode);
 			} finally {
+				channel.close();
+				if (live?.channel === channel) live = undefined;
 				clearInterval(heartbeat);
 				ctx.ui.setStatus("claude-progress", undefined);
 				// Restore the steady-state label (now with the resolved version).

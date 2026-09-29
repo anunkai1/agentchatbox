@@ -10,6 +10,7 @@ import {
 	restoreStickyMode,
 	runClaudeTask,
 	STICKY_ENTRY_TYPE,
+	SteerChannel,
 } from "../extensions/claude-delegate/index.js";
 import {
 	buildClaudeSpawn,
@@ -45,8 +46,12 @@ describe("claude-delegate spawn plan", () => {
 		expect(plan.args[plan.args.indexOf("--session-id") + 1]).toBe("uuid-1");
 		expect(plan.args).not.toContain("--resume");
 		expect(plan.args[plan.args.indexOf("--thinking-display") + 1]).toBe("summarized");
-		expect(plan.args[1]).toContain("do a thing");
-		expect(plan.args[1]).toContain("~/.secrets");
+		// The prompt goes in on stdin so follow-ups can join the live run.
+		expect(plan.args[plan.args.indexOf("--input-format") + 1]).toBe("stream-json");
+		expect(plan.args).toContain("--replay-user-messages");
+		expect(plan.args.join(" ")).not.toContain("do a thing");
+		expect(plan.prompt).toContain("do a thing");
+		expect(plan.prompt).toContain("~/.secrets");
 		expect(plan.env.BH_DOMAIN_SKILLS).toBe("1");
 	});
 
@@ -103,6 +108,24 @@ describe("claude stream parser", () => {
 			{ kind: "text", text: "", model: "m" },
 			{ kind: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
 			{ kind: "tool_result", id: "t1", text: "a.txt", isError: false },
+		]);
+	});
+
+	it("reports replayed stdin prompts, not tool results, as prompt events", () => {
+		const parser = new StreamParser();
+		const events = parser.feed(
+			[
+				JSON.stringify({ type: "user", message: { content: "also do X" }, isReplay: true }),
+				JSON.stringify({
+					type: "user",
+					message: { content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] },
+				}),
+				"",
+			].join("\n"),
+		);
+		expect(events).toEqual([
+			{ kind: "prompt", text: "also do X" },
+			{ kind: "tool_result", id: "t", text: "ok", isError: false },
 		]);
 	});
 
@@ -410,10 +433,15 @@ describe("claude-delegate sticky mode", () => {
 
 	it("diverts every typed message to Claude Code while on, and stops at /cc off", async () => {
 		const seen: string[][] = [];
-		const h = harness("sonnet", { opus: "claude-opus-5-5" }, async (args) => {
+		const prompts: string[] = [];
+		const h = harness("sonnet", { opus: "claude-opus-5-5" }, (async (
+			args: string[],
+			options: { prompt: string },
+		) => {
 			seen.push(args);
+			prompts.push(options.prompt);
 			return ok();
-		});
+		}) as never);
 		await h.cc("on opus", h.uiCtx);
 		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "opus" });
 		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Sonnet · high");
@@ -424,7 +452,7 @@ describe("claude-delegate sticky mode", () => {
 		await h.whenIdle();
 		expect(seen).toHaveLength(2);
 		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("opus");
-		expect(seen[1][1]).toContain("and reply to Sam");
+		expect(prompts[1]).toContain("and reply to Sam");
 		const types = h.sendMessage.mock.calls.map((call) => call[0].customType);
 		expect(types).toEqual([PROMPT_MESSAGE_TYPE, PROMPT_MESSAGE_TYPE, "note", "note"]);
 
@@ -506,6 +534,67 @@ describe("claude-delegate sticky mode", () => {
 		expect(progress.at(-1)?.[1]).toBeUndefined();
 	});
 
+	it("adds a follow-up to the live run instead of queueing a new one", async () => {
+		const seen: string[][] = [];
+		const written: string[] = [];
+		let finish: () => void = () => {};
+		type Run = (
+			args: string[],
+			options: {
+				prompt: string;
+				channel?: SteerChannel;
+				onEvent?: (event: StreamEvent) => void;
+			},
+		) => Promise<{ resultText?: string; isError: boolean; model?: string }>;
+		const run: Run = (args, options) => {
+			seen.push(args);
+			const channel = options.channel!;
+			channel.attach(
+				(line) => written.push(JSON.parse(line).message.content),
+				() => {},
+			);
+			// As runClaudeTask does, the first prompt goes in on the channel.
+			channel.send(options.prompt);
+			options.onEvent?.({ kind: "init", claudeSessionId: "s", model: "claude-opus-5-5" });
+			return new Promise((resolve) => {
+				finish = () => {
+					for (let i = 0; i < channel.sent; i += 1) {
+						options.onEvent?.({ kind: "prompt", text: written[i] });
+						channel.consumed += 1;
+					}
+					options.onEvent?.({ kind: "result", text: "both done", isError: false });
+					channel.turnEnded();
+					resolve({ resultText: "both done", isError: false, model: "claude-opus-5-5" });
+				};
+			});
+		};
+		const h = harness("opus", {}, run as never);
+		await h.cc("on", h.uiCtx);
+		h.input("check my inbox");
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(h.input("and reply to Sam")).toEqual({ action: "handled" });
+		expect(written.at(-1)).toBe("and reply to Sam");
+		const queued = h.ui.setStatus.mock.calls.filter(([key]: [string]) => key === "claude-progress");
+		expect(queued.some(([, text]: [string, string]) => text?.includes("⟳ 1 queued"))).toBe(true);
+		finish();
+		await h.whenIdle();
+
+		// One Claude Code run, both prompts in the chat, one reply for the turn.
+		expect(seen).toHaveLength(1);
+		const types = h.sendMessage.mock.calls.map((call) => call[0].customType);
+		expect(types).toEqual([PROMPT_MESSAGE_TYPE, PROMPT_MESSAGE_TYPE, "note"]);
+		expect(String(h.sendMessage.mock.calls[2][0].content)).toContain("both done");
+
+		// Once the run has ended, the next message starts a fresh (resumed) run.
+		h.input("thanks, one more thing");
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(seen).toHaveLength(2);
+		finish();
+		await h.whenIdle();
+	});
+
 	it("mirrors a failed run too, so the chat still saves", async () => {
 		const h = harness("opus", {}, async () => ({
 			isError: true,
@@ -557,6 +646,30 @@ describe("tool display helpers", () => {
 	});
 });
 
+describe("SteerChannel", () => {
+	it("closes stdin only when a turn ends with every follow-up taken in", () => {
+		const end = vi.fn();
+		const lines: string[] = [];
+		const channel = new SteerChannel();
+		expect(channel.send("too early")).toBe(false);
+		channel.attach((line) => lines.push(line), end);
+		expect(channel.send("first")).toBe(true);
+		expect(channel.send("second")).toBe(true);
+		expect(channel.queuedFollowUps).toBe(1);
+		expect(JSON.parse(lines[1])).toEqual({
+			type: "user",
+			message: { role: "user", content: "second" },
+		});
+		channel.consumed = 1;
+		channel.turnEnded();
+		expect(end).not.toHaveBeenCalled();
+		channel.consumed = 2;
+		channel.turnEnded();
+		expect(end).toHaveBeenCalledTimes(1);
+		expect(channel.send("late")).toBe(false);
+	});
+});
+
 describe("runClaudeTask", () => {
 	it("has no time limit", async () => {
 		const spy = vi.spyOn(globalThis, "setTimeout");
@@ -602,6 +715,28 @@ describe("runClaudeTask", () => {
 		expect(outcome.resultText).toBe("all done");
 		expect(outcome.isError).toBe(false);
 		expect(outcome.model).toBeUndefined();
+	});
+
+	it("writes the prompt to stdin and ends it after an idle turn", async () => {
+		// Stub: echo each stdin message back as a replay, then a result.
+		const script = [
+			'let buf="";process.stdin.on("data",d=>{buf+=d;let i;while((i=buf.indexOf("\\n"))>=0){',
+			"const m=JSON.parse(buf.slice(0,i));buf=buf.slice(i+1);",
+			'process.stdout.write(JSON.stringify({type:"user",isReplay:true,message:m.message})+"\\n");',
+			'process.stdout.write(JSON.stringify({type:"result",result:"got "+m.message.content,is_error:false})+"\\n");',
+			'}});process.stdin.on("end",()=>process.exit(0));',
+		].join("");
+		const kinds: string[] = [];
+		const outcome = await runClaudeTask(["-e", script], {
+			cwd: process.cwd(),
+			env: {},
+			bin: process.execPath,
+			prompt: "hello",
+			onEvent: (event) => kinds.push(event.kind),
+		});
+		expect(kinds).toEqual(["prompt", "result"]);
+		expect(outcome.resultText).toBe("got hello");
+		expect(outcome.isError).toBe(false);
 	});
 
 	it("marks a failing run as an error", async () => {
