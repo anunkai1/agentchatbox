@@ -33,6 +33,19 @@ export function autoSize(): void {
 	ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
 }
 
+/** A /cc run bypasses pi, so it has no streaming state; its heartbeat label says it is going. */
+export function claudeRunActive(): boolean {
+	return Boolean(state.extensionStatusLabels["claude-progress"]);
+}
+
+/** Show Stop for a running Claude Code task as well as for a pi run. */
+export function syncStopButton(): void {
+	const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement | null;
+	if (!stopBtn) return;
+	stopBtn.hidden = !state.isStreaming && !claudeRunActive();
+	if (!state.isStreaming && claudeRunActive()) stopBtn.title = "Stop the Claude Code task";
+}
+
 export function setStreaming(s: boolean): void {
 	state.isStreaming = s;
 	// Keep the input enabled while streaming so the user can queue
@@ -48,7 +61,7 @@ export function setStreaming(s: boolean): void {
 		? "Queue instruction — delivered after the current turn (⌘/Ctrl+Enter)"
 		: "Send message (⌘/Ctrl+Enter)";
 	const stopBtn = $<HTMLButtonElement>("#stop-btn");
-	stopBtn.hidden = !s;
+	stopBtn.hidden = !s && !claudeRunActive();
 	// Context-aware label mirroring the CLI: while a retry backoff is
 	// counting down, Stop cancels the retry ("interrupt to cancel"); a
 	// compaction is likewise abortable through pi's normal abort path.
@@ -56,7 +69,9 @@ export function setStreaming(s: boolean): void {
 		? "Cancel retry backoff"
 		: state.compaction
 			? "Stop context cleanup"
-			: "Stop the current run";
+			: !s && claudeRunActive()
+				? "Stop the Claude Code task"
+				: "Stop the current run";
 	if (!s) state.toolSpinner = null;
 	startOrStopWorkingTick(s);
 	refreshStatus();

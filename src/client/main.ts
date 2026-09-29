@@ -41,6 +41,7 @@ import {
 	appendError,
 	appendToolCall,
 	autoSize,
+	claudeRunActive,
 	clearAttachmentPreviews,
 	finalizeToolCall,
 	hideToast,
@@ -63,6 +64,7 @@ import {
 	showToast,
 	syncDisplayPreferences,
 	syncSteerBadges,
+	syncStopButton,
 	updateJumpFabState,
 	updateJumpToBottomFabState,
 	updateVoiceTextBox,
@@ -259,6 +261,15 @@ function handleSend(): void {
 }
 
 /**
+ * Stop the current run. A /cc task runs outside pi, so pi's abort would do
+ * nothing; the extension's own /cc stop command cancels it.
+ */
+function stopRun(): void {
+	if (!state.isStreaming && claudeRunActive()) sendPromptHook("/cc stop");
+	else abortPiHook();
+}
+
+/**
  * Send a typed message as the user. Agent workflow commands are owned by pi
  * extensions and arrive through the normal RPC event stream instead.
  */
@@ -306,6 +317,7 @@ function sendAsUser(trimmed: string): boolean {
  */
 type SendPromptHook = (text: string, images?: PromptImage[]) => boolean;
 let sendPromptHook: SendPromptHook = () => false;
+let abortPiHook: () => void = () => {};
 /** Closure over `chatClient.steer`, wired in boot(). */
 let steerHook: SendPromptHook = () => false;
 /** Closure over `chatClient.getSessionStats`, wired in boot(). onEvent is
@@ -1243,6 +1255,7 @@ function onEvent(event: Record<string, unknown>): void {
 					delete state.extensionStatusLabels[e.statusKey];
 				}
 				refreshStatus();
+				if (e.statusKey === "claude-progress") syncStopButton();
 			} else if (e.method === "notify" && typeof e.message === "string") {
 				const notifyType =
 					e.notifyType === "error" ? "error" : e.notifyType === "warning" ? "warning" : "info";
@@ -1463,7 +1476,7 @@ async function boot(): Promise<void> {
 			// "interrupt to cancel" during a retry). Otherwise Stop
 			// aborts the whole run.
 			if (state.retry) chatClient.abortRetry();
-			else chatClient.abort();
+			else stopRun();
 		},
 		abortRetry: () => chatClient.abortRetry(),
 		setSessionPinned: (sessionId, pinned) => chatClient.setSessionPinned(sessionId, pinned),
@@ -1524,7 +1537,7 @@ async function boot(): Promise<void> {
 	setChatControls({
 		setModel: (modelId, provider) => chatClient.setModel(modelId, provider),
 		setThinking: (level) => chatClient.setThinking(level),
-		abort: () => chatClient.abort(),
+		abort: () => stopRun(),
 		compact: (customInstructions) => chatClient.compact(customInstructions),
 		newSession: (projectId) => chatClient.newSession(projectId),
 		resumeSession: (id) => chatClient.resumeSession(id),
@@ -1789,6 +1802,7 @@ async function boot(): Promise<void> {
 	// no-op until this runs; user gestures can only reach it after renderShell
 	// has installed the handlers.
 	sendPromptHook = (text, images) => chatClient.prompt(text, images);
+	abortPiHook = () => chatClient.abort();
 	steerHook = (text, images) => chatClient.steer(text, images);
 	getSessionStatsHook = () => chatClient.getSessionStats();
 	extensionUiResponder = (id, response) => chatClient.extensionUiResponse(id, response);
