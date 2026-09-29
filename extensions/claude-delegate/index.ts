@@ -14,12 +14,18 @@ import {
 	type DelegationMode,
 	type DelegationStore,
 	delegationLabel,
+	descendantsOf,
 	FileDelegationStore,
+	MODE_LABELS,
 	normaliseToolArgs,
 	parseDelegationMode,
+	type RunRecord,
+	RunRegistry,
+	type RunUsage,
 	type StreamEvent,
 	StreamParser,
 	stdinUserMessage,
+	terminateRun,
 } from "./lib.js";
 /**
  * Custom message carrying the prompt the owner sent to Claude Code. ACB draws
@@ -33,6 +39,8 @@ export const STICKY_ENTRY_TYPE = "claude-sticky";
 const HEARTBEAT_MS = 5000;
 /** Silence on the stream beyond this is flagged in the status label. */
 const QUIET_WARNING_MS = 2 * 60 * 1000;
+/** A run still going after this is stopped; a hung run must not live forever. */
+export const MAX_RUN_MS = 3 * 60 * 60 * 1000;
 
 /** `45s`, `3m12s`, `1h05m`. */
 export function formatElapsed(ms: number): string {
@@ -59,16 +67,26 @@ export function parseCcArgs(raw: string): { mode?: DelegationMode; task: string 
 export type CcControl =
 	| { kind: "on"; mode?: DelegationMode }
 	| { kind: "off" }
-	| { kind: "status" };
+	| { kind: "status" }
+	| { kind: "ps" }
+	| { kind: "new" }
+	| { kind: "stop"; all: boolean };
 
 /**
- * Recognise the sticky-mode controls: `/cc on [opus|sonnet|haiku]`, `/cc off`
- * and `/cc status`. Anything longer is an ordinary task ("on Monday, book…").
+ * Recognise the controls: `/cc on [opus|sonnet|haiku]`, `/cc off`, `/cc status`,
+ * `/cc ps`, `/cc new` and `/cc stop [all]`. Anything longer is an ordinary
+ * task ("on Monday, book…").
  */
 export function parseCcControl(raw: string): CcControl | undefined {
 	const words = raw.trim().toLowerCase().split(/\s+/).filter(Boolean);
 	if (words.length === 1 && words[0] === "off") return { kind: "off" };
 	if (words.length === 1 && words[0] === "status") return { kind: "status" };
+	if (words.length === 1 && words[0] === "ps") return { kind: "ps" };
+	if (words.length === 1 && words[0] === "new") return { kind: "new" };
+	if (words[0] === "stop" && words.length === 1) return { kind: "stop", all: false };
+	if (words[0] === "stop" && words.length === 2 && words[1] === "all") {
+		return { kind: "stop", all: true };
+	}
 	if (words[0] !== "on" || words.length > 2) return undefined;
 	if (words.length === 1) return { kind: "on" };
 	const mode = parseDelegationMode(words[1]);
@@ -135,6 +153,15 @@ export class SteerChannel {
 		this.closed = true;
 		this.end?.();
 	}
+
+	/** Reopen for a fresh process (a retry after the first one failed to start). */
+	reset(): void {
+		this.sent = 0;
+		this.consumed = 0;
+		this.closed = false;
+		this.write = undefined;
+		this.end = undefined;
+	}
 }
 
 export interface DelegationRequest {
@@ -146,11 +173,17 @@ export interface DelegationRequest {
 	channel?: SteerChannel;
 	/** Every parsed stream event (thinking, tool calls and results included). */
 	onEvent?: (event: StreamEvent) => void;
+	/** Aborting kills the run's whole process group. */
+	signal?: AbortSignal;
+	/** Called with Claude Code's pid as soon as it is running. */
+	onSpawn?: (pid: number) => void;
 }
 
 export interface DelegationOutcome {
 	outcome: SpawnOutcome;
 	label: string;
+	/** The chat's stored Claude conversation was gone, so a fresh one was started. */
+	restarted: boolean;
 }
 
 /** Run one delegation: session continuity, effort, spawn, and model/session bookkeeping. */
@@ -161,43 +194,77 @@ export async function performDelegation(
 	request: DelegationRequest,
 ): Promise<DelegationOutcome> {
 	const key = request.sessionKey;
-	const resumeId = store.readClaudeSession(key);
-	const newSessionId = resumeId ? undefined : randomUUID();
+	const mode = request.mode;
 	mkdirSync(workspace, { recursive: true });
 
-	const mode = request.mode;
+	const attempt = async (resumeId: string | undefined) => {
+		const newSessionId = resumeId ? undefined : randomUUID();
+		const plan = buildClaudeSpawn({
+			task: request.task,
+			mode,
+			workspace,
+			// A resumed chat stays on the model it started on, even after the
+			// alias moves to a newer version.
+			model: resumeId ? store.readPinnedModel(key, mode) : undefined,
+			resumeSessionId: resumeId,
+			newSessionId,
+			effort: DEFAULT_EFFORT[mode],
+		});
+		return runTask(plan.args, {
+			cwd: plan.cwd,
+			env: {
+				BH_TAB_SCOPE: `claude:${key}`,
+				PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
+			},
+			prompt: plan.prompt,
+			channel: request.channel,
+			signal: request.signal,
+			onSpawn: request.onSpawn,
+			// Claude Code reports a vanished conversation as a failed result; when
+			// we are about to retry, that failure must not reach the chat.
+			onEvent: (event) => {
+				if (resumeId && event.kind === "result" && event.staleSession) return;
+				request.onEvent?.(event);
+			},
+		});
+	};
 
-	const plan = buildClaudeSpawn({
-		task: request.task,
-		mode,
-		resumeSessionId: resumeId,
-		newSessionId,
-		effort: DEFAULT_EFFORT[mode],
-	});
+	let resumeId = store.readClaudeSession(key);
+	let outcome = await attempt(resumeId);
+	let restarted = false;
+	if (resumeId && outcome.staleSession) {
+		store.clearClaudeSession(key);
+		request.channel?.reset();
+		restarted = true;
+		resumeId = undefined;
+		outcome = await attempt(undefined);
+	}
 
-	const outcome = await runTask(plan.args, {
-		cwd: plan.cwd,
-		env: {
-			BH_TAB_SCOPE: `claude:${key}`,
-			PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
-		},
-		prompt: plan.prompt,
-		channel: request.channel,
-		onEvent: request.onEvent,
-	});
-
-	if (outcome.claudeSessionId) store.writeClaudeSession(key, outcome.claudeSessionId);
+	if (outcome.claudeSessionId) {
+		store.writeClaudeSession(
+			key,
+			outcome.claudeSessionId,
+			outcome.model ? { mode, model: outcome.model } : undefined,
+		);
+	}
 	if (outcome.model) store.writeModel(mode, outcome.model);
 
 	return {
 		outcome,
 		label: delegationLabel(mode, outcome.model ?? store.readModel(mode), DEFAULT_EFFORT[mode]),
+		restarted,
 	};
 }
 
 interface SpawnOutcome {
 	resultText?: string;
 	isError: boolean;
+	/** Stopped through the abort signal rather than finishing or failing. */
+	cancelled?: boolean;
+	/** `--resume` named a conversation Claude Code no longer has. */
+	staleSession?: boolean;
+	/** Tokens and time for the last turn, when Claude Code reported them. */
+	usage?: RunUsage;
 	claudeSessionId?: string;
 	/** The wire model id Claude Code reported for the run. */
 	model?: string;
@@ -215,9 +282,10 @@ function sessionKey(ctx: unknown): string {
 
 /**
  * Run one headless `claude -p` task. Every parsed event goes through onEvent,
- * so ACB shows live progress while Claude works. There is no time limit: long
- * sessions are expected. With a prompt, stdin stays open as a SteerChannel for
- * follow-ups; the outcome carries the last turn's result.
+ * so ACB shows live progress while Claude works. The run has no timer of its
+ * own; the caller's abort signal stops it, killing the whole process group.
+ * With a prompt, stdin stays open as a SteerChannel for follow-ups; the
+ * outcome carries the last turn's result.
  */
 export function runClaudeTask(
 	args: string[],
@@ -228,6 +296,10 @@ export function runClaudeTask(
 		/** First stream-json stdin message; without it stdin is closed. */
 		prompt?: string;
 		channel?: SteerChannel;
+		/** Aborting kills the run and resolves it as cancelled. */
+		signal?: AbortSignal;
+		/** Called with the child's pid once it has started. */
+		onSpawn?: (pid: number) => void;
 		/** Override the executable (tests use a stub that emits stream-json). */
 		bin?: string;
 	},
@@ -238,9 +310,22 @@ export function runClaudeTask(
 			cwd: options.cwd,
 			env: { ...process.env, ...options.env },
 			stdio: [options.prompt === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+			// Its own process group, so pi's signals and terminal do not reach it
+			// and a stop can address it as a unit (see terminateRun).
+			detached: true,
 		});
+		if (child.pid !== undefined) options.onSpawn?.(child.pid);
+		let cancelled = false;
+		const cancel = () => {
+			if (cancelled || child.pid === undefined) return;
+			cancelled = true;
+			channel.close();
+			void terminateRun(child.pid);
+		};
 
 		const channel = options.channel ?? new SteerChannel();
+		if (options.signal?.aborted) cancel();
+		else options.signal?.addEventListener("abort", cancel, { once: true });
 		if (options.prompt !== undefined && child.stdin) {
 			const stdin = child.stdin;
 			// A run that exits early must not crash pi on a late write.
@@ -258,7 +343,9 @@ export function runClaudeTask(
 		let lastText = "";
 		let claudeSessionId: string | undefined;
 
-		let resultEvent: { text?: string; isError: boolean } | undefined;
+		let resultEvent:
+			| { text?: string; isError: boolean; staleSession?: boolean; usage?: RunUsage }
+			| undefined;
 		// The first model reported (init/assistant) is the primary; later ones
 		// are subagents.
 		let model: string | undefined;
@@ -276,7 +363,12 @@ export function runClaudeTask(
 				} else if (event.kind === "prompt") {
 					channel.consumed += 1;
 				} else if (event.kind === "result") {
-					resultEvent = { text: event.text, isError: event.isError };
+					resultEvent = {
+						text: event.text,
+						isError: event.isError,
+						staleSession: event.staleSession,
+						usage: event.usage,
+					};
 					channel.turnEnded();
 				}
 			}
@@ -293,9 +385,13 @@ export function runClaudeTask(
 
 		child.on("close", (code, signalName) => {
 			channel.close();
+			options.signal?.removeEventListener("abort", cancel);
 			const outcome: SpawnOutcome = {
 				resultText: resultEvent?.text ?? (lastText || undefined),
-				isError: resultEvent?.isError === true || (code !== 0 && !resultEvent),
+				isError: !cancelled && (resultEvent?.isError === true || (code !== 0 && !resultEvent)),
+				cancelled: cancelled || undefined,
+				staleSession: resultEvent?.staleSession,
+				usage: resultEvent?.usage,
 				claudeSessionId,
 				model,
 			};
@@ -312,7 +408,10 @@ export function runClaudeTask(
 
 /** Only the status label matters here; the rest stays pi's own context type. */
 interface StatusContext {
-	ui: { setStatus(key: string, text: string | undefined): void };
+	ui: {
+		setStatus(key: string, text: string | undefined): void;
+		notify?(message: string, type?: string): void;
+	};
 	sessionManager?: unknown;
 }
 
@@ -332,9 +431,25 @@ const ZERO_USAGE = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
+let warnedMirrorGone = false;
+
+/**
+ * Chat history depends on pi's session manager exposing appendMessage to
+ * extensions, which pi does not promise. If an upgrade removes it, say so once
+ * instead of silently losing the chat.
+ */
 function appendToSession(ctx: StatusContext, message: unknown): void {
 	const sink = ctx.sessionManager as Partial<MirrorSink> | undefined;
-	if (typeof sink?.appendMessage !== "function") return;
+	if (typeof sink?.appendMessage !== "function") {
+		if (!warnedMirrorGone) {
+			warnedMirrorGone = true;
+			ctx.ui.notify?.(
+				"Claude Code replies can no longer be saved to this chat: pi's session API changed.",
+				"warning",
+			);
+		}
+		return;
+	}
 	sink.appendMessage(message);
 }
 
@@ -497,11 +612,64 @@ export class RunTrace {
 	}
 }
 
+/** `38k` style token counts. */
+function compactCount(n: number): string {
+	return n >= 10_000
+		? `${Math.round(n / 1000)}k`
+		: n >= 1000
+			? `${(n / 1000).toFixed(1)}k`
+			: `${n}`;
+}
+
+/** What a turn used, for the reply footer: turns, time and tokens. */
+export function usageSummary(usage: RunUsage | undefined): string {
+	if (!usage) return "";
+	const parts: string[] = [];
+	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns === 1 ? "" : "s"}`);
+	if (usage.durationMs) parts.push(formatElapsed(usage.durationMs));
+	parts.push(
+		`${compactCount(usage.inputTokens + usage.cacheReadTokens)} in / ${compactCount(usage.outputTokens)} out`,
+	);
+	return parts.join(" · ");
+}
+
+/**
+ * Claude Code processes started by this pi process. If pi exits without a
+ * clean shutdown they would otherwise run on unattended, so the exit hook
+ * kills their process groups.
+ */
+const livePids = new Set<number>();
+let exitHookInstalled = false;
+function trackLivePid(pid: number): void {
+	livePids.add(pid);
+	if (exitHookInstalled) return;
+	exitHookInstalled = true;
+	process.on("exit", () => {
+		for (const livePid of livePids) {
+			for (const target of [-livePid, livePid, ...descendantsOf(livePid)]) {
+				try {
+					process.kill(target, "SIGKILL");
+				} catch {
+					// already gone
+				}
+			}
+		}
+	});
+}
+
+function describeRun(run: RunRecord, key: string): string {
+	const age = formatElapsed(Date.now() - Date.parse(run.startedAt));
+	const where = run.chat === key ? "this chat" : `chat ${run.chat.slice(0, 8)}`;
+	return `pid ${run.pid} · ${MODE_LABELS[run.mode]} · ${age} · ${where}`;
+}
+
 export function registerClaudeDelegate(
 	pi: ExtensionAPI,
 	store: DelegationStore,
 	workspace = DEFAULT_WORKSPACE,
 	runTask: typeof runClaudeTask = runClaudeTask,
+	registry: RunRegistry = new RunRegistry(),
+	maxRunMs = MAX_RUN_MS,
 ): { whenIdle(): Promise<void> } {
 	// ACB reads extensionStatusLabels["claude-delegate"] for the default model.
 	// The text includes the resolved model version once a run has reported it.
@@ -523,8 +691,16 @@ export function registerClaudeDelegate(
 
 	// The run currently going, so a follow-up can join it instead of queueing.
 	let live:
-		| { key: string; mode: DelegationMode; channel: SteerChannel; beat: () => void }
+		| {
+				key: string;
+				mode: DelegationMode;
+				channel: SteerChannel;
+				beat: () => void;
+				abort: AbortController;
+		  }
 		| undefined;
+	// Bumped by a stop so runs still queued behind the live one are dropped.
+	let stopEpoch = 0;
 
 	/**
 	 * Direct passthrough: the prompt goes to headless Claude Code without a
@@ -554,16 +730,26 @@ export function registerClaudeDelegate(
 			);
 			return Promise.resolve();
 		}
+		const epoch = stopEpoch;
 		const run = async () => {
+			// A stop while this waited in the queue drops it.
+			if (epoch !== stopEpoch) return;
 			ctx.ui.notify(`Sending to Claude Code (${label})…`, "info");
 			const trace = new RunTrace(ctx, mode);
 			const channel = new SteerChannel();
+			const abort = new AbortController();
 			const startedAt = Date.now();
 			let replies = 0;
+			let pid: number | undefined;
+			let timedOut = false;
+			// A hung run must not live forever: past the limit it is stopped.
+			const limit = setTimeout(() => {
+				timedOut = true;
+				abort.abort();
+			}, maxRunMs);
 			// The status label doubles as a heartbeat: elapsed time, the tool in
 			// flight, follow-ups not yet taken in and how long the stream has been
-			// quiet, so a stuck run is visibly different from a busy one (there is
-			// no time limit).
+			// quiet, so a stuck run is visibly different from a busy one.
 			const beat = () => {
 				const elapsed = formatElapsed(Date.now() - startedAt);
 				const quiet = Date.now() - trace.lastEventAt;
@@ -577,13 +763,22 @@ export function registerClaudeDelegate(
 				ctx.ui.notify(failure, "error");
 				mirrorReplyToSession(ctx, `⚠ ${failure}`, model, trace.takeTrailingThinking());
 			};
-			const reply = (text: string | undefined, model: string | undefined) => {
+			const stopped = (model: string) => {
+				const why = timedOut
+					? `⏱ Stopped: the run hit the ${formatElapsed(maxRunMs)} time limit.`
+					: "⏹ Stopped.";
+				ctx.ui.notify(why, "warning");
+				pi.sendMessage({ customType: "note", content: why, display: true });
+				mirrorReplyToSession(ctx, why, model, trace.takeTrailingThinking());
+			};
+			const reply = (text: string | undefined, model: string | undefined, usage?: RunUsage) => {
 				const resolved = delegationLabel(
 					mode,
 					model ?? store.readModel(mode),
 					DEFAULT_EFFORT[mode],
 				);
-				const footer = model ? `\n\n— ${resolved} (\`${model}\`)` : "";
+				const used = usageSummary(usage);
+				const footer = model ? `\n\n— ${resolved} (\`${model}\`)${used ? ` · ${used}` : ""}` : "";
 				const content = `${text ?? "Task finished with no summary text."}${footer}`;
 				// ACB renders extension display notes for customType "note"
 				// (display:true, no triggerTurn). The assistant mirror right after
@@ -591,15 +786,32 @@ export function registerClaudeDelegate(
 				pi.sendMessage({ customType: "note", content, display: true });
 				mirrorReplyToSession(ctx, content, model ?? mode, trace.takeTrailingThinking());
 			};
-			live = { key, mode, channel, beat };
+			live = { key, mode, channel, beat, abort };
 			const heartbeat = setInterval(beat, HEARTBEAT_MS);
 			beat();
 			try {
-				const { outcome } = await performDelegation(store, workspace, runTask, {
+				const { outcome, restarted } = await performDelegation(store, workspace, runTask, {
 					task,
 					mode,
 					sessionKey: key,
 					channel,
+					signal: abort.signal,
+					onSpawn: (spawned) => {
+						// A retry after a vanished conversation is a second process.
+						if (pid !== undefined) {
+							livePids.delete(pid);
+							registry.remove(pid);
+						}
+						pid = spawned;
+						trackLivePid(spawned);
+						registry.add({
+							pid: spawned,
+							owner: process.pid,
+							chat: key,
+							mode,
+							startedAt: new Date(startedAt).toISOString(),
+						});
+					},
 					onEvent: (event) => {
 						trace.handle(event);
 						// A follow-up taken in after a turn ended starts another
@@ -608,21 +820,36 @@ export function registerClaudeDelegate(
 							replies += 1;
 							if (event.isError)
 								fail(event.text ?? "Delegated task failed.", trace.reportedModel ?? mode);
-							else reply(event.text, trace.reportedModel);
+							else reply(event.text, trace.reportedModel, event.usage);
 						}
 						beat();
 					},
 				});
+				if (restarted) {
+					ctx.ui.notify(
+						"Claude Code no longer had this chat's earlier conversation, so it started a fresh one.",
+						"warning",
+					);
+				}
+				if (outcome.cancelled) {
+					stopped(outcome.model ?? mode);
+					return;
+				}
 				if (replies > 0) return;
 				if (outcome.isError) {
 					fail(outcome.resultText ?? "Delegated task failed.", outcome.model ?? mode);
 					return;
 				}
-				reply(outcome.resultText, outcome.model);
+				reply(outcome.resultText, outcome.model, outcome.usage);
 			} catch (error) {
 				fail(error instanceof Error ? error.message : String(error), mode);
 			} finally {
+				clearTimeout(limit);
 				channel.close();
+				if (pid !== undefined) {
+					livePids.delete(pid);
+					registry.remove(pid);
+				}
 				if (live?.channel === channel) live = undefined;
 				clearInterval(heartbeat);
 				ctx.ui.setStatus("claude-progress", undefined);
@@ -635,11 +862,60 @@ export function registerClaudeDelegate(
 		return next;
 	};
 
+	/** Stop this chat's run (or every chat's) and drop anything queued behind it. */
+	const stopRuns = async (
+		key: string,
+		all: boolean,
+		ctx: StatusContext & { ui: { notify(message: string, type?: string): void } },
+	): Promise<void> => {
+		stopEpoch += 1;
+		const own = live && (all || live.key === key) ? live : undefined;
+		own?.abort.abort();
+		// Runs this process is not driving: another chat's pi, or an orphan.
+		const others = registry
+			.list()
+			.filter((run) => (all || run.chat === key) && !livePids.has(run.pid));
+		await Promise.all(others.map((run) => terminateRun(run.pid)));
+		for (const run of others) registry.remove(run.pid);
+		const count = (own ? 1 : 0) + others.length;
+		ctx.ui.notify(
+			count === 0
+				? all
+					? "No Claude Code runs are active."
+					: "Nothing is running in this chat."
+				: `Stopping ${count} Claude Code run${count === 1 ? "" : "s"}…`,
+			"info",
+		);
+	};
+
 	pi.registerCommand("cc", {
 		description:
-			"send a task straight to headless Claude Code: /cc [opus|sonnet|haiku] <task>; /cc on|off keeps this chat on Claude Code",
+			"send a task straight to headless Claude Code: /cc [opus|sonnet|haiku] <task>; /cc on|off keeps this chat on Claude Code; /cc stop [all] cancels; /cc ps lists runs; /cc new starts a fresh conversation",
 		handler: async (rawArgs, ctx) => {
 			const control = parseCcControl(rawArgs);
+			if (control?.kind === "ps") {
+				const runs = registry.list();
+				ctx.ui.notify(
+					runs.length === 0
+						? "No Claude Code runs are active."
+						: `Claude Code runs:\n${runs.map((run) => describeRun(run, sessionKey(ctx))).join("\n")}\n/cc stop cancels this chat's run; /cc stop all cancels every run.`,
+					"info",
+				);
+				return;
+			}
+			if (control?.kind === "stop") {
+				await stopRuns(sessionKey(ctx), control.all, ctx);
+				return;
+			}
+			if (control?.kind === "new") {
+				if (live && live.key === sessionKey(ctx)) {
+					ctx.ui.notify("A task is still running; /cc stop it first.", "warning");
+					return;
+				}
+				store.clearClaudeSession(sessionKey(ctx));
+				ctx.ui.notify("The next message starts a fresh Claude Code conversation.", "info");
+				return;
+			}
 			if (control?.kind === "status") {
 				ctx.ui.notify(
 					sticky
@@ -733,6 +1009,15 @@ export function registerClaudeDelegate(
 	pi.on("session_start", (_event, ctx) => {
 		sticky = restoreStickyMode(ctx.sessionManager?.getEntries?.() ?? []);
 		restoreStatus(ctx);
+		// A pi that died mid-run can leave its Claude Code running; stop such orphans.
+		void registry.reapOrphans().catch(() => undefined);
+	});
+
+	// Quit, reload or a session switch tears this extension down, and with it
+	// the only thing that could report or stop the run, so stop it now.
+	pi.on("session_shutdown", () => {
+		stopEpoch += 1;
+		live?.abort.abort();
 	});
 
 	return { whenIdle: () => queue };

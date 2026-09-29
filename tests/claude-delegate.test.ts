@@ -1,8 +1,14 @@
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
 	ACTIVITY_STATUS_KEY,
 	formatElapsed,
+	MAX_RUN_MS,
 	MIRROR_PROVIDER,
+	mirrorReplyToSession,
 	PROMPT_MESSAGE_TYPE,
 	parseCcArgs,
 	parseCcControl,
@@ -11,16 +17,19 @@ import {
 	runClaudeTask,
 	STICKY_ENTRY_TYPE,
 	SteerChannel,
+	usageSummary,
 } from "../extensions/claude-delegate/index.js";
 import {
 	buildClaudeSpawn,
 	buildPrompt,
 	DEFAULT_EFFORT,
 	delegationLabel,
+	descendantsOf,
 	FileDelegationStore,
 	normaliseToolArgs,
 	parseDelegationMode,
 	prettyModelName,
+	RunRegistry,
 	type StreamEvent,
 	StreamParser,
 } from "../extensions/claude-delegate/lib.js";
@@ -172,30 +181,94 @@ describe("effort levels", () => {
 	});
 });
 
+function tmpStore() {
+	const dir = mkdtempSync(join(tmpdir(), "claude-delegate-store-"));
+	const legacy = join(dir, "legacy.json");
+	return {
+		dir,
+		legacy,
+		store: new FileDelegationStore(
+			join(dir, "mode"),
+			join(dir, "sessions"),
+			join(dir, "models"),
+			legacy,
+		),
+	};
+}
+
 describe("claude-delegate store", () => {
 	it("round-trips mode and session mapping", () => {
-		const modePath = `/tmp/claude-delegate-test-${process.pid}`;
-		const sessionsPath = `${modePath}-sessions.json`;
-		const store = new FileDelegationStore(modePath, sessionsPath);
+		const { store } = tmpStore();
 		expect(store.readMode()).toBe("sonnet");
 		store.writeMode("haiku");
 		expect(store.readMode()).toBe("haiku");
 		store.writeClaudeSession("chat-1", "s-42");
 		expect(store.readClaudeSession("chat-1")).toBe("s-42");
+		store.clearClaudeSession("chat-1");
+		expect(store.readClaudeSession("chat-1")).toBeUndefined();
 	});
 
 	it("remembers the resolved model per mode", () => {
-		const modePath = `/tmp/claude-delegate-models-${process.pid}`;
-		const store = new FileDelegationStore(
-			`${modePath}-mode`,
-			`${modePath}-sessions.json`,
-			`${modePath}-models.json`,
-		);
+		const { store } = tmpStore();
 		expect(store.readModel("opus")).toBeUndefined();
 		store.writeModel("opus", "claude-opus-5-5");
 		store.writeModel("haiku", "claude-haiku-4-5-20251001");
 		expect(store.readModel("opus")).toBe("claude-opus-5-5");
 		expect(store.readModel("haiku")).toBe("claude-haiku-4-5-20251001");
+	});
+
+	it("keeps each chat in its own file so chats cannot overwrite each other", () => {
+		const { store, dir } = tmpStore();
+		// Two store instances stand in for two pi processes finishing together.
+		const other = new FileDelegationStore(
+			join(dir, "mode"),
+			join(dir, "sessions"),
+			join(dir, "models"),
+			undefined,
+		);
+		store.writeClaudeSession("chat-a", "s-a");
+		other.writeClaudeSession("chat-b", "s-b");
+		store.writeClaudeSession("chat-c", "s-c");
+		expect(readdirSync(join(dir, "sessions")).sort()).toEqual([
+			"chat-a.json",
+			"chat-b.json",
+			"chat-c.json",
+		]);
+		expect(other.readClaudeSession("chat-a")).toBe("s-a");
+		expect(store.readClaudeSession("chat-b")).toBe("s-b");
+	});
+
+	it("pins a chat's model per conversation and resets it for a new one", () => {
+		const { store } = tmpStore();
+		store.writeClaudeSession("chat-1", "s-1", { mode: "opus", model: "claude-opus-5-5" });
+		expect(store.readPinnedModel("chat-1", "opus")).toBe("claude-opus-5-5");
+		expect(store.readPinnedModel("chat-1", "sonnet")).toBeUndefined();
+		// The same conversation keeps its pins when another mode is added.
+		store.writeClaudeSession("chat-1", "s-1", { mode: "sonnet", model: "claude-sonnet-5-5" });
+		expect(store.readPinnedModel("chat-1", "opus")).toBe("claude-opus-5-5");
+		// A new conversation starts unpinned.
+		store.writeClaudeSession("chat-1", "s-2");
+		expect(store.readPinnedModel("chat-1", "opus")).toBeUndefined();
+	});
+
+	it("falls back to the old single-file map until a chat is cleared", () => {
+		const { store, legacy } = tmpStore();
+		writeFileSync(
+			legacy,
+			JSON.stringify({ "old-chat": { claudeSessionId: "s-old", updatedAt: "2026-01-01" } }),
+		);
+		expect(store.readClaudeSession("old-chat")).toBe("s-old");
+		store.clearClaudeSession("old-chat");
+		expect(store.readClaudeSession("old-chat")).toBeUndefined();
+		store.writeClaudeSession("old-chat", "s-new");
+		expect(store.readClaudeSession("old-chat")).toBe("s-new");
+	});
+
+	it("keeps odd chat keys inside the sessions directory", () => {
+		const { store, dir } = tmpStore();
+		store.writeClaudeSession("../../escape", "s-x");
+		expect(readdirSync(join(dir, "sessions"))).toHaveLength(1);
+		expect(store.readClaudeSession("../../escape")).toBe("s-x");
 	});
 });
 
@@ -222,18 +295,25 @@ function harness(
 		model?: string;
 	}>,
 	entries: Array<{ type: string; customType?: string; data?: unknown }> = [],
+	options: { maxRunMs?: number } = {},
 ) {
 	let current = mode;
 	const sessions: Record<string, string> = {};
+	const pins: Record<string, string> = {};
 	const store = {
 		readMode: () => current as never,
 		writeMode: (next: string) => {
 			current = next;
 		},
 		readClaudeSession: (key: string) => sessions[key],
-		writeClaudeSession: (key: string, id: string) => {
+		writeClaudeSession: (key: string, id: string, pin?: { mode: string; model: string }) => {
 			sessions[key] = id;
+			if (pin) pins[`${key}:${pin.mode}`] = pin.model;
 		},
+		clearClaudeSession: (key: string) => {
+			delete sessions[key];
+		},
+		readPinnedModel: (key: string, forMode: string) => pins[`${key}:${forMode}`],
 		readModel: (forMode: string) => knownModels[forMode],
 		writeModel: (forMode: string, modelId: string) => {
 			knownModels[forMode] = modelId;
@@ -242,6 +322,10 @@ function harness(
 	const handlers: Record<string, CommandHandler> = {};
 	let sessionStart: ((event: unknown, ctx: unknown) => void) | undefined;
 	let input: ((event: unknown, ctx: unknown) => { action: string }) | undefined;
+	let shutdown: (() => void) | undefined;
+	const runsDir = mkdtempSync(join(tmpdir(), "claude-delegate-runs-"));
+	// Every pid counts as a live Claude Code here; the stand-in runs have no real process.
+	const registry = new RunRegistry(runsDir, () => true);
 	const notify = vi.fn();
 	const setStatus = vi.fn();
 	const sendMessage = vi.fn();
@@ -256,6 +340,7 @@ function harness(
 			on(event: string, handler: (event: unknown, ctx: unknown) => void) {
 				if (event === "session_start") sessionStart = handler;
 				if (event === "input") input = handler as never;
+				if (event === "session_shutdown") shutdown = handler as never;
 			},
 			sendMessage,
 			appendEntry,
@@ -263,6 +348,8 @@ function harness(
 		store as never,
 		"/tmp/claude-delegate-workspace",
 		runTask as never,
+		registry,
+		options.maxRunMs,
 	);
 	const ui = {
 		notify,
@@ -284,8 +371,12 @@ function harness(
 		input: (text: string, extra: Record<string, unknown> = {}) =>
 			input?.({ type: "input", text, source: "rpc", ...extra }, uiCtx),
 		whenIdle: () => delegate.whenIdle(),
+		shutdown: () => shutdown?.(),
+		registry,
+		runsDir,
 		appendEntry,
 		sessions,
+		pins,
 		entries,
 		ui,
 		uiCtx,
@@ -672,7 +763,7 @@ describe("SteerChannel", () => {
 });
 
 describe("runClaudeTask", () => {
-	it("has no time limit", async () => {
+	it("sets no timer of its own; the caller's signal is the only stop", async () => {
 		const spy = vi.spyOn(globalThis, "setTimeout");
 		try {
 			await runClaudeTask(["-e", "process.exit(0)"], {
@@ -749,5 +840,393 @@ describe("runClaudeTask", () => {
 		});
 		expect(outcome.isError).toBe(true);
 		expect(outcome.resultText).toContain("boom");
+	});
+});
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+describe("stopping runs", () => {
+	const alive = (pid: number) => {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const waitFor = async (check: () => boolean, ms = 4000) => {
+		const end = Date.now() + ms;
+		while (!check() && Date.now() < end) await new Promise((r) => setTimeout(r, 25));
+	};
+
+	it("kills the whole process tree, including a grandchild in its own group", async () => {
+		// Like Claude Code's Bash tool, the grandchild is a session leader in a
+		// group of its own, so signalling the child's group would miss it.
+		const script = [
+			'const {spawn}=require("node:child_process");',
+			'const g=spawn("setsid",[process.execPath,"-e","setInterval(()=>{},1000)"],{stdio:"ignore"});',
+			'process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"s"})+"\\n");',
+			"setInterval(()=>{},1000);",
+		].join("");
+		const abort = new AbortController();
+		let pid = 0;
+		let onInit: () => void = () => {};
+		const ready = new Promise<void>((resolve) => {
+			onInit = resolve;
+		});
+		const run = runClaudeTask(["-e", script], {
+			cwd: process.cwd(),
+			env: {},
+			bin: process.execPath,
+			signal: abort.signal,
+			onSpawn: (spawned) => {
+				pid = spawned;
+			},
+			onEvent: (event) => {
+				if (event.kind === "init") onInit();
+			},
+		});
+		await ready;
+		await waitFor(() => descendantsOf(pid).length > 0);
+		const tree = descendantsOf(pid);
+		expect(tree.length).toBeGreaterThan(0);
+		expect(alive(pid)).toBe(true);
+
+		abort.abort();
+		const outcome = await run;
+		expect(outcome.cancelled).toBe(true);
+		expect(outcome.isError).toBe(false);
+		await waitFor(() => !alive(pid) && !tree.some(alive));
+		expect(alive(pid)).toBe(false);
+		for (const member of tree) expect(alive(member)).toBe(false);
+	});
+
+	it("resolves at once as cancelled when the signal is already aborted", async () => {
+		const abort = new AbortController();
+		abort.abort();
+		const outcome = await runClaudeTask(["-e", "setInterval(()=>{},1000)"], {
+			cwd: process.cwd(),
+			env: {},
+			bin: process.execPath,
+			signal: abort.signal,
+		});
+		expect(outcome.cancelled).toBe(true);
+	});
+
+	// A runTask stand-in that stays "running" until its signal aborts.
+	function hanging(spawnedPid = 4242) {
+		return (
+			_args: string[],
+			options: { signal?: AbortSignal; onSpawn?: (pid: number) => void },
+		) => {
+			options.onSpawn?.(spawnedPid);
+			return new Promise<{ isError: boolean; cancelled: boolean; model: string }>((resolve) => {
+				options.signal?.addEventListener("abort", () =>
+					resolve({ isError: false, cancelled: true, model: "claude-opus-5-5" }),
+				);
+			});
+		};
+	}
+
+	it("/cc stop cancels this chat's live run and says so in the chat", async () => {
+		const h = harness("opus", {}, hanging() as never);
+		await h.cc("on", h.uiCtx);
+		h.input("do a long thing");
+		await flush();
+		await h.cc("stop", h.uiCtx);
+		await h.whenIdle();
+		expect(h.ui.notify).toHaveBeenCalledWith("Stopping 1 Claude Code run…", "info");
+		expect(h.ui.notify).toHaveBeenCalledWith("⏹ Stopped.", "warning");
+		const note = h.sendMessage.mock.calls
+			.map((call) => call[0])
+			.find((m) => m.customType === "note");
+		expect(note.content).toBe("⏹ Stopped.");
+		// The progress label is cleared once the run is gone.
+		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-sticky", "Opus 5.5 · high");
+	});
+
+	it("/cc stop reports when nothing is running", async () => {
+		const h = harness("opus", {}, hanging() as never);
+		await h.cc("stop", h.uiCtx);
+		expect(h.ui.notify).toHaveBeenLastCalledWith("Nothing is running in this chat.", "info");
+		await h.cc("stop all", h.uiCtx);
+		expect(h.ui.notify).toHaveBeenLastCalledWith("No Claude Code runs are active.", "info");
+	});
+
+	it("drops runs queued behind the one that was stopped", async () => {
+		const seen: number[] = [];
+		const h = harness("opus", {}, ((args: string[], options: never) => {
+			seen.push(seen.length);
+			return hanging()(args, options);
+		}) as never);
+		// Different models cannot join the live run, so the second one queues.
+		const first = h.cc("opus first", h.uiCtx);
+		await flush();
+		const second = h.cc("haiku second", h.uiCtx);
+		await flush();
+		await h.cc("stop", h.uiCtx);
+		await Promise.all([first, second]);
+		expect(seen).toEqual([0]);
+	});
+
+	it("stops a run at the time limit and says why", async () => {
+		const h = harness("opus", {}, hanging() as never, [], { maxRunMs: 30 });
+		await h.cc("do a long thing", h.uiCtx);
+		expect(h.ui.notify).toHaveBeenCalledWith(expect.stringContaining("time limit"), "warning");
+		expect(MAX_RUN_MS).toBe(3 * 60 * 60 * 1000);
+	});
+
+	it("registers a run for /cc ps and removes it when the run ends", async () => {
+		let release: () => void = () => {};
+		const h = harness("opus", {}, ((
+			_args: string[],
+			options: { onSpawn?: (p: number) => void },
+		) => {
+			options.onSpawn?.(process.pid); // a pid that is certainly alive
+			return new Promise((resolve) => {
+				release = () => resolve({ resultText: "ok", isError: false, model: "claude-opus-5-5" });
+			});
+		}) as never);
+		const running = h.cc("work", h.uiCtx);
+		await flush();
+		const listed = h.registry.list();
+		expect(listed).toHaveLength(1);
+		expect(listed[0]).toMatchObject({ pid: process.pid, chat: "chat-1", mode: "opus" });
+		await h.cc("ps", h.uiCtx);
+		expect(String(h.ui.notify.mock.calls.at(-1)?.[0])).toContain("this chat");
+		release();
+		await running;
+		expect(h.registry.list()).toEqual([]);
+	});
+
+	it("kills a live run when the session shuts down", async () => {
+		const h = harness("opus", {}, hanging() as never);
+		const running = h.cc("work", h.uiCtx);
+		await flush();
+		h.shutdown();
+		await running;
+		expect(h.ui.notify).toHaveBeenCalledWith("⏹ Stopped.", "warning");
+	});
+});
+
+describe("run registry", () => {
+	const record = (pid: number, owner: number) => ({
+		pid,
+		owner,
+		chat: "c",
+		mode: "opus" as const,
+		startedAt: new Date().toISOString(),
+	});
+
+	it("lists live runs and deletes records of dead ones", () => {
+		const dir = mkdtempSync(join(tmpdir(), "runs-"));
+		const registry = new RunRegistry(dir, (pid) => pid === 10);
+		registry.add(record(10, 1));
+		registry.add(record(11, 1));
+		expect(registry.list().map((r) => r.pid)).toEqual([10]);
+		expect(readdirSync(dir)).toEqual(["10.json"]);
+		registry.remove(10);
+		expect(registry.list()).toEqual([]);
+	});
+
+	it("reaps runs whose owning pi process is gone, and only those", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "runs-"));
+		const child = (await import("node:child_process")).spawn(
+			process.execPath,
+			["-e", "setInterval(()=>{},1000)"],
+			{ detached: true, stdio: "ignore" },
+		);
+		child.unref();
+		const registry = new RunRegistry(
+			dir,
+			() => true,
+			(owner) => owner === 1,
+		);
+		registry.add(record(child.pid as number, 999_999)); // owner dead
+		registry.add(record(process.pid, 1)); // owner alive: must survive
+		expect(await registry.reapOrphans()).toEqual([child.pid]);
+		expect(() => process.kill(child.pid as number, 0)).toThrow();
+		expect(registry.list().map((r) => r.pid)).toEqual([process.pid]);
+	});
+});
+
+describe("conversation continuity", () => {
+	it("starts a fresh conversation, silently, when the stored one is gone", async () => {
+		const calls: string[][] = [];
+		const h = harness("sonnet", {}, async (args, options) => {
+			calls.push(args);
+			const events = (options as { onEvent?: (e: StreamEvent) => void }).onEvent;
+			if (args.includes("--resume")) {
+				events?.({ kind: "result", isError: true, staleSession: true });
+				return { isError: true, staleSession: true, resultText: "No conversation found" };
+			}
+			return { resultText: "fresh answer", isError: false, claudeSessionId: "s-new" };
+		});
+		h.sessions["chat-1"] = "s-gone";
+		await h.cc("carry on", h.uiCtx);
+
+		expect(calls).toHaveLength(2);
+		expect(calls[0]).toContain("--resume");
+		expect(calls[1]).toContain("--session-id");
+		expect(h.sessions["chat-1"]).toBe("s-new");
+		// The failed attempt never reaches the chat; the retry's answer does.
+		const errors = h.ui.notify.mock.calls.filter(([, type]) => type === "error");
+		expect(errors).toEqual([]);
+		expect(h.ui.notify).toHaveBeenCalledWith(expect.stringContaining("fresh one"), "warning");
+		const notes = h.sendMessage.mock.calls.map((c) => c[0]).filter((m) => m.customType === "note");
+		expect(String(notes.at(-1).content)).toContain("fresh answer");
+	});
+
+	it("resumes on the model the chat started with, not wherever the alias moved", async () => {
+		const calls: string[][] = [];
+		const h = harness("opus", { opus: "claude-opus-5-6" }, async (args) => {
+			calls.push(args);
+			return { resultText: "ok", isError: false, claudeSessionId: "s-1", model: "claude-opus-5-5" };
+		});
+		await h.cc("first", h.uiCtx);
+		expect(calls[0][calls[0].indexOf("--model") + 1]).toBe("opus");
+		expect(h.pins["chat-1:opus"]).toBe("claude-opus-5-5");
+		await h.cc("second", h.uiCtx);
+		expect(calls[1][calls[1].indexOf("--model") + 1]).toBe("claude-opus-5-5");
+	});
+
+	it("sends the owner context once, not on every resumed run", async () => {
+		const prompts: string[] = [];
+		const h = harness("sonnet", {}, async (_args, options) => {
+			prompts.push((options as unknown as { prompt: string }).prompt);
+			return { resultText: "ok", isError: false, claudeSessionId: "s-1" };
+		});
+		await h.cc("first", h.uiCtx);
+		await h.cc("second", h.uiCtx);
+		expect(prompts[0]).toContain("/home/lepton/AGENTS.md");
+		expect(prompts[1]).toBe("second");
+	});
+
+	it("/cc new forgets the conversation, but not while a task is running", async () => {
+		const h = harness("sonnet", {}, async () => ({ resultText: "ok", isError: false }));
+		h.sessions["chat-1"] = "s-1";
+		await h.cc("new", h.uiCtx);
+		expect(h.sessions["chat-1"]).toBeUndefined();
+	});
+
+	it("runs in the workspace it is given", () => {
+		const plan = buildClaudeSpawn({ task: "t", mode: "sonnet", workspace: "/tmp/elsewhere" });
+		expect(plan.cwd).toBe("/tmp/elsewhere");
+	});
+
+	it("parses controls for stop, ps and new", () => {
+		expect(parseCcControl("stop")).toEqual({ kind: "stop", all: false });
+		expect(parseCcControl("STOP all")).toEqual({ kind: "stop", all: true });
+		expect(parseCcControl("ps")).toEqual({ kind: "ps" });
+		expect(parseCcControl("new")).toEqual({ kind: "new" });
+		expect(parseCcControl("stop the printer")).toBeUndefined();
+		expect(parseCcControl("new york flights")).toBeUndefined();
+	});
+});
+
+describe("usage reporting", () => {
+	it("reads usage and a vanished-conversation failure from the result event", () => {
+		const parser = new StreamParser();
+		const [ok] = parser.feed(
+			`${JSON.stringify({
+				type: "result",
+				result: "done",
+				is_error: false,
+				duration_ms: 72_000,
+				num_turns: 14,
+				usage: {
+					input_tokens: 10,
+					cache_creation_input_tokens: 8000,
+					cache_read_input_tokens: 30_000,
+					output_tokens: 2100,
+				},
+			})}\n`,
+		);
+		expect(ok).toMatchObject({
+			kind: "result",
+			usage: {
+				durationMs: 72_000,
+				turns: 14,
+				inputTokens: 8010,
+				outputTokens: 2100,
+				cacheReadTokens: 30_000,
+			},
+		});
+		const [stale] = parser.feed(
+			`${JSON.stringify({
+				type: "result",
+				is_error: true,
+				errors: ["No conversation found with session ID: x"],
+			})}\n`,
+		);
+		expect(stale).toMatchObject({ kind: "result", isError: true, staleSession: true });
+	});
+
+	it("summarises a turn for the reply footer", () => {
+		expect(
+			usageSummary({
+				durationMs: 72_000,
+				turns: 14,
+				inputTokens: 8010,
+				outputTokens: 2100,
+				cacheReadTokens: 30_000,
+			}),
+		).toBe("14 turns · 1m12s · 38k in / 2.1k out");
+		expect(usageSummary(undefined)).toBe("");
+	});
+
+	it("puts the summary in the reply footer", async () => {
+		const h = harness("sonnet", {}, async (_args, options) => {
+			const emit = (options as { onEvent?: (e: StreamEvent) => void }).onEvent;
+			emit?.({ kind: "init", claudeSessionId: "s", model: "claude-sonnet-5-5" });
+			emit?.({
+				kind: "result",
+				text: "done",
+				isError: false,
+				usage: {
+					turns: 3,
+					durationMs: 5000,
+					inputTokens: 900,
+					outputTokens: 120,
+					cacheReadTokens: 0,
+				},
+			});
+			return { resultText: "done", isError: false, model: "claude-sonnet-5-5" };
+		});
+		await h.cc("go", h.uiCtx);
+		const note = h.sendMessage.mock.calls.map((c) => c[0]).find((m) => m.customType === "note");
+		expect(String(note.content)).toContain("3 turns · 5s · 900 in / 120 out");
+	});
+});
+
+describe("chat history mirroring against pi's real session manager", () => {
+	// The mirror leans on SessionManager.appendMessage, which pi does not
+	// promise to extensions. If a pi upgrade changes it, this fails first.
+	it("writes a chat file that keeps the mirrored reply", () => {
+		const dir = mkdtempSync(join(tmpdir(), "acb-mirror-"));
+		const manager = SessionManager.create(dir, dir);
+		const ctx = { ui: { setStatus: vi.fn(), notify: vi.fn() }, sessionManager: manager };
+		mirrorReplyToSession(ctx, "answer from claude", "claude-opus-5-5", ["thought"]);
+
+		const roles = manager
+			.getEntries()
+			.filter((e) => e.type === "message")
+			.map((e) => (e as { message: { role: string } }).message.role);
+		expect(roles).toEqual(["assistant"]);
+		const file = manager.getSessionFile();
+		expect(file).toBeTruthy();
+		const saved = readFileSync(file as string, "utf8");
+		expect(saved).toContain("answer from claude");
+		expect(saved).toContain("thought");
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+	});
+
+	it("warns once, instead of silently losing the chat, when appendMessage is gone", () => {
+		const notify = vi.fn();
+		const ctx = { ui: { setStatus: vi.fn(), notify }, sessionManager: {} };
+		mirrorReplyToSession(ctx, "a", "m");
+		mirrorReplyToSession(ctx, "b", "m");
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify.mock.calls[0][0]).toContain("session API changed");
 	});
 });
