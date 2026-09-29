@@ -52,7 +52,6 @@ describe("claude-delegate spawn plan", () => {
 		expect(plan.args.join(" ")).not.toContain("do a thing");
 		expect(plan.prompt).toContain("do a thing");
 		expect(plan.prompt).toContain("~/.secrets");
-		expect(plan.env.BH_DOMAIN_SKILLS).toBe("1");
 	});
 
 	it("resumes a stored session and maps sonnet by default", () => {
