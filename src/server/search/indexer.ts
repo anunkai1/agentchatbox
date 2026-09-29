@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { extractText } from "../../shared/content.js";
 import { findPiSessionFile, parseJsonl, type SessionSummary } from "../session-list.js";
-import { embed } from "./embeddings.js";
+import { embedBatch } from "./embeddings.js";
 import { indexSession, isIndexed } from "./store.js";
 
 /** Small overlapping passages fit the existing MiniLM model better than whole replies. */
@@ -50,7 +50,7 @@ export async function ensureSessionIndexed(session: SessionSummary): Promise<num
 			modifiedAt: session.modifiedAt,
 		},
 		chunks,
-		embed,
+		embedBatch,
 		() => {
 			try {
 				return statSync(file).mtimeMs.toString() === stamp;

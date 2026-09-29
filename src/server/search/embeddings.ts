@@ -3,6 +3,15 @@
 const MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2";
 export const EMBEDDING_DIM = 384;
 
+/**
+ * ONNX Runtime threads for the embedding session. MiniLM passages are tiny, so
+ * letting ORT spread each call across every core costs more in thread
+ * synchronisation than it saves, pins the box, and starves the Node event loop
+ * (the whole indexer runs on the main thread). Two threads keeps the sweep off
+ * the other cores so the server stays responsive.
+ */
+export const EMBED_THREADS = 2;
+
 // Cached lazy-loaded pipeline. Loading takes ~5 s once (ONNX init); after that
 // every embed() call is cheap.
 type FeatureExtractionPipeline = (
@@ -42,7 +51,18 @@ async function getPipeline(): Promise<FeatureExtractionPipeline> {
 				opts?: { dtype?: string },
 			) => Promise<FeatureExtractionPipeline>;
 		};
-		const p = await mod.pipeline("feature-extraction", MODEL_ID, { dtype: "fp32" });
+		// Keep the wasm path single-threaded too, in case that backend is used.
+		try {
+			const env = (mod as { env?: { backends?: { onnx?: { wasm?: { numThreads?: number } } } } })
+				.env;
+			if (env?.backends?.onnx?.wasm) env.backends.onnx.wasm.numThreads = 1;
+		} catch {
+			// Backend shape varies by release; the session options below matter more.
+		}
+		const p = await mod.pipeline("feature-extraction", MODEL_ID, {
+			dtype: "fp32",
+			session_options: { intra_op_num_threads: EMBED_THREADS, inter_op_num_threads: 1 },
+		} as { dtype?: string });
 		pipeline = p;
 		return pipeline;
 	})().catch((error) => {
@@ -62,6 +82,29 @@ export async function embed(text: string): Promise<Float32Array> {
 	const truncated = text.length > 2000 ? text.slice(0, 2000) : text;
 	const output = await p(truncated, { pooling: "mean", normalize: true });
 	return new Float32Array(output.data);
+}
+
+/**
+ * Embed many passages in one call. Batching removes per-call ONNX overhead and
+ * keeps the number of main-thread round trips proportional to sessions rather
+ * than to passages.
+ */
+export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
+	if (texts.length === 0) return [];
+	const p = await getPipeline();
+	const inputs = texts.map((text) => (text.length > 2000 ? text.slice(0, 2000) : text));
+	const output = (await p(inputs as unknown as string, {
+		pooling: "mean",
+		normalize: true,
+	})) as { data: Float32Array; dims?: number[] };
+	const dims = output.dims ?? [];
+	const rows = texts.length;
+	const dim = dims.length > 1 ? dims[dims.length - 1] : output.data.length / rows;
+	const vectors: Float32Array[] = [];
+	for (let i = 0; i < rows; i++) {
+		vectors.push(new Float32Array(output.data.subarray(i * dim, (i + 1) * dim)));
+	}
+	return vectors;
 }
 
 /** Float32Array → Buffer for SQLite BLOB storage. */
