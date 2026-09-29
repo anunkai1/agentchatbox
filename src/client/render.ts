@@ -1639,6 +1639,10 @@ function paintStatusDynamic(): void {
 			`<span class="retry-banner">↻ Retrying (${r.attempt}/${r.maxAttempts}) in ${secs}s — ${esc(r.errorMessage)}</span>`,
 		);
 	}
+	// A /cc run bypasses pi, so isStreaming is false; the claude-delegate
+	// extension publishes its own heartbeat (model · tool · elapsed · quiet warning).
+	const claudeProgress = state.extensionStatusLabels["claude-progress"];
+	if (claudeProgress) dyn.push(`<span class="streaming-dot"></span> ${esc(claudeProgress)}`);
 	if (state.pendingSteerCount > 0) dyn.push(`⟳ ${state.pendingSteerCount} queued`);
 	if (state.connectionStatus !== "open") {
 		const tag =

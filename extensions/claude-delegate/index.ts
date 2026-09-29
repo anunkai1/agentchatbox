@@ -39,7 +39,7 @@ export const STICKY_ENTRY_TYPE = "claude-sticky";
 /** Alias probes are trivial; keep them from hanging a user-initiated refresh. */
 export const PROBE_TIMEOUT_MS = 2 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
-/** How often the status label refreshes during a delegated run. */
+/** How often the progress heartbeat refreshes during a delegated run. */
 const HEARTBEAT_MS = 5000;
 /** Silence on the stream beyond this is flagged in the status label. */
 const QUIET_WARNING_MS = 2 * 60 * 1000;
@@ -653,7 +653,7 @@ export function registerClaudeDelegate(
 				const quiet = Date.now() - trace.lastEventAt;
 				const doing = trace.pendingTools[0] ?? "working";
 				const warn = quiet >= QUIET_WARNING_MS ? ` · ⚠ quiet ${formatElapsed(quiet)}` : "";
-				ctx.ui.setStatus("claude-delegate", `${label} · ${doing} · ${elapsed}${warn}`);
+				ctx.ui.setStatus("claude-progress", `${label} · ${doing} · ${elapsed}${warn}`);
 			};
 			const heartbeat = setInterval(beat, HEARTBEAT_MS);
 			beat();
@@ -687,6 +687,7 @@ export function registerClaudeDelegate(
 				mirrorReplyToSession(ctx, `⚠ ${failure}`, mode, trace.trailingThinking);
 			} finally {
 				clearInterval(heartbeat);
+				ctx.ui.setStatus("claude-progress", undefined);
 				// Restore the steady-state label (now with the resolved version).
 				restoreStatus(ctx);
 			}
