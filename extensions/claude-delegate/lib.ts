@@ -4,6 +4,16 @@ import { dirname, join } from "node:path";
 
 export const DEFAULT_WORKSPACE = join(homedir(), ".config", "browser-harness", "agent-workspace");
 
+/**
+ * Custom message carrying the prompt the owner sent to Claude Code. ACB draws
+ * it as a user bubble so /cc and sticky-mode prompts survive in the history.
+ */
+export const PROMPT_MESSAGE_TYPE = "claude-prompt";
+/** Provider tag on the assistant messages that mirror a Claude Code reply. */
+export const MIRROR_PROVIDER = "claude-code";
+/** `details.source` on the display notes this extension sends. */
+export const NOTE_SOURCE = "claude-delegate";
+
 export type DelegationMode = "opus" | "sonnet" | "haiku";
 
 export const DELEGATION_MODES: readonly DelegationMode[] = ["opus", "sonnet", "haiku"];
@@ -221,8 +231,9 @@ export const TASK_PREAMBLE = [
  * The first message of a conversation carries the owner context. A resumed
  * conversation already holds it, so later runs send the bare task.
  */
-export function buildPrompt(task: string, resumed = false): string {
-	return resumed ? task : `${TASK_PREAMBLE}\n\nTask: ${task}`;
+export function buildPrompt(task: string, resumed = false, catchUp?: string): string {
+	const body = catchUp ? `${catchUp}\n\nTask: ${task}` : resumed ? task : `Task: ${task}`;
+	return resumed ? body : `${TASK_PREAMBLE}\n\n${body}`;
 }
 
 export interface ClaudeSpawnPlan {
@@ -237,6 +248,8 @@ export interface SpawnOptions {
 	mode: DelegationMode;
 	/** Working directory for the run. */
 	workspace?: string;
+	/** Chat history Claude Code has not seen yet, placed before the task. */
+	catchUp?: string;
 	/** Exact model id to run on; defaults to the mode's alias. */
 	model?: string;
 	resumeSessionId?: string;
@@ -279,7 +292,7 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 	}
 	return {
 		args,
-		prompt: buildPrompt(options.task, Boolean(options.resumeSessionId)),
+		prompt: buildPrompt(options.task, Boolean(options.resumeSessionId), options.catchUp),
 		cwd: options.workspace ?? DEFAULT_WORKSPACE,
 	};
 }
