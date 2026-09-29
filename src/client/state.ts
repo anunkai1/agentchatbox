@@ -56,6 +56,12 @@ export type PersistedMessage =
 			 * (tool/steer/error).
 			 */
 			ts?: number;
+			/**
+			 * Set when the prompt was routed past pi to another agent (the
+			 * claude-delegate extension's customType:"claude-prompt"). Such
+			 * prompts are custom messages, so they carry no fork `seq`.
+			 */
+			via?: string;
 	  }
 	| {
 			kind: "assistant";

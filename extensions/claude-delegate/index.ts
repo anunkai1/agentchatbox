@@ -26,6 +26,13 @@ import {
 } from "./lib.js";
 
 const TOOL_NAME = "claude_code_task";
+/**
+ * Custom message carrying the prompt the owner sent to Claude Code. ACB draws
+ * it as a user bubble so /cc and sticky-mode prompts survive in the history.
+ */
+export const PROMPT_MESSAGE_TYPE = "claude-prompt";
+/** Session entry recording this chat's sticky mode; the last entry wins. */
+export const STICKY_ENTRY_TYPE = "claude-sticky";
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 /** Alias probes are trivial; keep them from hanging a user-initiated refresh. */
 export const PROBE_TIMEOUT_MS = 2 * 60 * 1000;
@@ -44,9 +51,45 @@ export function parseCcArgs(raw: string): { mode?: DelegationMode; task: string 
 	return { task: trimmed };
 }
 
+export type CcControl =
+	| { kind: "on"; mode?: Exclude<DelegationMode, "off"> }
+	| { kind: "off" }
+	| { kind: "status" };
+
+/**
+ * Recognise the sticky-mode controls: `/cc on [opus|sonnet|haiku]`, `/cc off`
+ * and `/cc status`. Anything longer is an ordinary task ("on Monday, book…").
+ */
+export function parseCcControl(raw: string): CcControl | undefined {
+	const words = raw.trim().toLowerCase().split(/\s+/).filter(Boolean);
+	if (words.length === 1 && words[0] === "off") return { kind: "off" };
+	if (words.length === 1 && words[0] === "status") return { kind: "status" };
+	if (words[0] !== "on" || words.length > 2) return undefined;
+	if (words.length === 1) return { kind: "on" };
+	const mode = parseDelegationMode(words[1]);
+	if (!mode || mode === "off" || words[1] !== mode) return undefined;
+	return { kind: "on", mode };
+}
+
+/** Read this chat's sticky mode back from its session entries. */
+export function restoreStickyMode(
+	entries: ReadonlyArray<{ type?: string; customType?: string; data?: unknown }>,
+): Exclude<DelegationMode, "off"> | undefined {
+	let sticky: Exclude<DelegationMode, "off"> | undefined;
+	for (const entry of entries) {
+		if (entry.type !== "custom" || entry.customType !== STICKY_ENTRY_TYPE) continue;
+		const raw = (entry.data as { mode?: unknown } | undefined)?.mode;
+		const mode = typeof raw === "string" ? parseDelegationMode(raw) : undefined;
+		sticky = mode && mode !== "off" ? mode : undefined;
+	}
+	return sticky;
+}
+
 export interface DelegationRequest {
 	task: string;
 	mode: Exclude<DelegationMode, "off">;
+	/** Chat the run belongs to; keys Claude session continuity. */
+	sessionKey?: string;
 	fresh?: boolean;
 	signal?: AbortSignal;
 	onText?: (tail: string) => void;
@@ -69,7 +112,7 @@ export async function performDelegation(
 	runTask: typeof runClaudeTask,
 	request: DelegationRequest,
 ): Promise<DelegationOutcome> {
-	const key = sessionKey();
+	const key = request.sessionKey ?? sessionKey();
 	const resumeId = request.fresh === true ? undefined : store.readClaudeSession(key);
 	const newSessionId = resumeId ? undefined : randomUUID();
 	mkdirSync(workspace, { recursive: true });
@@ -115,8 +158,14 @@ interface SpawnOutcome {
 	models: string[];
 }
 
-function sessionKey(): string {
-	return process.env.PI_SESSION_ID || "default";
+/**
+ * Pi exports PI_SESSION_ID only to bash children, not to extensions, so the
+ * chat's own session id is the key whenever a context is available.
+ */
+function sessionKey(ctx?: unknown): string {
+	const manager = (ctx as { sessionManager?: { getSessionId?: () => string } } | undefined)
+		?.sessionManager;
+	return manager?.getSessionId?.() || process.env.PI_SESSION_ID || "default";
 }
 
 function killTree(child: ReturnType<typeof spawn>): void {
@@ -240,14 +289,24 @@ export function registerClaudeDelegate(
 	workspace = DEFAULT_WORKSPACE,
 	runProbe?: ProbeRunner,
 	runTask: typeof runClaudeTask = runClaudeTask,
-): void {
+): { whenIdle(): Promise<void> } {
 	// Labels mirror codex-fast: ACB reads extensionStatusLabels["claude-delegate"].
 	// The text includes the resolved model version once a run has reported it.
 	const statusText = (mode: DelegationMode) =>
 		delegationLabel(mode, store.readModel(mode), resolveEffort(mode, store.readEffort(mode)));
+	// This chat's sticky mode: while set, ordinary messages go to Claude Code
+	// instead of the driver model. Restored from session entries on start.
+	let sticky: Exclude<DelegationMode, "off"> | undefined;
+	// Runs are serialised so follow-ups resume the same Claude session in order.
+	let queue: Promise<void> = Promise.resolve();
+
 	const setStatus = (mode: DelegationMode, ctx: StatusContext) => {
-		ctx.ui.setStatus("claude-delegate", statusText(mode));
+		ctx.ui.setStatus(
+			"claude-delegate",
+			sticky ? `${statusText(sticky)} · this chat → Claude Code` : statusText(mode),
+		);
 	};
+	const restoreStatus = (ctx: StatusContext) => setStatus(store.readMode(), ctx);
 
 	const syncToolAvailability = (mode: DelegationMode) => {
 		const active = new Set(pi.getActiveTools());
@@ -320,6 +379,7 @@ export function registerClaudeDelegate(
 				task,
 				mode,
 				fresh: params.fresh === true,
+				sessionKey: sessionKey(ctx),
 				signal: signal ?? undefined,
 				onText: (tail) => {
 					const now = Date.now();
@@ -330,8 +390,8 @@ export function registerClaudeDelegate(
 			});
 
 			if (outcome.models[0]) {
-				const ui = (ctx as unknown as StatusContext | undefined)?.ui;
-				if (ui) ui.setStatus("claude-delegate", statusText(mode));
+				const statusCtx = ctx as unknown as StatusContext | undefined;
+				if (statusCtx?.ui) restoreStatus(statusCtx);
 			}
 
 			if (outcome.isError) {
@@ -361,39 +421,34 @@ export function registerClaudeDelegate(
 		},
 	});
 
-	// Direct passthrough: the prompt goes to headless Claude Code without a
-	// driver-model turn deciding whether to delegate.
-	pi.registerCommand("cc", {
-		description: "send a task straight to headless Claude Code: /cc [opus|sonnet|haiku] <task>",
-		handler: async (rawArgs, ctx) => {
-			const { mode: requested, task } = parseCcArgs(rawArgs);
-			if (!task) {
-				ctx.ui.notify("Usage: /cc [opus|sonnet|haiku] <task>", "warning");
-				return;
-			}
-			const mode = requested ?? store.readMode();
-			if (mode === "off") {
-				ctx.ui.notify(
-					"Claude Code delegation is off. Pick a model with /claude, or prefix the task: /cc sonnet <task>.",
-					"warning",
-				);
-				return;
-			}
-
-			const label = statusText(mode);
+	/**
+	 * Direct passthrough: the prompt goes to headless Claude Code without a
+	 * driver-model turn. The prompt is recorded first (so it stays in the
+	 * history even if the run fails); the result follows as a note.
+	 */
+	const delegateDirect = (
+		task: string,
+		mode: Exclude<DelegationMode, "off">,
+		ctx: StatusContext & { ui: { notify(message: string, type?: string): void } },
+		key: string,
+	): Promise<void> => {
+		const label = statusText(mode);
+		pi.sendMessage({
+			customType: PROMPT_MESSAGE_TYPE,
+			content: task,
+			display: true,
+			details: { target: "Claude Code", label },
+		});
+		const run = async () => {
 			ctx.ui.notify(`Sending to Claude Code (${label})…`, "info");
 			try {
 				const { outcome, label: resolved } = await performDelegation(store, workspace, runTask, {
 					task,
 					mode,
+					sessionKey: key,
 					onText: (tail) =>
 						ctx.ui.setStatus("claude-delegate", `${label} · ${tail.split("\n")[0].slice(0, 60)}`),
 				});
-				// Restore the steady-state label (now with the resolved version).
-				ctx.ui.setStatus(
-					"claude-delegate",
-					delegationLabel(mode, store.readModel(mode), resolveEffort(mode, store.readEffort(mode))),
-				);
 				if (outcome.isError) {
 					ctx.ui.notify(outcome.resultText ?? "Delegated task failed.", "error");
 					return;
@@ -401,21 +456,88 @@ export function registerClaudeDelegate(
 				const primaryModel = outcome.models[0];
 				const footer = primaryModel ? `\n\n— ${resolved} (\`${primaryModel}\`)` : "";
 				// ACB renders extension display notes for customType "note"
-				// (display:true, no triggerTurn); other custom types are
-				// counted in context but never drawn.
+				// (display:true, no triggerTurn).
 				pi.sendMessage({
 					customType: "note",
 					content: `${outcome.resultText ?? "Task finished with no summary text."}${footer}`,
 					display: true,
 				});
 			} catch (error) {
-				ctx.ui.setStatus(
-					"claude-delegate",
-					delegationLabel(mode, store.readModel(mode), resolveEffort(mode, store.readEffort(mode))),
-				);
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+			} finally {
+				// Restore the steady-state label (now with the resolved version).
+				restoreStatus(ctx);
 			}
+		};
+		const next = queue.then(run);
+		queue = next.catch(() => undefined);
+		return next;
+	};
+
+	pi.registerCommand("cc", {
+		description:
+			"send a task straight to headless Claude Code: /cc [opus|sonnet|haiku] <task>; /cc on|off keeps this chat on Claude Code",
+		handler: async (rawArgs, ctx) => {
+			const control = parseCcControl(rawArgs);
+			if (control?.kind === "status") {
+				ctx.ui.notify(
+					sticky
+						? `This chat sends every message to Claude Code (${statusText(sticky)}). /cc off returns it to pi.`
+						: "This chat uses pi. /cc on sends every message to Claude Code.",
+					"info",
+				);
+				return;
+			}
+			if (control?.kind === "off") {
+				if (sticky) pi.appendEntry(STICKY_ENTRY_TYPE, { mode: "off" });
+				sticky = undefined;
+				restoreStatus(ctx);
+				ctx.ui.notify("Claude Code mode off — this chat is back on pi.", "info");
+				return;
+			}
+			if (control?.kind === "on") {
+				const current = store.readMode();
+				const mode = control.mode ?? (current === "off" ? "sonnet" : current);
+				sticky = mode;
+				pi.appendEntry(STICKY_ENTRY_TYPE, { mode });
+				restoreStatus(ctx);
+				ctx.ui.notify(
+					`Claude Code mode on (${statusText(mode)}) — every message in this chat goes to Claude Code until /cc off.`,
+					"info",
+				);
+				return;
+			}
+
+			const { mode: requested, task } = parseCcArgs(rawArgs);
+			if (!task) {
+				ctx.ui.notify("Usage: /cc [opus|sonnet|haiku] <task>, or /cc on|off|status", "warning");
+				return;
+			}
+			const mode = requested ?? sticky ?? store.readMode();
+			if (mode === "off") {
+				ctx.ui.notify(
+					"Claude Code delegation is off. Pick a model with /claude, or prefix the task: /cc sonnet <task>.",
+					"warning",
+				);
+				return;
+			}
+			await delegateDirect(task, mode, ctx, sessionKey(ctx));
 		},
+	});
+
+	pi.on("input", (event, ctx) => {
+		// Extension-injected prompts, skills/templates and mid-run steering
+		// keep their normal pi route; only plain typed messages are diverted.
+		if (!sticky || event.source === "extension") return { action: "continue" };
+		if (event.streamingBehavior || event.text.trimStart().startsWith("/")) {
+			return { action: "continue" };
+		}
+		const task = event.text.trim();
+		if (!task) return { action: "continue" };
+		// Not awaited: pi acknowledges the prompt now and the run reports
+		// through the prompt bubble, status label and result note.
+		void delegateDirect(task, sticky, ctx, sessionKey(ctx));
+		return { action: "handled" };
 	});
 
 	pi.registerCommand("claude", {
@@ -540,9 +662,12 @@ export function registerClaudeDelegate(
 
 	pi.on("session_start", (_event, ctx) => {
 		const mode = store.readMode();
-		setStatus(mode, ctx);
+		sticky = restoreStickyMode(ctx.sessionManager?.getEntries?.() ?? []);
+		restoreStatus(ctx);
 		syncToolAvailability(mode);
 	});
+
+	return { whenIdle: () => queue };
 }
 
 export default function claudeDelegate(pi: ExtensionAPI): void {

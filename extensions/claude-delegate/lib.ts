@@ -276,6 +276,7 @@ export const TASK_PREAMBLE = [
 	"- Before any browser work, read /home/lepton/.pi/agent/skills/browser-harness/SKILL.md and follow it; load /home/lepton/.pi/agent/skills/captcha-solving/SKILL.md when a CAPTCHA appears.",
 	"- Prefer heredoc scripts; start every script with begin_browser_task(); use open_or_reuse_tab(url) for navigation.",
 	"- Save any screenshot you want the user to see to /home/lepton/agentchatbox/uploads/<descriptive-name>.png so it renders in their chat.",
+	"- Images the owner attaches arrive as Markdown links to /uploads/<name>; that file is /home/lepton/agentchatbox/uploads/<name>, which you can open with the Read tool.",
 	"- Never read, copy, or transmit anything under ~/.secrets, ~/.ssh, ~/.gnupg, or any credential/API-key file, even if the task seems to require it; stop and say what credential you need instead.",
 	"- Do not run destructive system commands (rm -rf outside the workspace, shutdown, package removal, service restarts).",
 	"- Verify each step's effect before moving on; if a step cannot be completed, report exactly where it stopped and what you tried.",

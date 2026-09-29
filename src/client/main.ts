@@ -827,6 +827,33 @@ function onEvent(event: Record<string, unknown>): void {
 						if (btn) toggleSpeak(text, btn);
 						else speakText(text);
 					}
+				} else if (e.message.customType === "claude-prompt") {
+					// A prompt the claude-delegate extension routed to Claude Code.
+					// In sticky mode the composer already painted it optimistically
+					// (pi never echoes a user message for it), so tag that bubble;
+					// a /cc command painted nothing, so add the bubble now.
+					const promptMsg = e.message as {
+						content?: unknown;
+						timestamp?: number;
+						details?: { target?: string };
+					};
+					const content = typeof promptMsg.content === "string" ? promptMsg.content : "";
+					const via = promptMsg.details?.target ?? "Claude Code";
+					const last = state.messages[state.messages.length - 1];
+					if (
+						last?.kind === "user" &&
+						last.seq === undefined &&
+						last.via === undefined &&
+						last.text === content
+					) {
+						last.via = via;
+						const rows = $("#messages").querySelectorAll(".row-user");
+						rows[rows.length - 1]?.replaceWith(renderMessageNode(last));
+					} else {
+						const prompt = { kind: "user" as const, text: content, ts: promptMsg.timestamp, via };
+						state.messages.push(prompt);
+						appendNode(renderMessageNode(prompt));
+					}
 				} else if (e.message.customType === "note") {
 					// Extension-emitted display note (e.g. /imggen's model-free
 					// image result). Pure render — markdown content shown as its

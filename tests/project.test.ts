@@ -146,6 +146,26 @@ describe("projectTranscript", () => {
 		expect(tool.isError).toBe(true);
 	});
 
+	it("rebuilds a Claude Code prompt as a tagged user bubble", () => {
+		const out = projectTranscript([
+			{
+				role: "custom",
+				customType: "claude-prompt",
+				content: "book the dentist",
+				details: { target: "Claude Code" },
+				timestamp: 42,
+			} as unknown as Message,
+			{ role: "custom", customType: "note", content: "booked" } as unknown as Message,
+		]);
+		expect(out[0]).toEqual({
+			kind: "user",
+			text: "book the dentist",
+			ts: 42,
+			via: "Claude Code",
+		});
+		expect(out[1]).toMatchObject({ kind: "note", text: "booked" });
+	});
+
 	it("returns an empty array for an empty transcript", () => {
 		expect(projectTranscript([])).toEqual([]);
 	});

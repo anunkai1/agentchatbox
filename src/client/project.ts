@@ -110,6 +110,22 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 					break;
 				}
 			}
+		} else if (cm.customType === "claude-prompt") {
+			// A prompt the claude-delegate extension sent to Claude Code (/cc
+			// or sticky mode). pi records it as a custom message rather than a
+			// user message, so rebuild it as a user bubble tagged with its target.
+			const promptMsg = m as {
+				content?: unknown;
+				timestamp?: number;
+				details?: { target?: string };
+			};
+			const content = typeof promptMsg.content === "string" ? promptMsg.content : "";
+			out.push({
+				kind: "user",
+				text: content,
+				ts: promptMsg.timestamp,
+				via: promptMsg.details?.target ?? "Claude Code",
+			});
 		} else if (cm.customType === "note") {
 			// Extension-emitted display note (e.g. /imggen image result).
 			// Reconstruct as a renderable note row (mirrors the live
