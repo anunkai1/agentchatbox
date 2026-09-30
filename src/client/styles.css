@@ -3078,7 +3078,7 @@ body.modal-open {
 	}
 
 	.header {
-		gap: 4px;
+		gap: 2px;
 		padding: 6px 10px;
 	}
 	/* Let the title give up space before the fixed header actions do. Without
@@ -3096,13 +3096,26 @@ body.modal-open {
 	}
 	/* Preserve the header action in the tight mobile bar without letting
 	 * its label crowd out the conversation title. */
-	.header-new-chat {
-		width: 44px;
-		height: 44px;
-		justify-content: center;
+	/* Real 30px boxes (not transform: scale, which leaves a 44px layout box
+	 * and wide gaps); the .header prefix beats the touch-target minimums. */
+	.header .header-new-chat,
+	.header .header-overflow,
+	.header .header-cc {
+		width: 30px;
+		min-width: 30px;
+		height: 30px;
+		min-height: 30px;
 		padding: 0;
+		justify-content: center;
 		border-radius: 50%;
-		transform: scale(0.68);
+		flex-shrink: 0;
+	}
+	.header .header-new-chat {
+		gap: 0;
+	}
+	.header-new-chat-icon svg {
+		width: 16px;
+		height: 16px;
 	}
 	.header-new-chat-icon {
 		display: inline-flex;
@@ -3116,20 +3129,8 @@ body.modal-open {
 	/* Keep the settings action inside the viewport too. The text label is
 	 * useful on wide screens, but an icon-only target avoids a clipped pill
 	 * when a long thread title is open on a phone. */
-	.header-overflow {
-		width: 44px;
-		padding: 0;
-		justify-content: center;
-		border-radius: 50%;
-		transform: scale(0.68);
-		flex-shrink: 0;
-	}
 	.header-overflow > span:last-child {
 		display: none;
-	}
-	.header-cc {
-		width: 30px;
-		height: 30px;
 	}
 	.header-cc-icon svg {
 		width: 16px;
