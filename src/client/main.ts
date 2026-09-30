@@ -369,7 +369,7 @@ function handleClaudeActivity(raw: string): void {
 	if (a.t === "thinking" && typeof a.text === "string") {
 		const msg: PersistedMessage = { kind: "assistant", text: "", thinking: a.text, ts: Date.now() };
 		state.messages.push(msg);
-		appendNode(renderMessageNode(msg));
+		appendNode(renderMessageNode(msg), { pin: true });
 	} else if (a.t === "tool" && typeof a.id === "string" && typeof a.name === "string") {
 		state.messages.push({ kind: "tool", name: a.name, args: a.args });
 		appendToolCall(a.name, a.args, a.id);
@@ -912,13 +912,33 @@ function onEvent(event: Record<string, unknown>): void {
 						typeof (e.message as { content?: unknown }).content === "string"
 							? ((e.message as { content?: string }).content ?? "")
 							: "";
-					const note = {
-						kind: "note" as const,
-						text: content,
-						ts: (e.message as { timestamp?: number }).timestamp,
-					};
-					state.messages.push(note);
-					appendNode(renderMessageNode(note));
+					const noteMsg = e.message as { timestamp?: number; details?: { source?: string } };
+					if (noteMsg.details?.source === "claude-delegate") {
+						// A /cc reply. The extension saves it to the session as an
+						// assistant message (one ordinal) without a message event, so
+						// paint it as one: the same voice and answer action bars as
+						// a pi reply, and a fork ordinal that matches the transcript.
+						liveMessageSeq++;
+						const reply: PersistedMessage = {
+							kind: "assistant",
+							text: content,
+							thinking: "",
+							seq: liveMessageSeq,
+							ts: noteMsg.timestamp,
+						};
+						state.messages.push(reply);
+						state.lastAssistantText = content;
+						state.lastAssistantSeq = liveMessageSeq;
+						appendNode(renderMessageNode(reply), { pin: true });
+					} else {
+						const note = {
+							kind: "note" as const,
+							text: content,
+							ts: noteMsg.timestamp,
+						};
+						state.messages.push(note);
+						appendNode(renderMessageNode(note));
+					}
 				}
 			} else if (e.message.role === "user") {
 				// User message echoed by the server (we already showed it
