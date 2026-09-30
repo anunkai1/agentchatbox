@@ -393,7 +393,7 @@ export function runClaudeTask(
 			channel.close();
 			options.signal?.removeEventListener("abort", cancel);
 			const outcome: SpawnOutcome = {
-				resultText: resultEvent?.text ?? (lastText || undefined),
+				resultText: resultEvent?.text || lastText || undefined,
 				isError: !cancelled && (resultEvent?.isError === true || (code !== 0 && !resultEvent)),
 				cancelled: cancelled || undefined,
 				staleSession: resultEvent?.staleSession,
@@ -808,7 +808,7 @@ export function registerClaudeDelegate(
 				);
 				const used = usageSummary(usage);
 				const footer = model ? `\n\n— ${resolved} (\`${model}\`)${used ? ` · ${used}` : ""}` : "";
-				const content = `${text ?? "Task finished with no summary text."}${footer}`;
+				const content = `${text || "Task finished with no summary text."}${footer}`;
 				// ACB renders extension display notes for customType "note"
 				// (display:true, no triggerTurn). The assistant mirror right after
 				// it is what persists the chat; ACB's history drops the note then.
@@ -851,6 +851,18 @@ export function registerClaudeDelegate(
 						trace.handle(event);
 						// A follow-up taken in after a turn ended starts another
 						// turn, so every turn's result gets its own reply.
+						// A result with no text and no turns is not a reply (Claude Code
+						// emits one at the start of a resumed run that had background
+						// tasks); showing it would post an empty answer.
+						if (
+							event.kind === "result" &&
+							!event.isError &&
+							!event.text?.trim() &&
+							!event.usage?.turns
+						) {
+							beat();
+							return;
+						}
 						if (event.kind === "result") {
 							replies += 1;
 							if (event.isError)

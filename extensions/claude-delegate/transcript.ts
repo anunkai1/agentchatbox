@@ -89,19 +89,19 @@ function claudeToolIds(
 }
 
 /**
- * Every reply is saved twice: as a display note and as the assistant message
- * that persists the chat. Old notes carry no marker, so a note whose text the
- * next Claude Code reply repeats is also a duplicate.
+ * Every reply is saved twice, as a display note and as the assistant message
+ * that persists the chat, so a reloaded chat holds both. A note is a duplicate
+ * when the very next message repeats its text. A running chat holds only the
+ * note (the assistant copy goes to pi's session file, not to the live
+ * conversation), so a note with no twin is the reply itself.
  */
 function isDuplicateNote(
 	customType: string | undefined,
-	details: unknown,
 	content: unknown,
 	next: { role?: string; provider?: string; content?: unknown } | undefined,
 ): boolean {
-	if (customType !== "note") return false;
-	if (isOurNote(details)) return true;
 	return (
+		customType === "note" &&
 		next?.role === "assistant" &&
 		next.provider === MIRROR_PROVIDER &&
 		textOf(next.content) === textOf(content)
@@ -137,7 +137,8 @@ export function buildCatchUp(
 		if (entry.type === "custom_message") {
 			return (
 				entry.customType === PROMPT_MESSAGE_TYPE ||
-				isDuplicateNote(entry.customType, entry.details, entry.content, entries[index + 1]?.message)
+				(entry.customType === "note" && isOurNote(entry.details)) ||
+				isDuplicateNote(entry.customType, entry.content, entries[index + 1]?.message)
 			);
 		}
 		const message = entry.message;
@@ -252,8 +253,29 @@ export function foldClaudeSteps<T extends ContextMessage>(messages: readonly T[]
 		if (message.role === "toolResult" && claudeIds.has(message.toolCallId ?? "")) continue;
 		if (
 			message.role === "custom" &&
-			isDuplicateNote(message.customType, message.details, message.content, messages[i + 1])
+			isDuplicateNote(message.customType, message.content, messages[i + 1])
 		) {
+			continue;
+		}
+		if (message.role === "custom" && message.customType === "note" && isOurNote(message.details)) {
+			// A live chat's only copy of Claude Code's reply: present it as the reply.
+			out.push({
+				role: "assistant",
+				provider: MIRROR_PROVIDER,
+				api: MIRROR_PROVIDER,
+				model: MIRROR_PROVIDER,
+				content: [{ type: "text", text: textOf(message.content) }],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: (message as { timestamp?: number }).timestamp ?? Date.now(),
+			} as unknown as T);
 			continue;
 		}
 		if (message.role === "custom" && message.customType === PROMPT_MESSAGE_TYPE) {
