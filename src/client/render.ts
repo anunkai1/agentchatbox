@@ -1390,6 +1390,7 @@ function refreshCapabilitiesBadge(): void {
 		ccButton.style.display = ccAvailable ? "" : "none";
 		const sticky = state.extensionStatusLabels["claude-sticky"];
 		ccButton.classList.toggle("on", Boolean(sticky));
+		ccButton.textContent = sticky ? "CC on" : "CC off";
 		ccButton.setAttribute("aria-pressed", sticky ? "true" : "false");
 		ccButton.title = sticky
 			? `Claude Code is on (${sticky}) — click to send messages back to pi (/cc off)`
@@ -2266,7 +2267,7 @@ export function renderShell(): void {
 					),
 				style: "display:none",
 			},
-			"CC",
+			"CC off",
 		),
 		el(
 			"button",
