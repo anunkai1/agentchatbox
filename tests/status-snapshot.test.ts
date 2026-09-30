@@ -24,6 +24,19 @@ describe("Shed lifecycle projection", () => {
 					streaming: true,
 					compaction: { reason: "overflow" as const, startedAt: 1000 },
 					lastCompaction: completed,
+					statusFrames: new Map<string, Record<string, unknown>>(),
+				},
+			],
+			[
+				"claude-session",
+				{
+					ready: true,
+					init: { provider: "venice", modelId: "deepseek", thinkingLevel: "off" as const },
+					busy: false,
+					streaming: false,
+					compaction: null,
+					lastCompaction: null,
+					statusFrames: new Map<string, Record<string, unknown>>([["claude-progress", {}]]),
 				},
 			],
 			[
@@ -35,6 +48,7 @@ describe("Shed lifecycle projection", () => {
 					streaming: false,
 					compaction: null,
 					lastCompaction: null,
+					statusFrames: new Map<string, Record<string, unknown>>(),
 				},
 			],
 		]);
@@ -49,6 +63,18 @@ describe("Shed lifecycle projection", () => {
 				streaming: true,
 				compaction: { reason: "overflow", startedAt: 1000 },
 				lastCompaction: completed,
+				claude: false,
+			},
+			{
+				sessionId: "claude-session",
+				cwd: undefined,
+				provider: "venice",
+				modelId: "deepseek",
+				busy: false,
+				streaming: false,
+				compaction: null,
+				lastCompaction: null,
+				claude: true,
 			},
 		]);
 	});
