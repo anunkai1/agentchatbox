@@ -819,15 +819,15 @@ body.sidebar-resizing iframe {
 	background: transparent;
 	border: 1px solid rgba(255, 255, 255, 0.22);
 	color: var(--text-secondary);
-	padding: 4px 9px;
-	border-radius: var(--radius-pill);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	padding: 0;
+	border-radius: 50%;
 	cursor: pointer;
-	font-family: inherit;
-	font-size: 12px;
-	font-weight: 700;
-	letter-spacing: 0.04em;
-	line-height: 1;
-	white-space: nowrap;
+	line-height: 0;
 	transition:
 		background 0.12s,
 		color 0.12s,
