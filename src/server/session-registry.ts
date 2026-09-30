@@ -200,11 +200,13 @@ export interface AgentLifecycleStatus {
 	streaming: boolean;
 	compaction: LiveSession["compaction"];
 	lastCompaction: LiveSession["lastCompaction"];
+	/** A /cc run is in flight. It bypasses pi, so busy and streaming stay false. */
+	claude: boolean;
 }
 
 type StatusSession = Pick<
 	LiveSession,
-	"ready" | "init" | "busy" | "streaming" | "compaction" | "lastCompaction"
+	"ready" | "init" | "busy" | "streaming" | "compaction" | "lastCompaction" | "statusFrames"
 >;
 
 /** Pure transport projection, split out so its public contract is regression-tested. */
@@ -223,6 +225,9 @@ export function buildStatusSnapshot(
 			streaming: session.streaming,
 			compaction: session.compaction,
 			lastCompaction: session.lastCompaction,
+			// The claude-delegate extension holds "claude-progress" set for exactly
+			// the duration of a run and clears it when the run ends.
+			claude: session.statusFrames.has("claude-progress"),
 		});
 	}
 	return out;
