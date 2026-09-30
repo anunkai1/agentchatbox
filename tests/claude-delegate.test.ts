@@ -1360,6 +1360,35 @@ describe("chat history across pi and Claude Code", () => {
 			expect(folded.map((m) => m.role)).toEqual(["user", "assistant", "custom", "assistant"]);
 		});
 
+		it("keeps Claude Code's reply in a running chat, where only the display note exists", () => {
+			// pi's live conversation gets sendMessage notes, not the assistant copies
+			// written to the session file, so the note is the only record of the reply.
+			const live = [
+				{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
+				{
+					role: "custom",
+					customType: PROMPT_MESSAGE_TYPE,
+					content: "make a codeword",
+					timestamp: 2,
+				},
+				{
+					role: "custom",
+					customType: "note",
+					content: "Kronvest\n\n— Haiku 4.5 · 1 turn",
+					details: { source: "claude-delegate" },
+					timestamp: 3,
+				},
+			];
+			const folded = foldClaudeSteps(live as never[]) as Array<{
+				role: string;
+				provider?: string;
+				content: unknown;
+			}>;
+			expect(folded.map((m) => m.role)).toEqual(["user", "custom", "assistant"]);
+			expect(folded[2].provider).toBe(MIRROR_PROVIDER);
+			expect(JSON.stringify(folded[2].content)).toContain("Kronvest");
+		});
+
 		it("also drops duplicate notes from chats saved before notes were marked", () => {
 			const { manager, say } = chat();
 			manager.appendCustomMessageEntry("note", "old reply", true);
@@ -1454,6 +1483,37 @@ describe("usage reporting", () => {
 			}),
 		).toBe("14 turns · 1m12s · 38k in / 2.1k out");
 		expect(usageSummary(undefined)).toBe("");
+	});
+
+	it("does not post an empty reply for a result with no text and no turns", async () => {
+		const h = harness("sonnet", {}, async (_args, options) => {
+			const emit = (options as { onEvent?: (e: StreamEvent) => void }).onEvent;
+			emit?.({ kind: "init", claudeSessionId: "s", model: "claude-sonnet-5-5" });
+			// Claude Code's leftover result from an earlier run's background task.
+			emit?.({
+				kind: "result",
+				text: "",
+				isError: false,
+				usage: { turns: 0, durationMs: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+			});
+			emit?.({
+				kind: "result",
+				text: "real answer",
+				isError: false,
+				usage: {
+					turns: 2,
+					durationMs: 4000,
+					inputTokens: 500,
+					outputTokens: 50,
+					cacheReadTokens: 0,
+				},
+			});
+			return { resultText: "real answer", isError: false, model: "claude-sonnet-5-5" };
+		});
+		await h.cc("go", h.uiCtx);
+		const notes = h.sendMessage.mock.calls.map((c) => c[0]).filter((m) => m.customType === "note");
+		expect(notes).toHaveLength(1);
+		expect(String(notes[0].content)).toContain("real answer");
 	});
 
 	it("puts the summary in the reply footer", async () => {
