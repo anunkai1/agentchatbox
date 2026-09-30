@@ -1382,6 +1382,21 @@ function refreshCapabilitiesBadge(): void {
 		}
 	}
 
+	const ccButton = document.getElementById("cc-toggle");
+	if (ccButton) {
+		const ccAvailable = caps?.some(
+			(command) => command.name === "claude" && command.source !== "skill",
+		);
+		ccButton.style.display = ccAvailable ? "" : "none";
+		const sticky = state.extensionStatusLabels["claude-sticky"];
+		ccButton.classList.toggle("on", Boolean(sticky));
+		ccButton.setAttribute("aria-pressed", sticky ? "true" : "false");
+		ccButton.title = sticky
+			? `Claude Code is on (${sticky}) — click to send messages back to pi (/cc off)`
+			: "Send this chat's messages to Claude Code (/cc on)";
+		ccButton.setAttribute("aria-label", `Claude Code routing is ${sticky ? "on" : "off"}`);
+	}
+
 	const badge = document.getElementById("caps-badge");
 	if (!badge) return;
 	if (!caps || caps.length === 0) {
@@ -2234,6 +2249,25 @@ export function renderShell(): void {
 			el("span", { class: "header-new-chat-label" }, "New chat"),
 		),
 		el("div", { class: "spacer" }),
+		// Per-chat Claude Code routing (/cc on|off). The extension owns the
+		// state; refreshCapabilitiesBadge() mirrors its "claude-sticky" label.
+		el(
+			"button",
+			{
+				class: "header-cc",
+				id: "cc-toggle",
+				type: "button",
+				title: "Send this chat's messages to Claude Code (/cc on)",
+				"aria-label": "Claude Code routing is off",
+				"aria-pressed": "false",
+				onclick: () =>
+					services.sendSlashCommand?.(
+						state.extensionStatusLabels["claude-sticky"] ? "/cc off" : "/cc on",
+					),
+				style: "display:none",
+			},
+			"CC",
+		),
 		el(
 			"button",
 			{
