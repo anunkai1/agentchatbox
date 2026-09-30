@@ -1574,6 +1574,10 @@ async function boot(): Promise<void> {
 		// Reset the live message ordinal — it gets re-seeded to the
 		// transcript length below if this is a resume with history.
 		liveMessageSeq = 0;
+		// Extension status labels belong to the bound session; the server
+		// replays the current ones right after `ready`, so drop any left
+		// over from a previously open chat (e.g. its /cc toggle).
+		state.extensionStatusLabels = {};
 		// Track the session id for export/display.
 		if (info.sessionId) {
 			state.sessionId = info.sessionId;

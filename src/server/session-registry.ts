@@ -157,6 +157,10 @@ export interface LiveSession {
 	 * blocks; invalidate on every completed message rather than reparsing an
 	 * unchanged transcript for each transient socket. */
 	replayMessages: TranscriptPayload["messages"] | null;
+	/** Latest extension setStatus frame per key. A status is published once, when
+	 * it changes, so a browser that attaches later (page refresh, reconnect)
+	 * would never learn it without a replay from here. */
+	statusFrames: Map<string, Record<string, unknown>>;
 	/**
 	 * The model the user just clicked via setModel, awaiting pi's
 	 * confirmation. The chat.ts handler stashes the request here and we
@@ -408,6 +412,7 @@ class SessionRegistry {
 			currentTurn: [],
 			currentTurnBytes: 0,
 			replayMessages: null,
+			statusFrames: new Map(),
 			pendingModel: null,
 			pendingThinking: null,
 			thinkingQueue: [],
@@ -671,6 +676,18 @@ class SessionRegistry {
 		// the detachable-session state and browser picker stay in sync too.
 		if (line.type === "extension_ui_request" && line.method === "setStatus" && session.ready) {
 			session.pi.send({ type: "get_state" });
+		}
+
+		// Remember the latest status per key for replay on reattach. The
+		// claude-activity key is a stream of one-off live steps, not state.
+		if (
+			line.type === "extension_ui_request" &&
+			line.method === "setStatus" &&
+			typeof line.statusKey === "string" &&
+			line.statusKey !== "claude-activity"
+		) {
+			if (typeof line.statusText === "string") session.statusFrames.set(line.statusKey, line);
+			else session.statusFrames.delete(line.statusKey);
 		}
 
 		// Keep the transport's model snapshot current after an extension-triggered
@@ -955,6 +972,11 @@ class SessionRegistry {
 		if (messages.length > 0) {
 			const payload: TranscriptPayload = { sessionId: session.sessionId, messages };
 			deliver(ws, { type: "transcript", ...payload });
+		}
+		// Extension statuses (e.g. the per-chat /cc toggle) are state, not
+		// events: the browser's copy is wiped on reload, so hand it the latest.
+		for (const frame of session.statusFrames.values()) {
+			deliver(ws, { type: "event", event: browserEvent(frame) });
 		}
 		// Only replay the turn buffer when genuinely mid-turn — once the
 		// turn ended, the completed message is on disk and the transcript
