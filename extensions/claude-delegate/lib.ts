@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -321,6 +322,77 @@ export interface RunUsage {
 	inputTokens: number;
 	outputTokens: number;
 	cacheReadTokens: number;
+}
+
+/**
+ * Where ACB keeps uploads. The server resolves its own uploads directory and
+ * hands it to every pi child as ACB_UPLOADS_DIR (see src/server/pi-process.ts),
+ * so that is the value to trust; the server's own UPLOADS_DIR override and the
+ * default project path are fallbacks for a pi run outside ACB.
+ */
+export function uploadsDir(): string {
+	return (
+		process.env.ACB_UPLOADS_DIR ||
+		process.env.UPLOADS_DIR ||
+		join(homedir(), "agentchatbox", "uploads")
+	);
+}
+
+/**
+ * Formats Claude Code can open, keyed by the MIME type ACB may hand over.
+ * ACB's upload path also accepts TIFF, AVIF, HEIC and HEIF; those are left
+ * out on purpose, because Claude Code's Read tool cannot decode them, and a
+ * path it will fail on is worse than saying the image did not come through.
+ */
+const IMAGE_EXTENSIONS: Record<string, string> = {
+	"image/png": "png",
+	"image/jpeg": "jpg",
+	"image/gif": "gif",
+	"image/webp": "webp",
+	"image/bmp": "bmp",
+};
+
+/** An image attached to a prompt, as pi hands it to an input hook. */
+export interface AttachedImage {
+	data: string;
+	mimeType: string;
+}
+
+/**
+ * Claude Code takes plain text, but ACB sends attached images to pi as bytes
+ * and shortens their links to a bare label, so a diverted message would reach
+ * Claude Code with no image. Each image is saved under a name taken from its
+ * content (the same picture is stored once) and its path is returned.
+ */
+export function saveAttachedImages(images: AttachedImage[], dir = uploadsDir()): string[] {
+	const paths: string[] = [];
+	for (const image of images) {
+		const ext = IMAGE_EXTENSIONS[image.mimeType];
+		if (!ext) continue;
+		try {
+			const bytes = Buffer.from(image.data, "base64");
+			const name = `prompt-${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.${ext}`;
+			mkdirSync(dir, { recursive: true });
+			try {
+				writeFileSync(join(dir, name), bytes, { flag: "wx", mode: 0o600 });
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+			}
+			paths.push(join(dir, name));
+		} catch {}
+	}
+	return paths;
+}
+
+/** The task with the saved images named, so Claude Code can open them. */
+export function withImagePaths(task: string, paths: string[], attached: number): string {
+	if (attached === 0) return task;
+	const lines = paths.map((path) => `- ${path}`);
+	const missed = attached - paths.length;
+	if (missed > 0) {
+		lines.push(`(${missed} attached image${missed === 1 ? "" : "s"} could not be passed on.)`);
+	}
+	return `${task}\n\nAttached images (open each with the Read tool):\n${lines.join("\n")}`;
 }
 
 /** One stream-json stdin line carrying a user message. */

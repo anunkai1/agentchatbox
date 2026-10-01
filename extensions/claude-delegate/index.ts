@@ -27,8 +27,10 @@ import {
 	type RunUsage,
 	type StreamEvent,
 	StreamParser,
+	saveAttachedImages,
 	stdinUserMessage,
 	terminateRun,
+	withImagePaths,
 } from "./lib.js";
 import { buildCatchUp, type EntryLike, foldClaudeSteps } from "./transcript.js";
 /** Session entry recording this chat's sticky mode; the last entry wins. */
@@ -1007,8 +1009,11 @@ export function registerClaudeDelegate(
 		if (event.streamingBehavior || event.text.trimStart().startsWith("/")) {
 			return { action: "continue" };
 		}
-		const task = event.text.trim();
-		if (!task) return { action: "continue" };
+		const images = event.images ?? [];
+		const text = event.text.trim();
+		if (!text && images.length === 0) return { action: "continue" };
+		// ACB sends images to pi as bytes and leaves only a label in the text.
+		const task = withImagePaths(text, saveAttachedImages(images), images.length);
 		// Not awaited: pi acknowledges the prompt now and the run reports
 		// through the prompt bubble, status label and result note.
 		void delegateDirect(task, sticky, ctx, sessionKey(ctx));
