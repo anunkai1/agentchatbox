@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -30,8 +30,10 @@ import {
 	parseDelegationMode,
 	prettyModelName,
 	RunRegistry,
+	saveAttachedImages,
 	type StreamEvent,
 	StreamParser,
+	withImagePaths,
 } from "../extensions/claude-delegate/lib.js";
 import { buildCatchUp, foldClaudeSteps } from "../extensions/claude-delegate/transcript.js";
 
@@ -731,6 +733,93 @@ describe("claude-delegate sticky mode", () => {
 		expect(h.input("hello")).toEqual({ action: "handled" });
 		await h.whenIdle();
 	});
+});
+
+describe("attached images reaching Claude Code", () => {
+	// A 1x1 PNG: the bytes only have to be real enough to name by hash.
+	const PNG_1PX =
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+	const image = (mimeType = "image/png", data = PNG_1PX) => ({ type: "image", data, mimeType });
+
+	/** Run a test with ACB_UPLOADS_DIR pointed at a throwaway directory. */
+	const withUploadsDir =
+		(run: (dir: string) => void | Promise<void>) =>
+		async (): Promise<void> => {
+			const dir = mkdtempSync(join(tmpdir(), "claude-delegate-uploads-"));
+			const previous = process.env.ACB_UPLOADS_DIR;
+			process.env.ACB_UPLOADS_DIR = dir;
+			try {
+				await run(dir);
+			} finally {
+				if (previous === undefined) delete process.env.ACB_UPLOADS_DIR;
+				else process.env.ACB_UPLOADS_DIR = previous;
+			}
+		};
+
+	it(
+		"saves an attached image once, under a content-addressed private name",
+		withUploadsDir((dir) => {
+			const [path] = saveAttachedImages([image()]);
+			expect(path).toBeDefined();
+			expect(dirname(path as string)).toBe(dir);
+			expect(path).toMatch(/prompt-[0-9a-f]{16}\.png$/);
+			expect(statSync(path as string).mode & 0o777).toBe(0o600);
+			// The same picture sent twice is stored once and named the same way.
+			expect(saveAttachedImages([image(), image()])).toEqual([path, path]);
+			expect(readdirSync(dir)).toHaveLength(1);
+		}),
+	);
+
+	it(
+		"skips a format Claude Code cannot open, and says how many were missed",
+		withUploadsDir((dir) => {
+			expect(saveAttachedImages([image("image/heic")])).toEqual([]);
+			expect(readdirSync(dir)).toEqual([]);
+			expect(withImagePaths("look at this", [], 1)).toContain(
+				"(1 attached image could not be passed on.)",
+			);
+		}),
+	);
+
+	it("leaves a task with no images exactly as it was", () => {
+		expect(withImagePaths("check the invoice", [], 0)).toBe("check the invoice");
+	});
+
+	it("names every saved image in the task, for the Read tool", () => {
+		const task = withImagePaths("what is wrong here?", ["/tmp/a.png", "/tmp/b.jpg"], 2);
+		expect(task).toContain("what is wrong here?");
+		expect(task).toContain("- /tmp/a.png");
+		expect(task).toContain("- /tmp/b.jpg");
+	});
+
+	it(
+		"passes a pasted image's path on to Claude Code",
+		withUploadsDir(async (dir) => {
+			const prompts: string[] = [];
+			const h = harness("sonnet", {}, (async (
+				_args: string[],
+				options: { prompt: string },
+			) => {
+				prompts.push(options.prompt);
+				return { resultText: "the button is cut off", isError: false, model: "claude-sonnet-5-5" };
+			}) as never);
+			await h.cc("on", h.uiCtx);
+			// ACB sends the bytes and leaves only a bare label in the text.
+			expect(
+				h.input("what is wrong in this screenshot?", {
+					images: [image()],
+				}),
+			).toEqual({ action: "handled" });
+			await h.whenIdle();
+
+			const [saved] = readdirSync(dir);
+			expect(saved).toBeDefined();
+			expect(prompts[0]).toContain("what is wrong in this screenshot?");
+			expect(prompts[0]).toContain(join(dir, saved as string));
+			// The prompt bubble ACB draws carries the same path.
+			expect(String(h.sendMessage.mock.calls[0][0].content)).toContain(join(dir, saved as string));
+		}),
+	);
 });
 
 describe("tool display helpers", () => {
