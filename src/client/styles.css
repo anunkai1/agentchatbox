@@ -2225,16 +2225,27 @@ body.sidebar-resizing iframe {
 		transform 0.1s,
 		color 0.12s;
 }
+/* The send button is the primary action: a filled green "go" control with a
+   soft glow, so it is unmistakable next to the dark composer. The old
+   --surface-active grey read as "invisible", which pulled the thumb to the
+   bright red stop button instead. */
+.send-btn {
+	background: var(--c-ok, #9ece6a);
+	color: #10240b;
+	box-shadow: 0 1px 10px rgba(158, 206, 106, 0.35);
+}
 .send-btn:hover {
-	background: var(--text);
-	color: #000;
+	background: color-mix(in srgb, var(--c-ok, #9ece6a) 82%, #fff);
+	color: #10240b;
+	box-shadow: 0 1px 14px rgba(158, 206, 106, 0.5);
 }
 .send-btn:active {
 	transform: scale(0.94);
 }
 .send-btn:disabled {
-	background: var(--surface);
-	color: var(--text-muted);
+	background: color-mix(in srgb, var(--c-ok, #9ece6a) 38%, var(--surface));
+	color: rgba(16, 36, 11, 0.6);
+	box-shadow: none;
 	cursor: not-allowed;
 }
 .stop-btn {
@@ -2249,13 +2260,16 @@ body.sidebar-resizing iframe {
 .send-btn[hidden] {
 	display: none;
 }
-/* Send button in steer mode (agent is streaming): muted accent to hint
-   that the message will be queued rather than sent immediately. */
+/* Send button in steer mode (agent is streaming): same green as the normal
+   send, with the arrow swapping to ⇢ to signal the message is queued. */
 .send-btn.steer-mode {
-	background: color-mix(in srgb, var(--c-ok, #3ddc84) 30%, var(--surface-active));
+	background: var(--c-ok, #9ece6a);
+	color: #10240b;
+	box-shadow: 0 1px 10px rgba(158, 206, 106, 0.35);
 }
 .send-btn.steer-mode:hover {
-	background: color-mix(in srgb, var(--c-ok, #3ddc84) 55%, var(--text));
+	background: color-mix(in srgb, var(--c-ok, #9ece6a) 82%, #fff);
+	color: #10240b;
 }
 
 /* ------------------------------------------------------------------ */

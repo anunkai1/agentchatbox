@@ -2427,7 +2427,7 @@ export function renderShell(): void {
 	});
 
 	// Composer — pill with attach + voice buttons on the left, textarea
-	// in the middle, and a dark up-arrow send button on the right.
+	// in the middle, and a green up-arrow send button on the right.
 	// The old globe/reasoning buttons were removed because they had no
 	// direct effect (they opened other menus instead).
 	const composerWrap = el("div", { class: "composer-wrap" });
