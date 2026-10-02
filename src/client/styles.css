@@ -2260,16 +2260,19 @@ body.sidebar-resizing iframe {
 .send-btn[hidden] {
 	display: none;
 }
-/* Send button in steer mode (agent is streaming): same green as the normal
-   send, with the arrow swapping to ⇢ to signal the message is queued. */
+/* Send button in steer mode (agent is streaming): a deeper, muted green with a
+   soft inner ring so it still reads as "go" but is subtly set apart from the
+   solid green send, alongside the ⇢ arrow that signals the message is queued. */
 .send-btn.steer-mode {
-	background: var(--c-ok, #9ece6a);
-	color: #10240b;
-	box-shadow: 0 1px 10px rgba(158, 206, 106, 0.35);
+	background: color-mix(in srgb, var(--c-ok, #9ece6a) 68%, #17240f);
+	color: #e6f5d6;
+	box-shadow:
+		inset 0 0 0 1.5px rgba(158, 206, 106, 0.55),
+		0 1px 8px rgba(158, 206, 106, 0.2);
 }
 .send-btn.steer-mode:hover {
-	background: color-mix(in srgb, var(--c-ok, #9ece6a) 82%, #fff);
-	color: #10240b;
+	background: color-mix(in srgb, var(--c-ok, #9ece6a) 82%, #17240f);
+	color: #f0fbe6;
 }
 
 /* ------------------------------------------------------------------ */
