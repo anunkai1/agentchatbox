@@ -139,3 +139,13 @@ function silenceBounds(buffer: AudioBufferLike): { lead: number; trail: number }
 		trail: ((windows - 1 - last) * window) / buffer.sampleRate,
 	};
 }
+
+/**
+ * When the next streamed chunk should start on the audio clock: right after the
+ * previous one ends, so the chunks run without a gap. If synthesis fell behind
+ * and that moment has already passed, start a moment from now instead, because
+ * the audio clock silently skips anything scheduled in the past.
+ */
+export function chunkStartTime(currentTime: number, lead: number, previousEnd: number): number {
+	return Math.max(currentTime + lead, previousEnd);
+}

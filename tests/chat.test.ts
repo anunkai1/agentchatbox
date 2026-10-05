@@ -717,7 +717,7 @@ describe("mountChatWs — pi subprocess pipe", () => {
 		} finally {
 			close();
 		}
-	});
+	}, 30_000); // First test to import chat.js; under a full parallel run that import has timed out at 5s.
 
 	it("strips image payloads during live delivery, reattach replay and run completion", async () => {
 		writeFileSync(
@@ -782,6 +782,61 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			expect(completed).toContain('"toolResults"');
 			expect(second.inbox.all().filter((m) => m.type === "error")).toHaveLength(0);
 			expect(second.ws.readyState).toBe(WebSocket.OPEN);
+		} finally {
+			first.close();
+			second?.close();
+		}
+	});
+
+	it("replays an extension's latest status to a browser that reattaches", async () => {
+		writeFileSync(
+			fakePiPath!,
+			`#!${process.execPath}
+const { createInterface } = require('node:readline');
+const send = (event) => console.log(JSON.stringify(event));
+const status = (statusKey, statusText) =>
+  send({ type: 'extension_ui_request', id: statusKey + '-' + statusText, method: 'setStatus', statusKey, statusText });
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line);
+  if (command.type === 'get_state') {
+    send({ type: 'response', command: 'get_state', success: true, data: { sessionId: 'status-replay-session', messageCount: 0 } });
+  } else if (command.type === 'prompt') {
+    status('claude-sticky', 'Opus');
+    status('claude-sticky', 'Sonnet'); // the latest one is what a reattach should see
+    status('claude-activity', 'reading a file'); // a one-off live step, not state
+    status('codex-fast', 'Enabled');
+    status('codex-fast', undefined); // cleared: must not come back
+    send({ type: 'agent_start' });
+  }
+});
+`,
+		);
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const first = await connectClient();
+		let second: Awaited<ReturnType<typeof connectClient>> | undefined;
+		const statuses = (inbox: Inbox) =>
+			inbox
+				.all()
+				.filter((m) => m.type === "event")
+				.map((m) => m.event as AnyMsg)
+				.filter((e) => e.type === "extension_ui_request" && e.method === "setStatus");
+		try {
+			const init = { type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" };
+			first.ws.send(JSON.stringify(init));
+			expect(await waitForType(first.inbox, "ready", 1)).toHaveLength(1);
+			first.ws.send(JSON.stringify({ type: "prompt", text: "go" }));
+			expect(await waitForEventOfType(first.inbox, "agent_start", 0, 3000)).toHaveLength(1);
+			const closed = new Promise<void>((resolve) => first.ws.once("close", () => resolve()));
+			first.close();
+			await closed;
+
+			second = await connectClient();
+			second.ws.send(JSON.stringify({ ...init, sessionId: "status-replay-session" }));
+			expect(await waitForType(second.inbox, "ready", 1)).toHaveLength(1);
+			await new Promise((r) => setTimeout(r, 300));
+			const replayed = statuses(second.inbox).map((e) => [e.statusKey, e.statusText]);
+			expect(replayed).toEqual([["claude-sticky", "Sonnet"]]);
 		} finally {
 			first.close();
 			second?.close();

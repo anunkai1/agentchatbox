@@ -31,7 +31,7 @@ import {
 	showTtsBanner,
 } from "./render.js";
 import { state } from "./state.js";
-import { trimChunkSilence } from "./tts-trim.js";
+import { chunkStartTime, trimChunkSilence } from "./tts-trim.js";
 
 /**
  * Soft cap on what we send to TTS. Kept just under the server's hard cap
@@ -377,7 +377,7 @@ async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise
 	// Start where the previous chunk ends. If synthesis fell behind playback the
 	// timeline has already passed, so start now rather than in the past (which the
 	// audio clock would silently skip).
-	const startAt = Math.max(ctx.currentTime + TTS_SCHEDULE_LEAD, nextStartAt);
+	const startAt = chunkStartTime(ctx.currentTime, TTS_SCHEDULE_LEAD, nextStartAt);
 	// `offset` skips the leading silence inside the buffer; the stop() is what
 	// removes the excess trailing silence, and it also fires this node's `ended`
 	// at the trimmed end so the queue advances on the audible finish.

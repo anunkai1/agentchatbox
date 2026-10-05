@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type AudioBufferLike,
 	CHUNK_JOIN_PAUSE_S,
+	chunkStartTime,
 	LEAD_KEEP_S,
 	trimChunkSilence,
 } from "../src/client/tts-trim.js";
@@ -122,5 +123,20 @@ describe("trimChunkSilence", () => {
 			getChannelData: () => new Float32Array(4),
 		};
 		expect(trimChunkSilence(buffer)).toEqual({ offset: 0, duration: buffer.duration });
+	});
+});
+
+describe("chunkStartTime", () => {
+	it("starts a chunk exactly where the previous one ends, so there is no gap", () => {
+		expect(chunkStartTime(10, 0.05, 12.5)).toBe(12.5);
+	});
+
+	it("starts a moment from now when synthesis fell behind playback", () => {
+		// The previous chunk ended at 8s but the clock is already at 10s.
+		expect(chunkStartTime(10, 0.05, 8)).toBeCloseTo(10.05);
+	});
+
+	it("starts a moment from now for the first chunk of an utterance", () => {
+		expect(chunkStartTime(3, 0.05, 0)).toBeCloseTo(3.05);
 	});
 });

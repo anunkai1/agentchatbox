@@ -1364,7 +1364,7 @@ function groupExtensionPackages(commands: PiCommand[]): Map<string, PiCommand[]>
 }
 
 /** Update the capabilities badge in the header. */
-function refreshCapabilitiesBadge(): void {
+export function refreshCapabilitiesBadge(): void {
 	const caps = state.capabilities;
 	const fastButton = document.getElementById("fast-mode");
 	if (fastButton) {
