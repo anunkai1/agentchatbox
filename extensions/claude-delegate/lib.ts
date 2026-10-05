@@ -110,9 +110,16 @@ interface SessionRecord {
 	models?: Record<string, string>;
 }
 
-/** Chat keys become file names, so keep them to a safe character set. */
+/**
+ * Chat keys become file names, so keep them to a safe character set. A key the
+ * clean-up had to change gets a short hash of the original, so two different
+ * keys cannot land on one file; ordinary keys keep their plain name.
+ */
 function safeName(key: string): string {
-	return key.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "default";
+	const cleaned = key.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+	if (cleaned === key && cleaned) return cleaned;
+	const hash = createHash("sha256").update(key).digest("hex").slice(0, 8);
+	return `${cleaned.slice(0, 100) || "default"}-${hash}`;
 }
 
 function writeAtomic(path: string, content: string, mode: number): void {
@@ -339,18 +346,23 @@ export function uploadsDir(): string {
 }
 
 /**
- * Formats Claude Code can open, keyed by the MIME type ACB may hand over.
- * ACB's upload path also accepts TIFF, AVIF, HEIC and HEIF; those are left
- * out on purpose, because Claude Code's Read tool cannot decode them, and a
- * path it will fail on is worse than saying the image did not come through.
+ * The image format of `bytes`, read from the file's own header rather than the
+ * MIME type the browser claimed. Only formats Claude Code can open are named:
+ * ACB's upload path also accepts TIFF, AVIF, HEIC and HEIF, which its Read tool
+ * cannot decode, and a path it will fail on is worse than saying the image did
+ * not come through.
  */
-const IMAGE_EXTENSIONS: Record<string, string> = {
-	"image/png": "png",
-	"image/jpeg": "jpg",
-	"image/gif": "gif",
-	"image/webp": "webp",
-	"image/bmp": "bmp",
-};
+function imageExtension(bytes: Buffer): string | undefined {
+	const starts = (...signature: number[]) => signature.every((byte, i) => bytes[i] === byte);
+	if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return "png";
+	if (starts(0xff, 0xd8, 0xff)) return "jpg";
+	if (starts(0x47, 0x49, 0x46, 0x38)) return "gif";
+	if (starts(0x52, 0x49, 0x46, 0x46) && bytes.subarray(8, 12).toString("latin1") === "WEBP") {
+		return "webp";
+	}
+	if (starts(0x42, 0x4d)) return "bmp";
+	return undefined;
+}
 
 /** An image attached to a prompt, as pi hands it to an input hook. */
 export interface AttachedImage {
@@ -367,10 +379,10 @@ export interface AttachedImage {
 export function saveAttachedImages(images: AttachedImage[], dir = uploadsDir()): string[] {
 	const paths: string[] = [];
 	for (const image of images) {
-		const ext = IMAGE_EXTENSIONS[image.mimeType];
-		if (!ext) continue;
 		try {
 			const bytes = Buffer.from(image.data, "base64");
+			const ext = imageExtension(bytes);
+			if (!ext) continue;
 			const name = `prompt-${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.${ext}`;
 			mkdirSync(dir, { recursive: true });
 			try {
@@ -596,6 +608,11 @@ export interface RunRecord {
 	chat: string;
 	mode: DelegationMode;
 	startedAt: string;
+	/**
+	 * When the process started, in /proc clock ticks. Process numbers get reused,
+	 * so this tells the run apart from an unrelated process that inherited its pid.
+	 */
+	startTicks?: string;
 }
 
 export const DEFAULT_RUNS_DIR = join(homedir(), ".config", "acb", "claude-delegate-runs");
@@ -608,6 +625,24 @@ export function isClaudeProcess(pid: number): boolean {
 	} catch {
 		return true; // No /proc (or unreadable): trust the signal check.
 	}
+}
+
+/** Field 22 of /proc/<pid>/stat: unique per process start. Undefined without /proc. */
+export function processStartTicks(pid: number): string | undefined {
+	try {
+		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+		// "pid (comm) state ppid ...": comm may hold spaces and parentheses.
+		return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** False when the pid now belongs to a different process than the one recorded. */
+function sameProcess(record: RunRecord): boolean {
+	if (!record.startTicks) return true; // Recorded before start times, or no /proc.
+	const current = processStartTicks(record.pid);
+	return current === undefined || current === record.startTicks;
 }
 
 function processAlive(pid: number): boolean {
@@ -720,8 +755,9 @@ export class RunRegistry {
 		for (const name of names) {
 			try {
 				const record = JSON.parse(readFileSync(join(this.dir, name), "utf8")) as RunRecord;
-				if (typeof record.pid === "number" && this.alive(record.pid)) runs.push(record);
-				else rmSync(join(this.dir, name), { force: true });
+				if (typeof record.pid === "number" && this.alive(record.pid) && sameProcess(record)) {
+					runs.push(record);
+				} else rmSync(join(this.dir, name), { force: true });
 			} catch {
 				rmSync(join(this.dir, name), { force: true });
 			}

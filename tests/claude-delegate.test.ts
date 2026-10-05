@@ -30,6 +30,7 @@ import {
 	parseDelegationMode,
 	prettyModelName,
 	RunRegistry,
+	processStartTicks,
 	saveAttachedImages,
 	type StreamEvent,
 	StreamParser,
@@ -239,6 +240,18 @@ describe("claude-delegate store", () => {
 		]);
 		expect(other.readClaudeSession("chat-a")).toBe("s-a");
 		expect(store.readClaudeSession("chat-b")).toBe("s-b");
+	});
+
+	it("keeps chats whose ids clean up to the same name in separate files", () => {
+		const { store, dir } = tmpStore();
+		store.writeClaudeSession("chat/1", "s-slash");
+		store.writeClaudeSession("chat 1", "s-space");
+		store.writeClaudeSession("chat_1", "s-plain");
+		expect(store.readClaudeSession("chat/1")).toBe("s-slash");
+		expect(store.readClaudeSession("chat 1")).toBe("s-space");
+		expect(store.readClaudeSession("chat_1")).toBe("s-plain");
+		expect(readdirSync(join(dir, "sessions"))).toHaveLength(3);
+		expect(readdirSync(join(dir, "sessions"))).toContain("chat_1.json");
 	});
 
 	it("pins a chat's model per conversation and resets it for a new one", () => {
@@ -773,11 +786,26 @@ describe("attached images reaching Claude Code", () => {
 	it(
 		"skips a format Claude Code cannot open, and says how many were missed",
 		withUploadsDir((dir) => {
-			expect(saveAttachedImages([image("image/heic")])).toEqual([]);
+			// HEIC files start with an "ftyp" box, not a format Claude Code can read.
+			const heic = Buffer.from("0000001c667479706865696300000000", "hex").toString("base64");
+			expect(saveAttachedImages([image("image/heic", heic)])).toEqual([]);
 			expect(readdirSync(dir)).toEqual([]);
 			expect(withImagePaths("look at this", [], 1)).toContain(
 				"(1 attached image could not be passed on.)",
 			);
+		}),
+	);
+
+	it(
+		"names the file from its own bytes, not the type the browser claimed",
+		withUploadsDir((dir) => {
+			// Real PNG bytes labelled as a JPEG are still stored as a PNG.
+			const [relabelled] = saveAttachedImages([image("image/jpeg")]);
+			expect(relabelled).toMatch(/\.png$/);
+			// A page labelled as a PNG is not an image and is not stored.
+			const html = Buffer.from("<html><script>alert(1)</script>").toString("base64");
+			expect(saveAttachedImages([image("image/png", html)])).toEqual([]);
+			expect(readdirSync(dir)).toHaveLength(1);
 		}),
 	);
 
@@ -1126,6 +1154,18 @@ describe("run registry", () => {
 		expect(readdirSync(dir)).toEqual(["10.json"]);
 		registry.remove(10);
 		expect(registry.list()).toEqual([]);
+	});
+
+	it("drops a record whose pid now belongs to a different process", () => {
+		const dir = mkdtempSync(join(tmpdir(), "runs-"));
+		const registry = new RunRegistry(dir, () => true);
+		const ticks = processStartTicks(process.pid);
+		if (ticks === undefined) return; // No /proc here: nothing to compare.
+		registry.add({ ...record(process.pid, 1), startTicks: ticks });
+		expect(registry.list().map((r) => r.pid)).toEqual([process.pid]);
+		registry.add({ ...record(process.pid, 1), startTicks: `${ticks}0` }); // reused pid
+		expect(registry.list()).toEqual([]);
+		expect(readdirSync(dir)).toEqual([]);
 	});
 
 	it("reaps runs whose owning pi process is gone, and only those", async () => {

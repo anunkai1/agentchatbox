@@ -22,6 +22,7 @@ import {
 	normaliseToolArgs,
 	PROMPT_MESSAGE_TYPE,
 	parseDelegationMode,
+	processStartTicks,
 	type RunRecord,
 	RunRegistry,
 	type RunUsage,
@@ -847,6 +848,7 @@ export function registerClaudeDelegate(
 							chat: key,
 							mode,
 							startedAt: new Date(startedAt).toISOString(),
+							startTicks: processStartTicks(spawned),
 						});
 					},
 					onEvent: (event) => {
