@@ -239,7 +239,7 @@ export interface AppState {
 	 * /api/health — the model the pi-voice-reply extension actually uses for
 	 * the text-rewrite phase. null = rewrite falls back to the session model. */
 	voiceRewriteModel: string | null;
-	/** Whisper (STT) model id from /api/health (e.g. "base"). Display-only. */
+	/** Speech-to-text model id from /api/health. Display-only. */
 	whisperModel: string | null;
 	/** Resolved image-generation model + provenance from /api/health. null
 	 * until the health probe lands. Display-only mirror of the extension's

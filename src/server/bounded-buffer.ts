@@ -2,12 +2,11 @@
  * Bounded byte buffer — accumulate chunks of process output while keeping
  * memory flat regardless of how chatty the child is.
  *
- * Extracted from `python-runner.ts`, which had this exact eviction math
- * inlined for stdout AND stderr. Two copies of fiddly ring-buffer logic
- * is one too many: centralize it here so it's correct in one place (and
- * unit-tested — previously there was no coverage of the eviction path).
+ * Written for the per-request Python transcription runner, which is gone; no
+ * code in `src/` uses it now. Kept, with its tests, as a ready-made capped
+ * accumulator for child-process output.
  *
- * Semantics match the prior python-runner `push()`:
+ * Semantics:
  *   - append the chunk; if total exceeds `maxBytes`, drop whole leading
  *     chunks (and a partial slice of the new head) until back under cap,
  *     so the buffer always holds the most recent `maxBytes` bytes.

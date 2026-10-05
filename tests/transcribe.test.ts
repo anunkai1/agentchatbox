@@ -106,7 +106,8 @@ describe("transcribe router", () => {
 		const resp = await postAudio(base, Buffer.from("audio"));
 		expect(resp.status).toBe(502);
 		const body = (await resp.json()) as { error?: string };
-		expect(body.error).toContain("all stt daemons failed");
+		expect(body.error).toBe("all stt daemons failed");
+		expect(JSON.stringify(body)).not.toContain(".test:");
 	});
 
 	it("400s without an audio field", async () => {

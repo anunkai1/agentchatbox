@@ -40,7 +40,7 @@ export interface ServerConfig {
 	wsMaxPayloadBytes: number;
 	/** Maximum time for a cold/resumed pi child to answer get_state. */
 	piReadyTimeoutMs: number;
-	/** OpenAI key, used for Whisper transcription of voice notes. */
+	/** OpenAI key. Nothing in ACB reads it now: voice notes go to the pi-stt-server daemons. */
 	openaiApiKey: string | undefined;
 	/**
 	 * Path to the `pi` CLI binary. Default "pi" (resolved via $PATH).

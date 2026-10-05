@@ -124,7 +124,7 @@ export interface HealthInfo {
 	 * ("provider/modelId"), used so the TTS banner names the model actually
 	 * doing the rewrite, not the session model. */
 	voiceRewriteModel?: string;
-	/** Whisper (STT) model id in use (e.g. "base", "medium"). Display-only. */
+	/** Speech-to-text model id in use, as reported by the daemon. Display-only. (Field keeps its old "whisper" name for compatibility.) */
 	whisperModel?: string;
 	/** Resolved image-generation model (pi-venice-image), with provenance:
 	 * "override" = ~/.config/acb/image-model, "env" = VENICE_IMAGE_MODEL,

@@ -1,8 +1,7 @@
 /**
- * BoundedBuffer — the byte-capped accumulator extracted from python-runner.
+ * BoundedBuffer — the byte-capped accumulator for child-process output.
  *
- * Covers the eviction path that previously had zero coverage (the ring-buffer
- * math lived inline in python-runner.ts with no test). Locks in: appends up to
+ * Covers the eviction path. Locks in: appends up to
  * the cap, evicts leading bytes past the cap, flags truncation, and only
  * appends the marker when actually truncated.
  */

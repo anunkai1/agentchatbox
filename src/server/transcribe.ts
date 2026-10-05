@@ -27,6 +27,7 @@ import express, { type Request, type Response, type Router } from "express";
 import multer from "multer";
 import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
+import { log } from "./logger.js";
 
 const upload = multer({
 	storage: multer.memoryStorage(),
@@ -37,8 +38,12 @@ const upload = multer({
 const DEFAULT_PRIMARY_URL = "http://127.0.0.1:8183";
 const DEFAULT_FALLBACK_URL = "http://127.0.0.1:8182";
 
-/** Bounded wait for a daemon answer — transcription is seconds, not minutes. */
-const STT_TIMEOUT_MS = Number(process.env.STT_CLIENT_TIMEOUT_MS) || 120_000;
+/**
+ * Bounded wait for one daemon's answer. Voice notes transcribe in seconds, and
+ * both daemons are tried in turn, so a hung one should hand over quickly
+ * rather than keep the user waiting minutes.
+ */
+const STT_TIMEOUT_MS = Number(process.env.STT_CLIENT_TIMEOUT_MS) || 30_000;
 
 const HEALTH_CACHE_MS = 60 * 1000;
 
@@ -131,7 +136,9 @@ export function createTranscribeRouter(): Router {
 				}
 				failures.push(result.error);
 			}
-			res.status(502).json({ error: `all stt daemons failed: ${failures.join("; ")}` });
+			// The detail names internal addresses, so it goes to the log, not the browser.
+			log.error("transcription failed on every daemon", { failures });
+			res.status(502).json({ error: "all stt daemons failed" });
 		}),
 	);
 
@@ -145,9 +152,9 @@ export function createTranscribeRouter(): Router {
 // loading is triggered by a probe), so probing both is fine.
 // ---------------------------------------------------------------------------
 
-export const checkWhisperAvailable = createCachedProbe(HEALTH_CACHE_MS, computeWhisperAvailable);
+export const checkSttAvailable = createCachedProbe(HEALTH_CACHE_MS, computeSttAvailable);
 
-async function computeWhisperAvailable(): Promise<{
+async function computeSttAvailable(): Promise<{
 	available: boolean;
 	reason?: string;
 	engine?: string;

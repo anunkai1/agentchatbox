@@ -1,8 +1,8 @@
 /**
  * A tiny TTL cache for expensive health probes.
  *
- * Both the TTS and the Whisper health checks share the exact same shape:
- * a slow computation (spawning Python / hitting an upstream health
+ * Both the TTS and the speech-to-text health checks share the exact same shape:
+ * a slow computation (hitting an upstream daemon's health
  * endpoint) whose result should be reused for a minute so /api/health
  * doesn't re-run it on every browser poll, with a single in-flight
  * promise so concurrent callers share one probe. This helper factors

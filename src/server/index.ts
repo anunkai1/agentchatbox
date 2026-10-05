@@ -39,7 +39,7 @@ import {
 } from "./session-list.js";
 import { registry } from "./session-registry.js";
 import { staticCacheControl } from "./static-cache.js";
-import { checkWhisperAvailable, createTranscribeRouter } from "./transcribe.js";
+import { checkSttAvailable, createTranscribeRouter } from "./transcribe.js";
 import { checkTtsAvailable, createTtsRouter } from "./tts.js";
 import { UploadStore } from "./upload-store.js";
 import { createUploadsRouter } from "./uploads.js";
@@ -365,17 +365,17 @@ function readVisionModel(): {
 	return { model, source, mode };
 }
 
-// Health check. Reports configured provider keys, local Whisper, local TTS,
+// Health check. Reports configured provider keys, speech-to-text, local TTS,
 // and the running commit hash (so an operator can verify the live process
 // is on the expected tree). Cross-check against
 // `git -C /home/lepton/agentchatbox rev-parse HEAD` on the host.
 app.get(
 	"/api/health",
 	asyncHandler(async (_req, res) => {
-		const whisper = await checkWhisperAvailable();
+		const whisper = await checkSttAvailable();
 		const tts = await checkTtsAvailable();
 		// Semantic session search is an optional, pluggable feature. Probe it the
-		// same way we probe Whisper/TTS so the UI can show/hide the search box.
+		// same way we probe speech-to-text/TTS so the UI can show/hide the search box.
 		const search = await sessionSearch.isSearchAvailable();
 		res.json({
 			status: "ok",
@@ -563,8 +563,8 @@ const server = app.listen(config.port, config.host, () => {
 	// pre-running them at boot means the browser's first poll returns
 	// instantly from cache. Fire-and-forget — failure here just means the
 	// cache fills lazily on first request.
-	void checkWhisperAvailable().then((w) =>
-		log.info("whisper probe ready", { available: w.available, reason: w.reason }),
+	void checkSttAvailable().then((w) =>
+		log.info("stt probe ready", { available: w.available, reason: w.reason }),
 	);
 	void checkTtsAvailable().then((t) =>
 		log.info("tts probe ready", { available: t.available, voice: t.voice, reason: t.reason }),
