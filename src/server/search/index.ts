@@ -58,6 +58,9 @@ function ensureInit(): Promise<void> {
  */
 export const SEARCH_SWEEP_BUDGET_MS = 15_000;
 
+/** Pruning more than this many conversations at once, and over half the index, is treated as suspect. */
+const MAX_SUSPECT_PRUNE = 20;
+
 export function searchStatus() {
 	return { indexing: !!refresh, error: lastError, progress };
 }
@@ -75,7 +78,19 @@ export function refreshSearchIndex(): Promise<void> {
 				...new Set([config.piCwd, ...listProjects().map((p) => p.cwd)]),
 			]);
 			const ids = new Set(sessions.map((s) => s.id));
-			for (const id of indexedSessionIds()) if (!ids.has(id)) await deleteSession(id);
+			const gone = indexedSessionIds().filter((id) => !ids.has(id));
+			// A listing that suddenly lacks most of the index is far likelier a failed read than
+			// hundreds of deletions; pruning on it would force a full, CPU-heavy re-embed.
+			if (gone.length > MAX_SUSPECT_PRUNE && gone.length * 2 > indexedSessionIds().length) {
+				log.warn("search prune skipped: listing is missing most indexed conversations", {
+					missing: gone.length,
+					indexed: indexedSessionIds().length,
+					listed: sessions.length,
+				});
+			} else {
+				if (gone.length) log.info("search prune", { removed: gone.length });
+				for (const id of gone) await deleteSession(id);
+			}
 			let failed = 0;
 			// A fresh object per pass (not a mutation of the previous one) so a
 			// request in flight cannot read counters from the pass before it.

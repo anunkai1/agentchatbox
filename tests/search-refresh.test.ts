@@ -1,6 +1,14 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), index: vi.fn(), remove: vi.fn(), load: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	list: vi.fn(),
+	index: vi.fn(),
+	remove: vi.fn(),
+	load: vi.fn(),
+	ids: vi.fn(),
+	warn: vi.fn(),
+}));
+vi.mock("../src/server/logger.js", () => ({ log: { info: vi.fn(), warn: mocks.warn } }));
 vi.mock("../src/server/config.js", () => ({ config: { piCwd: "/global" } }));
 vi.mock("../src/server/projects.js", () => ({ listProjects: () => [{ cwd: "/project" }] }));
 vi.mock("../src/server/session-list.js", () => ({ listAllSessions: mocks.list }));
@@ -12,7 +20,7 @@ vi.mock("../src/server/search/embeddings.js", () => ({
 vi.mock("../src/server/search/store.js", () => ({
 	isStoreAvailable: async () => true,
 	loadCache: mocks.load,
-	indexedSessionIds: () => ["removed"],
+	indexedSessionIds: () => mocks.ids(),
 	deleteSession: mocks.remove,
 	searchVectors: vi.fn(),
 }));
@@ -23,6 +31,7 @@ beforeEach(() => {
 	mocks.load.mockResolvedValue(undefined);
 	vi.stubEnv("AGENTCHATBOX_SEARCH_ENABLED", "1");
 	mocks.list.mockReturnValue([{ id: "new" }]);
+	mocks.ids.mockReturnValue(["removed"]);
 });
 
 it("reconciles all projects and deletions on every refresh", async () => {
@@ -71,4 +80,26 @@ it("disabled search never opens the index", async () => {
 	const search = await import("../src/server/search/index.js");
 	await search.refreshSearchIndex();
 	expect(mocks.load).not.toHaveBeenCalled();
+});
+
+it("refuses to prune most of the index when the listing is suddenly short", async () => {
+	const indexed = Array.from({ length: 100 }, (_, i) => `s${i}`);
+	mocks.ids.mockReturnValue(indexed);
+	mocks.list.mockReturnValue(indexed.slice(0, 10).map((id) => ({ id })));
+	const search = await import("../src/server/search/index.js");
+	await search.refreshSearchIndex();
+	expect(mocks.remove).not.toHaveBeenCalled();
+	expect(mocks.warn).toHaveBeenCalledWith(
+		"search prune skipped: listing is missing most indexed conversations",
+		{ missing: 90, indexed: 100, listed: 10 },
+	);
+});
+
+it("still prunes a large but minority share of deleted conversations", async () => {
+	const indexed = Array.from({ length: 100 }, (_, i) => `s${i}`);
+	mocks.ids.mockReturnValue(indexed);
+	mocks.list.mockReturnValue(indexed.slice(30).map((id) => ({ id })));
+	const search = await import("../src/server/search/index.js");
+	await search.refreshSearchIndex();
+	expect(mocks.remove).toHaveBeenCalledTimes(30);
 });

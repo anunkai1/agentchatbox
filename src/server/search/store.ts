@@ -16,8 +16,9 @@
  * degrades to off. No regular dep on the core server.
  */
 
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { log } from "../logger.js";
 import { projectRoot } from "../paths.js";
 import { bufferToVector, EMBED_BATCH_SIZE, EMBEDDING_DIM, vectorToBuffer } from "./embeddings.js";
 
@@ -107,6 +108,25 @@ function defaultDbPath(): string {
 	return override ? resolve(override) : resolve(projectRoot, "data", "search.db");
 }
 
+function countSessions(database: Database): number {
+	return (database.prepare("SELECT COUNT(*) AS n FROM indexed_sessions").get() as { n: number }).n;
+}
+
+/** Copy the index aside before a wipe, keeping only the newest copy (the file is ~200 MB). */
+function backUpBeforeWipe(path: string, foundVersion: number): string | null {
+	try {
+		const dir = dirname(path);
+		const prefix = `${basename(path)}.pre-wipe-`;
+		for (const name of readdirSync(dir)) if (name.startsWith(prefix)) unlinkSync(join(dir, name));
+		const backup = `${path}.pre-wipe-v${foundVersion}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+		if (existsSync(path)) copyFileSync(path, backup);
+		return backup;
+	} catch (error) {
+		log.warn("search index backup failed", { error: String(error) });
+		return null;
+	}
+}
+
 /** Open (or reuse) the SQLite handle and create the schema. */
 export async function getDb(): Promise<Database> {
 	if (db) return db;
@@ -137,8 +157,20 @@ export async function getDb(): Promise<Database> {
 	`);
 	// Version 2 indexes overlapping conversational passages rather than truncated messages.
 	const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
-	if (version.user_version !== 2)
+	if (version.user_version !== 2) {
+		const sessions = countSessions(db);
+		// A wipe forces a full re-embed (minutes of full CPU), so say why it happened and
+		// keep the last copy for diagnosis. Fresh databases (version 0, no rows) are silent.
+		if (sessions > 0) {
+			log.warn("search index wiped: format version mismatch", {
+				foundVersion: version.user_version,
+				expectedVersion: 2,
+				sessions,
+				backup: backUpBeforeWipe(path, version.user_version),
+			});
+		}
 		db.exec("DELETE FROM embeddings; DELETE FROM indexed_sessions; PRAGMA user_version = 2;");
+	}
 	return db;
 }
 
