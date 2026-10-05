@@ -1,5 +1,6 @@
 #!/bin/sh
 # Run the same lint gate as CI before a commit lands, so formatting and import
-# order mistakes are caught here and not by a failed deploy.
+# order mistakes are caught here and not by a failed deploy. Only errors are
+# shown; warnings do not fail CI, so they stay quiet here.
 # Enable once per clone with: git config core.hooksPath .githooks
-exec npm run lint --silent
+exec npx --no-install biome check --diagnostic-level=error src/ extensions/
