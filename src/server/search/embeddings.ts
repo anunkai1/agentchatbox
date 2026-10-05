@@ -17,9 +17,17 @@ export const EMBED_THREADS = 2;
  */
 export const EMBED_BATCH_SIZE = 8;
 
+/**
+ * How long one request may wait for the worker before it is declared hung. The
+ * first request also covers loading the model (and downloading it on first use),
+ * so this is a hang detector with room to spare, not a speed target.
+ */
+export const EMBED_TIMEOUT_MS = Number(process.env.EMBED_TIMEOUT_MS) || 120_000;
+
 interface PendingEmbed {
 	resolve: (vectors: Float32Array[]) => void;
 	reject: (error: Error) => void;
+	timer?: NodeJS.Timeout;
 }
 
 // One lazily forked worker process owns the model. A crashed or exited worker
@@ -45,7 +53,10 @@ export async function isEmbeddingAvailable(): Promise<boolean> {
 function failWorker(w: ChildProcess, error: Error): void {
 	if (worker !== w) return;
 	worker = null;
-	for (const request of pending.values()) request.reject(error);
+	for (const request of pending.values()) {
+		clearTimeout(request.timer);
+		request.reject(error);
+	}
 	pending.clear();
 }
 
@@ -76,6 +87,7 @@ function getWorker(): ChildProcess {
 		const request = pending.get(msg.id);
 		if (!request) return;
 		pending.delete(msg.id);
+		clearTimeout(request.timer);
 		if (pending.size === 0) holdOpen(w, false);
 		if (msg.vectors) request.resolve(msg.vectors);
 		else request.reject(new Error(msg.error ?? "embedding failed"));
@@ -98,12 +110,27 @@ export function embedBatch(texts: string[]): Promise<Float32Array[]> {
 	const w = getWorker();
 	const id = nextId++;
 	return new Promise((resolve, reject) => {
-		pending.set(id, { resolve, reject });
+		const request: PendingEmbed = { resolve, reject };
+		pending.set(id, request);
 		holdOpen(w, true);
-		w.send({
-			id,
-			texts: texts.map((text) => (text.length > 2000 ? text.slice(0, 2000) : text)),
-		});
+		// A worker that stops answering would otherwise hold every request, and the
+		// index sweep behind them, until the server restarts. Replace it instead.
+		request.timer = setTimeout(() => {
+			failWorker(w, new Error(`embedding worker did not answer within ${EMBED_TIMEOUT_MS} ms`));
+			w.kill();
+		}, EMBED_TIMEOUT_MS);
+		try {
+			w.send({
+				id,
+				texts: texts.map((text) => (text.length > 2000 ? text.slice(0, 2000) : text)),
+			});
+		} catch (error) {
+			// The channel closed between spawn and send: nothing will ever reply.
+			clearTimeout(request.timer);
+			pending.delete(id);
+			if (pending.size === 0) holdOpen(w, false);
+			reject(error instanceof Error ? error : new Error(String(error)));
+		}
 	});
 }
 

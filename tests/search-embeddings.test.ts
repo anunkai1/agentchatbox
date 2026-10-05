@@ -104,6 +104,37 @@ describe("embedding worker client", () => {
 		expect(mocks.children).toHaveLength(1);
 	});
 
+	it("replaces a worker that stops answering, failing what it was holding", async () => {
+		vi.useFakeTimers();
+		try {
+			const { embedBatch, EMBED_TIMEOUT_MS } = await import("../src/server/search/embeddings.js");
+			const stuck = embedBatch(["a"]);
+			const alsoStuck = embedBatch(["b"]);
+			const failures = Promise.allSettled([stuck, alsoStuck]);
+			await vi.advanceTimersByTimeAsync(EMBED_TIMEOUT_MS);
+			expect((await failures).map((r) => r.status)).toEqual(["rejected", "rejected"]);
+			expect(mocks.children[0].kill).toHaveBeenCalled();
+
+			const next = embedBatch(["c"]);
+			expect(mocks.children).toHaveLength(2);
+			mocks.children[1].reply(0, 1);
+			expect(await next).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not leave a request waiting when the worker's channel has closed", async () => {
+		const { embedBatch } = await import("../src/server/search/embeddings.js");
+		const first = embedBatch(["a"]);
+		mocks.children[0].send = () => {
+			throw new Error("channel closed");
+		};
+		await expect(embedBatch(["b"])).rejects.toThrow("channel closed");
+		mocks.children[0].reply(0, 1);
+		expect(await first).toHaveLength(1);
+	});
+
 	it("stops the worker and fails its pending requests", async () => {
 		const { embedBatch, stopEmbeddingWorker } = await import("../src/server/search/embeddings.js");
 		const request = embedBatch(["a"]);
