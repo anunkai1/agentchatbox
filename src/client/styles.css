@@ -2168,6 +2168,10 @@ body.sidebar-resizing iframe {
 	background: var(--surface-hover);
 	color: var(--text);
 }
+.composer .icon-btn.voice-mode-on {
+	background: var(--accent-soft);
+	border-color: var(--accent-border);
+}
 .composer .input {
 	flex: 1;
 	resize: none;

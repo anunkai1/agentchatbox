@@ -41,6 +41,7 @@ export interface SessionPrefs {
 interface DisplayPrefs {
 	showThinking?: boolean;
 	showToolCalls?: boolean;
+	voiceMode?: boolean;
 }
 
 function key(sessionId: string): string {
@@ -120,6 +121,7 @@ export function applySessionPrefs(): void {
 	}
 
 	const display = loadDisplayDefaults();
+	state.voiceMode = display.voiceMode === true;
 	const hasLegacyDisplay =
 		typeof prefs.showThinking === "boolean" || typeof prefs.showToolCalls === "boolean";
 	if (typeof display.showThinking === "boolean") state.showThinking = display.showThinking;
@@ -143,6 +145,7 @@ export function saveSessionPrefs(): void {
 	saveDisplayDefaults({
 		showThinking: state.showThinking,
 		showToolCalls: state.showToolCalls,
+		voiceMode: state.voiceMode,
 	});
 
 	const id = state.sessionId;

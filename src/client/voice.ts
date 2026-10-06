@@ -30,6 +30,7 @@ import {
 	setStatusMessage,
 	showTtsBanner,
 } from "./render.js";
+import { services } from "./services.js";
 import { state } from "./state.js";
 import { chunkStartTime, trimChunkSilence } from "./tts-trim.js";
 
@@ -850,6 +851,8 @@ export async function handleVoiceRecord(): Promise<void> {
 		$<HTMLButtonElement>("#voice-btn").textContent = "🎙";
 		return;
 	}
+	// Voice mode: a reply still playing would be picked up by the mic.
+	if (state.voiceMode) stopAllVoice();
 	try {
 		const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 		recordedChunks = [];
@@ -898,7 +901,12 @@ export async function handleVoiceRecord(): Promise<void> {
 					ta.focus();
 				}
 				autoSize();
-				setStatusMessage(`transcribed (${text.length} chars). Press Enter to send.`);
+				if (state.voiceMode && text.trim()) {
+					setStatusMessage(`transcribed (${text.length} chars), sending…`);
+					services.submitComposer?.();
+				} else {
+					setStatusMessage(`transcribed (${text.length} chars). Press Enter to send.`);
+				}
 			} catch (err) {
 				appendError(`transcription failed: ${err instanceof Error ? err.message : String(err)}`);
 			} finally {

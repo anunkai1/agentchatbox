@@ -102,3 +102,18 @@ describe("chat display preferences", () => {
 		expect(state.showToolCalls).toBe(false);
 	});
 });
+
+describe("voice mode preference", () => {
+	it("is off by default and follows the device across sessions", () => {
+		applySessionPrefs();
+		expect(state.voiceMode).toBe(false);
+
+		state.voiceMode = true;
+		saveSessionPrefs();
+
+		state.sessionId = "another-session";
+		state.voiceMode = false;
+		applySessionPrefs();
+		expect(state.voiceMode).toBe(true);
+	});
+});

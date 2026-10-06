@@ -187,6 +187,12 @@ export interface AppState {
 	/** Whether tool-call cards and results are visible in the chat UI. */
 	showToolCalls: boolean;
 	/**
+	 * Voice mode (device-wide): a finished voice recording is sent without a
+	 * second press, and each finished reply is spoken (the Long variant) as soon
+	 * as its spoken text is generated.
+	 */
+	voiceMode: boolean;
+	/**
 	 * Human-readable label for the current image-generation model, shown
 	 * in the status overflow row. Updated by the pi-venice-image
 	 * extension's notify events; defaults to "default". ACB no longer
@@ -391,6 +397,7 @@ export const state: AppState = {
 	currentThinking: "high",
 	showThinking: false,
 	showToolCalls: false,
+	voiceMode: false,
 	pendingModelSet: null,
 	uploadedImages: new Map(),
 	connectionStatus: "connecting",

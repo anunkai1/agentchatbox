@@ -1479,6 +1479,7 @@ export function openOverflowMenu(): void {
 		isShown: () => boolean,
 		setShown: (shown: boolean) => void,
 		description: string,
+		labels: [on: string, off: string] = ["Shown", "Hidden"],
 	) => {
 		const value = el("span", { class: "overflow-value" });
 		const row = el("button", {
@@ -1488,7 +1489,7 @@ export function openOverflowMenu(): void {
 		});
 		const update = () => {
 			const shown = isShown();
-			value.textContent = shown ? "Shown" : "Hidden";
+			value.textContent = shown ? labels[0] : labels[1];
 			row.setAttribute("aria-pressed", String(shown));
 		};
 		row.append(
@@ -1617,6 +1618,15 @@ export function openOverflowMenu(): void {
 				state.currentImageModelLabel ?? "Default",
 				closeThen(() => services.sendSlashCommand?.("/imagemodel")),
 				"Choose image-generation model",
+			),
+			displayToggleRow(
+				"Voice mode",
+				() => state.voiceMode,
+				(on) => {
+					state.voiceMode = on;
+				},
+				"Send voice recordings automatically and speak each reply",
+				["On", "Off"],
 			),
 			actionRow(
 				"Voice",

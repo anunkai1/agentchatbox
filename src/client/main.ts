@@ -62,6 +62,7 @@ import {
 	scrollToBottom,
 	setStreaming,
 	showToast,
+	showTtsBanner,
 	syncDisplayPreferences,
 	syncSteerBadges,
 	syncStopButton,
@@ -92,6 +93,7 @@ import {
 	type PersistedMessage,
 	refreshCurrentModelLabel,
 	state,
+	voiceRewriteLabel,
 } from "./state.js";
 import { readSessionIdFromUrl, shareableSessionUrl, writeSessionIdToUrl } from "./url.js";
 import {
@@ -309,6 +311,33 @@ function sendAsUser(trimmed: string): boolean {
 	}
 	return true;
 }
+
+/**
+ * Timestamp of a finished run's last assistant reply, or null when there is
+ * nothing to speak (aborted, errored, or no text). It identifies the reply so
+ * voice mode voices each one only once.
+ */
+function voiceableReplyStamp(messages: unknown): number | null {
+	if (!Array.isArray(messages)) return null;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i] as {
+			role?: string;
+			stopReason?: string;
+			timestamp?: number;
+			content?: unknown;
+		};
+		if (m?.role !== "assistant") continue;
+		if (m.stopReason === "error" || m.stopReason === "aborted") return null;
+		const hasText =
+			Array.isArray(m.content) &&
+			m.content.some((b) => b?.type === "text" && typeof b.text === "string" && b.text.trim());
+		return hasText && typeof m.timestamp === "number" ? m.timestamp : null;
+	}
+	return null;
+}
+
+/** The reply voice mode last asked for, so a repeat agent_end cannot voice it twice. */
+let lastAutoVoicedStamp: number | null = null;
 
 /**
  * Wires `sendAsUser` to the boot-local chat client. It remains a module-level
@@ -741,6 +770,16 @@ function onEvent(event: Record<string, unknown>): void {
 			// which is the cadence that actually matters and avoids a request
 			// storm in a tool-heavy multi-turn run.
 			getSessionStatsHook();
+			// Voice mode: ask pi-voice-reply for the Long spoken variant of the
+			// reply that just finished; the voice-reply handler plays it on arrival.
+			if (state.voiceMode && !state.compaction && !state.isStreaming) {
+				const stamp = voiceableReplyStamp(e.messages);
+				if (stamp !== null && stamp !== lastAutoVoicedStamp) {
+					lastAutoVoicedStamp = stamp;
+					showTtsBanner(`Long TTS · generating spoken text via ${voiceRewriteLabel()}…`);
+					sendPromptHook("/voice-last long");
+				}
+			}
 			break;
 
 		case "turn_start":
@@ -1840,6 +1879,7 @@ async function boot(): Promise<void> {
 		sendSlashCommand: (text) => {
 			sendPromptHook(text);
 		},
+		submitComposer: handleSend,
 		sendPrompt: (text) => sendAsUser(text),
 		copyText,
 		copyShareLink: () => {

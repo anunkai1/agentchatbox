@@ -20,6 +20,8 @@ export interface ClientServices {
 	forkFromMessage(messageCount: number): void;
 	/** Send a slash command / prompt with no local echo (voice-reply button). */
 	sendSlashCommand(text: string): void;
+	/** Send the composer's contents exactly as pressing Enter would (voice-mode auto-send). */
+	submitComposer(): void;
 	/** Send a normal user prompt from an inline response action. */
 	sendPrompt(text: string): boolean;
 	/** Copy text using the browser clipboard with the app fallback. */

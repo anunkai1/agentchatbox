@@ -381,6 +381,14 @@ export function syncDisplayPreferences(): void {
 		node.classList.toggle("display-hidden", thinkingHidden);
 		node.setAttribute("aria-hidden", String(thinkingHidden));
 	}
+	const voiceBtn = document.querySelector<HTMLElement>("#voice-btn");
+	voiceBtn?.classList.toggle("voice-mode-on", state.voiceMode);
+	voiceBtn?.setAttribute(
+		"title",
+		state.voiceMode
+			? "Voice mode on: sends when you stop talking, and replies are spoken"
+			: "Voice note (transcribes locally on server)",
+	);
 	const toolsHidden = !state.showToolCalls;
 	for (const node of document.querySelectorAll<HTMLElement>("#messages .row-tool")) {
 		node.classList.toggle("display-hidden", toolsHidden);
