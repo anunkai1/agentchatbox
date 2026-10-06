@@ -305,7 +305,7 @@ they decide *what* to say (pi-voice-reply) and *how* to say it (pi-voice-server)
 
 - [pi-voice-server](https://github.com/anunkai1/pi-voice-server) — minimal **Kokoro-82M** TTS HTTP server. `/api/tts` and `/api/tts/stream` proxy here for actual speech synthesis (loads one model, keeps it warm, serializes calls, streams chunks so playback starts before synthesis finishes).
 - [pi-voice-reply](https://github.com/anunkai1/pi-voice-reply) — `pi` extension producing spoken-summary voice replies (long listenable + short concise rewrites via the same model that produced the reply). Requested with `/voice-last` (the speak buttons and Voice mode).
-- **Voice mode** (Settings → Media → Voice mode, device-wide): a recording ends by itself after 3 s of silence after speech (7 s if none was heard) and is sent without pressing Enter, and each finished reply is spoken automatically (the Long variant, via `/voice-last long`).
+- **Voice mode** (Settings → Media → Voice mode, device-wide): a recording ends by itself after 3 s of silence after speech (7 s if none was heard) and is sent without pressing Enter, and each finished reply is spoken automatically (the Long variant, via `/voice-last long`) in the visible tab only.
 
 ### Upstream
 
