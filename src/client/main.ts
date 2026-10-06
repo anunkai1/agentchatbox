@@ -854,7 +854,7 @@ function onEvent(event: Record<string, unknown>): void {
 						).details ?? {};
 					// Which reply is this variant about? The extension voices the
 					// message a --match hint names (the row whose button was pressed)
-					// and echoes the hint back; without one (keyword trigger, or an
+					// and echoes the hint back; without one (Voice mode, or an
 					// older extension) it is the newest reply, as before.
 					const hint = typeof details.match === "string" ? details.match : "";
 					// Merge only the variant(s) this message carries, so
@@ -896,8 +896,8 @@ function onEvent(event: Record<string, unknown>): void {
 					// Auto-play. If a button initiated this (the variant wasn't
 					// generated yet at press time), honor the variant it picked
 					// and drive THAT button's label (spin → ⏹) via toggleSpeak
-					// so it's stoppable. Otherwise (keyword trigger like "reply
-					// in voice") default to long with no owning button. Falls
+					// so it's stoppable. Otherwise (Voice mode) default to
+					// long with no owning button. Falls
 					// back to whichever variant actually arrived if the requested
 					// one is empty.
 					const want = state.pendingVoiceVariant ?? "long";
