@@ -764,11 +764,10 @@ let mediaRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let recordingStart = 0;
 
-/**
- * A recording stops after this long without speech: one that never heard any is
- * dropped, one that did is transcribed as normal.
- */
-const SILENCE_TIMEOUT_MS = 7_000;
+/** A recording that has heard no speech this long after the button press is dropped. */
+const NO_SPEECH_TIMEOUT_MS = 7_000;
+/** After speech, this much silence ends the recording and it is transcribed as normal. */
+const END_OF_SPEECH_SILENCE_MS = 3_000;
 /**
  * Mic level (RMS, 0..1) that counts as speech. Deliberately low: if it is too
  * high a real recording is lost, if it is too low a noisy room just never times
@@ -782,10 +781,11 @@ let stopSpeechWatch: (() => void) | null = null;
 let discardRecording = false;
 
 /**
- * Watches the mic level of `stream` and calls `onTimeout` once SILENCE_TIMEOUT_MS
- * pass without speech (counted from the start, then from the last speech),
- * saying whether any speech was heard at all. The monitor is a side channel (an AnalyserNode
- * beside MediaRecorder), so a failure to set it up leaves recording untouched.
+ * Watches the mic level of `stream` and calls `onTimeout` when no speech has been
+ * heard for NO_SPEECH_TIMEOUT_MS from the start, or for END_OF_SPEECH_SILENCE_MS
+ * after the last speech, saying whether any speech was heard at all. The monitor
+ * is a side channel (an AnalyserNode beside MediaRecorder), so a failure to set
+ * it up leaves recording untouched.
  */
 function watchForSpeech(
 	stream: MediaStream,
@@ -812,7 +812,10 @@ function watchForSpeech(
 		if (Math.sqrt(sum / samples.length) >= SPEECH_RMS_THRESHOLD) {
 			heardSpeech = true;
 			lastSoundAt = Date.now();
-		} else if (ctx.state === "running" && Date.now() - lastSoundAt >= SILENCE_TIMEOUT_MS) {
+		} else if (
+			ctx.state === "running" &&
+			Date.now() - lastSoundAt >= (heardSpeech ? END_OF_SPEECH_SILENCE_MS : NO_SPEECH_TIMEOUT_MS)
+		) {
 			stop();
 			onTimeout(heardSpeech);
 		}
@@ -867,7 +870,7 @@ export async function handleVoiceRecord(): Promise<void> {
 			});
 			if (discardRecording) {
 				discardRecording = false;
-				setStatusMessage(`no speech heard in ${SILENCE_TIMEOUT_MS / 1000}s, recording stopped`);
+				setStatusMessage(`no speech heard in ${NO_SPEECH_TIMEOUT_MS / 1000}s, recording stopped`);
 				return;
 			}
 			const blob = new Blob(recordedChunks, { type: "audio/webm" });
