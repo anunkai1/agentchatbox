@@ -764,6 +764,57 @@ let mediaRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let recordingStart = 0;
 
+/** A recording that hears no speech this long after the button press is dropped. */
+const NO_SPEECH_TIMEOUT_MS = 7_000;
+/**
+ * Mic level (RMS, 0..1) that counts as speech. Deliberately low: if it is too
+ * high a real recording is lost, if it is too low a noisy room just never times
+ * out, which is the old behaviour.
+ */
+const SPEECH_RMS_THRESHOLD = 0.01;
+
+/** Tears down the level monitor of the current recording, if any. */
+let stopSpeechWatch: (() => void) | null = null;
+/** Set when the no-speech timeout ended the recording: onstop then skips transcription. */
+let discardRecording = false;
+
+/**
+ * Watches the mic level of `stream` and calls `onTimeout` if no speech is heard
+ * within NO_SPEECH_TIMEOUT_MS. The monitor is a side channel (an AnalyserNode
+ * beside MediaRecorder), so a failure to set it up leaves recording untouched.
+ */
+function watchForSpeech(stream: MediaStream, onTimeout: () => void): () => void {
+	let ctx: AudioContext;
+	try {
+		ctx = new AudioContext();
+	} catch {
+		return () => {};
+	}
+	const analyser = ctx.createAnalyser();
+	analyser.fftSize = 1024;
+	ctx.createMediaStreamSource(stream).connect(analyser);
+	// A suspended context reads silence; never time out on that.
+	void ctx.resume().catch(() => {});
+	const samples = new Float32Array(analyser.fftSize);
+	const startedAt = Date.now();
+	const timer = setInterval(() => {
+		analyser.getFloatTimeDomainData(samples);
+		let sum = 0;
+		for (const v of samples) sum += v * v;
+		if (Math.sqrt(sum / samples.length) >= SPEECH_RMS_THRESHOLD) {
+			stop();
+		} else if (ctx.state === "running" && Date.now() - startedAt >= NO_SPEECH_TIMEOUT_MS) {
+			stop();
+			onTimeout();
+		}
+	}, 50);
+	function stop(): void {
+		clearInterval(timer);
+		void ctx.close();
+	}
+	return stop;
+}
+
 /**
  * True while a finished recording is being transcribed. The mic button flips
  * back to 🎙 the moment recording stops, but the transcription round-trip takes
@@ -795,6 +846,8 @@ export async function handleVoiceRecord(): Promise<void> {
 			if (e.data.size > 0) recordedChunks.push(e.data);
 		};
 		mediaRecorder.onstop = async () => {
+			stopSpeechWatch?.();
+			stopSpeechWatch = null;
 			// Canonical teardown: ensure the mic button reverts to its
 			// idle icon no matter how recording stopped (button click,
 			// an OS/permission revoke, etc.).
@@ -803,6 +856,11 @@ export async function handleVoiceRecord(): Promise<void> {
 			stream.getTracks().forEach((t) => {
 				t.stop();
 			});
+			if (discardRecording) {
+				discardRecording = false;
+				setStatusMessage(`no speech heard in ${NO_SPEECH_TIMEOUT_MS / 1000}s, recording stopped`);
+				return;
+			}
 			const blob = new Blob(recordedChunks, { type: "audio/webm" });
 			const secs = (Date.now() - recordingStart) / 1000;
 			setStatusMessage(`transcribing ${secs.toFixed(1)}s of audio…`);
@@ -837,7 +895,13 @@ export async function handleVoiceRecord(): Promise<void> {
 			}
 		};
 		recordingStart = Date.now();
+		discardRecording = false;
 		mediaRecorder.start();
+		const recorder = mediaRecorder;
+		stopSpeechWatch = watchForSpeech(stream, () => {
+			discardRecording = true;
+			recorder.stop();
+		});
 		$<HTMLButtonElement>("#voice-btn").textContent = "🔴";
 		setStatusMessage("recording… click 🔴 to stop");
 	} catch (err) {
