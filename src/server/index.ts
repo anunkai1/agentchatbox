@@ -30,7 +30,7 @@ import { log } from "./logger.js";
 import { modelsCache } from "./models-cache.js";
 import { projectRoot } from "./paths.js";
 import { listProjects, readProjectInstructions } from "./projects.js";
-import { experimentSecurityHeaders, securityHeaders } from "./security.js";
+import { securityHeaders } from "./security.js";
 import {
 	findPiSessionFile,
 	findSessionCwd,
@@ -55,8 +55,6 @@ uploadStore.recoverAbandonedUploads();
 const app = express();
 app.disable("x-powered-by");
 app.use(securityHeaders);
-// Loosen connect-src only for self-contained /experiments/ pages (market data).
-app.use(experimentSecurityHeaders);
 // Deliberately no CORS middleware: every browser API is same-origin. Omitting
 // ACAO is the fail-closed policy for credentialed cross-origin requests.
 app.use(express.json({ limit: "2mb", strict: true }));

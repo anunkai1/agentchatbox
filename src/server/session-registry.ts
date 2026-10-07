@@ -396,8 +396,7 @@ class SessionRegistry {
 		if (this.entries.size + this.pending.size >= config.maxLiveSessions) {
 			throw new Error(`live session limit reached (${config.maxLiveSessions})`);
 		}
-		const apiKey = getServerApiKey(init.provider);
-		if (!apiKey) {
+		if (!getServerApiKey(init.provider)) {
 			throw new Error(
 				`no API key for provider "${init.provider}" — set one in .env or pick a different provider`,
 			);
@@ -406,7 +405,6 @@ class SessionRegistry {
 			bin: config.piBin,
 			provider: init.provider,
 			modelId: init.modelId,
-			apiKey,
 			cwd: init.cwd ?? config.piCwd,
 			sessionId: init.sessionId,
 			thinkingLevel: init.thinkingLevel,

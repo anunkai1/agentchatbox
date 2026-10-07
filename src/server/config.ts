@@ -40,8 +40,6 @@ export interface ServerConfig {
 	wsMaxPayloadBytes: number;
 	/** Maximum time for a cold/resumed pi child to answer get_state. */
 	piReadyTimeoutMs: number;
-	/** OpenAI key. Nothing in ACB reads it now: voice notes go to the pi-stt-server daemons. */
-	openaiApiKey: string | undefined;
 	/**
 	 * Path to the `pi` CLI binary. Default "pi" (resolved via $PATH).
 	 * Overridable via PI_BIN for tests (point at a fake-pi.sh fixture).
@@ -61,11 +59,6 @@ export interface ServerConfig {
 	 * owns or recursively deletes their directories.
 	 */
 	trustedExternalProjects: ReadonlyMap<string, string>;
-}
-
-function readKey(name: string): string | undefined {
-	const v = process.env[name];
-	return v && v.trim().length > 0 ? v.trim() : undefined;
 }
 
 function positiveInt(name: string, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
@@ -189,7 +182,6 @@ export const config: ServerConfig = {
 		64 * 1024 * 1024,
 	),
 	piReadyTimeoutMs: positiveInt("AGENTCHATBOX_PI_READY_TIMEOUT_MS", 30_000, 120_000),
-	openaiApiKey: readKey("OPENAI_API_KEY"),
 	// `piBin` and `piCwd` are read lazily — they need to reflect the
 	// process state at boot time, not at module-load time (which could
 	// be any time the module is imported, e.g. during a test). A

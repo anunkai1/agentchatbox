@@ -82,8 +82,7 @@ class ModelsCache {
 			log.warn("models cache probe skipped: no provider with API key");
 			return;
 		}
-		const apiKey = getServerApiKey(start.provider);
-		if (!apiKey) {
+		if (!getServerApiKey(start.provider)) {
 			log.warn("models cache probe skipped: no API key for boot probe provider", {
 				provider: start.provider,
 			});
@@ -94,7 +93,6 @@ class ModelsCache {
 			bin: config.piBin,
 			provider: start.provider,
 			modelId: start.modelId,
-			apiKey,
 			cwd: config.piCwd,
 		});
 

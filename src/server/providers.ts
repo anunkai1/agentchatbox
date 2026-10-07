@@ -43,8 +43,6 @@ export const PROVIDER_KEYS = [
 	"venice",
 ] as const;
 
-export type SupportedProvider = (typeof PROVIDER_KEYS)[number];
-
 /**
  * Subset of PROVIDER_KEYS that map to SDK-registered providers (i.e.
  * providers that have a real entry in @earendil-works/pi-ai's MODELS

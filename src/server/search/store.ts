@@ -31,15 +31,6 @@ export interface IndexedSessionMeta {
 	modifiedAt: string;
 }
 
-export interface EmbeddedRow {
-	sessionId: string;
-	msgIdx: number;
-	role: string;
-	text: string;
-	vector: Float32Array;
-	createdAt: string;
-}
-
 export interface SearchHit {
 	sessionId: string;
 	msgIdx: number;
@@ -425,13 +416,5 @@ function toHit(m: CacheMeta, similarity: number): SearchHit {
 		title: meta?.title ?? "",
 		modifiedAt: meta?.modifiedAt ?? m.createdAt,
 		messageCount: meta?.msgCount ?? 0,
-	};
-}
-
-export function getCacheStats(): { count: number; memoryMb: number; sessions: number } {
-	return {
-		count: cacheMeta.length,
-		memoryMb: Math.round((cacheVectors.byteLength / 1024 / 1024) * 10) / 10,
-		sessions: sessionMeta.size,
 	};
 }

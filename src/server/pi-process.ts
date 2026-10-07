@@ -65,10 +65,6 @@ export interface PiProcessOptions {
 	thinkingLevel?: string;
 	/** Optional session id to resume. Omit to start a fresh session. */
 	sessionId?: string;
-	/** API key for the provider. Used ONLY by the registry's spawn gate
-	 * (it reads auth.json via `getServerApiKey` and refuses to spawn if
-	 * absent). This value is not explicitly added to argv or env. */
-	apiKey: string;
 	/** Working directory — the project root `pi` treats as the session scope. */
 	cwd: string;
 	/**

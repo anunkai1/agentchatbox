@@ -40,13 +40,15 @@ setTimeout(() => {}, 1000);
 			bin,
 			provider: "zai",
 			modelId: "glm-5.2",
-			apiKey: "test-dummy",
 			cwd: dir,
 		});
 		children.push(child);
 
 		const event = await new Promise<Record<string, unknown>>((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error("timed out waiting for large RPC line")), 15_000);
+			const timer = setTimeout(
+				() => reject(new Error("timed out waiting for large RPC line")),
+				15_000,
+			);
 			child.on("event", (line) => {
 				clearTimeout(timer);
 				resolve(line);
@@ -73,7 +75,6 @@ setTimeout(() => {}, 1000);
 			provider: "zai",
 			modelId: "glm-5.2",
 			thinkingLevel: "high",
-			apiKey: "test-dummy",
 			cwd: dir,
 		});
 		children.push(child);
