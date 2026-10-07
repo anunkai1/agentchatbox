@@ -46,4 +46,18 @@ describe("upload route", () => {
 		expect(statSync(`${root}/${filename}`).mode & 0o777).toBe(0o600);
 		expect(readdirSync(root).filter((name) => name.startsWith(".acb-upload-"))).toEqual([]);
 	});
+
+	it("returns non-ASCII names intact and swaps square brackets for parentheses", async () => {
+		const { url } = await fixture();
+		for (const [sent, expected] of [
+			["файл-отчёт.txt", "файл-отчёт.txt"],
+			["résumé.pdf", "résumé.pdf"],
+			["report [final].pdf", "report (final).pdf"],
+		]) {
+			const form = new FormData();
+			form.append("file", new Blob(["x"]), sent);
+			const response = await fetch(url, { method: "POST", body: form });
+			expect(((await response.json()) as { filename: string }).filename).toBe(expected);
+		}
+	});
 });

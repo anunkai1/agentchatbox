@@ -21,6 +21,8 @@ export function safeExtension(name: string): string {
 export function createUploadsRouter(store: UploadStore): Router {
 	const router = express.Router();
 	const upload = multer({
+		// Browsers send file names as UTF-8; multer decodes them as latin1 by default.
+		defParamCharset: "utf8",
 		storage: multer.diskStorage({
 			destination: (_req, _file, callback) => callback(null, store.tempDir),
 			filename: (req, _file, callback) => {
@@ -82,7 +84,8 @@ export function createUploadsRouter(store: UploadStore): Router {
 				const id = filename.slice(0, filename.length - ext.length);
 				const response: UploadResponse = {
 					id,
-					filename: file.originalname.slice(0, 1024),
+					// The name becomes a markdown link label, where square brackets would break the link.
+					filename: file.originalname.slice(0, 1024).replace(/\[/g, "(").replace(/\]/g, ")"),
 					mimeType: file.mimetype || "application/octet-stream",
 					size: file.size,
 					url: `/uploads/${filename}`,
