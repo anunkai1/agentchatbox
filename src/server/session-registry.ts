@@ -209,6 +209,16 @@ type StatusSession = Pick<
 	"ready" | "init" | "busy" | "streaming" | "compaction" | "lastCompaction" | "statusFrames"
 >;
 
+/** The claude-delegate extension holds "claude-progress" set for exactly the duration of a run. */
+function hasClaudeRun(session: Pick<LiveSession, "statusFrames">): boolean {
+	return session.statusFrames.has("claude-progress");
+}
+
+/** Work that must never be reaped: a pi turn or run, or a detached /cc run. */
+function isWorking(session: Pick<LiveSession, "busy" | "streaming" | "statusFrames">): boolean {
+	return session.busy || session.streaming || hasClaudeRun(session);
+}
+
 /** Pure transport projection, split out so its public contract is regression-tested. */
 export function buildStatusSnapshot(
 	entries: Iterable<readonly [string, StatusSession]>,
@@ -225,9 +235,7 @@ export function buildStatusSnapshot(
 			streaming: session.streaming,
 			compaction: session.compaction,
 			lastCompaction: session.lastCompaction,
-			// The claude-delegate extension holds "claude-progress" set for exactly
-			// the duration of a run and clears it when the run ends.
-			claude: session.statusFrames.has("claude-progress"),
+			claude: hasClaudeRun(session),
 		});
 	}
 	return out;
@@ -383,7 +391,7 @@ class SessionRegistry {
 		// attached, or between-turn sessions are never sacrificed for capacity.
 		for (const candidate of this.entries.values()) {
 			if (this.entries.size + this.pending.size < config.maxLiveSessions) break;
-			if (!candidate.ws && !candidate.busy && !candidate.streaming) this.kill(candidate);
+			if (!candidate.ws && !isWorking(candidate)) this.kill(candidate);
 		}
 		if (this.entries.size + this.pending.size >= config.maxLiveSessions) {
 			throw new Error(`live session limit reached (${config.maxLiveSessions})`);
@@ -602,7 +610,7 @@ class SessionRegistry {
 	 */
 	detach(session: LiveSession, ws: PiSocket): void {
 		if (session.ws === ws) session.ws = null;
-		if (!session.busy && !session.streaming) this.scheduleIdleReap(session);
+		if (!isWorking(session)) this.scheduleIdleReap(session);
 	}
 
 	/** Force-kill a session and remove it from the registry. */
@@ -693,6 +701,8 @@ class SessionRegistry {
 		) {
 			if (typeof line.statusText === "string") session.statusFrames.set(line.statusKey, line);
 			else session.statusFrames.delete(line.statusKey);
+			// A detached /cc run that just finished leaves the session idle.
+			if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
 		}
 
 		// Keep the transport's model snapshot current after an extension-triggered
@@ -890,7 +900,7 @@ class SessionRegistry {
 		} else if (line.type === "agent_end") {
 			void refreshSearchIndex();
 			session.streaming = false;
-			if (!session.ws && !session.busy) this.scheduleIdleReap(session);
+			if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
 		}
 		if (line.type === "turn_start") {
 			session.busy = true;
@@ -928,7 +938,7 @@ class SessionRegistry {
 				if (removed) session.currentTurnBytes -= eventBytes(removed);
 			}
 			session.busy = false;
-			if (!session.ws && !session.streaming) this.scheduleIdleReap(session);
+			if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
 		}
 
 		if (line.type === "session_info_changed") {
@@ -1007,7 +1017,7 @@ class SessionRegistry {
 		if (!session.sessionId) return; // not ready yet — nothing to reap
 		session.idleTimer = setTimeout(() => {
 			session.idleTimer = null;
-			if (!session.ws && !session.busy && !session.streaming) {
+			if (!session.ws && !isWorking(session)) {
 				log.info("idle session grace expired; reaping", { sessionId: session.sessionId });
 				this.kill(session);
 			}

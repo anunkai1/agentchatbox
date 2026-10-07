@@ -270,6 +270,30 @@ while IFS= read -r line; do
 done
 `;
 
+const CLAUDE_RUN_SCRIPT = `#!/usr/bin/env bash
+# Mimic a detached /cc run: the claude-delegate extension sets the
+# "claude-progress" status, pi itself emits no turn events (busy and streaming
+# stay false), and the status is cleared when the run ends.
+if [ -n "\${AGENTCHATBOX_FAKE_PI_MARKER}" ]; then
+  echo "$$" >> "\${AGENTCHATBOX_FAKE_PI_MARKER}"
+fi
+sleep 0.05
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"claude-run-session-001","messageCount":0}}'
+      ;;
+    "prompt")
+      echo '{"type":"response","command":"prompt","success":true}'
+      echo '{"type":"extension_ui_request","id":"s1","method":"setStatus","statusKey":"claude-progress","statusText":"working"}'
+      sleep 0.8
+      echo '{"type":"extension_ui_request","id":"s2","method":"setStatus","statusKey":"claude-progress"}'
+      ;;
+  esac
+done
+`;
+
 const RETRY_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that emits the auto_retry lifecycle on \`prompt\` and records
 # every command type it receives to the marker file. Used to prove two
@@ -485,6 +509,7 @@ function makeFakePi(
 		| "retry"
 		| "running"
 		| "between-turns"
+		| "claude-run"
 		| "set-model"
 		| "thinking-queue"
 		| "compact",
@@ -509,20 +534,22 @@ function makeFakePi(
 									: behavior === "compact"
 										? COMPACT_SCRIPT
 										: behavior === "running"
-										? RUNNING_SCRIPT
-										: behavior === "between-turns"
-											? BETWEEN_TURNS_SCRIPT
-											: behavior === "set-model"
-												? SET_MODEL_SCRIPT
-												: behavior === "thinking-queue"
-													? THINKING_QUEUE_SCRIPT
-													: behavior === "exit-after-read"
-														? EXIT_AFTER_FIRST_READ_SCRIPT
-														: behavior === "exit-after-delay"
-															? EXIT_AFTER_DELAY_SCRIPT
-															: behavior === "exit-after-ready"
-																? EXIT_AFTER_READY_SCRIPT
-																: EXIT_BEFORE_SESSION_SCRIPT;
+											? RUNNING_SCRIPT
+											: behavior === "between-turns"
+												? BETWEEN_TURNS_SCRIPT
+												: behavior === "claude-run"
+													? CLAUDE_RUN_SCRIPT
+													: behavior === "set-model"
+														? SET_MODEL_SCRIPT
+														: behavior === "thinking-queue"
+															? THINKING_QUEUE_SCRIPT
+															: behavior === "exit-after-read"
+																? EXIT_AFTER_FIRST_READ_SCRIPT
+																: behavior === "exit-after-delay"
+																	? EXIT_AFTER_DELAY_SCRIPT
+																	: behavior === "exit-after-ready"
+																		? EXIT_AFTER_READY_SCRIPT
+																		: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -769,7 +796,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 				const encoded = JSON.stringify(events);
 				expect(encoded).not.toContain("PRIVATE_");
 				expect(encoded).toContain("/uploads/photo.png");
-				expect(events.find((m) => (m.event as AnyMsg).type === "tool_execution_end")?.event).toEqual({
+				expect(
+					events.find((m) => (m.event as AnyMsg).type === "tool_execution_end")?.event,
+				).toEqual({
 					type: "tool_execution_end",
 					toolCallId: "call-1",
 					result: { content: [{ type: "text", text: "[photo](/uploads/photo.png)" }] },
@@ -1529,6 +1558,55 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 				process.kill(pid, "SIGKILL");
 			} catch {
 				/* already dead */
+			}
+		}
+		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+	});
+
+	it("does not reap a detached /cc run, then reaps it once the run ends", async () => {
+		fakePiPath = makeFakePi("claude-run");
+		process.env.PI_BIN = fakePiPath;
+		const markerDir = mkdtempSync(join(tmpdir(), "marker-"));
+		const marker = join(markerDir, "spawns");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		process.env.AGENTCHATBOX_IDLE_GRACE_MS = "250";
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const c1 = await connectClient();
+		try {
+			c1.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await c1.inbox.waitFor(1);
+			c1.ws.send(JSON.stringify({ type: "prompt", text: "long cc task" }));
+			await new Promise((r) => setTimeout(r, 150));
+			c1.close();
+
+			// Past the idle grace but inside the run: the child must survive.
+			await new Promise((r) => setTimeout(r, 450));
+			const [pid] = readPids(marker);
+			expect(pid).toBeDefined();
+			expect(isAlive(pid!)).toBe(true);
+
+			// Once the run clears its status, normal detached-idle cleanup resumes.
+			const deadline = Date.now() + 5000;
+			while (isAlive(pid!) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+			expect(isAlive(pid!)).toBe(false);
+		} finally {
+			c1.close();
+			for (const pid of readPids(marker)) {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
 			}
 		}
 		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
