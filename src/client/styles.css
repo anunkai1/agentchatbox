@@ -3148,10 +3148,23 @@ body.modal-open {
 	.header .header-voice {
 		gap: 0;
 	}
+	/* The 30px circle IS the button here, so an inner disc would draw a second
+	 * ring inside it. Drop the disc and let the button itself be the lamp: dim
+	 * with a grey V when off, solid accent with a dark V when on. */
 	.header-voice-v {
-		width: 18px;
-		height: 18px;
-		font-size: 10.5px;
+		width: auto;
+		height: auto;
+		border: none;
+		padding-bottom: 0;
+		font-size: 14px;
+	}
+	.header-voice.on .header-voice-v {
+		background: none;
+	}
+	.header-voice.on {
+		background: var(--accent);
+		border-color: var(--accent);
+		color: #1a0906;
 	}
 	.header-voice-label {
 		display: none;
