@@ -116,11 +116,6 @@ body {
 .sidebar.collapsed {
 	margin-left: calc(var(--sidebar-w) * -1);
 }
-/* Only one prominent New chat action is visible: the drawer owns it while
-   open; the main header takes over when the drawer is collapsed. */
-.sidebar:not(.collapsed) ~ .main .header-new-chat {
-	display: none;
-}
 
 .sidebar-header {
 	display: flex;
@@ -853,14 +848,16 @@ body.sidebar-resizing iframe {
 	color: #fff;
 }
 
-/* Primary new-chat action stays visible even while the sidebar is closed. */
-.header-new-chat {
+/* Voice mode on/off pill. Off is a quiet outline; on takes the accent, so the
+   state reads at a glance. On a phone the label is hidden, leaving the icon
+   and the colour to carry it. */
+.header-voice {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
-	background: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan));
-	border: 1px solid transparent;
-	color: #fff;
+	background: var(--surface-hover);
+	border: 1px solid var(--border);
+	color: var(--text-muted);
 	padding: 6px 10px;
 	border-radius: var(--radius-pill);
 	cursor: pointer;
@@ -868,21 +865,33 @@ body.sidebar-resizing iframe {
 	font-size: 13px;
 	font-weight: 600;
 	white-space: nowrap;
-	box-shadow: 0 2px 10px rgba(39, 196, 200, 0.16);
 	transition:
-		filter 0.12s,
-		box-shadow 0.12s;
+		background 0.12s,
+		border-color 0.12s,
+		color 0.12s;
 }
-.header-new-chat:link,
-.header-new-chat:visited,
-.header-new-chat:hover,
-.header-new-chat:active {
-	color: #fff;
-	text-decoration: none;
+.header-voice:hover {
+	color: var(--text);
 }
-.header-new-chat:hover {
-	filter: brightness(1.12);
-	box-shadow: 0 3px 14px rgba(39, 196, 200, 0.24);
+.header-voice.on {
+	background: var(--accent-soft);
+	border-color: var(--accent-border);
+	color: var(--accent);
+}
+.header-voice-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 0;
+}
+.header-voice .voice-on {
+	display: none;
+}
+.header-voice.on .voice-on {
+	display: inline;
+}
+.header-voice.on .voice-off {
+	display: none;
 }
 
 /* The "API ↗" header affordance — z.ai style icon-label-arrow button. */
@@ -3119,7 +3128,7 @@ body.modal-open {
 	 * its label crowd out the conversation title. */
 	/* Real 30px boxes (not transform: scale, which leaves a 44px layout box
 	 * and wide gaps); the .header prefix beats the touch-target minimums. */
-	.header .header-new-chat,
+	.header .header-voice,
 	.header .header-overflow,
 	.header .header-cc {
 		width: 30px;
@@ -3131,20 +3140,14 @@ body.modal-open {
 		border-radius: 50%;
 		flex-shrink: 0;
 	}
-	.header .header-new-chat {
+	.header .header-voice {
 		gap: 0;
 	}
-	.header-new-chat-icon svg {
+	.header-voice-icon svg {
 		width: 16px;
 		height: 16px;
 	}
-	.header-new-chat-icon {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		line-height: 0;
-	}
-	.header-new-chat-label {
+	.header-voice-label {
 		display: none;
 	}
 	/* Keep the settings action inside the viewport too. The text label is
@@ -4078,7 +4081,7 @@ select:focus-visible,
 	.send-btn,
 	.stop-btn,
 	.header .icon-btn,
-	.header-new-chat,
+	.header-voice,
 	.header-overflow {
 		min-width: 44px;
 		min-height: 44px;

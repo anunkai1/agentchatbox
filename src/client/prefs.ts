@@ -28,7 +28,9 @@
  */
 
 const PREFIX = "acb:prefs:";
-const DISPLAY_DEFAULTS_KEY = "acb:prefs:display-defaults";
+/** Device-wide (per browser) prefs. Exported so the `storage` listener in
+ * main.ts can recognise a change made by another tab. */
+export const DISPLAY_DEFAULTS_KEY = "acb:prefs:display-defaults";
 
 export interface SessionPrefs {
 	ttsVoice?: string | null;
@@ -154,4 +156,11 @@ export function saveSessionPrefs(): void {
 		ttsVoice: state.ttsVoice,
 		ttsSpeed: state.ttsSpeed,
 	});
+}
+
+/** Re-read the device-wide voice-mode flag. Voice mode is stored once per
+ * browser, so another tab can flip it while this one is open; the `storage`
+ * listener in main.ts calls this before repainting. */
+export function reloadVoiceMode(): void {
+	state.voiceMode = loadDisplayDefaults().voiceMode === true;
 }

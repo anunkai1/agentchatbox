@@ -389,6 +389,21 @@ export function syncDisplayPreferences(): void {
 			? "Voice mode on: sends when you stop talking, and replies are spoken"
 			: "Voice note (transcribes locally on server)",
 	);
+	const headerVoice = document.querySelector<HTMLElement>("#header-voice");
+	if (headerVoice) {
+		headerVoice.classList.toggle("on", state.voiceMode);
+		headerVoice.setAttribute("aria-pressed", String(state.voiceMode));
+		headerVoice.setAttribute(
+			"aria-label",
+			state.voiceMode ? "Voice mode is on" : "Voice mode is off",
+		);
+		headerVoice.setAttribute(
+			"title",
+			state.voiceMode
+				? "Voice mode on: recordings send when you stop talking, replies are spoken"
+				: "Voice mode off — click to turn on",
+		);
+	}
 	const toolsHidden = !state.showToolCalls;
 	for (const node of document.querySelectorAll<HTMLElement>("#messages .row-tool")) {
 		node.classList.toggle("display-hidden", toolsHidden);
@@ -1938,6 +1953,8 @@ export interface ShellHandlers {
 	openVoicePicker: () => void;
 	openSpeedPicker: () => void;
 	openOverflowMenu: () => void;
+	/** Toggle Voice mode from the header pill (mirrors the Settings row). */
+	toggleVoiceMode: () => void;
 	handleVoiceRecord: () => Promise<void>;
 	/** Stop all voice playback + cancel in-flight TTS (status-bar stop button). */
 	stopAllVoice: () => void;
@@ -2231,30 +2248,27 @@ export function renderShell(): void {
 			}),
 			el("span", { class: "title", id: "title" }, state.title),
 		),
-		// A real link makes middle-click / modifier-click open a fresh chat
-		// in another tab. Plain clicks stay in the SPA and start immediately.
+		// Voice mode on/off. Device-wide, like the Settings row it mirrors, so the
+		// pill keeps its state across sessions. Both the speaker icon and the accent
+		// fill change, so the state reads at a glance on a phone. Starting a new chat
+		// lives in the drawer behind the ☰ button.
 		el(
-			"a",
+			"button",
 			{
-				class: "header-new-chat",
-				id: "header-new-chat",
-				href: "/",
-				rel: "noopener",
-				title: "New chat — middle-click to open in a new tab",
-				ariaLabel: "New chat",
-				onclick: (e: MouseEvent) => {
-					if (e.button !== 0) return;
-					if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-					e.preventDefault();
-					shellHandlers?.newGlobalSession();
-				},
+				class: "header-voice",
+				id: "header-voice",
+				type: "button",
+				title: "Voice mode off — click to turn on",
+				"aria-label": "Voice mode is off",
+				"aria-pressed": "false",
+				onclick: () => shellHandlers?.toggleVoiceMode(),
 			},
 			el("span", {
-				class: "header-new-chat-icon",
+				class: "header-voice-icon",
 				"aria-hidden": "true",
-				html: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+				html: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.5 6.5 9H3v6h3.5L11 19.5z"/><path class="voice-on" d="M15.5 8.5a5 5 0 0 1 0 7"/><path class="voice-on" d="M18.5 5.5a9 9 0 0 1 0 13"/><path class="voice-off" d="m16 9.5 5 5"/><path class="voice-off" d="m21 9.5-5 5"/></svg>`,
 			}),
-			el("span", { class: "header-new-chat-label" }, "New chat"),
+			el("span", { class: "header-voice-label" }, "Voice"),
 		),
 		el("div", { class: "spacer" }),
 		// Per-chat Claude Code routing (/cc on|off). The extension owns the

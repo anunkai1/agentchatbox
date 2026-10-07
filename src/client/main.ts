@@ -33,7 +33,12 @@ import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
 import { type ExtensionUiResponder, handleExtensionUiRequest } from "./extension-ui.js";
 import { setRichText } from "./linkify.js";
-import { applySessionPrefs } from "./prefs.js";
+import {
+	applySessionPrefs,
+	DISPLAY_DEFAULTS_KEY,
+	reloadVoiceMode,
+	saveSessionPrefs,
+} from "./prefs.js";
 import { projectTranscript } from "./project.js";
 import {
 	appendAssistantPlaceholder,
@@ -1566,6 +1571,12 @@ async function boot(): Promise<void> {
 			resetChatState();
 			chatClient.newSession();
 		},
+		toggleVoiceMode: () => {
+			state.voiceMode = !state.voiceMode;
+			saveSessionPrefs();
+			syncDisplayPreferences();
+			showToast(state.voiceMode ? "Voice mode on" : "Voice mode off");
+		},
 		newSessionInProject: (projectId) => {
 			if (confirm("Start a new chat in this project?")) {
 				resetChatState();
@@ -1580,6 +1591,16 @@ async function boot(): Promise<void> {
 	registerShellHandlers(shellHandlers);
 
 	renderShell();
+
+	// Voice mode is device-wide, so another tab can flip it while this one sits
+	// open. `storage` fires only in the OTHER tabs, so re-read the flag there and
+	// repaint rather than trusting a stale copy. Switching the setting here is
+	// what writes the key, so this tab needs no handler of its own.
+	window.addEventListener("storage", (e) => {
+		if (e.key !== DISPLAY_DEFAULTS_KEY) return;
+		reloadVoiceMode();
+		syncDisplayPreferences();
+	});
 	// Paint the previous display-only sidebar snapshot before pi finishes
 	// starting. The authoritative WS response below replaces it shortly after.
 	if (cachedSidebar) {
