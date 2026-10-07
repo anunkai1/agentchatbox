@@ -98,7 +98,6 @@ export function setStreaming(s: boolean): void {
 			: !s && claudeRunActive()
 				? "Stop the Claude Code task"
 				: "Stop the current run";
-	if (!s) state.toolSpinner = null;
 	startOrStopWorkingTick(s);
 	refreshStatus();
 }

@@ -1018,14 +1018,8 @@ function onEvent(event: Record<string, unknown>): void {
 				// current regardless of when the paint lands.
 				scheduleStreamDom(lastAssistantDom, text, thinking);
 			}
-			// Update cost incrementally.
-			if (m?.usage) {
-				state.costTotal.input += m.usage.input;
-				state.costTotal.output += m.usage.output;
-				state.costTotal.cacheRead += m.usage.cacheRead;
-				state.costTotal.cacheWrite += m.usage.cacheWrite;
-				state.costTotal.cost += m.usage.cost?.total ?? 0;
-			}
+			// Cost is added once, at message_end: usage while streaming may be
+			// cumulative, so adding it here would double count.
 			// Don't repaint the status bar for every token. The model, thinking
 			// level and context fill are unchanged during a message, while
 			// replacing the status DOM on each update needlessly forces Android
@@ -1677,10 +1671,6 @@ async function boot(): Promise<void> {
 		syncCurrentSessionTitle(sessions);
 		saveSidebarCache();
 		renderSessionsIntoPicker(sessions);
-		// Derive which project the currently-viewed session belongs to, so
-		// the sidebar can highlight its folder.
-		const current = sessions.find((s) => s.id === state.sessionId);
-		if (current?.projectId) state.activeProjectId = current.projectId;
 		renderSidebarSessions(sessions);
 	});
 	chatClient.onProjectsUpdated((projects) => {
@@ -1917,15 +1907,6 @@ async function boot(): Promise<void> {
 				reasoning: m.reasoning,
 				thinkingLevels: m.thinkingLevels,
 			}));
-			// Fall back to the legacy single-provider shape if /api/models
-			// returns nothing (older server) — we still get *something* in
-			// the picker so the user isn't stuck.
-			if (state.availableModels.length === 0) {
-				state.availableModels = h.providers.map((p) => ({
-					id: "MiniMax-M3",
-					provider: p,
-				}));
-			}
 			refreshCurrentModelLabel();
 			refreshStatus();
 		})

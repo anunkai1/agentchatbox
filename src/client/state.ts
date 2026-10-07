@@ -112,16 +112,6 @@ export type PersistedMessage =
 	 */
 	| { kind: "steer"; text: string; delivered: boolean }
 	/**
-	 * A spoken-summary voice reply from the pi-voice-reply extension.
-	 * Emitted as a custom message (customType:"voice-reply") after a
-	 * turn where the user asked for voice. Contains two listenable
-	 * rewrites of the assistant's reply — a detailed long version and a
-	 * concise short version — which the browser renders as two speak
-	 * buttons. The actual TTS synthesis happens via the existing
-	 * /api/tts endpoint (Kokoro); this message only carries the words.
-	 */
-	| { kind: "voice-reply"; long: string; short: string }
-	/**
 	 * A display-only note injected by an extension via pi.sendMessage()
 	 * (customType:"note", display:true, no triggerTurn). No LLM turn is
 	 * involved — it's a way for a slash command to surface content
@@ -163,7 +153,6 @@ export interface AppState {
 	historyIdx: number | null; // null = at the "now" position
 	history: string[]; // user prompts typed in this session
 	isStreaming: boolean;
-	toolSpinner: HTMLElement | null;
 	costTotal: {
 		input: number;
 		output: number;
@@ -361,13 +350,6 @@ export interface AppState {
 	sessionCwd: string | null;
 	/** All known projects (folders with their own cwd + AGENTS.md). */
 	projects: ProjectSummary[];
-	/**
-	 * The project new chats start in (sidebar-highlighted folder).
-	 * Per your decision, a brand-new chat always starts in Global; this
-	 * tracks which folder the user has expanded/selected for visibility
-	 * and for the "+ New chat" target when they explicitly pick one.
-	 */
-	activeProjectId: string;
 }
 
 export interface ModelOption {
@@ -388,7 +370,6 @@ export const state: AppState = {
 	historyIdx: null,
 	history: [],
 	isStreaming: false,
-	toolSpinner: null,
 	costTotal: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
 	availableModels: [],
 	currentModelId: null,
@@ -428,7 +409,6 @@ export const state: AppState = {
 	compaction: null,
 	sessionCwd: null,
 	projects: [],
-	activeProjectId: "global",
 	capabilities: null,
 	contextUsage: null,
 	contextWarned: false,

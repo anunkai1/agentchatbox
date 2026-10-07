@@ -1024,9 +1024,8 @@ function currentModelThinkingLevels(): ThinkingLevel[] {
 	if (model?.thinkingLevels?.length) return model.thinkingLevels;
 	if (model?.reasoning === false) return ["off"];
 
-	// Compatibility fallback for an older /api/models response that predates
-	// per-model level metadata. Preserve ACB's former five-level picker rather
-	// than guessing that extended xhigh/max support exists.
+	// The model has no level metadata (or is not in the list yet): offer the
+	// standard five levels rather than guessing that xhigh/max are supported.
 	return ["off", "minimal", "low", "medium", "high"];
 }
 
@@ -1406,7 +1405,7 @@ export function openModelsPanel(): void {
 			"Text-to-speech",
 			`Synthesises audio for playback & voice replies. Engine: ${engine}.`,
 			modelLine(pill("env", "set"), `voice ${ttsVoice}`),
-			hint("switch voice → ", kbd("/voice"), " · engine via ", kbd("TTS_ENGINE")),
+			hint("switch voice → ", kbd("/voice")),
 			() => {
 				overlay.remove();
 				void openVoicePicker();
