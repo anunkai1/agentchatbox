@@ -21,8 +21,6 @@ export function safeExtension(name: string): string {
 export function createUploadsRouter(store: UploadStore): Router {
 	const router = express.Router();
 	const upload = multer({
-		// Browsers send file names as UTF-8; multer decodes them as latin1 by default.
-		defParamCharset: "utf8",
 		storage: multer.diskStorage({
 			destination: (_req, _file, callback) => callback(null, store.tempDir),
 			filename: (req, _file, callback) => {
@@ -35,6 +33,9 @@ export function createUploadsRouter(store: UploadStore): Router {
 		// threshold. Two therefore permits exactly our one file part; `files: 1`
 		// and `fields: 0` still reject every additional file or form field.
 		limits: { fileSize: store.maxUploadBytes, files: 1, fields: 0, parts: 2 },
+		// Browsers send file names as UTF-8; busboy decodes them as latin1 by default.
+		// The option is forwarded to busboy but missing from @types/multer.
+		...({ defParamCharset: "utf8" } as object),
 	});
 
 	router.post("/", (req: Request, res: Response, next: NextFunction) => {

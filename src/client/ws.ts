@@ -175,10 +175,8 @@ export function createChatClient(): ChatClient {
 	let attempt = 0;
 	let manualClose = false;
 	let inited = false;
-	/** Set by reconnect() so the async close event from the old socket
-	 *  doesn't ALSO schedule a reconnect (which would race with the
-	 *  synchronous connect() below and leak a second WebSocket). */
-	let suppressReconnect = false;
+	/** Pending backoff reconnect. At most one, and cancelled whenever we connect. */
+	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	let currentStatus: "connecting" | "open" | "closed" | "stalled" = "connecting";
 	/** Timestamp of the last message received from the server (any type). */
 	let lastMessageAt = Date.now();
@@ -210,18 +208,24 @@ export function createChatClient(): ChatClient {
 	function connect() {
 		manualClose = false;
 		inited = false; // need to re-send init after a reconnect
-		suppressReconnect = false; // reconnect() sets this; a brand-new socket has nothing to suppress
+		if (reconnectTimer) clearTimeout(reconnectTimer);
+		reconnectTimer = null;
 		setStatus("connecting");
 		const proto = location.protocol === "https:" ? "wss:" : "ws:";
 		const url = `${proto}//${location.host}/api/chat`;
-		ws = new WebSocket(url);
+		// Events from a socket that is no longer `ws` (replaced by reconnect())
+		// are ignored, so an old socket closing can never clobber the new one.
+		const socket = new WebSocket(url);
+		ws = socket;
 
-		ws.addEventListener("open", () => {
+		socket.addEventListener("open", () => {
+			if (socket !== ws) return;
 			attempt = 0;
 			setStatus("open");
 		});
 
-		ws.addEventListener("message", (e) => {
+		socket.addEventListener("message", (e) => {
+			if (socket !== ws) return;
 			// Any frame from the server proves the connection is alive —
 			// this includes the heartbeat `{type:"ping"}`. Refreshing here
 			// is what lets the watchdog detect a wedged socket.
@@ -303,16 +307,10 @@ export function createChatClient(): ChatClient {
 			}
 		});
 
-		ws.addEventListener("close", (ev) => {
+		socket.addEventListener("close", (ev) => {
+			if (socket !== ws) return;
 			setStatus("closed");
 			ws = null;
-			// reconnect() closed the old socket synchronously and already
-			// opened a fresh one; its close event must NOT trigger a second
-			// reconnect. Clear the flag and stop.
-			if (suppressReconnect) {
-				suppressReconnect = false;
-				return;
-			}
 			// 4001 = "session taken over by another connection" (see
 			// session-registry.ts ejectView). This is terminal for THIS tab:
 			// the session is now owned elsewhere, and auto-reconnecting would
@@ -332,11 +330,11 @@ export function createChatClient(): ChatClient {
 				const jitter = 1 + (Math.random() * 0.4 - 0.2);
 				const delay = Math.round(base * jitter);
 				attempt++;
-				setTimeout(connect, delay);
+				reconnectTimer = setTimeout(connect, delay);
 			}
 		});
 
-		ws.addEventListener("error", () => {
+		socket.addEventListener("error", () => {
 			// The "close" event will fire right after; do nothing here.
 		});
 	}
@@ -461,16 +459,18 @@ export function createChatClient(): ChatClient {
 		onCapabilities: (l) => subscribe(capabilitiesListeners, l),
 		onSessionStats: (l) => subscribe(sessionStatsListeners, l),
 		reconnect: () => {
-			// Suppress the old socket's async close-reconnect so we don't
-			// end up with two racing WebSockets (the one we close here and
-			// the one connect() opens next). connect() clears the flag.
-			suppressReconnect = true;
-			if (ws) ws.close();
+			// Detach the old socket first: its async close event is then ignored
+			// (see connect()), and connect() cancels any pending backoff timer.
+			const old = ws;
+			ws = null;
+			old?.close();
 			attempt = 0;
 			connect();
 		},
 		close: () => {
 			manualClose = true;
+			if (reconnectTimer) clearTimeout(reconnectTimer);
+			reconnectTimer = null;
 			if (watchdog) clearInterval(watchdog);
 			if (ws) ws.close();
 		},
