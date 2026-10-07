@@ -18,7 +18,7 @@ import {
 	MAX_PROMPT_IMAGES,
 } from "../shared/limits.js";
 import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
-import { $ } from "./dom.js";
+import { $, MIC_ICON, REC_ICON } from "./dom.js";
 import { markdownToSpeechText } from "./markdown.js";
 import {
 	addFileUploadPreview,
@@ -833,7 +833,7 @@ function watchForSpeech(
 
 /**
  * True while a finished recording is being transcribed. The mic button flips
- * back to 🎙 the moment recording stops, but the transcription round-trip takes
+ * back to the mic icon the moment recording stops, but the transcription round-trip takes
  * seconds, and a recording started in that window would insert a second
  * transcript (the older one landing last, if it finishes last) while both fight
  * over the status line. The button is also disabled so the state is visible.
@@ -851,7 +851,7 @@ export async function handleVoiceRecord(): Promise<void> {
 		// sees that recording has stopped, before the transcription
 		// round-trip even begins. (onstop also resets it as the
 		// canonical teardown point.)
-		$<HTMLButtonElement>("#voice-btn").textContent = "🎙";
+		$<HTMLButtonElement>("#voice-btn").innerHTML = MIC_ICON;
 		return;
 	}
 	// Voice mode: a reply still playing would be picked up by the mic.
@@ -872,7 +872,7 @@ export async function handleVoiceRecord(): Promise<void> {
 			// idle icon no matter how recording stopped (button click,
 			// an OS/permission revoke, etc.).
 			const btn = $<HTMLButtonElement>("#voice-btn");
-			btn.textContent = "🎙";
+			btn.innerHTML = MIC_ICON;
 			micStream.getTracks().forEach((t) => {
 				t.stop();
 			});
@@ -927,8 +927,8 @@ export async function handleVoiceRecord(): Promise<void> {
 			discardRecording = !heardSpeech;
 			recorder.stop();
 		});
-		$<HTMLButtonElement>("#voice-btn").textContent = "🔴";
-		setStatusMessage("recording… click 🔴 to stop");
+		$<HTMLButtonElement>("#voice-btn").innerHTML = REC_ICON;
+		setStatusMessage("recording… click the mic to stop");
 	} catch (err) {
 		// The mic may already be open (MediaRecorder setup failed): release it.
 		stream?.getTracks().forEach((t) => {

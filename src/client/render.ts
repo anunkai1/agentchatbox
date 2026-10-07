@@ -17,7 +17,7 @@
 
 import type { PiCommand, ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
-import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
+import { $, el, escapeHtml, type LiveAssistantDom, MIC_ICON, mountModal } from "./dom.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { services } from "./services.js";
 import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
@@ -2530,20 +2530,17 @@ export function renderShell(): void {
 			},
 			"+",
 		),
-		el(
-			"button",
-			{
-				class: "icon-btn",
-				id: "voice-btn",
-				type: "button",
-				title: "Voice note (transcribes locally on server)",
-				"aria-label": "Record a voice note",
-				onclick: () => {
-					void shellHandlers?.handleVoiceRecord();
-				},
+		el("button", {
+			class: "icon-btn",
+			id: "voice-btn",
+			type: "button",
+			title: "Voice note (transcribes locally on server)",
+			"aria-label": "Record a voice note",
+			onclick: () => {
+				void shellHandlers?.handleVoiceRecord();
 			},
-			"🎙",
-		),
+			html: MIC_ICON,
+		}),
 		el("textarea", {
 			id: "input",
 			class: "input",
