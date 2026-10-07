@@ -311,7 +311,6 @@ they decide *what* to say (pi-voice-reply) and *how* to say it (pi-voice-server)
 - [pi](https://pi.dev) — the coding agent
 - [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) — unified LLM API
 - [`@earendil-works/pi-agent-core`](https://github.com/earendil-works/pi) — agent loop
-- [`@earendil-works/pi-web-ui`](https://github.com/earendil-works/pi) — the upstream project this UI is inspired by. We don't use its components (vanilla DOM, no framework) but its bundled stylesheet (`app.css`, Tailwind v4 + KaTeX) is copied into `public/app.css` at build time.
 
 ## License
 

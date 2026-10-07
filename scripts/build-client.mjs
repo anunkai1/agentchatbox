@@ -4,7 +4,7 @@
  *   node scripts/build-client.mjs          # one-shot build
  *   node scripts/build-client.mjs --watch  # rebuild on change
  *
- * Outputs to public/app.js and (if main.ts imports a CSS file) public/app.css.
+ * Outputs to public/app.js (plus styles.css, index.html and the brand assets).
  * The public/ folder is served by the Node server in production.
  */
 
@@ -19,8 +19,6 @@ const watch = process.argv.includes("--watch");
 
 await mkdir(resolve(root, "public"), { recursive: true });
 
-const cssSrc = resolve(root, "node_modules/@earendil-works/pi-web-ui/dist/app.css");
-const cssDst = resolve(root, "public/app.css");
 const htmlSrc = resolve(root, "index.html");
 const htmlDst = resolve(root, "public/index.html");
 
@@ -29,7 +27,7 @@ const htmlDst = resolve(root, "public/index.html");
  * `assets/brand/` into `public/` so express.static can serve them at
  * the same paths the HTML <link> tags reference. Source of truth
  * lives in `assets/brand/` so the binary PNGs are tracked in git
- * (public/ is mostly build output and partly gitignored).
+ * (public/ is build output and gitignored).
  */
 async function copyBrand() {
 	const brandSrc = resolve(root, "assets/brand");
@@ -49,12 +47,10 @@ async function copyBrand() {
 async function copyStatic() {
 	const clientCssSrc = resolve(root, "src/client/styles.css");
 	const clientCssDst = resolve(root, "public/styles.css");
-	await copyFile(cssSrc, cssDst);
 	await copyFile(clientCssSrc, clientCssDst);
 	await copyFile(htmlSrc, htmlDst);
 	await copyBrand();
-	const cssStat = await stat(cssDst);
-	console.log(`client: copied app.css (${(cssStat.size / 1024).toFixed(1)} KB) + styles.css + index.html`);
+	console.log("client: copied styles.css + index.html");
 }
 
 /**
@@ -110,26 +106,6 @@ const options = {
 	define: {
 		"process.env.NODE_ENV": watch ? '"development"' : '"production"',
 	},
-	// These packages are Node-only (or pull in Node-only deps like `process`).
-	// The web UI references them as optional integrations; we replace any
-	// import of them (including subpaths) with an empty stub.
-	plugins: [
-		{
-			name: "stub-optional-deps",
-			setup(build) {
-				const STUB = resolve(root, "src/client/stubs/empty.js");
-				const STUB_PREFIXES = ["@lmstudio/sdk", "ollama", "jszip"];
-				build.onResolve({ filter: /.*/ }, (args) => {
-					for (const prefix of STUB_PREFIXES) {
-						if (args.path === prefix || args.path.startsWith(prefix + "/")) {
-							return { path: STUB };
-						}
-					}
-					return undefined;
-				});
-			},
-		},
-	],
 };
 
 if (watch) {
