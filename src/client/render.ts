@@ -20,6 +20,7 @@ import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
 import {
 	CLOCK_ICON,
+	COMPOSER_STOP_ICON,
 	FOLDER_ICON,
 	iconEl,
 	LONG_ICON,
@@ -29,11 +30,13 @@ import {
 	PAUSE_ICON,
 	PENCIL_ICON,
 	PLAY_ICON,
+	SEND_ICON,
 	SHORT_ICON,
 	SHRINK_ICON,
 	SPEAK_ICON,
 	STAR_FILLED_ICON,
 	STAR_ICON,
+	STEER_ICON,
 	STOP_ICON,
 	TRASH_ICON,
 	ZAP_ICON,
@@ -75,7 +78,9 @@ export function setStreaming(s: boolean): void {
 	const sendBtn = $<HTMLButtonElement>("#send-btn");
 	sendBtn.hidden = false;
 	sendBtn.classList.toggle("steer-mode", s);
-	sendBtn.textContent = s ? "⇢" : "↑";
+	// SVG, not a text glyph: font baselines put glyph ink below a button's
+	// optical centre (see SEND_ICON / STEER_ICON in icons.ts).
+	sendBtn.innerHTML = s ? STEER_ICON : SEND_ICON;
 	sendBtn.setAttribute("aria-label", s ? "Queue instruction" : "Send message");
 	sendBtn.title = s
 		? "Queue instruction — delivered after the current turn (⌘/Ctrl+Enter)"
@@ -2584,31 +2589,25 @@ export function renderShell(): void {
 		el(
 			"div",
 			{ class: "composer-actions" },
-			el(
-				"button",
-				{
-					class: "send-btn",
-					id: "send-btn",
-					type: "button",
-					title: "Send (⌘/Ctrl+Enter)",
-					"aria-label": "Send message",
-					onclick: () => shellHandlers?.handleSend(),
-				},
-				"↑",
-			),
-			el(
-				"button",
-				{
-					class: "stop-btn",
-					id: "stop-btn",
-					type: "button",
-					title: "Stop the current run",
-					"aria-label": "Stop the current run",
-					hidden: true,
-					onclick: () => shellHandlers?.abort(),
-				},
-				"■",
-			),
+			el("button", {
+				class: "send-btn",
+				id: "send-btn",
+				type: "button",
+				title: "Send (⌘/Ctrl+Enter)",
+				"aria-label": "Send message",
+				html: SEND_ICON,
+				onclick: () => shellHandlers?.handleSend(),
+			}),
+			el("button", {
+				class: "stop-btn",
+				id: "stop-btn",
+				type: "button",
+				title: "Stop the current run",
+				"aria-label": "Stop the current run",
+				html: COMPOSER_STOP_ICON,
+				hidden: true,
+				onclick: () => shellHandlers?.abort(),
+			}),
 		),
 	);
 	composerWrap.append(composer);

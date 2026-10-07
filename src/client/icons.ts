@@ -22,6 +22,25 @@ export const MIC_ICON = svg(
 export const REC_ICON =
 	'<svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="#ef4444"/></svg>';
 
+/**
+ * Composer primary actions: send (up arrow) and, while the agent is streaming,
+ * steer (right arrow — the instruction is queued for the next turn).
+ *
+ * These are SVG rather than the "↑" / "⇢" / "■" text glyphs they replace.
+ * Text ink is placed on the font baseline, not the line box's centre, so those
+ * glyphs rendered visibly below the middle of the round buttons and by a
+ * different amount per glyph (measured on Android/Roboto: ~2px for "■",
+ * ~2px for "↑", ~3.5px for "⇢"). A 24/24 SVG in a flex-centred button is
+ * geometrically centred on every platform. Sized to match MIC_ICON.
+ */
+export const SEND_ICON = svg('<path d="M12 19V5M5 12l7-7 7 7"/>', false, "20");
+export const STEER_ICON = svg('<path d="M5 12h14M12 5l7 7-7 7"/>', false, "20");
+export const COMPOSER_STOP_ICON = svg(
+	'<rect x="6" y="6" width="12" height="12" rx="2"/>',
+	true,
+	"20",
+);
+
 /** Speak buttons: immediate speaker, plus the long / medium / short variants. */
 export const SPEAK_ICON = svg(
 	'<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>',
