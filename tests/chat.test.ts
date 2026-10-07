@@ -261,7 +261,7 @@ while IFS= read -r line; do
       echo '{"type":"agent_start"}'
       echo '{"type":"turn_start"}'
       echo '{"type":"turn_end","message":{"role":"assistant","content":[],"timestamp":1},"toolResults":[]}'
-      sleep 0.8
+      sleep 1.5
       echo '{"type":"turn_start"}'
       echo '{"type":"turn_end","message":{"role":"assistant","content":[],"timestamp":2},"toolResults":[]}'
       echo '{"type":"agent_end","messages":[],"willRetry":false}'
@@ -1639,7 +1639,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			c1.close();
 
 			// This is beyond the idle grace but still inside the fake agent's
-			// 800 ms between-turn pause. The broader streaming=true state must
+			// 1.5 s between-turn pause. The broader streaming=true state must
 			// keep the detached child alive.
 			await new Promise((r) => setTimeout(r, 450));
 			const [pid] = readPids(marker);
@@ -1647,7 +1647,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			expect(isAlive(pid!)).toBe(true);
 
 			// Once agent_end arrives, normal detached-idle cleanup resumes.
-			await new Promise((r) => setTimeout(r, 750));
+			const deadline = Date.now() + 5000;
+			while (isAlive(pid!) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
 			expect(isAlive(pid!)).toBe(false);
 		} finally {
 			c1.close();
