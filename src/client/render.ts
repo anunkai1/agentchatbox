@@ -2722,6 +2722,9 @@ export function renderShell(): void {
 	renderHistory();
 	restoreImageAttachmentPreviews();
 	refreshStatus();
+	// The header pill is built "off"; repaint it (and the mic) from state, since
+	// a rebuild after the session's prefs were applied would otherwise lose it.
+	syncDisplayPreferences();
 }
 
 // ---------------------------------------------------------------------------
