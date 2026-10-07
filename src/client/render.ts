@@ -3125,6 +3125,13 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	// their visible rows against these offsets on the next microtask.
 	const projectsScrollTop = projectsPane.scrollTop;
 	const sessionsScrollTop = sessionsPane.scrollTop;
+	// Each windowed list listens for scroll on its pane; unbind them before
+	// the rebuild discards the lists, or every refresh would leak a listener.
+	for (const pane of [projectsPane, sessionsPane]) {
+		for (const list of pane.querySelectorAll<WindowedSessionList>(".windowed-session-list")) {
+			list.dispose?.();
+		}
+	}
 	projectsPane.innerHTML = "";
 	sessionsPane.innerHTML = "";
 
