@@ -9,7 +9,7 @@
  *   - handleFileAttach(): POST to /api/upload, remember structured image
  *     references for multimodal models, and show attachment previews
  *   - handleVoiceRecord(): MediaRecorder → POST to /api/transcribe →
- *     paste the transcript into the input
+ *     paste the transcript into the input; cancelVoiceRecord() drops it
  */
 
 import {
@@ -778,8 +778,23 @@ const SPEECH_RMS_THRESHOLD = 0.01;
 
 /** Tears down the level monitor of the current recording, if any. */
 let stopSpeechWatch: (() => void) | null = null;
-/** Set when the timeout ended a recording that never heard speech: onstop then skips transcription. */
-let discardRecording = false;
+/** Set when a recording is to be dropped (no speech heard, or cancelled): onstop shows it and skips transcription. */
+let discardMessage: string | null = null;
+
+/** Shows the cancel button only while a recording is in progress. */
+function setRecordingUi(recording: boolean): void {
+	$<HTMLButtonElement>("#voice-btn").innerHTML = recording ? REC_ICON : MIC_ICON;
+	$<HTMLButtonElement>("#voice-cancel-btn").hidden = !recording;
+}
+
+/** Stops the current recording and throws the audio away instead of transcribing it. */
+export function cancelVoiceRecord(): void {
+	const recorder = mediaRecorder;
+	if (recorder?.state !== "recording") return;
+	discardMessage = "recording cancelled";
+	recorder.stop();
+	setRecordingUi(false);
+}
 
 /**
  * Watches the mic level of `stream` and calls `onTimeout` when no speech has been
@@ -848,7 +863,7 @@ export async function handleVoiceRecord(): Promise<void> {
 		// sees that recording has stopped, before the transcription
 		// round-trip even begins. (onstop also resets it as the
 		// canonical teardown point.)
-		$<HTMLButtonElement>("#voice-btn").innerHTML = MIC_ICON;
+		setRecordingUi(false);
 		return;
 	}
 	// Voice mode: a reply still playing would be picked up by the mic.
@@ -869,13 +884,13 @@ export async function handleVoiceRecord(): Promise<void> {
 			// idle icon no matter how recording stopped (button click,
 			// an OS/permission revoke, etc.).
 			const btn = $<HTMLButtonElement>("#voice-btn");
-			btn.innerHTML = MIC_ICON;
+			setRecordingUi(false);
 			micStream.getTracks().forEach((t) => {
 				t.stop();
 			});
-			if (discardRecording) {
-				discardRecording = false;
-				setStatusMessage(`no speech heard in ${NO_SPEECH_TIMEOUT_MS / 1000}s, recording stopped`);
+			if (discardMessage) {
+				setStatusMessage(discardMessage);
+				discardMessage = null;
 				return;
 			}
 			const blob = new Blob(recordedChunks, { type: "audio/webm" });
@@ -917,15 +932,17 @@ export async function handleVoiceRecord(): Promise<void> {
 			}
 		};
 		recordingStart = Date.now();
-		discardRecording = false;
+		discardMessage = null;
 		mediaRecorder.start();
 		const recorder = mediaRecorder;
 		stopSpeechWatch = watchForSpeech(micStream, (heardSpeech) => {
-			discardRecording = !heardSpeech;
+			if (!heardSpeech) {
+				discardMessage = `no speech heard in ${NO_SPEECH_TIMEOUT_MS / 1000}s, recording stopped`;
+			}
 			recorder.stop();
 		});
-		$<HTMLButtonElement>("#voice-btn").innerHTML = REC_ICON;
-		setStatusMessage("recording… click the mic to stop");
+		setRecordingUi(true);
+		setStatusMessage("recording… click the mic to stop, ✕ to cancel");
 	} catch (err) {
 		// The mic may already be open (MediaRecorder setup failed): release it.
 		stream?.getTracks().forEach((t) => {

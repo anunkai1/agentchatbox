@@ -101,6 +101,7 @@ import {
 } from "./state.js";
 import { readSessionIdFromUrl, shareableSessionUrl, writeSessionIdToUrl } from "./url.js";
 import {
+	cancelVoiceRecord,
 	handleDrop,
 	handleFileAttach,
 	handlePaste,
@@ -1491,6 +1492,7 @@ async function boot(): Promise<void> {
 		openSpeedPicker,
 		openOverflowMenu,
 		handleVoiceRecord,
+		cancelVoiceRecord,
 		stopAllVoice,
 		pauseVoice,
 		resumeVoice,

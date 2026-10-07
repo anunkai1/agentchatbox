@@ -19,6 +19,7 @@ export const MIC_ICON = svg(
 	false,
 	"20",
 );
+export const CANCEL_ICON = svg('<path d="M6 6l12 12M18 6L6 18"/>', false, "20");
 export const REC_ICON =
 	'<svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="#ef4444"/></svg>';
 

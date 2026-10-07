@@ -19,6 +19,7 @@ import type { PiCommand, ProjectSummary, SessionSummary } from "../shared/protoc
 import { type SessionSearchHit, searchSessions } from "./api.js";
 import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
 import {
+	CANCEL_ICON,
 	CLOCK_ICON,
 	COMPOSER_STOP_ICON,
 	FOLDER_ICON,
@@ -2041,6 +2042,7 @@ export interface ShellHandlers {
 	/** Toggle Voice mode from the header pill (mirrors the Settings row). */
 	toggleVoiceMode: () => void;
 	handleVoiceRecord: () => Promise<void>;
+	cancelVoiceRecord: () => void;
 	/** Stop all voice playback + cancel in-flight TTS (status-bar stop button). */
 	stopAllVoice: () => void;
 	/** Pause TTS playback, holding position (status-bar pause button). */
@@ -2571,6 +2573,16 @@ export function renderShell(): void {
 				void shellHandlers?.handleVoiceRecord();
 			},
 			html: MIC_ICON,
+		}),
+		el("button", {
+			class: "icon-btn",
+			id: "voice-cancel-btn",
+			type: "button",
+			title: "Cancel recording (discard audio)",
+			"aria-label": "Cancel recording",
+			hidden: true,
+			onclick: () => shellHandlers?.cancelVoiceRecord(),
+			html: CANCEL_ICON,
 		}),
 		el("textarea", {
 			id: "input",
