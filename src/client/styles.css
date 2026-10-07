@@ -1835,18 +1835,22 @@ body.sidebar-resizing iframe {
 /* Shared action strip below messages. Icon-first controls keep the
    transcript calm while tooltips and aria-labels preserve discoverability.
    An assistant row wraps this in .assistant-controls, which owns the gap
-   above the line; the user row's strip sits inside its bubble. */
+   above the line; the user row's strip sits inside its bubble.
+
+   The buttons are only as wide as the glyph plus a thin margin: a 15px icon
+   in a 30px box reads as a big empty gap between neighbours, so the box is
+   26px and the gap 2px (1px on phones). */
 .message-actions {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 4px;
+	gap: 2px;
 }
 .user-message-actions {
 	margin-right: 4px;
 }
 .message-action {
-	width: 30px;
+	width: 26px;
 	height: 28px;
 	display: inline-flex;
 	align-items: center;
@@ -3284,22 +3288,25 @@ body.modal-open {
 	 * .assistant-controls). Below ~400px the two groups wrap to two tight
 	 * lines rather than squeezing further. */
 	.message-action {
-		width: 30px;
+		width: 26px;
 		height: 30px;
 	}
-	.voice-actions {
+	.message-actions {
 		gap: 1px;
+	}
+	.voice-actions {
+		gap: 2px;
 	}
 	.voice-actions .speak-btn {
 		height: 30px;
-		padding-inline: 3px;
-		gap: 1.5px;
+		padding-inline: 4px;
+		gap: 2px;
 	}
 	.voice-actions .voice-icon {
-		font-size: 12px;
+		font-size: 13px;
 	}
 	.voice-actions .voice-label {
-		font-size: 11px;
+		font-size: 11.5px;
 	}
 	.tool-head {
 		gap: 6px;
@@ -3319,7 +3326,7 @@ body.modal-open {
 		max-height: 280px;
 	}
 	.message-actions {
-		gap: 2px;
+		gap: 1px;
 	}
 
 	/* Mobile: the full status text (model · think · tokens · cost) doesn't
