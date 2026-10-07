@@ -4024,13 +4024,20 @@ export function openProjectEditor(id?: string): void {
 	instr.placeholder = "e.g. You are a gruff pirate captain. Always answer in pirate slang.";
 	// Pre-fill with existing instructions only when editing — for a new
 	// project we leave blank so the AGENTS.md isn't created until saved.
+	// The box stays disabled until the text has loaded, and Save sends it
+	// only if changed, so a slow or failed fetch can never blank the file.
+	let loadedInstructions: string | null = null;
 	if (editing) {
-		// Fetch current instructions from the server's AGENTS.md via the
-		// project's cwd through the existing /api/file endpoint is overkill;
-		// the server doesn't ship instructions back in ProjectSummary. We
-		// rely on a tiny fetch below.
+		instr.disabled = true;
+		instr.placeholder = "Loading instructions…";
 		void fetchProjectInstructions(editing.id).then((text) => {
+			if (text === null) {
+				instr.placeholder = "Couldn't load the instructions — they will be left unchanged.";
+				return;
+			}
+			loadedInstructions = text;
 			instr.value = text;
+			instr.disabled = false;
 		});
 	}
 	box.append(instr);
@@ -4076,7 +4083,14 @@ export function openProjectEditor(id?: string): void {
 		const icon = iconInput.value.trim() || "📁";
 		const instructions = instr.value;
 		if (editing) {
-			shellHandlers?.updateProject({ id: editing.id, name, icon, instructions });
+			shellHandlers?.updateProject({
+				id: editing.id,
+				name,
+				icon,
+				...(loadedInstructions !== null && instructions !== loadedInstructions
+					? { instructions }
+					: {}),
+			});
 		} else {
 			shellHandlers?.createProject({ name, icon, instructions });
 		}
@@ -4089,14 +4103,14 @@ export function openProjectEditor(id?: string): void {
 /**
  * Fetch a project's current AGENTS.md text for the editor textarea. Uses a
  * dedicated REST endpoint so we don't bloat ProjectSummary or round-trip the
- * instructions over the WS session channel.
+ * instructions over the WS session channel. Returns null if it could not load.
  */
-async function fetchProjectInstructions(id: string): Promise<string> {
+async function fetchProjectInstructions(id: string): Promise<string | null> {
 	try {
 		const res = await fetch(`/api/projects/${encodeURIComponent(id)}/instructions`);
-		if (!res.ok) return "";
+		if (!res.ok) return null;
 		return (await res.json()).text ?? "";
 	} catch {
-		return "";
+		return null;
 	}
 }
