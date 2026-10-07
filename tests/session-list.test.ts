@@ -8,7 +8,15 @@
  * summaries and reads back the right messages.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -207,7 +215,7 @@ describe("listPiSessions", () => {
 				JSON.stringify({
 					type: "custom_message",
 					customType: "claude-prompt",
-					content: "fix the \"login\" bug",
+					content: 'fix the "login" bug',
 					display: true,
 					details: { target: "sonnet" },
 				}),
@@ -536,6 +544,32 @@ describe("movePiSession", () => {
 		expect(moved[0].messageCount).toBe(2);
 	});
 
+	it("copies everything after the header byte for byte, including a missing final newline", async () => {
+		const file = join(root!, "--home-test-project--", "2026-06-15T10-00-00_aaa.jsonl");
+		const header = JSON.stringify({ type: "session", version: 3, id: "aaa", cwd });
+		const tail = '{"type":"message","message":{"role":"user","content":"héllo ✓"}}\n\n{"torn"';
+		writeFileSync(file, `${header}\n${tail}`);
+		const { movePiSession } = await import("../src/server/session-list.js");
+
+		expect(movePiSession(cwd, "aaa", "/home/other/project")).toBe("moved");
+		const movedFile = join(root!, "--home-other-project--", "2026-06-15T10-00-00_aaa.jsonl");
+		const moved = readFileSync(movedFile, "utf8");
+		const [firstLine, ...rest] = moved.split("\n");
+		expect(JSON.parse(firstLine).cwd).toBe("/home/other/project");
+		expect(rest.join("\n")).toBe(tail);
+		expect(
+			readdirSync(join(root!, "--home-other-project--")).filter((f) => f.endsWith(".tmp")),
+		).toEqual([]);
+	});
+
+	it("refuses a file whose header id is not the requested session", async () => {
+		const file = join(root!, "--home-test-project--", "2026-06-15T10-00-00_aaa.jsonl");
+		writeFileSync(file, `${JSON.stringify({ type: "session", version: 3, id: "other", cwd })}\n`);
+		const { movePiSession } = await import("../src/server/session-list.js");
+		expect(movePiSession(cwd, "aaa", "/home/other/project")).not.toBe("moved");
+		expect(existsSync(file)).toBe(true);
+	});
+
 	it("creates the target session directory when the project has none yet", async () => {
 		writeSession(
 			"--home-test-project--",
@@ -609,6 +643,57 @@ describe("movePiSession", () => {
 
 		// A stale index would still point pi at the old folder.
 		expect(findSessionCwd("aaa", [])).toBe(target);
+	});
+});
+
+describe("forkPiSession", () => {
+	it("copies exactly N message entries, drops the old header and ignores custom entries in the count", async () => {
+		const custom = JSON.stringify({ type: "custom_message", customType: "voice-reply" });
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["q1", "q2", "q3"],
+			[custom],
+		);
+		const { forkPiSession, listPiSessions, readPiSessionMessages } = await import(
+			"../src/server/session-list.js"
+		);
+
+		const newId = forkPiSession(cwd, "aaa", 3);
+		expect(newId).toBeTruthy();
+		expect(newId).not.toBe("aaa");
+
+		const forked = listPiSessions(cwd).find((x) => x.id === newId);
+		expect(forked?.messageCount).toBe(3);
+		const texts = readPiSessionMessages(cwd, newId!).map((m) =>
+			JSON.stringify((m as { content: unknown }).content),
+		);
+		expect(texts).toHaveLength(3);
+		// The original is untouched and no temp file is left behind.
+		expect(listPiSessions(cwd).find((x) => x.id === "aaa")?.messageCount).toBe(6);
+		const files = readdirSync(join(root!, "--home-test-project--"));
+		expect(files.filter((f) => f.endsWith(".tmp"))).toEqual([]);
+		const copy = readFileSync(
+			join(root!, "--home-test-project--", files.find((f) => f.includes(newId!))!),
+			"utf8",
+		);
+		expect(copy.split("\n").filter((l) => l.includes('"type":"session"'))).toHaveLength(1);
+	});
+
+	it("forks an empty session for a count of 0 and returns null for an unknown id", async () => {
+		writeSession(
+			"--home-test-project--",
+			"2026-06-15T10-00-00_aaa.jsonl",
+			"aaa",
+			"2026-06-15T10:00:00.000Z",
+			["q1"],
+		);
+		const { forkPiSession, listPiSessions } = await import("../src/server/session-list.js");
+		const newId = forkPiSession(cwd, "aaa", 0);
+		expect(listPiSessions(cwd).find((x) => x.id === newId)?.messageCount).toBe(0);
+		expect(forkPiSession(cwd, "nope", 1)).toBeNull();
 	});
 });
 

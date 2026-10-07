@@ -36,6 +36,7 @@ import {
 	statSync,
 	unlinkSync,
 	writeFileSync,
+	writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -103,8 +104,9 @@ export function parseJsonl(raw: string): Record<string, unknown>[] {
 /** Visit a JSONL file one line at a time with bounded read memory. Session
  * files can exceed 150 MiB because image blocks are persisted in pi's context;
  * readFileSync + split + JSON.parse previously pushed a single replay above
- * 500 MiB RSS. StringDecoder preserves UTF-8 characters split across chunks. */
-function forEachJsonlLine(path: string, visitor: (line: string) => void): void {
+ * 500 MiB RSS. StringDecoder preserves UTF-8 characters split across chunks.
+ * The visitor may return `false` to stop reading. */
+function forEachJsonlLine(path: string, visitor: (line: string) => unknown): void {
 	const fd = openSync(path, "r");
 	const buffer = Buffer.allocUnsafe(1024 * 1024);
 	const decoder = new StringDecoder("utf8");
@@ -118,7 +120,7 @@ function forEachJsonlLine(path: string, visitor: (line: string) => void): void {
 			for (;;) {
 				const newline = pending.indexOf("\n", start);
 				if (newline < 0) break;
-				visitor(pending.slice(start, newline));
+				if (visitor(pending.slice(start, newline)) === false) return;
 				start = newline + 1;
 			}
 			pending = pending.slice(start);
@@ -730,50 +732,73 @@ export function movePiSession(
 	const file = findPiSessionFile(from, sessionId);
 	if (!file) return "not-found";
 
-	let raw: string;
-	try {
-		raw = readFileSync(file, "utf8");
-	} catch {
-		return "failed";
-	}
-
-	// Rewrite ONLY the header line; every other line is copied verbatim so
-	// pi's append-only entry tree (parentIds, labels, session_info renames)
-	// survives untouched.
-	const lines = raw.split("\n");
-	let headerIndex = -1;
-	let header: Record<string, unknown> | null = null;
-	for (let i = 0; i < lines.length; i++) {
-		const trimmed = lines[i].trim();
-		if (!trimmed) continue;
-		try {
-			const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-			if (parsed?.type === "session") {
-				// A different id in the header means findPiSessionFile matched
-				// a file this session doesn't own — never rewrite that one.
-				if (String(parsed.id) !== sessionId) return "failed";
-				headerIndex = i;
-				header = parsed;
-			}
-		} catch {
-			/* skip malformed/torn lines */
-		}
-		if (header) break;
-	}
-	if (!header || headerIndex < 0) return "failed";
-	lines[headerIndex] = JSON.stringify({ ...header, cwd: to });
-
+	// The `session` header is always the first line. Rewrite ONLY that line;
+	// every byte after it is copied verbatim so pi's append-only entry tree
+	// (parentIds, labels, session_info renames) survives untouched. Streaming
+	// the tail keeps a 150 MiB transcript out of memory.
 	const targetDir = sessionsDirFor(to);
 	const targetFile = join(targetDir, basename(file));
-	if (existsSync(targetFile)) return "conflict";
+	let source: number | undefined;
+	let header: Record<string, unknown>;
+	let tailStart: number;
+	let headerHasNewline: boolean;
+	try {
+		source = openSync(file, "r");
+		const head = Buffer.alloc(65536);
+		const n = readSync(source, head, 0, head.length, 0);
+		const newline = head.subarray(0, n).indexOf(0x0a);
+		headerHasNewline = newline >= 0;
+		tailStart = headerHasNewline ? newline + 1 : n;
+		header = JSON.parse(
+			head
+				.subarray(0, newline < 0 ? n : newline)
+				.toString("utf8")
+				.trim(),
+		);
+		// A different id in the header means findPiSessionFile matched
+		// a file this session doesn't own — never rewrite that one.
+		if (header?.type !== "session" || String(header.id) !== sessionId) {
+			closeSync(source);
+			return "failed";
+		}
+	} catch {
+		if (source !== undefined) closeSync(source);
+		return "failed";
+	}
+	if (existsSync(targetFile)) {
+		closeSync(source);
+		return "conflict";
+	}
 
+	const temp = `${targetFile}.${process.pid}.tmp`;
 	try {
 		mkdirSync(targetDir, { recursive: true });
-		const temp = `${targetFile}.${process.pid}.tmp`;
-		writeFileSync(temp, lines.join("\n"));
+		const out = openSync(temp, "w");
+		try {
+			const newHeader = JSON.stringify({ ...header, cwd: to });
+			// A header-only file has no newline after it; keep it that way.
+			writeSync(out, headerHasNewline ? `${newHeader}\n` : newHeader);
+			const chunk = Buffer.allocUnsafe(1024 * 1024);
+			let position = tailStart;
+			for (;;) {
+				const read = readSync(source, chunk, 0, chunk.length, position);
+				if (read === 0) break;
+				writeSync(out, chunk, 0, read);
+				position += read;
+			}
+		} finally {
+			closeSync(out);
+		}
 		renameSync(temp, targetFile);
 	} catch {
+		try {
+			unlinkSync(temp);
+		} catch {
+			/* ignore */
+		}
 		return "failed";
+	} finally {
+		closeSync(source);
 	}
 
 	try {
@@ -912,17 +937,15 @@ export function forkPiSession(
 	const file = findPiSessionFile(cwd, sourceSessionId);
 	if (!file) return null;
 
-	const raw = readFileSync(file, "utf8");
-	const lines = raw.split("\n");
-
-	// Recover the source `session` header so we can preserve its cwd +
-	// version, then rewrite id + timestamp for the fork.
+	// Recover the source `session` header (always the first line) so we can
+	// preserve its cwd + version, then rewrite id + timestamp for the fork.
+	const headerLine = readFirstLine(file);
 	let header: Record<string, unknown> | null = null;
-	for (const parsed of parseJsonl(raw)) {
-		if (parsed.type === "session") {
-			header = parsed;
-			break;
-		}
+	try {
+		const parsed = headerLine ? (JSON.parse(headerLine) as Record<string, unknown>) : null;
+		if (parsed?.type === "session") header = parsed;
+	} catch {
+		/* not a session file */
 	}
 	if (!header) return null;
 
@@ -936,23 +959,6 @@ export function forkPiSession(
 		cwd: header.cwd,
 	};
 
-	const count = Math.max(0, Math.floor(messageCount));
-	const outLines: string[] = [JSON.stringify(newHeader)];
-	let copied = 0;
-	for (const l of lines) {
-		if (copied >= count) break;
-		const t = l.trim();
-		if (!t) continue;
-		try {
-			const parsed = JSON.parse(t) as Record<string, unknown>;
-			if (parsed.type === "session") continue; // drop the original header
-			outLines.push(t);
-			if (parsed.type === "message") copied++;
-		} catch {
-			/* skip malformed */
-		}
-	}
-
 	const dir = sessionsDirFor(String(header.cwd ?? resolve(cwd)));
 	// Match pi's filename convention
 	// `<isoTimestamp-with-colons-as-dashes>_<sessionId>.jsonl` so the
@@ -960,7 +966,44 @@ export function forkPiSession(
 	// first-line id, not the name).
 	const stamp = now.toISOString().replace(/:/g, "-");
 	const newFile = join(dir, `${stamp}_${newId}.jsonl`);
-	writeFileSync(newFile, `${outLines.join("\n")}\n`);
+	const temp = `${newFile}.${process.pid}.tmp`;
+
+	// Stream the copy: transcripts reach 150 MiB, so never hold one in memory.
+	// Stop as soon as `count` message entries are copied.
+	const count = Math.max(0, Math.floor(messageCount));
+	const out = openSync(temp, "w");
+	try {
+		writeSync(out, `${JSON.stringify(newHeader)}\n`);
+		let copied = 0;
+		if (count > 0) {
+			forEachJsonlLine(file, (line) => {
+				const t = line.trim();
+				if (!t) return;
+				let type = jsonlLineType(t);
+				if (type === null) {
+					try {
+						type = String((JSON.parse(t) as Record<string, unknown>).type);
+					} catch {
+						return; // skip malformed
+					}
+				}
+				if (type === "session") return; // drop the original header
+				writeSync(out, `${t}\n`);
+				if (type === "message") copied++;
+				return copied < count;
+			});
+		}
+	} catch (error) {
+		closeSync(out);
+		try {
+			unlinkSync(temp);
+		} catch {
+			/* ignore */
+		}
+		throw error;
+	}
+	closeSync(out);
+	renameSync(temp, newFile);
 	// A new session file exists now — drop the id→cwd index so the next
 	// resume finds this fork without waiting for a miss-triggered rebuild.
 	cwdIndex = null;
