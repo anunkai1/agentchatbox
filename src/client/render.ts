@@ -1248,6 +1248,10 @@ export function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): voi
 	// has scrolled up to re-read. Default (false) force-scrolls — correct
 	// for the user's own messages and for explicit commands like /help.
 	if (!opts.pin || wasPinned) scrollToBottom();
+	// A new row may change the user-message count (the jump button's
+	// show/disabled state) and whether we are still pinned at the bottom.
+	updateJumpFabState();
+	updateJumpToBottomFabState();
 }
 
 // Live rendering for the streaming case: we mutate the last assistant

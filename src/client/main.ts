@@ -22,6 +22,7 @@ import type {
 import type { ProjectSummary, PromptImage, SessionSummary } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
 import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
+import { copyText } from "./clipboard.js";
 import {
 	noteAssistantMessageEnd,
 	noteContextMessage,
@@ -44,6 +45,7 @@ import {
 	appendAssistantPlaceholder,
 	appendCompactionChip,
 	appendError,
+	appendNode,
 	appendToolCall,
 	autoSize,
 	beginPendingVoice,
@@ -71,8 +73,6 @@ import {
 	syncDisplayPreferences,
 	syncSteerBadges,
 	syncStopButton,
-	updateJumpFabState,
-	updateJumpToBottomFabState,
 	updateVoiceTextBox,
 	voiceBoxForHint,
 	voiceBoxForMessage,
@@ -149,31 +149,6 @@ function historyForward(): void {
 // ---------------------------------------------------------------------------
 // Composer drafts and inline actions
 // ---------------------------------------------------------------------------
-
-async function copyText(text: string): Promise<boolean> {
-	try {
-		if (navigator.clipboard?.writeText) {
-			await navigator.clipboard.writeText(text);
-			return true;
-		}
-	} catch {
-		// Fall through to the legacy textarea path for LAN/http contexts.
-	}
-	try {
-		const ta = document.createElement("textarea");
-		ta.value = text;
-		ta.style.position = "fixed";
-		ta.style.opacity = "0";
-		document.body.appendChild(ta);
-		ta.focus();
-		ta.select();
-		const ok = document.execCommand("copy");
-		document.body.removeChild(ta);
-		return ok;
-	} catch {
-		return false;
-	}
-}
 
 const DRAFT_STORAGE_PREFIX = "acb-draft-v1:";
 
@@ -468,27 +443,6 @@ function recoverStrandedSteer(): void {
 	if (!stranded.text) return;
 	sendPromptHook(stranded.text);
 	setStreaming(true);
-}
-
-// Capture pinning BEFORE appending. The new node may be tall (a ⚙
-// tool card, a thinking block, a result <pre>), and once it's in the
-// DOM it grows scrollHeight while scrollTop stays put — so an
-// after-append isAtBottom() check would falsely report "not at
-// bottom" (the 80px slack is consumed by the new block itself) and
-// silently skip the scroll. Worse, that poisons pinning for the
-// rest of the turn: every later streamed token's
-// scrollToBottomIfPinned() would then no-op because isAtBottom()
-// stays false. Capturing pre-append fixes both.
-function appendNode(node: HTMLElement, opts: { pin?: boolean } = {}): void {
-	const wasPinned = isAtBottom();
-	$("#messages").append(node);
-	if (!opts.pin || wasPinned) scrollToBottom();
-	// A new row may change the user-message count (e.g. the user just
-	// sent one), so refresh the jump button's show/disabled state.
-	updateJumpFabState();
-	// Reflect whether we're still pinned at the bottom after the new
-	// row landed, so the jump-to-bottom button hides / shows correctly.
-	updateJumpToBottomFabState();
 }
 
 /**

@@ -14,6 +14,7 @@
 import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
 import { listVoices } from "./api.js";
+import { copyText } from "./clipboard.js";
 import { $, el, escapeHtml, mountModal } from "./dom.js";
 import { saveSessionPrefs } from "./prefs.js";
 import {
@@ -516,7 +517,7 @@ export function handleSlash(arg: string): void {
 					// clipboard.writeText promise so a permission denial
 					// surfaces correctly. We don't block the slash
 					// command on it.
-					void copyToClipboard(m.text).then((ok) => {
+					void copyText(m.text).then((ok) => {
 						if (ok) appendNode(el_pre("Copied last assistant message to clipboard."));
 						else appendError("clipboard access denied");
 					});
@@ -532,7 +533,7 @@ export function handleSlash(arg: string): void {
 			if (!url) {
 				appendError("no session yet — send a message first");
 			} else {
-				void copyToClipboard(url).then((ok) => {
+				void copyText(url).then((ok) => {
 					if (ok) appendNode(el_pre(`Copied chat link to clipboard:\n  ${url}`));
 					else appendError("clipboard access denied");
 				});
@@ -1699,43 +1700,6 @@ export function openOverflowMenu(): void {
 // ---------------------------------------------------------------------------
 // Clipboard + export
 // ---------------------------------------------------------------------------
-
-/**
- * Copy text to the system clipboard. Returns false on permission denied
- * or in non-secure contexts where navigator.clipboard is unavailable.
- *
- * The `navigator.clipboard.writeText` call is awaited so a permission
- * denial surfaces here (return `false`) instead of escaping the try as
- * a fire-and-forget rejection. Before this fix, the function returned
- * `true` *before* the write resolved, so callers that logged "copied!"
- * were lying when the clipboard write had actually failed.
- */
-async function copyToClipboard(text: string): Promise<boolean> {
-	try {
-		if (navigator.clipboard?.writeText) {
-			// navigator.clipboard requires https or localhost. Fall back to
-			// the legacy textarea trick on http:// LAN addresses.
-			await navigator.clipboard.writeText(text);
-			return true;
-		}
-	} catch {
-		// fall through to textarea fallback
-	}
-	try {
-		const ta = document.createElement("textarea");
-		ta.value = text;
-		ta.style.position = "fixed";
-		ta.style.opacity = "0";
-		document.body.appendChild(ta);
-		ta.focus();
-		ta.select();
-		const ok = document.execCommand("copy");
-		document.body.removeChild(ta);
-		return ok;
-	} catch {
-		return false;
-	}
-}
 
 /**
  * Download the current session as a self-contained HTML file. Used by
