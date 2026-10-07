@@ -6,6 +6,7 @@
  * access), refuses non-regular files, and sets attachment headers.
  */
 
+import { readdirSync, readlinkSync } from "node:fs";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -46,6 +47,31 @@ describe("GET /api/file", () => {
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-disposition")).toContain("attachment");
 		expect(await res.text()).toBe("hi there");
+	});
+
+	it("closes the file descriptor when the client aborts mid-download", async () => {
+		const big = join(tmp, "big.bin");
+		await writeFile(big, Buffer.alloc(64 * 1024 * 1024));
+		const openCount = () =>
+			readdirSync("/proc/self/fd").filter((fd) => {
+				try {
+					return readlinkSync(`/proc/self/fd/${fd}`) === big;
+				} catch {
+					return false;
+				}
+			}).length;
+		const controller = new AbortController();
+		const res = await fetch(`${base}/api/file?path=${encodeURIComponent(big)}`, {
+			signal: controller.signal,
+		});
+		const reader = res.body!.getReader();
+		await reader.read();
+		expect(openCount()).toBe(1);
+		controller.abort();
+		await reader.read().catch(() => {});
+		const deadline = Date.now() + 2000;
+		while (openCount() > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+		expect(openCount()).toBe(0);
 	});
 
 	it("resolves relative tool paths against the supplied session cwd", async () => {

@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { pipeline } from "node:stream/promises";
 import type { Request, Response, Router } from "express";
 import express from "express";
 import { asyncHandler } from "./async-handler.js";
@@ -83,16 +84,9 @@ export function createUploadsServingRouter(): Router {
 					res.setHeader("Content-Type", "application/octet-stream");
 					res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
 				}
-				handle
-					.createReadStream({ autoClose: true, start: 0 })
-					.on("error", () => {
-						try {
-							res.destroy();
-						} catch {
-							/* client may already be gone */
-						}
-					})
-					.pipe(res);
+				// pipeline() destroys the file stream (closing its descriptor) when the
+				// client aborts; a bare .pipe() would leak it until garbage collection.
+				await pipeline(handle.createReadStream({ autoClose: true, start: 0 }), res).catch(() => {});
 			} catch (error) {
 				await handle.close().catch(() => {});
 				throw error;

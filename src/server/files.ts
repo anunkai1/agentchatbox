@@ -23,6 +23,7 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename, isAbsolute, resolve } from "node:path";
+import { pipeline } from "node:stream/promises";
 import type { Request, Response, Router } from "express";
 import express from "express";
 import { asyncHandler } from "./async-handler.js";
@@ -78,20 +79,12 @@ export function createFilesRouter(): Router {
 			res.setHeader("Content-Length", String(s.size));
 			// Stream the file instead of buffering it. The agent routinely
 			// touches multi-GB logs; loading one into a Buffer to `res.send()`
-			// would spike memory and can OOM the server. Piping reads + sends
-			// in chunks so peak memory stays flat regardless of file size.
-			handle
-				.createReadStream({ autoClose: true, start: 0 })
-				.on("error", () => {
-					// Avoid reflecting filesystem details. Mid-stream failures cannot
-					// change status safely, so destroy the response.
-					try {
-						res.destroy();
-					} catch {
-						/* client may be gone */
-					}
-				})
-				.pipe(res);
+			// would spike memory and can OOM the server. pipeline() streams in
+			// chunks so peak memory stays flat, and destroys the file stream
+			// (closing its descriptor) when the client aborts or a read fails.
+			// Mid-stream failures cannot change the status, so they are dropped
+			// without reflecting filesystem details.
+			await pipeline(handle.createReadStream({ autoClose: true, start: 0 }), res).catch(() => {});
 		}),
 	);
 
