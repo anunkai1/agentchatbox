@@ -336,7 +336,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const text = el("div", { class: "text markdown" }, " ");
 		setRichText(text, m.text || " ");
 		body.append(text);
-		if (m.ts !== undefined) body.append(makeTimestampEl(m.ts));
+		body.append(makeAssistantMetaRow(() => m, m.ts));
 		body.append(
 			makeAssistantControls(
 				() => m,
@@ -834,6 +834,29 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 		makeMessageActionButton("continue", "Ask the agent to continue", () => {
 			sendActionPrompt("Continue from your last answer.");
 		}),
+	);
+	return bar;
+}
+
+/**
+ * An assistant reply's meta line: the timestamp on the left, then the fork and
+ * share controls at the right edge of the same line. They used to sit at the
+ * end of the reply's control row; the timestamp line is otherwise empty, so
+ * they cost no extra line there, and the control row keeps just the
+ * per-answer actions (copy / retry / continue) plus the voice strip.
+ */
+function makeAssistantMetaRow(
+	getMessage: () => PersistedMessage | null,
+	ts: number | undefined,
+): HTMLElement {
+	const row = el("div", { class: "assistant-meta" });
+	if (ts !== undefined) row.append(makeTimestampEl(ts));
+	const actions = el("div", {
+		class: "message-actions assistant-meta-actions",
+		role: "toolbar",
+		"aria-label": "Conversation actions",
+	});
+	actions.append(
 		makeMessageActionButton("fork", "Fork this conversation here", () => {
 			const message = getMessage();
 			if (message?.kind === "assistant" && message.seq !== undefined) {
@@ -844,7 +867,8 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 			services.copyShareLink?.();
 		}),
 	);
-	return bar;
+	row.append(actions);
+	return row;
 }
 
 /**
@@ -1315,12 +1339,15 @@ export function appendAssistantPlaceholder(
 	body.append(thinkingWrap);
 	const pre = el("div", { class: "text markdown streaming" });
 	body.append(pre);
-	// Timestamp on the live placeholder too, so it's visible while the
-	// reply streams in (renderMessageNode repaints it on full re-render).
-	// The just-pushed assistant message is the last entry in state.
+	// Timestamp (once it is known) plus the fork/share controls share the
+	// meta line above the control row; renderMessageNode repaints them on a
+	// full re-render. The just-pushed assistant message is the last entry in
+	// state.
 	{
 		const am = state.messages[state.messages.length - 1];
-		if (am && am.kind === "assistant" && am.ts !== undefined) body.append(makeTimestampEl(am.ts));
+		body.append(
+			makeAssistantMetaRow(() => message, am && am.kind === "assistant" ? am.ts : undefined),
+		);
 	}
 	// Long/Med/Short spoken-variant buttons on EVERY assistant row, including
 	// the live-streaming placeholder — the variants are generated on

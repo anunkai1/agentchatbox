@@ -1893,6 +1893,25 @@ body.sidebar-resizing iframe {
 .message-action.is-success {
 	color: var(--c-ok);
 }
+
+/* Assistant meta line: the timestamp, then fork/share pushed to the right
+   edge of the same line. The control row below keeps only the per-answer
+   actions and the voice strip. */
+.assistant-meta {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 6px;
+}
+.assistant-meta .msg-ts {
+	margin-top: 0;
+}
+.assistant-meta-actions {
+	margin-left: auto;
+}
+.assistant-meta-actions .message-action {
+	height: 24px;
+}
 /* User rows become flex column so the bubble and its single action strip
    stack neatly, with Copy and Fork sharing one line. */
 .row-user {
