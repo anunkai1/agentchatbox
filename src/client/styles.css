@@ -854,11 +854,11 @@ body.sidebar-resizing iframe {
 .header-voice {
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
+	gap: 6px;
 	background: var(--surface-hover);
 	border: 1px solid var(--border);
 	color: var(--text-muted);
-	padding: 6px 10px;
+	padding: 6px 11px 6px 7px;
 	border-radius: var(--radius-pill);
 	cursor: pointer;
 	font-family: inherit;
@@ -878,20 +878,25 @@ body.sidebar-resizing iframe {
 	border-color: var(--accent-border);
 	color: var(--accent);
 }
-.header-voice-icon {
+/* The "V" disc: a dim outline when off, solid accent when on. The glyph is a
+   letter, so there is no vector art to carry — only the disc's fill changes. */
+.header-voice-v {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	line-height: 0;
+	width: 20px;
+	height: 20px;
+	border-radius: 50%;
+	border: 1.5px solid rgba(255, 255, 255, 0.22);
+	font-size: 11px;
+	font-weight: 800;
+	line-height: 1;
+	padding-bottom: 1px;
 }
-.header-voice .voice-on {
-	display: none;
-}
-.header-voice.on .voice-on {
-	display: inline;
-}
-.header-voice.on .voice-off {
-	display: none;
+.header-voice.on .header-voice-v {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: #1a0906;
 }
 
 /* The "API ↗" header affordance — z.ai style icon-label-arrow button. */
@@ -3143,9 +3148,10 @@ body.modal-open {
 	.header .header-voice {
 		gap: 0;
 	}
-	.header-voice-icon svg {
-		width: 16px;
-		height: 16px;
+	.header-voice-v {
+		width: 18px;
+		height: 18px;
+		font-size: 10.5px;
 	}
 	.header-voice-label {
 		display: none;

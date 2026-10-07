@@ -403,6 +403,10 @@ export function syncDisplayPreferences(): void {
 				? "Voice mode on: recordings send when you stop talking, replies are spoken"
 				: "Voice mode off — click to turn on",
 		);
+		const headerVoiceLabel = headerVoice.querySelector(".header-voice-label");
+		if (headerVoiceLabel) {
+			headerVoiceLabel.textContent = state.voiceMode ? "Voice on" : "Voice off";
+		}
 	}
 	const toolsHidden = !state.showToolCalls;
 	for (const node of document.querySelectorAll<HTMLElement>("#messages .row-tool")) {
@@ -2249,9 +2253,9 @@ export function renderShell(): void {
 			el("span", { class: "title", id: "title" }, state.title),
 		),
 		// Voice mode on/off. Device-wide, like the Settings row it mirrors, so the
-		// pill keeps its state across sessions. Both the speaker icon and the accent
-		// fill change, so the state reads at a glance on a phone. Starting a new chat
-		// lives in the drawer behind the ☰ button.
+		// pill keeps its state across sessions. The disc lights up when on, which is
+		// the fastest read of "is the mic armed?" at 30px, where the label is gone.
+		// Starting a new chat lives in the drawer behind the ☰ button.
 		el(
 			"button",
 			{
@@ -2263,12 +2267,8 @@ export function renderShell(): void {
 				"aria-pressed": "false",
 				onclick: () => shellHandlers?.toggleVoiceMode(),
 			},
-			el("span", {
-				class: "header-voice-icon",
-				"aria-hidden": "true",
-				html: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.5 6.5 9H3v6h3.5L11 19.5z"/><path class="voice-on" d="M15.5 8.5a5 5 0 0 1 0 7"/><path class="voice-on" d="M18.5 5.5a9 9 0 0 1 0 13"/><path class="voice-off" d="m16 9.5 5 5"/><path class="voice-off" d="m21 9.5-5 5"/></svg>`,
-			}),
-			el("span", { class: "header-voice-label" }, "Voice"),
+			el("span", { class: "header-voice-v", "aria-hidden": "true" }, "V"),
+			el("span", { class: "header-voice-label" }, "Voice off"),
 		),
 		el("div", { class: "spacer" }),
 		// Per-chat Claude Code routing (/cc on|off). The extension owns the
