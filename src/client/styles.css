@@ -1743,7 +1743,7 @@ body.sidebar-resizing iframe {
 	}
 }
 .speak-btn.is-loading {
-	pointer-events: none;
+	/* Stays clickable: a second press cancels (generation or synthesis). */
 	opacity: 0.85;
 }
 

@@ -669,7 +669,13 @@ export function makeVoiceVariantButton(
 	btn.setAttribute("aria-label", title);
 	btn.addEventListener("click", () => {
 		// Second press while this variant is still being written: cancel it.
-		if (state.pendingVoiceBtn === btn) {
+		// The row can be re-rendered mid-generation, leaving the pending button
+		// detached; its replacement counts as the same press.
+		const pending = state.pendingVoiceBtn;
+		if (
+			pending &&
+			(pending === btn || (!pending.isConnected && state.pendingVoiceVariant === variant))
+		) {
 			resetPendingVoice(true);
 			return;
 		}
