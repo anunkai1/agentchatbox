@@ -321,6 +321,18 @@ function sendAsUser(trimmed: string): boolean {
 let lastAutoVoicedStamp: number | null = null;
 
 /**
+ * Voice mode: ask for the Long spoken variant of the reply identified by
+ * `stamp` (null = nothing to speak). The voice-reply handler plays it on arrival.
+ */
+function autoVoiceReply(stamp: number | null): void {
+	if (!state.voiceMode || state.compaction) return;
+	if (stamp === null || stamp === lastAutoVoicedStamp) return;
+	lastAutoVoicedStamp = stamp;
+	beginPendingVoice("long", null, "");
+	sendPromptHook("/voice-last long");
+}
+
+/**
  * Wires `sendAsUser` to the boot-local chat client. It remains a module-level
  * hook because composer handlers are registered before the WebSocket client
  * finishes booting.
@@ -732,14 +744,7 @@ function onEvent(event: Record<string, unknown>): void {
 			getSessionStatsHook();
 			// Voice mode: ask pi-voice-reply for the Long spoken variant of the
 			// reply that just finished; the voice-reply handler plays it on arrival.
-			if (state.voiceMode && !state.compaction && !state.isStreaming) {
-				const stamp = voiceableReplyStamp(e.messages);
-				if (stamp !== null && stamp !== lastAutoVoicedStamp) {
-					lastAutoVoicedStamp = stamp;
-					beginPendingVoice("long", null, "");
-					sendPromptHook("/voice-last long");
-				}
-			}
+			if (!state.isStreaming) autoVoiceReply(voiceableReplyStamp(e.messages));
 			break;
 
 		case "turn_start":
@@ -925,6 +930,9 @@ function onEvent(event: Record<string, unknown>): void {
 						state.lastAssistantText = content;
 						state.lastAssistantSeq = liveMessageSeq;
 						appendNode(renderMessageNode(reply), { pin: true });
+						// A /cc run bypasses pi, so no agent_end follows: voice the
+						// reply here, but not the "Stopped" notices.
+						if (!/^[⏹⏱⚠]/.test(content)) autoVoiceReply(noteMsg.timestamp ?? liveMessageSeq);
 					} else {
 						const note = {
 							kind: "note" as const,
