@@ -1633,7 +1633,7 @@ export function refreshStatus(): void {
 		].join(" · ");
 		coreEl.innerHTML = core;
 		// Full value on hover when truncated.
-		coreEl.title = core;
+		coreEl.title = coreEl.textContent ?? "";
 	}
 
 	paintStatusDynamic();
@@ -1795,7 +1795,7 @@ function paintStatusDynamic(): void {
 	// flashing <span>. All interpolated bits are escaped above. The title
 	// keeps the full value reachable on hover when the slot truncates.
 	dynEl.innerHTML = html;
-	dynEl.title = html;
+	dynEl.title = dynEl.textContent ?? "";
 }
 
 /**
@@ -2700,7 +2700,14 @@ export function renderShell(): void {
 		) {
 			e.preventDefault();
 			shellHandlers?.historyBack();
-		} else if (e.key === "ArrowDown") {
+		} else if (
+			e.key === "ArrowDown" &&
+			!e.altKey &&
+			state.historyIdx !== null &&
+			!input.value.slice(input.selectionEnd).includes("\n")
+		) {
+			// Only while recalling history, and only from the last line, so the
+			// caret can still move down through a multi-line draft.
 			e.preventDefault();
 			shellHandlers?.historyForward();
 		}
