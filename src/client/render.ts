@@ -848,19 +848,18 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 }
 
 /**
- * An assistant reply's single control line: the icon strip
- * (copy / retry / continue / fork / share) followed by the voice strip
- * (🔊 + Long / Med / Short). The two used to sit on separate lines — the
- * voice strip occupied a whole row above the icons, wasting vertical space
- * and leaving most of both rows empty. They now share one row and wrap onto
- * a second line only when the viewport is too narrow to hold both.
+ * An assistant reply's single control line: the voice strip
+ * (🔊 + Long / Med / Short) first, then the icon strip
+ * (copy / retry / continue / fork / share). The voice strip used to sit on a
+ * line of its own above the icons; both now share one row and wrap onto a
+ * second line only when the viewport is too narrow to hold both.
  */
 function makeAssistantControls(
 	getMessage: () => PersistedMessage | null,
 	voiceActions: HTMLElement,
 ): HTMLElement {
 	const row = el("div", { class: "assistant-controls" });
-	row.append(makeAssistantActionBar(getMessage), voiceActions);
+	row.append(voiceActions, makeAssistantActionBar(getMessage));
 	return row;
 }
 
