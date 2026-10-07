@@ -58,6 +58,47 @@ setTimeout(() => {}, 1000);
 		expect(message.content[0].data).toHaveLength(33 * 1024 * 1024);
 	}, 15_000);
 
+	it("reassembles events split across chunks and skips junk lines", () => {
+		const dir = mkdtempSync(join(tmpdir(), "agentchatbox-pi-process-split-"));
+		tempDirs.push(dir);
+		const bin = join(dir, "fake-pi-idle");
+		writeFileSync(bin, "#!/usr/bin/env bash\nwhile IFS= read -r _l; do :; done\n", { mode: 0o755 });
+		const child = spawnPi({ bin, provider: "zai", modelId: "glm-5.2", cwd: dir });
+		children.push(child);
+		const events: unknown[] = [];
+		child.on("event", (e) => events.push(e));
+		const feed = (chunk: string) =>
+			(child as unknown as { handleStdout(c: string): void }).handleStdout(chunk);
+
+		feed('{"type":"a"');
+		feed(',"n":1}\nnot json\n{"type":"b"}\r\n{"type"');
+		feed(':"c"}\n');
+		expect(events).toEqual([{ type: "a", n: 1 }, { type: "b" }, { type: "c" }]);
+	});
+
+	it("handles one very long line arriving in small chunks without quadratic rescans", () => {
+		const dir = mkdtempSync(join(tmpdir(), "agentchatbox-pi-process-slow-"));
+		tempDirs.push(dir);
+		const bin = join(dir, "fake-pi-idle");
+		writeFileSync(bin, "#!/usr/bin/env bash\nwhile IFS= read -r _l; do :; done\n", { mode: 0o755 });
+		const child = spawnPi({ bin, provider: "zai", modelId: "glm-5.2", cwd: dir });
+		children.push(child);
+		let seen = 0;
+		child.on("event", () => seen++);
+		const feed = (chunk: string) =>
+			(child as unknown as { handleStdout(c: string): void }).handleStdout(chunk);
+
+		const piece = "x".repeat(64 * 1024);
+		const started = performance.now();
+		feed('{"data":"');
+		for (let i = 0; i < 512; i++) feed(piece); // 32 MiB
+		feed('"}\n');
+		const elapsed = performance.now() - started;
+		expect(seen).toBe(1);
+		// The old rescan-per-chunk loop took ~3.9 s here.
+		expect(elapsed).toBeLessThan(1500);
+	});
+
 	it("starts RPC children offline so startup probes cannot block a chat", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "agentchatbox-pi-process-"));
 		tempDirs.push(dir);

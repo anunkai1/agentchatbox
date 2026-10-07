@@ -106,7 +106,9 @@ export declare interface PiProcess {
 // biome-ignore lint/suspicious/noUnsafeDeclarationMerging: intentional — merges the PiProcess interface into the class to type the inherited EventEmitter on/emit overloads.
 export class PiProcess extends EventEmitter {
 	private readonly child: ChildProcessWithoutNullStreams;
-	private stdoutBuf = "";
+	/** Pieces of the current, not yet newline-terminated stdout line. */
+	private stdoutPending: string[] = [];
+	private stdoutPendingChars = 0;
 	private stderrBuf = "";
 	private killTimer: ReturnType<typeof setTimeout> | null = null;
 	/**
@@ -320,38 +322,57 @@ export class PiProcess extends EventEmitter {
 		// chunks so one bad line produces one error rather than a burst of
 		// duplicate errors in the browser.
 		if (this.killed) return;
-		this.stdoutBuf += chunk;
-		if (this.stdoutBuf.length > PiProcess.MAX_STDOUT_LINE_CHARS && !this.stdoutBuf.includes("\n")) {
-			this.emit("error", new Error("pi emitted an oversized RPC line"));
-			this.kill();
-			return;
-		}
+		// Scan only the new chunk for the newline and join the pieces once per
+		// line. Rescanning an ever-growing buffer is quadratic for one huge line
+		// (an image prompt echoed back by pi).
+		let start = 0;
 		for (;;) {
-			const idx = this.stdoutBuf.indexOf("\n");
-			if (idx < 0) break;
-			const line = this.stdoutBuf.slice(0, idx);
-			this.stdoutBuf = this.stdoutBuf.slice(idx + 1);
-			if (!line) continue;
-			// Strip a trailing \r defensively — pi doesn't emit
-			// \r\n, but a buggy version might.
-			const clean = line.endsWith("\r") ? line.slice(0, -1) : line;
-			if (clean.length > PiProcess.MAX_STDOUT_LINE_CHARS) {
-				this.emit("error", new Error("pi emitted an oversized RPC line"));
-				this.kill();
+			const idx = chunk.indexOf("\n", start);
+			if (idx < 0) {
+				const tail = chunk.slice(start);
+				if (!tail) return;
+				this.stdoutPending.push(tail);
+				this.stdoutPendingChars += tail.length;
+				if (this.stdoutPendingChars > PiProcess.MAX_STDOUT_LINE_CHARS) {
+					this.emit("error", new Error("pi emitted an oversized RPC line"));
+					this.kill();
+				}
 				return;
 			}
-			let parsed: Record<string, unknown>;
-			try {
-				parsed = JSON.parse(clean) as Record<string, unknown>;
-			} catch {
-				// Non-JSON line. `pi` should never emit one in RPC
-				// mode, but a buggy version might. Drop silently;
-				// the stderr buffer carries the raw bytes for
-				// postmortem.
-				continue;
+			let line = chunk.slice(start, idx);
+			start = idx + 1;
+			if (this.stdoutPending.length > 0) {
+				line = this.stdoutPending.join("") + line;
+				this.stdoutPending = [];
+				this.stdoutPendingChars = 0;
 			}
-			this.emit("event", parsed);
+			if (!this.handleLine(line)) return;
 		}
+	}
+
+	/** Parse and emit one complete line. Returns false if the process was killed. */
+	private handleLine(line: string): boolean {
+		if (!line) return true;
+		// Strip a trailing \r defensively — pi doesn't emit
+		// \r\n, but a buggy version might.
+		const clean = line.endsWith("\r") ? line.slice(0, -1) : line;
+		if (clean.length > PiProcess.MAX_STDOUT_LINE_CHARS) {
+			this.emit("error", new Error("pi emitted an oversized RPC line"));
+			this.kill();
+			return false;
+		}
+		let parsed: Record<string, unknown>;
+		try {
+			parsed = JSON.parse(clean) as Record<string, unknown>;
+		} catch {
+			// Non-JSON line. `pi` should never emit one in RPC
+			// mode, but a buggy version might. Drop silently;
+			// the stderr buffer carries the raw bytes for
+			// postmortem.
+			return true;
+		}
+		this.emit("event", parsed);
+		return true;
 	}
 }
 
