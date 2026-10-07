@@ -2,7 +2,7 @@
   "name": "agentchatbox",
   "version": "0.1.0",
   "private": true,
-  "description": "Web chat interface for the pi coding agent. The browser is a thin renderer; the server is a thin transport layer that spawns a `pi --mode rpc` subprocess per WebSocket connection.",
+  "description": "Web chat interface for the pi coding agent. The browser is a thin renderer; the server is a thin transport layer that runs one `pi --mode rpc` subprocess per chat session; a session survives its WebSocket connection.",
   "type": "module",
   "license": "MIT",
   "scripts": {

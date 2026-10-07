@@ -1,12 +1,7 @@
 /**
  * Single source of truth for the list of LLM providers the server knows
- * about. Imported by:
- *
- *   - models-cache.ts: to iterate SDK providers when picking a boot-probe
- *                  provider, and to derive SDK_PROVIDERS
- *   - index.ts:    to drive the /api/models picker — only providers
- *                  that are both in this set AND authenticated in `pi`'s
- *                  auth.json are returned to the client
+ * about. Used by models-cache.ts to pick the boot-probe provider; the
+ * /api/models list itself comes from pi's own catalog.
  *
  * Why a single file: the previous design had two parallel arrays
  * (`KNOWN_PROVIDERS` in agent.ts, `builtinProviders` in index.ts) that

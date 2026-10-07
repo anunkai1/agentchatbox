@@ -3286,9 +3286,9 @@ function renderProjectsContainer(
  * Draggable splitter between the Projects (top) and Global/Other (bottom)
  * sidebar panes. The Projects pane height is persisted to localStorage so
  * the user's preferred split survives reloads. The document-level
- * mousemove/mouseup handlers are attached exactly once (renderShell can
- * rebuild the DOM many times); the per-element mousedown is rebound on
- * every rebuild because the splitter node is brand new each time.
+ * mousemove/mouseup handlers are attached when a drag starts and removed
+ * when it ends; the per-element handlers are rebound on every rebuild
+ * because the splitter node is brand new each time.
  */
 const SIDEBAR_SPLIT_KEY = "acb-sidebar-projects-pane-height";
 const SIDEBAR_SPLIT_MIN = 60; // px — don't let either pane collapse to nothing

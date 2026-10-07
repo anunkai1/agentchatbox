@@ -17,7 +17,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - **Codex Fast control** — a header button and Settings row open the pi extension’s Fast/Standard picker; Settings mirrors the extension-reported current state while persistence and the `service_tier` rewrite remain extension-owned
 - **Keyboard, screen-reader, and touch friendly** — labelled controls, trapped/restored modal focus, keyboard-operable pickers and project folders, and 44px mobile action targets
 - **Shareable session links** — every chat lives at `/s/<session-id>`. Bookmark it, copy it (`/link` or the Settings menu), or open it on another device to resume the same conversation
-- Local TTS (Kokoro, 1.4× playback) and STT (pi-stt-server daemons: Lappy GPU whisper, CPU fallback) — no paid cloud APIs
+- Local TTS (Kokoro, 1.25× default playback) and STT (pi-stt-server daemons: Lappy GPU whisper, CPU fallback) — no paid cloud APIs
 - Slash commands, model switching mid-conversation, session history / resume / rename
 - Session list / transcript replay via `/api/sessions`
 
@@ -62,7 +62,7 @@ src/
     main.ts               # boot, send, history, event dispatcher, init handshake
     render.ts             # renderShell + message renderers + status bar
     slashes.ts            # /model, /think, /clear, /sessions, /export, ...
-    voice.ts              # TTS playback (1.4×) + MediaRecorder + file attach
+    voice.ts              # TTS playback (1.25× default) + MediaRecorder + file attach
     state.ts              # AppState, PromptImage map (no IndexedDB — sessions on disk)
     dom.ts                # $ / el / text helpers, uuid fallback
     ws.ts                 # WebSocket client (init, listSessions, resumeSession, ...)

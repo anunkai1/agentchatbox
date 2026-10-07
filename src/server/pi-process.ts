@@ -1,7 +1,7 @@
 /**
  * Subprocess wrapper for `pi --mode rpc`.
  *
- * Spawns the `pi` CLI in RPC mode (one process per WS connection) and
+ * Spawns the `pi` CLI in RPC mode (one process per chat session) and
  * exposes:
  *   - a strict-`\n` NDJSON splitter on stdout (Node `readline` is not
  *     protocol-compliant — see the rpc.md docs and the SKILL.md note in
@@ -22,7 +22,8 @@
  * ACB relies on pi's built-in + persisted model catalogs, which can be
  * refreshed explicitly outside ACB with `pi update --models`.
  *
- * The process model is one `pi` per WS connection. Resume = kill + respawn
+ * The process model is one `pi` per chat session (it can outlive its
+ * WebSocket; see session-registry.ts). Resume = kill + respawn
  * with `--session <id>`. New session = kill + respawn without `--session`.
  * Model switch mid-conversation does NOT respawn — `pi` supports in-process
  * model switching via the `set_model` RPC command.

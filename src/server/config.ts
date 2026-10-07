@@ -182,11 +182,7 @@ export const config: ServerConfig = {
 		64 * 1024 * 1024,
 	),
 	piReadyTimeoutMs: positiveInt("AGENTCHATBOX_PI_READY_TIMEOUT_MS", 30_000, 120_000),
-	// `piBin` and `piCwd` are read lazily — they need to reflect the
-	// process state at boot time, not at module-load time (which could
-	// be any time the module is imported, e.g. during a test). A
-	// getter on the config object would be ideal but a frozen literal
-	// is what the rest of the file uses; resolve them here.
+	// `piBin` and `piCwd` are resolved once, when this module loads.
 	piBin: process.env.PI_BIN ?? "pi",
 	piCwd,
 	trustedExternalProjects: parseTrustedExternalProjects(
