@@ -1333,24 +1333,11 @@ export function openModelsPanel(): void {
 			"Multimodal / vision",
 			"Reading images & video frames in chat. Routed by pi-multimodal-proxy.",
 			modelLine(
-				state.visionModel?.source === "env"
-					? pill("env", "set")
-					: state.visionModel?.source === "config"
-						? pill("picked", "set")
-						: pill("default", "default"),
-				state.visionModel?.model ?? "anthropic/claude-sonnet-4-5",
+				pill("session", "implicit"),
+				// The extension reports its own resolved model and mode for this session.
+				state.extensionStatusLabels["multimodal-proxy"] ?? "(loads with the session)",
 			),
-			hint(
-				"switch → ",
-				kbd("/multimodal-proxy"),
-				state.visionModel?.mode === "fallback"
-					? " · mode: fallback (only when chat model can't see images)"
-					: state.visionModel?.mode === "always"
-						? " · mode: always"
-						: state.visionModel?.mode === "off"
-							? " · mode: off"
-							: "",
-			),
+			hint("switch → ", kbd("/multimodal-proxy")),
 		),
 	);
 

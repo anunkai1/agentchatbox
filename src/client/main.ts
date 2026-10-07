@@ -1852,7 +1852,6 @@ async function boot(): Promise<void> {
 			if (state.imageModel && state.imageModel.source !== "default") {
 				state.currentImageModelLabel = state.imageModel.model;
 			}
-			state.visionModel = h.visionModel ?? null;
 			state.geminiKey = h.geminiKey ?? false;
 			state.availableModels = models.map((m: ModelInfo) => ({
 				id: m.id,
