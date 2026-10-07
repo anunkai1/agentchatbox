@@ -5,8 +5,7 @@ import { defineConfig } from "vitest/config";
 
 /**
  * Vitest config. We only run server-side tests today; the client bundle
- * is exercised by the manual smoke suite in `scripts/*-smoke.mjs` and
- * the headless check-page script.
+ * is exercised by the manual smoke scripts in `scripts/`.
  *
  * If client-side tests are added later, they will need a DOM environment
  * (jsdom or happy-dom) and a separate config file — keeping that out of

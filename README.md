@@ -97,7 +97,6 @@ extensions/
 tests/                    # vitest, server-side + pure extension helpers
 scripts/                  # build + dev helpers
   build-client.mjs        # esbuild bundler for the client
-  _archive/               # throwaway test scripts (gitignored, see .gitignore)
 ```
 
 ## Run locally
