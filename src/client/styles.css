@@ -27,15 +27,16 @@
 	--text-secondary: #b4b4b4;
 	--text-muted: #858585;
 
-	/* Accent — warm orange/red like z.ai */
-	--accent: #eb5b3c;
-	--accent-hover: #ff6f4d;
-	--accent-soft: rgba(235, 91, 60, 0.12);
+	/* Accent — ACB blue, light enough to read as text on the black UI and dark
+	 * enough to carry white text on filled buttons */
+	--accent: #2689c7;
+	--accent-hover: #3fa0dd;
+	--accent-soft: rgba(38, 137, 199, 0.14);
 	--brand-blue: #1d3970;
 	--brand-cyan: #1d9fa5;
 	--brand-gradient: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan));
 	--brand-glow: rgba(39, 196, 200, 0.35);
-	--accent-border: rgba(235, 91, 60, 0.45);
+	--accent-border: rgba(38, 137, 199, 0.5);
 
 	/* User bubble — a desaturated dark grey */
 	--user-bubble: color-mix(
@@ -43,7 +44,7 @@
 		var(--accent) 16%,
 		#050505
 	); /* tinted so user turns pop against the black bg when fast-scrolling */
-	--user-bubble-border: rgba(235, 91, 60, 0.35);
+	--user-bubble-border: rgba(38, 137, 199, 0.35);
 
 	/* Semantic accents */
 	--c-tool: #c4a7fb;
@@ -1012,13 +1013,13 @@ body.sidebar-resizing iframe {
    boundary and flicker. The ring fades from nothing, out to 6px, back. */
 @keyframes jumpHighlight {
 	0% {
-		box-shadow: 0 0 0 0 rgba(235, 91, 60, 0);
+		box-shadow: 0 0 0 0 rgba(38, 137, 199, 0);
 	}
 	20% {
-		box-shadow: 0 0 0 6px rgba(235, 91, 60, 0.45);
+		box-shadow: 0 0 0 6px rgba(38, 137, 199, 0.45);
 	}
 	100% {
-		box-shadow: 0 0 0 0 rgba(235, 91, 60, 0);
+		box-shadow: 0 0 0 0 rgba(38, 137, 199, 0);
 	}
 }
 .row-user .bubble.jump-highlight {
@@ -2189,9 +2190,9 @@ body.sidebar-resizing iframe {
 	color: var(--text);
 }
 .composer .icon-btn.voice-mode-on {
-	background: rgba(29, 159, 165, 0.16);
-	border-color: rgba(39, 196, 200, 0.5);
-	color: #5fd6da;
+	background: var(--accent-soft);
+	border-color: var(--accent-border);
+	color: var(--accent-hover);
 }
 .composer .input {
 	flex: 1;
