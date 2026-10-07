@@ -1664,14 +1664,26 @@ body.sidebar-resizing iframe {
 	opacity: 0.85;
 }
 
+/* One control line per assistant reply: the icon strip and the voice strip
+   share a row, so the voice buttons no longer take a full-width line of
+   their own. They wrap as two groups only when the viewport is too narrow
+   for both (see the mobile block below). This row owns the spacing above it;
+   the strips inside it set no margin of their own. */
+.assistant-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 6px;
+	margin-top: 8px;
+}
+
 /* Compact voice strip: immediate speech plus the generated Long/Medium/Short
    variants stay together and fit on one line, including on narrow screens. */
 .voice-actions {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: 2px;
 	max-width: 100%;
-	margin-top: 7px;
 	overflow-x: auto;
 	overscroll-behavior-x: contain;
 	scrollbar-width: none;
@@ -1684,22 +1696,23 @@ body.sidebar-resizing iframe {
 	height: 30px;
 	flex: 0 0 auto;
 	justify-content: center;
-	gap: 5px;
+	gap: 3px;
 	margin-top: 0;
-	padding: 0 9px;
+	padding: 0 6px;
 	font-size: 13px;
 	white-space: nowrap;
 }
 .voice-actions .voice-icon {
 	display: inline-flex;
-	font-size: 15px;
+	font-size: 14px;
 	line-height: 1;
 }
 .voice-actions .voice-label {
-	font-size: 12px;
+	font-size: 11.5px;
 	font-weight: 600;
 }
 .voice-actions .immediate-voice {
+	padding: 0 5px;
 	color: var(--text-muted);
 	background: transparent;
 	border-color: transparent;
@@ -1820,16 +1833,16 @@ body.sidebar-resizing iframe {
 	color: var(--text);
 }
 /* Shared action strip below messages. Icon-first controls keep the
-   transcript calm while tooltips and aria-labels preserve discoverability. */
+   transcript calm while tooltips and aria-labels preserve discoverability.
+   An assistant row wraps this in .assistant-controls, which owns the gap
+   above the line; the user row's strip sits inside its bubble. */
 .message-actions {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 4px;
-	margin-top: 8px;
 }
 .user-message-actions {
-	margin-top: 0;
 	margin-right: 4px;
 }
 .message-action {
@@ -3266,13 +3279,27 @@ body.modal-open {
 	.composer-state {
 		padding-inline: 4px;
 	}
+	/* The control line has to hold nine controls in ~338px at a 412px phone
+	 * width, so the icon strip and the voice chips are trimmed here (see
+	 * .assistant-controls). Below ~400px the two groups wrap to two tight
+	 * lines rather than squeezing further. */
+	.message-action {
+		width: 30px;
+		height: 30px;
+	}
 	.voice-actions {
-		gap: 3px;
-		padding-bottom: 2px;
+		gap: 1px;
 	}
 	.voice-actions .speak-btn {
-		height: 32px;
-		padding-inline: 8px;
+		height: 30px;
+		padding-inline: 3px;
+		gap: 1.5px;
+	}
+	.voice-actions .voice-icon {
+		font-size: 12px;
+	}
+	.voice-actions .voice-label {
+		font-size: 11px;
 	}
 	.tool-head {
 		gap: 6px;
@@ -3293,10 +3320,6 @@ body.modal-open {
 	}
 	.message-actions {
 		gap: 2px;
-	}
-	.message-action {
-		width: 32px;
-		height: 30px;
 	}
 
 	/* Mobile: the full status text (model · think · tokens · cost) doesn't

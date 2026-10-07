@@ -338,12 +338,15 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		body.append(text);
 		if (m.ts !== undefined) body.append(makeTimestampEl(m.ts));
 		body.append(
-			makeVoiceActions(
-				() => m.text,
-				() => m.voiceLong ?? "",
-				() => m.voiceMedium ?? "",
-				() => m.voiceShort ?? "",
-				() => voiceHintFor(m.text),
+			makeAssistantControls(
+				() => m,
+				makeVoiceActions(
+					() => m.text,
+					() => m.voiceLong ?? "",
+					() => m.voiceMedium ?? "",
+					() => m.voiceShort ?? "",
+					() => voiceHintFor(m.text),
+				),
 			),
 		);
 		// Read-along box for the medium/short spoken variants (long is
@@ -353,7 +356,6 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		updateVoiceTextBox(voiceBox, m);
 		voiceBoxByMessage.set(m, voiceBox);
 		body.append(voiceBox);
-		body.append(makeAssistantActionBar(() => m));
 		wrap.append(body);
 		return wrap;
 	}
@@ -845,6 +847,23 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 	return bar;
 }
 
+/**
+ * An assistant reply's single control line: the icon strip
+ * (copy / retry / continue / fork / share) followed by the voice strip
+ * (🔊 + Long / Med / Short). The two used to sit on separate lines — the
+ * voice strip occupied a whole row above the icons, wasting vertical space
+ * and leaving most of both rows empty. They now share one row and wrap onto
+ * a second line only when the viewport is too narrow to hold both.
+ */
+function makeAssistantControls(
+	getMessage: () => PersistedMessage | null,
+	voiceActions: HTMLElement,
+): HTMLElement {
+	const row = el("div", { class: "assistant-controls" });
+	row.append(makeAssistantActionBar(getMessage), voiceActions);
+	return row;
+}
+
 export function summarizeArgs(args: unknown): string {
 	if (!args || typeof args !== "object") return String(args ?? "");
 	const a = args as Record<string, unknown>;
@@ -1311,15 +1330,20 @@ export function appendAssistantPlaceholder(
 	// The getter resolves to the last assistant message's variant, which
 	// is what /voice-last voices anyway.
 	body.append(
-		makeVoiceActions(
-			() => state.lastAssistantText,
-			// This row's own message, not "the last assistant message": once a
-			// newer turn exists the row is no longer last, and resolving by
-			// position would then play/read some other reply's variant.
-			() => message.voiceLong ?? "",
-			() => message.voiceMedium ?? "",
-			() => message.voiceShort ?? "",
-			() => voiceHintFor(message.text),
+		makeAssistantControls(
+			// Capture this row's message, not the latest assistant at click time.
+			// Streaming mutates the same object, so text and seq stay up to date.
+			() => message,
+			makeVoiceActions(
+				() => state.lastAssistantText,
+				// This row's own message, not "the last assistant message": once a
+				// newer turn exists the row is no longer last, and resolving by
+				// position would then play/read some other reply's variant.
+				() => message.voiceLong ?? "",
+				() => message.voiceMedium ?? "",
+				() => message.voiceShort ?? "",
+				() => voiceHintFor(message.text),
+			),
 		),
 	);
 	// Read-along box (hidden until a medium/short variant lands). Returned
@@ -1327,9 +1351,6 @@ export function appendAssistantPlaceholder(
 	const voiceBox = makeVoiceTextBox();
 	voiceBoxByMessage.set(message, voiceBox);
 	body.append(voiceBox);
-	// Capture this row's message, not the latest assistant at click time.
-	// Streaming mutates the same object, so text and seq stay up to date.
-	body.append(makeAssistantActionBar(() => message));
 	wrap.append(body);
 	appendNode(wrap, { pin: true });
 	return { textPre: pre, thinkingWrap, thinkingPre, voiceTextBox: voiceBox };
