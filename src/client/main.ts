@@ -732,14 +732,7 @@ function onEvent(event: Record<string, unknown>): void {
 			getSessionStatsHook();
 			// Voice mode: ask pi-voice-reply for the Long spoken variant of the
 			// reply that just finished; the voice-reply handler plays it on arrival.
-			// Only the visible tab speaks, so background chats never talk over the
-			// one being listened to (their Long button still works).
-			if (
-				state.voiceMode &&
-				document.visibilityState === "visible" &&
-				!state.compaction &&
-				!state.isStreaming
-			) {
+			if (state.voiceMode && !state.compaction && !state.isStreaming) {
 				const stamp = voiceableReplyStamp(e.messages);
 				if (stamp !== null && stamp !== lastAutoVoicedStamp) {
 					lastAutoVoicedStamp = stamp;
