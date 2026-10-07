@@ -1618,7 +1618,12 @@ export function refreshStatus(): void {
 	const voiceEl = $<HTMLSpanElement>("#status-voice");
 	if (voiceEl) {
 		let html = "";
-		if (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0 || state.pendingVoiceBtn) {
+		if (
+			state.audioPlaying ||
+			state.audioPaused ||
+			state.ttsInFlight > 0 ||
+			state.pendingVoiceVariant
+		) {
 			if (state.audioPlaying || state.audioPaused) {
 				// Playback active or paused — show pause/resume + stop controls.
 				// The toggle button swaps between ⏸ (playing) and ▶ (paused); the
