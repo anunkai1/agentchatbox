@@ -3,7 +3,8 @@
  *
  * Storage layout (one file, `data/search.db`):
  *   embeddings(session_id, msg_idx, role, text, vector BLOB, created_at)
- *   indexed_sessions(session_id, cwd, mtime, msg_count, title, modified_at)
+ *   indexed_sessions(session_id, cwd, mtime, msg_count, title, modified_at,
+ *                    indexed_bytes, next_idx)
  *
  * The DB is durable storage only. At module load we pull every vector into one
  * contiguous `Float32Array` and brute-force search it with a bounded heap — no
@@ -29,6 +30,10 @@ export interface IndexedSessionMeta {
 	msgCount: number;
 	title: string;
 	modifiedAt: string;
+	/** Byte offset in the JSONL up to which passages are indexed (a line boundary). */
+	indexedBytes?: number;
+	/** Ordinal the next passage of this session will take. */
+	nextIdx?: number;
 }
 
 export interface SearchHit {
@@ -146,6 +151,17 @@ export async function getDb(): Promise<Database> {
 			modified_at TEXT
 		);
 	`);
+	// Transcripts are append-only, so remember how far each one is indexed and
+	// embed only what was added. Databases from before this have NULLs, which
+	// make that session's next change a full re-index.
+	const columns = (
+		db.prepare("PRAGMA table_info(indexed_sessions)").all() as Array<{ name: string }>
+	).map((c) => c.name);
+	if (!columns.includes("indexed_bytes")) {
+		db.exec("ALTER TABLE indexed_sessions ADD COLUMN indexed_bytes INTEGER");
+	}
+	if (!columns.includes("next_idx"))
+		db.exec("ALTER TABLE indexed_sessions ADD COLUMN next_idx INTEGER");
 	// Version 2 indexes overlapping conversational passages rather than truncated messages.
 	const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
 	if (version.user_version !== 2) {
@@ -194,7 +210,9 @@ export async function loadCache(): Promise<void> {
 	}
 
 	const metas = database
-		.prepare("SELECT session_id, cwd, mtime, msg_count, title, modified_at FROM indexed_sessions")
+		.prepare(
+			"SELECT session_id, cwd, mtime, msg_count, title, modified_at, indexed_bytes, next_idx FROM indexed_sessions",
+		)
 		.all() as Array<{
 		session_id: string;
 		cwd: string;
@@ -202,6 +220,8 @@ export async function loadCache(): Promise<void> {
 		msg_count: number;
 		title: string;
 		modified_at: string;
+		indexed_bytes: number | null;
+		next_idx: number | null;
 	}>;
 	sessionMeta = new Map(
 		metas.map(
@@ -215,6 +235,8 @@ export async function loadCache(): Promise<void> {
 						msgCount: m.msg_count,
 						title: m.title,
 						modifiedAt: m.modified_at,
+						indexedBytes: m.indexed_bytes ?? undefined,
+						nextIdx: m.next_idx ?? undefined,
 					} satisfies IndexedSessionMeta,
 				] as const,
 		),
@@ -231,15 +253,23 @@ export async function isIndexed(sessionId: string, mtimeIso: string): Promise<bo
 	return !!row && row.mtime === mtimeIso;
 }
 
+/** What is already indexed for a session (cache-backed; call after loadCache). */
+export function indexedSessionState(sessionId: string): IndexedSessionMeta | undefined {
+	return sessionMeta.get(sessionId);
+}
+
 /**
- * Index a session's messages: wipe any prior rows for it, embed every message,
- * insert, and record its metadata. Mutates the in-memory cache incrementally.
+ * Index a session's messages and record its metadata. By default any prior
+ * rows for the session are wiped first and every message is re-embedded.
+ * With `append`, prior rows are kept and `messages` are added after them, so
+ * only new passages are embedded and the cache is extended in place.
  */
 export async function indexSession(
 	meta: IndexedSessionMeta,
 	messages: Array<{ msgIdx: number; role: string; text: string; createdAt: string }>,
 	embedMany: (texts: string[]) => Promise<Float32Array[]>,
 	stillCurrent: () => boolean = () => true,
+	opts: { append?: boolean } = {},
 ): Promise<void> {
 	const database = await getDb();
 
@@ -262,7 +292,8 @@ export async function indexSession(
 
 	// Persist in one synchronous transaction.
 	const tx = database.transaction(() => {
-		database.prepare("DELETE FROM embeddings WHERE session_id = ?").run(meta.sessionId);
+		if (!opts.append)
+			database.prepare("DELETE FROM embeddings WHERE session_id = ?").run(meta.sessionId);
 		const ins = database.prepare(
 			"INSERT OR REPLACE INTO embeddings (session_id, msg_idx, role, text, vector, created_at) VALUES (?, ?, ?, ?, ?, ?)",
 		);
@@ -273,14 +304,53 @@ export async function indexSession(
 		}
 		database
 			.prepare(
-				"INSERT OR REPLACE INTO indexed_sessions (session_id, cwd, mtime, msg_count, title, modified_at) VALUES (?, ?, ?, ?, ?, ?)",
+				"INSERT OR REPLACE INTO indexed_sessions (session_id, cwd, mtime, msg_count, title, modified_at, indexed_bytes, next_idx) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 			)
-			.run(meta.sessionId, meta.cwd, meta.mtime, meta.msgCount, meta.title, meta.modifiedAt);
+			.run(
+				meta.sessionId,
+				meta.cwd,
+				meta.mtime,
+				meta.msgCount,
+				meta.title,
+				meta.modifiedAt,
+				meta.indexedBytes ?? null,
+				meta.nextIdx ?? null,
+			);
 	});
 	tx();
 
 	sessionMeta.set(meta.sessionId, meta);
-	await refreshCacheForSession(meta.sessionId);
+	if (opts.append) {
+		if (!cacheLoaded) await loadCache();
+		else appendToCache(meta.sessionId, messages, vectors);
+	} else {
+		await refreshCacheForSession(meta.sessionId);
+	}
+}
+
+/** Extend the in-memory cache with new passages. Capacity grows geometrically, so an append is O(new). */
+function appendToCache(
+	sessionId: string,
+	messages: Array<{ msgIdx: number; role: string; text: string; createdAt: string }>,
+	vectors: Map<number, Float32Array>,
+): void {
+	const added = messages.filter((m) => vectors.has(m.msgIdx));
+	const needed = (cacheMeta.length + added.length) * EMBEDDING_DIM;
+	if (cacheVectors.length < needed) {
+		const grown = new Float32Array(Math.max(needed, Math.ceil(cacheVectors.length * 1.25)));
+		grown.set(cacheVectors.subarray(0, cacheMeta.length * EMBEDDING_DIM));
+		cacheVectors = grown;
+	}
+	for (const m of added) {
+		cacheVectors.set(vectors.get(m.msgIdx)!, cacheMeta.length * EMBEDDING_DIM);
+		cacheMeta.push({
+			sessionId,
+			msgIdx: m.msgIdx,
+			role: m.role,
+			text: m.text,
+			createdAt: m.createdAt,
+		});
+	}
 }
 
 /**

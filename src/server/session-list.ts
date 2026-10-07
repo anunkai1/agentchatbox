@@ -134,7 +134,7 @@ function forEachJsonlLine(path: string, visitor: (line: string) => unknown): voi
 
 /** Pi writes top-level `type` first. Reading it without parsing the rest lets
  * summary scans count giant image messages without materialising their data. */
-function jsonlLineType(line: string): string | null {
+export function jsonlLineType(line: string): string | null {
 	return line.match(/^\s*\{\s*"type"\s*:\s*"([^"]+)"/)?.[1] ?? null;
 }
 
