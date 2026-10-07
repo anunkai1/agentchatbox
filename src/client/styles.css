@@ -1664,17 +1664,17 @@ body.sidebar-resizing iframe {
 	opacity: 0.85;
 }
 
-/* One control line per assistant reply: the icon strip and the voice strip
+/* One control line per assistant reply: the voice strip and the icon strip
    share a row, so the voice buttons no longer take a full-width line of
    their own. They wrap as two groups only when the viewport is too narrow
-   for both (see the mobile block below). This row owns the spacing above it;
-   the strips inside it set no margin of their own. */
+   for both (see the mobile block below). The row owns the spacing above it
+   and sits close under the meta line; the strips inside it set no margin. */
 .assistant-controls {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 2px 6px;
-	margin-top: 8px;
+	margin-top: 2px;
 }
 
 /* Compact voice strip: immediate speech plus the generated Long/Medium/Short
@@ -1896,12 +1896,14 @@ body.sidebar-resizing iframe {
 
 /* Assistant meta line: the timestamp, then fork/share pushed to the right
    edge of the same line. The control row below keeps only the per-answer
-   actions and the voice strip. */
+   actions and the voice strip. Both rows are deliberately tight: the meta
+   buttons are trimmed to 22px and the control row sits 2px under them, so a
+   reply spends as little height as possible on chrome. */
 .assistant-meta {
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	margin-top: 6px;
+	margin-top: 5px;
 }
 .assistant-meta .msg-ts {
 	margin-top: 0;
@@ -1910,7 +1912,7 @@ body.sidebar-resizing iframe {
 	margin-left: auto;
 }
 .assistant-meta-actions .message-action {
-	height: 24px;
+	height: 22px;
 }
 /* User rows become flex column so the bubble and its single action strip
    stack neatly, with Copy and Fork sharing one line. */
