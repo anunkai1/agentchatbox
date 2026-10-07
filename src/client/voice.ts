@@ -826,7 +826,7 @@ function watchForSpeech(
 	}, 50);
 	function stop(): void {
 		clearInterval(timer);
-		void ctx.close();
+		void ctx.close().catch(() => {}); // a second stop() finds it already closed
 	}
 	return stop;
 }
@@ -856,8 +856,10 @@ export async function handleVoiceRecord(): Promise<void> {
 	}
 	// Voice mode: a reply still playing would be picked up by the mic.
 	if (state.voiceMode) stopAllVoice();
+	let stream: MediaStream | null = null;
 	try {
-		const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		const micStream = stream;
 		recordedChunks = [];
 		mediaRecorder = new MediaRecorder(stream);
 		mediaRecorder.ondataavailable = (e) => {
@@ -871,7 +873,7 @@ export async function handleVoiceRecord(): Promise<void> {
 			// an OS/permission revoke, etc.).
 			const btn = $<HTMLButtonElement>("#voice-btn");
 			btn.textContent = "🎙";
-			stream.getTracks().forEach((t) => {
+			micStream.getTracks().forEach((t) => {
 				t.stop();
 			});
 			if (discardRecording) {
@@ -921,13 +923,21 @@ export async function handleVoiceRecord(): Promise<void> {
 		discardRecording = false;
 		mediaRecorder.start();
 		const recorder = mediaRecorder;
-		stopSpeechWatch = watchForSpeech(stream, (heardSpeech) => {
+		stopSpeechWatch = watchForSpeech(micStream, (heardSpeech) => {
 			discardRecording = !heardSpeech;
 			recorder.stop();
 		});
 		$<HTMLButtonElement>("#voice-btn").textContent = "🔴";
 		setStatusMessage("recording… click 🔴 to stop");
 	} catch (err) {
-		appendError(`microphone access denied: ${err instanceof Error ? err.message : String(err)}`);
+		// The mic may already be open (MediaRecorder setup failed): release it.
+		stream?.getTracks().forEach((t) => {
+			t.stop();
+		});
+		mediaRecorder = null;
+		const detail = err instanceof Error ? err.message : String(err);
+		appendError(
+			stream ? `could not start recording: ${detail}` : `microphone access denied: ${detail}`,
+		);
 	}
 }
