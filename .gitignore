@@ -51,7 +51,6 @@ public/experiments/
 # Throwaway debug
 .hermes/
 AGENTS.md
-.venv/
 
 # Stray screenshots from browser harness runs (YouTube uploads etc.)
 youtube-*.png
