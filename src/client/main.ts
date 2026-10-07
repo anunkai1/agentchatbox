@@ -46,6 +46,7 @@ import {
 	appendError,
 	appendToolCall,
 	autoSize,
+	beginPendingVoice,
 	claudeRunActive,
 	clearAttachmentPreviews,
 	finalizeToolCall,
@@ -67,7 +68,6 @@ import {
 	scrollToBottom,
 	setStreaming,
 	showToast,
-	showTtsBanner,
 	syncDisplayPreferences,
 	syncSteerBadges,
 	syncStopButton,
@@ -98,7 +98,6 @@ import {
 	type PersistedMessage,
 	refreshCurrentModelLabel,
 	state,
-	voiceRewriteLabel,
 } from "./state.js";
 import { readSessionIdFromUrl, shareableSessionUrl, writeSessionIdToUrl } from "./url.js";
 import {
@@ -114,6 +113,7 @@ import {
 	stopAllVoice,
 	toggleSpeak,
 } from "./voice.js";
+import { isVoiceFailureNotice, pendingReplyText, voiceableReplyStamp } from "./voice-pending.js";
 import { createChatClient } from "./ws.js";
 
 // ---------------------------------------------------------------------------
@@ -315,30 +315,6 @@ function sendAsUser(trimmed: string): boolean {
 		$<HTMLSpanElement>("#title").textContent = state.title;
 	}
 	return true;
-}
-
-/**
- * Timestamp of a finished run's last assistant reply, or null when there is
- * nothing to speak (aborted, errored, or no text). It identifies the reply so
- * voice mode voices each one only once.
- */
-function voiceableReplyStamp(messages: unknown): number | null {
-	if (!Array.isArray(messages)) return null;
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const m = messages[i] as {
-			role?: string;
-			stopReason?: string;
-			timestamp?: number;
-			content?: unknown;
-		};
-		if (m?.role !== "assistant") continue;
-		if (m.stopReason === "error" || m.stopReason === "aborted") return null;
-		const hasText =
-			Array.isArray(m.content) &&
-			m.content.some((b) => b?.type === "text" && typeof b.text === "string" && b.text.trim());
-		return hasText && typeof m.timestamp === "number" ? m.timestamp : null;
-	}
-	return null;
 }
 
 /** The reply voice mode last asked for, so a repeat agent_end cannot voice it twice. */
@@ -742,13 +718,6 @@ function onEvent(event: Record<string, unknown>): void {
 				state.streamingStartedAt = null;
 			}
 			state.retry = null;
-			// Safety net: if a Long/Short button was pressed to generate a
-			// voice reply but pi finished without emitting one (error or
-			// unsupported turn), reset the pending button so its spinner
-			// doesn't spin forever. toggleSpeak clears pendingVoiceBtn when
-			// it fires, so a non-null value here means generation failed.
-			resetPendingVoice(false);
-			state.voiceRepliesToSkip = 0;
 			// No local save — the server's `pi` child auto-persists
 			// every event to its JSONL session file as it happens.
 			// A steer stranded in pi's queue when the agent went idle
@@ -774,7 +743,7 @@ function onEvent(event: Record<string, unknown>): void {
 				const stamp = voiceableReplyStamp(e.messages);
 				if (stamp !== null && stamp !== lastAutoVoicedStamp) {
 					lastAutoVoicedStamp = stamp;
-					showTtsBanner(`Long TTS · generating spoken text via ${voiceRewriteLabel()}…`);
+					beginPendingVoice("long", null, "");
 					sendPromptHook("/voice-last long");
 				}
 			}
@@ -888,36 +857,26 @@ function onEvent(event: Record<string, unknown>): void {
 							lastAssistantVoiceBox();
 						if (box) updateVoiceTextBox(box, target);
 					}
-					// Clear the press's hint once consumed, alongside the variant it went
-					// with.
-					state.pendingVoiceHint = null;
-					// Auto-play. If a button initiated this (the variant wasn't
-					// generated yet at press time), honor the variant it picked
-					// and drive THAT button's label (spin → ⏹) via toggleSpeak
-					// so it's stoppable. Otherwise (Voice mode) default to
-					// long with no owning button. Falls
-					// back to whichever variant actually arrived if the requested
-					// one is empty.
-					// A reply for a press the user cancelled is kept but not played,
-					// and must not consume a newer press's pending state.
-					const skip = state.voiceRepliesToSkip > 0;
-					if (skip) state.voiceRepliesToSkip--;
-					const want = state.pendingVoiceVariant ?? "long";
-					const btn = skip ? null : state.pendingVoiceBtn;
-					if (!skip) {
+					// Auto-play only the reply that answers the outstanding request (a
+					// pressed button, or voice mode's automatic Long): one press, one
+					// play. A request the user cancelled, a stale reply, or voice mode
+					// turned off meanwhile finds nothing pending, so it is kept above
+					// but stays silent.
+					const text = pendingReplyText(
+						{ variant: state.pendingVoiceVariant, hint: state.pendingVoiceHint },
+						details,
+					);
+					if (text && updated) {
+						const btn = state.pendingVoiceBtn;
 						state.pendingVoiceVariant = null;
+						state.pendingVoiceHint = null;
 						state.pendingVoiceBtn = null;
-					}
-					const wantText =
-						want === "short" ? details.short : want === "medium" ? details.medium : details.long;
-					const text =
-						(wantText ?? "").trim() ||
-						(details.long ?? "").trim() ||
-						(details.medium ?? "").trim() ||
-						(details.short ?? "").trim();
-					if (text && updated && !skip) {
+						// toggleSpeak drives the pressing button's label (spin → ⏹) so it
+						// stays stoppable; voice mode has no button.
 						if (btn) toggleSpeak(text, btn);
 						else speakText(text);
+					} else if (text) {
+						resetPendingVoice();
 					}
 				} else if (e.message.customType === "claude-prompt") {
 					// A prompt the claude-delegate extension routed to Claude Code.
@@ -1322,6 +1281,8 @@ function onEvent(event: Record<string, unknown>): void {
 			} else if (e.method === "notify" && typeof e.message === "string") {
 				const notifyType =
 					e.notifyType === "error" ? "error" : e.notifyType === "warning" ? "warning" : "info";
+				// pi-voice-reply reports a failed /voice-last only through notify.
+				if (state.pendingVoiceVariant && isVoiceFailureNotice(e.message)) resetPendingVoice();
 				showToast(e.message, notifyType);
 				// Capture the image-model label from the pi-venice-image extension's
 				// notify so the Settings row reflects the current model. The

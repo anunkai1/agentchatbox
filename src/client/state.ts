@@ -281,15 +281,13 @@ export interface AppState {
 	 * has been generated, these record which variant to auto-play and the
 	 * button element that initiated it, so the voice-reply handler can
 	 * finish the press (spin → play that variant on that button) instead
-	 * of leaving the user to press again. Cleared once the voice-reply
-	 * arrives (or on agent_end if generation produced nothing).
+	 * of leaving the user to press again. Voice mode's automatic Long request
+	 * sets the variant with no button. Non-null means a /voice-last is
+	 * outstanding; cleared when its voice-reply arrives, on a failure notice, or
+	 * when the user cancels (second press, status-bar ⏹, starting a recording).
 	 */
 	pendingVoiceVariant: "long" | "medium" | "short" | null;
 	pendingVoiceBtn: HTMLElement | null;
-	/** Voice replies still due from /voice-last presses the user cancelled while
-	 * generating. Each arriving voice-reply is merged and shown but, while this
-	 * is above zero, not auto-played. Reset on agent_end. */
-	voiceRepliesToSkip: number;
 	/**
 	 * Commands/skills/extensions loaded for the current session, reported
 	 * by the server from pi's `get_commands` RPC (per-project accurate).
@@ -421,7 +419,6 @@ export const state: AppState = {
 	pendingVoiceVariant: null,
 	pendingVoiceHint: null,
 	pendingVoiceBtn: null,
-	voiceRepliesToSkip: 0,
 	lastAssistantText: "",
 	lastAssistantSeq: null,
 	pendingSteerCount: 0,

@@ -460,28 +460,47 @@ function setBtnLoading(btn: HTMLElement): void {
 	btn.classList.add("is-loading");
 }
 
+const VOICE_ICONS = { long: "🗣️", medium: "📝", short: "💬" } as const;
+const VOICE_NAMES = { long: "Long TTS", medium: "Medium TTS", short: "Short TTS" } as const;
+
 /**
- * Clear a pressed-but-ungenerated spoken variant: restore its button, drop the
- * pending state and the "generating…" banner. `cancelled` means the user gave
- * up while the reply was still being written, so that reply must not
- * auto-play when it lands; false is the no-reply-arrived cleanup at agent_end.
+ * Clear the outstanding /voice-last request, if any: restore its button (a
+ * voice-mode request has none), drop the pending state and the "generating…"
+ * banner. Called on cancel, on a failure notice, and before a new request
+ * replaces it. Once cleared, the reply (should one still arrive) is kept but
+ * not auto-played (see pendingReplyText).
  */
-export function resetPendingVoice(cancelled: boolean): void {
+export function resetPendingVoice(): void {
+	if (!state.pendingVoiceVariant) return;
 	const btn = state.pendingVoiceBtn;
-	if (!btn) return;
-	const fallbackIcon =
-		state.pendingVoiceVariant === "medium"
-			? "📝"
-			: state.pendingVoiceVariant === "short"
-				? "💬"
-				: "🗣️";
-	btn.classList.remove("is-loading");
-	btn.textContent = btn.dataset.idleLabel ?? fallbackIcon;
+	if (btn) {
+		btn.classList.remove("is-loading");
+		btn.textContent = btn.dataset.idleLabel ?? VOICE_ICONS[state.pendingVoiceVariant];
+	}
 	state.pendingVoiceVariant = null;
 	state.pendingVoiceHint = null;
 	state.pendingVoiceBtn = null;
-	if (cancelled) state.voiceRepliesToSkip++;
 	hideToast();
+	refreshStatus();
+}
+
+/**
+ * Record a /voice-last request as outstanding and raise the "generating…"
+ * banner. `btn` is the pressed variant button (spinning), or null for voice
+ * mode's automatic Long. Replaces any earlier outstanding request so its
+ * button is not left spinning.
+ */
+export function beginPendingVoice(
+	variant: "long" | "medium" | "short",
+	btn: HTMLElement | null,
+	hint: string,
+): void {
+	resetPendingVoice();
+	if (btn) setBtnLoading(btn);
+	state.pendingVoiceVariant = variant;
+	state.pendingVoiceBtn = btn;
+	state.pendingVoiceHint = hint || null;
+	showTtsBanner(`${VOICE_NAMES[variant]} · generating spoken text via ${voiceRewriteLabel()}…`);
 	refreshStatus();
 }
 
@@ -658,8 +677,6 @@ export function makeVoiceVariantButton(
 ): HTMLElement {
 	const icon = variant === "long" ? "🗣️" : variant === "medium" ? "📝" : "💬";
 	const label = variant === "long" ? "Long" : variant === "medium" ? "Med" : "Short";
-	const variantName =
-		variant === "long" ? "Long TTS" : variant === "medium" ? "Medium TTS" : "Short TTS";
 	const btn = el("button", { class: "speak-btn voice-variant-btn", title }) as HTMLButtonElement;
 	btn.append(
 		el("span", { class: "voice-icon", text: icon }),
@@ -676,7 +693,7 @@ export function makeVoiceVariantButton(
 			pending &&
 			(pending === btn || (!pending.isConnected && state.pendingVoiceVariant === variant))
 		) {
-			resetPendingVoice(true);
+			resetPendingVoice();
 			return;
 		}
 		const existing = getText().trim();
@@ -686,22 +703,14 @@ export function makeVoiceVariantButton(
 			return;
 		}
 		// Not generated yet — request generation of THIS variant only and
-		// queue it for autoplay. Show a spinner immediately so the press
-		// has visible feedback during the (multi-second) LLM round-trip.
-		// Also raise the blue TTS banner (like the multimodal-proxy toast):
-		// it reads "generating…" here, then speakText() flips it to
-		// "synthesizing via <engine>…" with a text preview once the spoken
-		// text arrives.
-		setBtnLoading(btn);
-		state.pendingVoiceVariant = variant;
-		state.pendingVoiceBtn = btn;
-		// Tell the extension WHICH reply this press is about, so a press on an
-		// older row voices that row instead of the newest one; the hint comes
+		// queue it for autoplay. beginPendingVoice spins the button and raises
+		// the blue TTS banner ("generating…"; speakText() flips it to
+		// "synthesizing via <engine>…" once the spoken text arrives).
+		// The hint tells the extension WHICH reply this press is about, so a press
+		// on an older row voices that row instead of the newest one; it comes
 		// back on the variant and the handler merges onto the same message.
 		const hint = getHint();
-		state.pendingVoiceHint = hint || null;
-		showTtsBanner(`${variantName} · generating spoken text via ${voiceRewriteLabel()}…`);
-		refreshStatus();
+		beginPendingVoice(variant, btn, hint);
 		services.sendSlashCommand?.(`/voice-last ${variant}${hint ? ` --match "${hint}"` : ""}`);
 	});
 	return btn;

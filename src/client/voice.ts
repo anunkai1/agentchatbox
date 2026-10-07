@@ -520,7 +520,7 @@ export function stopAllVoice(): void {
 		currentSpeakSrc = null;
 	}
 	// A press still waiting on its spoken text is stopped too.
-	resetPendingVoice(true);
+	resetPendingVoice();
 	refreshStatus();
 }
 
