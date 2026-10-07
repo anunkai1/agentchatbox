@@ -323,9 +323,12 @@ let lastAutoVoicedStamp: number | null = null;
 /**
  * Voice mode: ask for the Long spoken variant of the reply identified by
  * `stamp` (null = nothing to speak). The voice-reply handler plays it on arrival.
+ * Only the visible tab speaks, so background chats never talk over the one being
+ * listened to (their Long button still works).
  */
 function autoVoiceReply(stamp: number | null): void {
 	if (!state.voiceMode || state.compaction) return;
+	if (document.visibilityState !== "visible") return;
 	if (stamp === null || stamp === lastAutoVoicedStamp) return;
 	lastAutoVoicedStamp = stamp;
 	beginPendingVoice("long", null, "");
