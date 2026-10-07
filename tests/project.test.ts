@@ -55,6 +55,21 @@ describe("projectTranscript", () => {
 		]);
 	});
 
+	it("does not count custom messages in the fork ordinal", () => {
+		const custom = { role: "custom", customType: "voice-reply", details: { short: "s" } };
+		const out = projectTranscript([
+			user("q1"),
+			assistant([{ type: "text", text: "a1" }]),
+			custom as unknown as Message,
+			custom as unknown as Message,
+			user("q2"),
+			assistant([{ type: "text", text: "a2" }]),
+		]);
+		expect(out.map((r) => (r.kind === "user" || r.kind === "assistant" ? r.seq : null))).toEqual([
+			1, 2, 3, 4,
+		]);
+	});
+
 	it("correlates a toolCall with its toolResult by id and keeps real args", () => {
 		const out = projectTranscript([
 			user("list files"),

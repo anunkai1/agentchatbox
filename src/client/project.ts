@@ -41,17 +41,21 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 	}
 
 	const out: PersistedMessage[] = [];
+	// Fork ordinal: position among the JSONL `type:"message"` entries. Custom
+	// messages (role "custom") are separate entries and are not counted.
+	let seq = 0;
 	for (let i = 0; i < messages.length; i++) {
 		const m = messages[i];
+		if ((m as { role: string }).role !== "custom") seq++;
 		if (m.role === "user") {
-			out.push({ kind: "user", text: extractText(m.content), seq: i + 1, ts: m.timestamp });
+			out.push({ kind: "user", text: extractText(m.content), seq, ts: m.timestamp });
 		} else if (m.role === "assistant") {
 			const content = Array.isArray(m.content) ? m.content : [];
 			out.push({
 				kind: "assistant",
 				text: extractText(content),
 				thinking: extractThinking(content),
-				seq: i + 1,
+				seq,
 				ts: m.timestamp,
 			});
 			// Emit a tool row for each toolCall block on this assistant
