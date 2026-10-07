@@ -33,6 +33,8 @@
 	--accent-soft: rgba(235, 91, 60, 0.12);
 	--brand-blue: #1d3970;
 	--brand-cyan: #1d9fa5;
+	--brand-gradient: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan));
+	--brand-glow: rgba(39, 196, 200, 0.35);
 	--accent-border: rgba(235, 91, 60, 0.45);
 
 	/* User bubble — a desaturated dark grey */
@@ -137,7 +139,7 @@ body {
 	justify-content: center;
 	padding: 6px 12px;
 	margin: 0;
-	background: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan));
+	background: var(--brand-gradient);
 	color: #fff;
 	border: 1px solid transparent;
 	border-radius: var(--radius-pill);
@@ -832,15 +834,16 @@ body.sidebar-resizing iframe {
 	opacity: 0.7;
 }
 .header-cc.on {
-	background: #d97757;
-	border-color: #d97757;
+	background: var(--brand-gradient);
+	border-color: transparent;
 	color: #fff;
 	opacity: 1;
-	box-shadow: 0 0 10px rgba(217, 119, 87, 0.55);
+	box-shadow: 0 0 10px var(--brand-glow);
 }
 .header-cc.on:hover {
-	background: #e58a6b;
+	background: var(--brand-gradient);
 	color: #fff;
+	filter: brightness(1.12);
 }
 
 /* Voice mode on/off pill. Off is a quiet outline; on takes the accent, so the
@@ -869,11 +872,12 @@ body.sidebar-resizing iframe {
 	color: var(--text);
 }
 .header-voice.on {
-	background: var(--accent-soft);
-	border-color: var(--accent-border);
-	color: var(--accent);
+	background: var(--brand-gradient);
+	border-color: transparent;
+	color: #fff;
+	box-shadow: 0 0 10px var(--brand-glow);
 }
-/* The "V" disc: a dim outline when off, solid accent when on. The glyph is a
+/* The "V" disc: a dim outline when off, solid white when on. The glyph is a
    letter, so there is no vector art to carry — only the disc's fill changes. */
 .header-voice-v {
 	display: inline-flex;
@@ -885,9 +889,9 @@ body.sidebar-resizing iframe {
 	border: 1.5px solid rgba(255, 255, 255, 0.22);
 }
 .header-voice.on .header-voice-v {
-	background: var(--accent);
-	border-color: var(--accent);
-	color: #1a0906;
+	background: #fff;
+	border-color: #fff;
+	color: var(--brand-blue);
 }
 
 /* The "API ↗" header affordance — z.ai style icon-label-arrow button. */
@@ -895,7 +899,7 @@ body.sidebar-resizing iframe {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	background: linear-gradient(135deg, var(--brand-blue), var(--brand-cyan));
+	background: var(--brand-gradient);
 	border: 1px solid transparent;
 	color: #fff;
 	padding: 6px 10px 6px 8px;
@@ -2185,8 +2189,9 @@ body.sidebar-resizing iframe {
 	color: var(--text);
 }
 .composer .icon-btn.voice-mode-on {
-	background: var(--accent-soft);
-	border-color: var(--accent-border);
+	background: rgba(29, 159, 165, 0.16);
+	border-color: rgba(39, 196, 200, 0.5);
+	color: #5fd6da;
 }
 .composer .input {
 	flex: 1;
@@ -2245,26 +2250,24 @@ body.sidebar-resizing iframe {
 		transform 0.1s,
 		color 0.12s;
 }
-/* The send button is the primary action: a filled green "go" control with a
-   soft glow, so it is unmistakable next to the dark composer. The old
-   --surface-active grey read as "invisible", which pulled the thumb to the
-   bright red stop button instead. */
+/* The send button is the primary action: a filled brand-gradient control with
+   a soft glow, matching New chat and Settings, so it is unmistakable next to
+   the dark composer. The old --surface-active grey read as "invisible", which
+   pulled the thumb to the bright red stop button instead. */
 .send-btn {
-	background: var(--c-ok, #9ece6a);
-	color: #10240b;
-	box-shadow: 0 1px 10px rgba(158, 206, 106, 0.35);
+	background: var(--brand-gradient);
+	color: #fff;
+	box-shadow: 0 1px 10px var(--brand-glow);
 }
 .send-btn:hover {
-	background: color-mix(in srgb, var(--c-ok, #9ece6a) 82%, #fff);
-	color: #10240b;
-	box-shadow: 0 1px 14px rgba(158, 206, 106, 0.5);
+	filter: brightness(1.15);
+	box-shadow: 0 1px 14px rgba(39, 196, 200, 0.5);
 }
 .send-btn:active {
 	transform: scale(0.94);
 }
 .send-btn:disabled {
-	background: color-mix(in srgb, var(--c-ok, #9ece6a) 38%, var(--surface));
-	color: rgba(16, 36, 11, 0.6);
+	opacity: 0.45;
 	box-shadow: none;
 	cursor: not-allowed;
 }
@@ -2280,19 +2283,22 @@ body.sidebar-resizing iframe {
 .send-btn[hidden] {
 	display: none;
 }
-/* Send button in steer mode (agent is streaming): a deeper, muted green with a
-   soft inner ring so it still reads as "go" but is subtly set apart from the
-   solid green send, alongside the ⇢ arrow that signals the message is queued. */
+/* Send button in steer mode (agent is streaming): a deeper, muted gradient with
+   a soft inner ring so it still reads as "go" but is subtly set apart from the
+   solid send, alongside the ⇢ arrow that signals the message is queued. */
 .send-btn.steer-mode {
-	background: color-mix(in srgb, var(--c-ok, #9ece6a) 68%, #17240f);
-	color: #e6f5d6;
+	background: linear-gradient(
+		135deg,
+		color-mix(in srgb, var(--brand-blue) 75%, #000),
+		color-mix(in srgb, var(--brand-cyan) 65%, #000)
+	);
+	color: #d8f4f5;
 	box-shadow:
-		inset 0 0 0 1.5px rgba(158, 206, 106, 0.55),
-		0 1px 8px rgba(158, 206, 106, 0.2);
+		inset 0 0 0 1.5px rgba(39, 196, 200, 0.55),
+		0 1px 8px rgba(39, 196, 200, 0.2);
 }
 .send-btn.steer-mode:hover {
-	background: color-mix(in srgb, var(--c-ok, #9ece6a) 82%, #17240f);
-	color: #f0fbe6;
+	filter: brightness(1.2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -3153,7 +3159,7 @@ body.modal-open {
 	}
 	/* The 30px circle IS the button here, so an inner disc would draw a second
 	 * ring inside it. Drop the disc and let the button itself be the lamp: dim
-	 * with a grey V when off, solid accent with a dark V when on. */
+	 * with a grey V when off, brand gradient with a white V when on. */
 	.header-voice-v {
 		width: auto;
 		height: auto;
@@ -3167,9 +3173,9 @@ body.modal-open {
 		background: none;
 	}
 	.header-voice.on {
-		background: var(--accent);
-		border-color: var(--accent);
-		color: #1a0906;
+		background: var(--brand-gradient);
+		border-color: transparent;
+		color: #fff;
 	}
 	.header-voice-label {
 		display: none;
