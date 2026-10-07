@@ -27,6 +27,7 @@ import {
 	autoSize,
 	hideToast,
 	refreshStatus,
+	resetPendingVoice,
 	setStatusMessage,
 	showTtsBanner,
 } from "./render.js";
@@ -518,6 +519,8 @@ export function stopAllVoice(): void {
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
 	}
+	// A press still waiting on its spoken text is stopped too.
+	resetPendingVoice(true);
 	refreshStatus();
 }
 

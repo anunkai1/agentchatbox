@@ -286,6 +286,10 @@ export interface AppState {
 	 */
 	pendingVoiceVariant: "long" | "medium" | "short" | null;
 	pendingVoiceBtn: HTMLElement | null;
+	/** Voice replies still due from /voice-last presses the user cancelled while
+	 * generating. Each arriving voice-reply is merged and shown but, while this
+	 * is above zero, not auto-played. Reset on agent_end. */
+	voiceRepliesToSkip: number;
 	/**
 	 * Commands/skills/extensions loaded for the current session, reported
 	 * by the server from pi's `get_commands` RPC (per-project accurate).
@@ -417,6 +421,7 @@ export const state: AppState = {
 	pendingVoiceVariant: null,
 	pendingVoiceHint: null,
 	pendingVoiceBtn: null,
+	voiceRepliesToSkip: 0,
 	lastAssistantText: "",
 	lastAssistantSeq: null,
 	pendingSteerCount: 0,

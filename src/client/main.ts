@@ -49,7 +49,6 @@ import {
 	claudeRunActive,
 	clearAttachmentPreviews,
 	finalizeToolCall,
-	hideToast,
 	isAtBottom,
 	jumpToPrevUserMessage,
 	lastAssistantVoiceBox,
@@ -63,6 +62,7 @@ import {
 	renderSidebarProjects,
 	renderSidebarSessions,
 	resetJumpNav,
+	resetPendingVoice,
 	type ShellHandlers,
 	scrollToBottom,
 	setStreaming,
@@ -747,22 +747,8 @@ function onEvent(event: Record<string, unknown>): void {
 			// unsupported turn), reset the pending button so its spinner
 			// doesn't spin forever. toggleSpeak clears pendingVoiceBtn when
 			// it fires, so a non-null value here means generation failed.
-			if (state.pendingVoiceBtn) {
-				const b = state.pendingVoiceBtn;
-				const fallbackVoiceIcon =
-					state.pendingVoiceVariant === "medium"
-						? "📝"
-						: state.pendingVoiceVariant === "short"
-							? "💬"
-							: "🗣️";
-				b.classList.remove("is-loading");
-				b.textContent = b.dataset.idleLabel ?? fallbackVoiceIcon;
-				state.pendingVoiceVariant = null;
-				state.pendingVoiceBtn = null;
-				// Generation produced no voice reply — clear the blue TTS banner
-				// (it was raised as "generating…" on the button press).
-				hideToast();
-			}
+			resetPendingVoice(false);
+			state.voiceRepliesToSkip = 0;
 			// No local save — the server's `pi` child auto-persists
 			// every event to its JSONL session file as it happens.
 			// A steer stranded in pi's queue when the agent went idle
@@ -912,10 +898,16 @@ function onEvent(event: Record<string, unknown>): void {
 					// long with no owning button. Falls
 					// back to whichever variant actually arrived if the requested
 					// one is empty.
+					// A reply for a press the user cancelled is kept but not played,
+					// and must not consume a newer press's pending state.
+					const skip = state.voiceRepliesToSkip > 0;
+					if (skip) state.voiceRepliesToSkip--;
 					const want = state.pendingVoiceVariant ?? "long";
-					const btn = state.pendingVoiceBtn;
-					state.pendingVoiceVariant = null;
-					state.pendingVoiceBtn = null;
+					const btn = skip ? null : state.pendingVoiceBtn;
+					if (!skip) {
+						state.pendingVoiceVariant = null;
+						state.pendingVoiceBtn = null;
+					}
 					const wantText =
 						want === "short" ? details.short : want === "medium" ? details.medium : details.long;
 					const text =
@@ -923,7 +915,7 @@ function onEvent(event: Record<string, unknown>): void {
 						(details.long ?? "").trim() ||
 						(details.medium ?? "").trim() ||
 						(details.short ?? "").trim();
-					if (text && updated) {
+					if (text && updated && !skip) {
 						if (btn) toggleSpeak(text, btn);
 						else speakText(text);
 					}

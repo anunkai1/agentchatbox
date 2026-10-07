@@ -460,6 +460,31 @@ function setBtnLoading(btn: HTMLElement): void {
 	btn.classList.add("is-loading");
 }
 
+/**
+ * Clear a pressed-but-ungenerated spoken variant: restore its button, drop the
+ * pending state and the "generating…" banner. `cancelled` means the user gave
+ * up while the reply was still being written, so that reply must not
+ * auto-play when it lands; false is the no-reply-arrived cleanup at agent_end.
+ */
+export function resetPendingVoice(cancelled: boolean): void {
+	const btn = state.pendingVoiceBtn;
+	if (!btn) return;
+	const fallbackIcon =
+		state.pendingVoiceVariant === "medium"
+			? "📝"
+			: state.pendingVoiceVariant === "short"
+				? "💬"
+				: "🗣️";
+	btn.classList.remove("is-loading");
+	btn.textContent = btn.dataset.idleLabel ?? fallbackIcon;
+	state.pendingVoiceVariant = null;
+	state.pendingVoiceHint = null;
+	state.pendingVoiceBtn = null;
+	if (cancelled) state.voiceRepliesToSkip++;
+	hideToast();
+	refreshStatus();
+}
+
 /** Structural slice updateVoiceTextBox needs from an assistant message. */
 interface VoiceTextSource {
 	voiceMedium?: string;
@@ -643,6 +668,11 @@ export function makeVoiceVariantButton(
 	btn.dataset.voiceVariant = variant;
 	btn.setAttribute("aria-label", title);
 	btn.addEventListener("click", () => {
+		// Second press while this variant is still being written: cancel it.
+		if (state.pendingVoiceBtn === btn) {
+			resetPendingVoice(true);
+			return;
+		}
 		const existing = getText().trim();
 		if (existing) {
 			// Variant already generated — play it directly.
@@ -665,6 +695,7 @@ export function makeVoiceVariantButton(
 		const hint = getHint();
 		state.pendingVoiceHint = hint || null;
 		showTtsBanner(`${variantName} · generating spoken text via ${voiceRewriteLabel()}…`);
+		refreshStatus();
 		services.sendSlashCommand?.(`/voice-last ${variant}${hint ? ` --match "${hint}"` : ""}`);
 	});
 	return btn;
@@ -1572,7 +1603,7 @@ export function refreshStatus(): void {
 	const voiceEl = $<HTMLSpanElement>("#status-voice");
 	if (voiceEl) {
 		let html = "";
-		if (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0) {
+		if (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0 || state.pendingVoiceBtn) {
 			if (state.audioPlaying || state.audioPaused) {
 				// Playback active or paused — show pause/resume + stop controls.
 				// The toggle button swaps between ⏸ (playing) and ▶ (paused); the
@@ -1585,7 +1616,7 @@ export function refreshStatus(): void {
 			} else {
 				// Synthesizing — nothing to pause yet (no audio loaded). Keep the
 				// single stop button with a spinner so the user can cancel.
-				html = `<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Cancel voice synthesis"><span class="speak-spinner"></span> synthesizing…</button>`;
+				html = `<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Cancel voice synthesis"><span class="speak-spinner"></span> ${state.ttsInFlight > 0 ? "synthesizing…" : "generating…"}</button>`;
 			}
 		}
 		voiceEl.innerHTML = html;
