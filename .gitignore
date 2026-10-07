@@ -67,3 +67,6 @@ data/
 # Projects (per-project cwd folders with their own AGENTS.md).
 # User-created workspaces, not source — like data/ and uploads/.
 .projects/
+
+# Voice samples must never be committed (repo is public)
+/*.wav
