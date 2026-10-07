@@ -425,27 +425,21 @@ body.sidebar-resizing iframe {
  * red on hover so it reads as destructive (matches the project-delete
  * button's color). */
 .session-action.delete {
-	/* The emoji is naturally much brighter than the other row actions. Keep
-	 * it subdued until the user points at the destructive control. */
-	filter: grayscale(0.8);
+	/* Keep it subdued until the user points at the destructive control. */
 	opacity: 0.6;
 }
 .session-action.delete:hover {
 	background: rgba(224, 86, 86, 0.12);
 	color: #e56f6f;
-	filter: none;
 	opacity: 1;
 }
-/* Move-to-project folder button — same hit target as the other row actions.
- * The emoji is a full-colour glyph, so keep it subdued (like the basket)
- * until the user points at it. */
+/* Move-to-project folder button — same hit target as the other row actions,
+ * subdued (like the basket) until the user points at it. */
 .session-action.move {
-	filter: grayscale(0.8);
 	opacity: 0.6;
 }
 .session-action.move:hover {
 	background: var(--surface-active);
-	filter: none;
 	opacity: 1;
 }
 .session-more {
@@ -467,7 +461,7 @@ body.sidebar-resizing iframe {
 	background: var(--surface-active);
 	color: var(--text);
 }
-/* Always-visible ⭐ shown next to the title of pinned sessions.
+/* Always-visible star shown next to the title of pinned sessions.
  * Click to unpin. Not hover-gated like the action buttons. */
 .session-pin-indicator {
 	width: 28px;
@@ -482,13 +476,14 @@ body.sidebar-resizing iframe {
 	font-size: 13px;
 	line-height: 1;
 	flex-shrink: 0;
-	filter: grayscale(0.3);
+	color: #f5b942;
+	opacity: 0.85;
 	transition:
-		filter 0.12s,
+		opacity 0.12s,
 		transform 0.12s;
 }
 .session-pin-indicator:hover {
-	filter: grayscale(0);
+	opacity: 1;
 	transform: scale(1.15);
 }
 /* Inline rename input — replaces the title node while editing. */
@@ -1691,6 +1686,7 @@ body.sidebar-resizing iframe {
 	white-space: nowrap;
 }
 .voice-actions .voice-icon {
+	display: inline-flex;
 	font-size: 15px;
 	line-height: 1;
 }
@@ -1702,6 +1698,16 @@ body.sidebar-resizing iframe {
 	color: var(--text-muted);
 	background: transparent;
 	border-color: transparent;
+}
+
+/* Inline SVG icons (icons.ts): sized by the host's font-size, tinted by its
+ * colour, and nudged onto the text baseline where they sit among words. */
+.icon {
+	flex: none;
+	vertical-align: -0.15em;
+}
+.icon-wrap {
+	display: inline-flex;
 }
 
 /* shared base class for the voice buttons on each assistant message. */
@@ -2514,6 +2520,7 @@ body.modal-open {
 .session-sheet-action {
 	display: flex;
 	align-items: center;
+	gap: 10px;
 	width: 100%;
 	min-height: 46px;
 	margin-top: 6px;

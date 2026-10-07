@@ -18,7 +18,8 @@ import {
 	MAX_PROMPT_IMAGES,
 } from "../shared/limits.js";
 import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
-import { $, MIC_ICON, REC_ICON } from "./dom.js";
+import { $ } from "./dom.js";
+import { MIC_ICON, REC_ICON, SPEAK_ICON, STOP_ICON } from "./icons.js";
 import { markdownToSpeechText } from "./markdown.js";
 import {
 	addFileUploadPreview,
@@ -155,23 +156,19 @@ function clampSynthSpeed(rate: number): number {
 let userPaused = false;
 
 /**
- * Derive a friendly speak-source label (e.g. "🗣️ LongTTS") from the
+ * Derive a friendly speak-source label (e.g. "LongTTS") from the
  * owning button so the TTS banner can name the variant. Falls back to a
- * generic "🔊 TTS" for direct speakText() calls (auto-speak) that have no
+ * generic "TTS" for direct speakText() calls (auto-speak) that have no
  * owning button.
  */
 function speakLabelFromSrc(src: unknown): string {
 	if (src instanceof HTMLElement) {
 		const variant = src.dataset.voiceVariant;
-		if (variant === "long") return "🗣️ LongTTS";
-		if (variant === "medium") return "📝 MedTTS";
-		if (variant === "short") return "💬 ShortTTS";
-		const lbl = src.dataset.idleLabel ?? src.textContent ?? "";
-		if (/LongTTS/.test(lbl)) return "🗣️ LongTTS";
-		if (/MedTTS/.test(lbl)) return "📝 MedTTS";
-		if (/ShortTTS/.test(lbl)) return "💬 ShortTTS";
+		if (variant === "long") return "LongTTS";
+		if (variant === "medium") return "MedTTS";
+		if (variant === "short") return "ShortTTS";
 	}
-	return "🔊 TTS";
+	return "TTS";
 }
 
 /** Collapse a spoken string to a single preview line, capped for the banner. */
@@ -203,9 +200,9 @@ function ttsVoiceLabel(): string | null {
 /**
  * Synthesize the given text via /api/tts and play it on the shared <audio>.
  * One call at a time — starting a new one stops the current playback.
- * `label` (e.g. "🗣️ LongTTS") names the variant on the blue TTS banner.
+ * `label` (e.g. "LongTTS") names the variant on the blue TTS banner.
  */
-export async function speakText(text: string, label = "🔊 TTS"): Promise<void> {
+export async function speakText(text: string, label = "TTS"): Promise<void> {
 	// Strip markdown before synthesis: the raw text off the wire is full
 	// of **bold**, ### headings, ``` fences, [label](url) links, etc. that
 	// the TTS engine would read aloud as literal sigils. See markdown.ts.
@@ -605,8 +602,8 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 	if (!(src instanceof HTMLElement)) return;
 	if (state === "loading") {
 		// Remember the idle label the first time we swap away from it,
-		// so a later "idle" restores the original emoji/text.
-		if (!src.dataset.idleLabel) src.dataset.idleLabel = src.textContent ?? "";
+		// so a later "idle" restores the original icon/label markup.
+		if (!src.dataset.idleLabel) src.dataset.idleLabel = src.innerHTML;
 		src.textContent = "";
 		src.append(Object.assign(document.createElement("span"), { className: "speak-spinner" }));
 		src.classList.add("is-loading");
@@ -615,10 +612,10 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 	}
 	src.classList.remove("is-loading");
 	if (state === "playing") {
-		src.textContent = "⏹";
+		src.innerHTML = STOP_ICON;
 		src.title = "Stop playback";
 	} else {
-		src.textContent = src.dataset.idleLabel ?? "🔊";
+		src.innerHTML = src.dataset.idleLabel ?? SPEAK_ICON;
 		src.title = "Speak this message (local TTS)";
 	}
 }

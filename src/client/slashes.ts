@@ -1379,7 +1379,7 @@ export function openModelsPanel(): void {
 	box.append(
 		svcRow(
 			"Voice-reply rewrite",
-			"Generates the 🗣️ Long / 💬 Short spoken text (pi-voice-reply).",
+			"Generates the Long / Short spoken text (pi-voice-reply).",
 			modelLine(
 				rewrite ? pill("env", "set") : pill("session", "implicit"),
 				rewrite ?? "(falls back to session model)",

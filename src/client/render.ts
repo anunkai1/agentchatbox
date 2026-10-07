@@ -17,7 +17,27 @@
 
 import type { PiCommand, ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
-import { $, el, escapeHtml, type LiveAssistantDom, MIC_ICON, mountModal } from "./dom.js";
+import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
+import {
+	CLOCK_ICON,
+	FOLDER_ICON,
+	iconEl,
+	LONG_ICON,
+	MEDIUM_ICON,
+	MIC_ICON,
+	PACKAGE_ICON,
+	PAUSE_ICON,
+	PENCIL_ICON,
+	PLAY_ICON,
+	SHORT_ICON,
+	SHRINK_ICON,
+	SPEAK_ICON,
+	STAR_FILLED_ICON,
+	STAR_ICON,
+	STOP_ICON,
+	TRASH_ICON,
+	ZAP_ICON,
+} from "./icons.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { services } from "./services.js";
 import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
@@ -273,7 +293,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 			el(
 				"span",
 				{ class: `steer-badge${m.delivered ? " delivered" : ""}` },
-				m.delivered ? "✓ delivered" : `⏳ queued #${Math.max(queuedPosition, 1)}`,
+				...steerBadgeContent(m.delivered, Math.max(queuedPosition, 1)),
 			),
 		);
 		return el("div", { class: "row row-user row-steer" }, bubble);
@@ -440,10 +460,10 @@ export function syncSteerBadges(): void {
 		const node = nodes[i];
 		if (!node) return;
 		if (m.delivered) {
-			node.textContent = "✓ delivered";
+			node.replaceChildren(...steerBadgeContent(true, 0));
 		} else {
 			queuedPosition += 1;
-			node.textContent = `⏳ queued #${queuedPosition}`;
+			node.replaceChildren(...steerBadgeContent(false, queuedPosition));
 		}
 		node.classList.toggle("delivered", m.delivered);
 	});
@@ -454,13 +474,18 @@ export function syncSteerBadges(): void {
  * phase). Captures the idle label the first time so it can be restored.
  */
 function setBtnLoading(btn: HTMLElement): void {
-	if (!btn.dataset.idleLabel) btn.dataset.idleLabel = btn.textContent ?? "";
+	if (!btn.dataset.idleLabel) btn.dataset.idleLabel = btn.innerHTML;
 	btn.textContent = "";
 	btn.append(Object.assign(document.createElement("span"), { className: "speak-spinner" }));
 	btn.classList.add("is-loading");
 }
 
-const VOICE_ICONS = { long: "🗣️", medium: "📝", short: "💬" } as const;
+/** Steer-message badge content: a delivered tick, or a clock and queue position. */
+function steerBadgeContent(delivered: boolean, queuedPosition: number): (Node | string)[] {
+	return delivered ? ["✓ delivered"] : [iconEl(CLOCK_ICON), ` queued #${queuedPosition}`];
+}
+
+const VOICE_ICONS = { long: LONG_ICON, medium: MEDIUM_ICON, short: SHORT_ICON } as const;
 const VOICE_NAMES = { long: "Long TTS", medium: "Medium TTS", short: "Short TTS" } as const;
 
 /**
@@ -475,7 +500,7 @@ export function resetPendingVoice(): void {
 	const btn = state.pendingVoiceBtn;
 	if (btn) {
 		btn.classList.remove("is-loading");
-		btn.textContent = btn.dataset.idleLabel ?? VOICE_ICONS[state.pendingVoiceVariant];
+		btn.innerHTML = btn.dataset.idleLabel ?? VOICE_ICONS[state.pendingVoiceVariant];
 	}
 	state.pendingVoiceVariant = null;
 	state.pendingVoiceHint = null;
@@ -555,7 +580,7 @@ function makeImmediateVoiceButton(getText: () => string): HTMLButtonElement {
 		type: "button",
 		title: "Speak this answer immediately",
 	}) as HTMLButtonElement;
-	button.append(el("span", { class: "voice-icon", text: "🔊" }));
+	button.append(el("span", { class: "voice-icon", html: SPEAK_ICON }));
 	button.setAttribute("aria-label", "Speak this answer immediately");
 	button.addEventListener("click", () => {
 		const text = getText().trim();
@@ -610,9 +635,9 @@ export function matchesVoiceHint(text: string, hint: string): boolean {
 	return normaliseVoiceText(text).toLowerCase().startsWith(hint.toLowerCase());
 }
 
-function makeVoiceTextSection(label: string, text: string): HTMLElement {
+function makeVoiceTextSection(icon: string, label: string, text: string): HTMLElement {
 	const s = el("div", { class: "voice-text-section" });
-	s.append(el("div", { class: "voice-text-label" }, label));
+	s.append(el("div", { class: "voice-text-label" }, iconEl(icon), ` ${label}`));
 	const body = el("div", { class: "markdown" });
 	setRichText(body, text);
 	s.append(body);
@@ -635,8 +660,8 @@ export function updateVoiceTextBox(box: HTMLElement, m: VoiceTextSource): void {
 		return;
 	}
 	box.classList.remove("hidden");
-	if (medium) box.append(makeVoiceTextSection("📝 MedTTS", medium));
-	if (short) box.append(makeVoiceTextSection("💬 ShortTTS", short));
+	if (medium) box.append(makeVoiceTextSection(MEDIUM_ICON, "MedTTS", medium));
+	if (short) box.append(makeVoiceTextSection(SHORT_ICON, "ShortTTS", short));
 }
 
 /**
@@ -655,7 +680,7 @@ export function lastAssistantVoiceBox(): HTMLElement | null {
 }
 
 /**
- * A spoken-variant speak button (🗣️ LongTTS / 📝 MedTTS / 💬 ShortTTS),
+ * A spoken-variant speak button (LongTTS / MedTTS / ShortTTS),
  * shown on every assistant row. Two behaviors depending on whether the
  * variant has been generated yet:
  *
@@ -675,11 +700,11 @@ export function makeVoiceVariantButton(
 	title: string,
 	getHint: () => string,
 ): HTMLElement {
-	const icon = variant === "long" ? "🗣️" : variant === "medium" ? "📝" : "💬";
+	const icon = VOICE_ICONS[variant];
 	const label = variant === "long" ? "Long" : variant === "medium" ? "Med" : "Short";
 	const btn = el("button", { class: "speak-btn voice-variant-btn", title }) as HTMLButtonElement;
 	btn.append(
-		el("span", { class: "voice-icon", text: icon }),
+		el("span", { class: "voice-icon", html: icon }),
 		el("span", { class: "voice-label" }, label),
 	);
 	btn.dataset.voiceVariant = variant;
@@ -1402,7 +1427,7 @@ export function appendCompactionChip(
 	const row = el(
 		"div",
 		{ class: "row row-compaction" },
-		el("div", { class: "compaction-chip" }, `🗜 ${why}${sizes}`),
+		el("div", { class: "compaction-chip" }, iconEl(SHRINK_ICON), ` ${why}${sizes}`),
 	);
 	appendNode(row);
 }
@@ -1449,7 +1474,7 @@ export function refreshCapabilitiesBadge(): void {
 			const status = state.extensionStatusLabels["codex-fast"];
 			const label =
 				status === "Enabled" ? "Fast" : status === "Standard" ? "Standard" : "Checking…";
-			fastButton.textContent = `⚡ ${label}`;
+			fastButton.replaceChildren(iconEl(ZAP_ICON), ` ${label}`);
 			fastButton.title = `Codex response speed: ${label} (/fast)`;
 			fastButton.setAttribute("aria-label", `Configure Codex response speed (currently ${label})`);
 		}
@@ -1626,13 +1651,13 @@ export function refreshStatus(): void {
 		) {
 			if (state.audioPlaying || state.audioPaused) {
 				// Playback active or paused — show pause/resume + stop controls.
-				// The toggle button swaps between ⏸ (playing) and ▶ (paused); the
-				// stop button (red ⏹) is always present to fully halt + clear.
+				// The toggle button swaps between pause (playing) and play (paused); the
+				// stop button (red) is always present to fully halt + clear.
 				const toggle = state.audioPaused
-					? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback" aria-label="Resume voice playback">▶</button>`
-					: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback" aria-label="Pause voice playback">⏸</button>`;
+					? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback" aria-label="Resume voice playback">${PLAY_ICON}</button>`
+					: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback" aria-label="Pause voice playback">${PAUSE_ICON}</button>`;
 				const label = state.audioPaused ? "‖ paused" : "♪ playing";
-				html = `${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Stop all voice playback">⏹</button> ${esc(label)}`;
+				html = `${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Stop all voice playback">${STOP_ICON}</button> ${esc(label)}`;
 			} else {
 				// Synthesizing — nothing to pause yet (no audio loaded). Keep the
 				// single stop button with a spinner so the user can cancel.
@@ -2377,7 +2402,8 @@ export function renderShell(): void {
 				onclick: () => shellHandlers?.handleSlash("fast menu"),
 				style: "display:none",
 			},
-			"⚡ Checking…",
+			iconEl(ZAP_ICON),
+			" Checking…",
 		),
 		el(
 			"button",
@@ -3124,7 +3150,7 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 		.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
 	if (other.length > 0) {
 		sessionsPane.append(
-			renderProjectFolder({ id: "other", name: "Other", icon: "📦", cwd: "" }, other),
+			renderProjectFolder({ id: "other", name: "Other", icon: "", cwd: "" }, other),
 		);
 	}
 	projectsPane.scrollTop = projectsScrollTop;
@@ -3433,8 +3459,9 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 		text: collapsed ? "▸" : "▾",
 		"aria-hidden": "true",
 	});
-	const icon =
-		p.icon === "📁" || p.icon === "📂" || !p.icon
+	const icon = isOther
+		? el("span", { class: "project-icon", html: PACKAGE_ICON, "aria-hidden": "true" })
+		: p.icon === "📁" || p.icon === "📂" || !p.icon
 			? renderBrandFolderIcon()
 			: el("span", { class: "project-icon", text: p.icon, "aria-hidden": "true" });
 	const name = el("span", { class: "project-name", text: p.name });
@@ -3476,7 +3503,7 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 			type: "button",
 			title: `Edit ${p.name}`,
 			"aria-label": `Edit ${p.name}`,
-			html: "✎",
+			html: PENCIL_ICON,
 		});
 		editBtn.addEventListener("click", (e) => {
 			e.stopPropagation();
@@ -3612,7 +3639,7 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 			type: "button",
 			title: `Unpin ${displayTitle}`,
 			"aria-label": `Unpin ${displayTitle}`,
-			text: "⭐",
+			html: STAR_FILLED_ICON,
 		});
 		starBtn.addEventListener("click", () => shellHandlers?.setSessionPinned(s.id, false));
 	}
@@ -3627,14 +3654,14 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		type: "button",
 		title: `Rename ${displayTitle}`,
 		"aria-label": `Rename ${displayTitle}`,
-		html: "✎",
+		html: PENCIL_ICON,
 	});
 	const deleteBtn = el("button", {
 		class: "session-action delete",
 		type: "button",
 		title: `Delete ${displayTitle}`,
 		"aria-label": `Delete ${displayTitle}`,
-		html: "🗑",
+		html: TRASH_ICON,
 	});
 	// Move-to-project sits leftmost in the action cluster (the slot between
 	// the metadata line and the basket on touch layouts). It opens a project
@@ -3644,7 +3671,7 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 		type: "button",
 		title: `Move ${displayTitle} to another project`,
 		"aria-label": `Move ${displayTitle} to another project`,
-		html: "📁",
+		html: FOLDER_ICON,
 	});
 	moveBtn.addEventListener("click", () => openMoveToProjectDialog(s));
 	if (pinned) {
@@ -3657,7 +3684,7 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 			type: "button",
 			title: `Pin ${displayTitle} to top`,
 			"aria-label": `Pin ${displayTitle} to top`,
-			text: "☆",
+			html: STAR_ICON,
 		});
 		pinBtn.addEventListener("click", () => shellHandlers?.setSessionPinned(s.id, true));
 		// Keep the same order before pinning: basket → pencil → star.
@@ -3707,38 +3734,54 @@ function openSessionActions(titleEl: HTMLElement, actions: HTMLElement, s: Sessi
 	box.append(el("h3", { text: title }));
 	box.append(el("p", { class: "session-action-sheet-hint", text: "Conversation actions" }));
 
-	const pinButton = el("button", {
-		class: "session-sheet-action",
-		type: "button",
-		text: s.pinned ? "★  Unpin conversation" : "☆  Pin conversation",
-	});
+	const pinButton = el(
+		"button",
+		{
+			class: "session-sheet-action",
+			type: "button",
+		},
+		iconEl(s.pinned ? STAR_FILLED_ICON : STAR_ICON),
+		s.pinned ? "Unpin conversation" : "Pin conversation",
+	);
 	pinButton.addEventListener("click", () => {
 		overlay.remove();
 		shellHandlers?.setSessionPinned(s.id, !s.pinned);
 	});
-	const renameButton = el("button", {
-		class: "session-sheet-action",
-		type: "button",
-		text: "✎  Rename conversation",
-	});
+	const renameButton = el(
+		"button",
+		{
+			class: "session-sheet-action",
+			type: "button",
+		},
+		iconEl(PENCIL_ICON),
+		"Rename conversation",
+	);
 	renameButton.addEventListener("click", () => {
 		overlay.remove();
 		setTimeout(() => startRename(titleEl, actions, s), 0);
 	});
-	const moveButton = el("button", {
-		class: "session-sheet-action",
-		type: "button",
-		text: "📁  Move to project…",
-	});
+	const moveButton = el(
+		"button",
+		{
+			class: "session-sheet-action",
+			type: "button",
+		},
+		iconEl(FOLDER_ICON),
+		"Move to project…",
+	);
 	moveButton.addEventListener("click", () => {
 		overlay.remove();
 		setTimeout(() => openMoveToProjectDialog(s), 0);
 	});
-	const deleteButton = el("button", {
-		class: "session-sheet-action destructive",
-		type: "button",
-		text: "🗑  Delete conversation",
-	});
+	const deleteButton = el(
+		"button",
+		{
+			class: "session-sheet-action destructive",
+			type: "button",
+		},
+		iconEl(TRASH_ICON),
+		"Delete conversation",
+	);
 	deleteButton.addEventListener("click", () => {
 		overlay.remove();
 		setTimeout(() => confirmDeleteSession(s), 0);

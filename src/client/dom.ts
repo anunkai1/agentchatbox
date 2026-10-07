@@ -24,12 +24,6 @@ export function uuid(): string {
 	return `${h.slice(0, 4).join("")}-${h.slice(4, 6).join("")}-${h.slice(6, 8).join("")}-${h.slice(8, 10).join("")}-${h.slice(10, 16).join("")}`;
 }
 
-/** Composer mic button icons: idle microphone and the red recording dot. */
-export const MIC_ICON =
-	'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg>';
-export const REC_ICON =
-	'<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="#ef4444"/></svg>';
-
 export function $<T extends HTMLElement>(sel: string): T {
 	const el = document.querySelector(sel) as T | null;
 	if (!el) throw new Error(`element not found: ${sel}`);
