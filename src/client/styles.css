@@ -4009,6 +4009,18 @@ body.modal-open {
 	text-align: right;
 }
 
+/* Narrow phones: a phone-width row is only ~298px wide (viewport minus the
+ * messages padding, the row padding and the 30px avatar), which cannot hold
+ * five icon buttons AND three voice chips that each carry a glyph plus a
+ * label. The variant chips keep the label and drop the glyph — "Long Med
+ * Short" stays self-describing — so the whole control row holds one line
+ * instead of wrapping. Wider viewports keep the glyphs. */
+@media (max-width: 430px) {
+	.voice-actions .voice-variant-btn .voice-icon {
+		display: none;
+	}
+}
+
 /* Narrow screens (phones): stack label above value so long model ids get
  * the full row width instead of being squashed into the right column. */
 @media (max-width: 520px) {
