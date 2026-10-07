@@ -227,8 +227,8 @@ const MAX_FRAME_BYTES = 10 * 1024 * 1024;
  *     0x00 END  → clean end of stream
  *     0x80 ERR  → payload = UTF-8 error message
  *
- * Throws on a non-OK HTTP status (caller falls back to synthesizeSpeech) or on
- * an ERR frame arriving mid-stream. `speed` behaves as in synthesizeSpeech.
+ * Throws on a non-OK HTTP status (caller falls back to synthesizeSpeech), on an
+ * ERR frame arriving mid-stream, or when the body closes without an END frame. `speed` behaves as in synthesizeSpeech.
  */
 export async function* streamSynthesizeSpeech(
 	text: string,
@@ -268,7 +268,9 @@ export async function* streamSynthesizeSpeech(
 	};
 	try {
 		while (true) {
-			if (!(await ensure(5))) return; // need the 5-byte frame header
+			// Closing without an END frame is a broken stream, not a finished one:
+			// returning quietly would play a truncated reply with no error.
+			if (!(await ensure(5))) throw new Error("tts stream ended before its END frame");
 			const type = buf[0]!;
 			const len = (buf[1]! | (buf[2]! << 8) | (buf[3]! << 16) | (buf[4]! << 24)) >>> 0;
 			if (len > MAX_FRAME_BYTES) {
@@ -276,7 +278,7 @@ export async function* streamSynthesizeSpeech(
 					`tts stream frame too large: ${len} bytes (max ${MAX_FRAME_BYTES}) — upstream protocol error`,
 				);
 			}
-			if (!(await ensure(5 + len))) return; // need the full payload
+			if (!(await ensure(5 + len))) throw new Error("tts stream ended mid-frame");
 			const payload = buf.subarray(5, 5 + len);
 			buf = buf.subarray(5 + len);
 			if (type === 0x01) {

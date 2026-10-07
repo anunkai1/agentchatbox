@@ -92,18 +92,31 @@ describe("streamSynthesizeSpeech", () => {
 		}).rejects.toThrow(/frame too large/);
 	});
 
-	it("ends cleanly when the stream stops without an END frame", async () => {
+	it("raises when the stream stops without an END frame (a truncated reply)", async () => {
 		const bytes = frame(0x01, new Uint8Array([9]));
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bodyOf(bytes)));
 		const chunks: number[][] = [];
-		for await (const blob of streamSynthesizeSpeech("hi")) {
-			chunks.push([...new Uint8Array(await blob.arrayBuffer())]);
-		}
+		await expect(async () => {
+			for await (const blob of streamSynthesizeSpeech("hi")) {
+				chunks.push([...new Uint8Array(await blob.arrayBuffer())]);
+			}
+		}).rejects.toThrow(/END frame/);
+		// The chunk that did arrive was still delivered before the error.
 		expect(chunks).toEqual([[9]]);
 	});
 
+	it("raises when the stream stops in the middle of a frame", async () => {
+		const bytes = frame(0x01, new Uint8Array([1, 2, 3])).subarray(0, 7);
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bodyOf(bytes)));
+		await expect(async () => {
+			for await (const _ of streamSynthesizeSpeech("hi")) {
+				/* nothing */
+			}
+		}).rejects.toThrow(/mid-frame/);
+	});
+
 	it("sends text, voice and speed in the request body", async () => {
-		const fetchMock = vi.fn().mockResolvedValue(bodyOf(new Uint8Array()));
+		const fetchMock = vi.fn().mockResolvedValue(bodyOf(frame(0x00, new Uint8Array())));
 		vi.stubGlobal("fetch", fetchMock);
 		for await (const _ of streamSynthesizeSpeech("hello", "af_heart", undefined, 1.25)) {
 			/* nothing */
