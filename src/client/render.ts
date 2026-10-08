@@ -2561,10 +2561,10 @@ export function renderShell(): void {
 	const welcome = el("div", { class: "welcome", id: "welcome" });
 	welcome.append(el("div", { class: "welcome-brand" }, "Agent Chat Box"));
 	welcome.append(
-		// ACB robot mark. Its eye glow is CSS-only, inside acb-robot.svg.
+		// ACB robot with letters behind its face. Glow is CSS-only, in acb-robot-letters.svg.
 		el("img", {
 			class: "welcome-mark",
-			src: "/acb-robot.svg",
+			src: "/acb-robot-letters.svg",
 			alt: "agentchatbox",
 			width: 72,
 			height: 72,
