@@ -15,6 +15,7 @@ public/index.html
 public/styles.css
 public/*.png
 public/*.webp
+public/*.svg
 *.tsbuildinfo
 
 # Environment
