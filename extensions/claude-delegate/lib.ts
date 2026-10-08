@@ -25,15 +25,6 @@ export const MODE_LABELS: Record<DelegationMode, string> = {
 	haiku: "Haiku",
 };
 
-/**
- * Aliases that lag a new release get an exact model id instead. Haiku's alias
- * still resolves to 4.5, so Haiku is pinned to 5.5; drop the entry once the
- * alias catches up.
- */
-export const MODE_MODEL: Partial<Record<DelegationMode, string>> = {
-	haiku: "claude-haiku-5-5",
-};
-
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
@@ -285,7 +276,7 @@ export interface SpawnOptions {
 	workspace?: string;
 	/** Chat history Claude Code has not seen yet, placed before the task. */
 	catchUp?: string;
-	/** Exact model id to run on; defaults to the mode's pinned id or alias. */
+	/** Exact model id to run on; defaults to the mode's alias. */
 	model?: string;
 	resumeSessionId?: string;
 	newSessionId?: string;
@@ -315,7 +306,7 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 		"--thinking-display",
 		"summarized",
 		"--model",
-		options.model ?? MODE_MODEL[options.mode] ?? options.mode,
+		options.model ?? options.mode,
 	];
 	if (options.effort) {
 		args.push("--effort", options.effort);

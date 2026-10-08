@@ -178,12 +178,12 @@ describe("effort levels", () => {
 		expect(withoutEffort.args).not.toContain("--effort");
 	});
 
-	it("runs Haiku on the pinned 5.5 id and the others on their aliases", () => {
+	it("runs every mode on its alias", () => {
 		const model = (mode: "opus" | "sonnet" | "haiku") => {
 			const { args } = buildClaudeSpawn({ task: "t", mode });
 			return args[args.indexOf("--model") + 1];
 		};
-		expect(model("haiku")).toBe("claude-haiku-5-5");
+		expect(model("haiku")).toBe("haiku");
 		expect(model("opus")).toBe("opus");
 		expect(model("sonnet")).toBe("sonnet");
 	});
@@ -528,7 +528,7 @@ describe("claude-delegate registration", () => {
 			return { resultText: "ok", isError: false, model: "claude-opus-5-5" };
 		});
 		await h.cc("do a thing", h.uiCtx);
-		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("claude-haiku-5-5");
+		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("haiku");
 		await h.cc("opus do a thing", h.uiCtx);
 		expect(seen[1][seen[1].indexOf("--model") + 1]).toBe("opus");
 	});
