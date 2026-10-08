@@ -40,18 +40,18 @@
     </radialGradient>
   </defs>
   <path d="M152 72H360A88 88 0 0 1 448 160V272A88 88 0 0 1 360 360H224L120 432L152 360A88 88 0 0 1 64 272V160A88 88 0 0 1 152 72Z" fill="#0a1f3b" stroke="url(#acb-robot-edge)" stroke-width="14" stroke-linejoin="round"/>
-  <!-- The letters are the robot: C is the head, A the crest, B the ear. -->
-  <path d="M321.5 202.1A80 80 0 1 0 321.5 293.9" fill="none" stroke="url(#acb-robot-silver)" stroke-width="30"/>
-  <path d="M206 167L256 100L306 167M226 140H286" fill="none" stroke="url(#acb-robot-silver)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M336 212V284M336 212H352A18 18 0 0 1 352 248H336M336 248H354A18 18 0 0 1 354 284H336" fill="none" stroke="url(#acb-robot-silver)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="137" y="230" width="22" height="36" rx="11" fill="url(#acb-robot-silver)"/>
-  <circle cx="148" cy="248" r="4.5" fill="#0a1f3b"/>
-  <rect x="201" y="218" width="110" height="60" rx="22" fill="#0a1f3b" stroke="url(#acb-robot-silver)" stroke-width="4"/>
-  <circle class="acb-robot-glow" cx="232" cy="244" r="22" fill="url(#acb-robot-glow)"/>
-  <circle class="acb-robot-glow" cx="280" cy="244" r="22" fill="url(#acb-robot-glow)"/>
-  <ellipse cx="232" cy="244" rx="10" ry="14" fill="#2ee6d6"/>
-  <ellipse cx="280" cy="244" rx="10" ry="14" fill="#2ee6d6"/>
-  <circle cx="229" cy="238" r="2.8" fill="#ffffff" fill-opacity="0.9"/>
-  <circle cx="277" cy="238" r="2.8" fill="#ffffff" fill-opacity="0.9"/>
-  <path d="M236 292Q256 304 276 292" fill="none" stroke="#2ee6d6" stroke-width="6" stroke-linecap="round"/>
+  <!-- The letters are the robot: C is the head, A and B flank it in one line. -->
+  <g transform="translate(14 0)">
+    <path d="M315 174.7A72 72 0 1 0 315 257.3" fill="none" stroke="url(#acb-robot-silver)" stroke-width="26"/>
+    <path d="M90 256L126 176L162 256M105 228H147" fill="none" stroke="url(#acb-robot-silver)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M352 176V256M352 176H366A20 20 0 0 1 366 216H352M352 216H370A20 20 0 0 1 370 256H352" fill="none" stroke="url(#acb-robot-silver)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="210" y="186" width="92" height="52" rx="20" fill="#0a1f3b" stroke="url(#acb-robot-silver)" stroke-width="4"/>
+    <circle class="acb-robot-glow" cx="237" cy="210" r="20" fill="url(#acb-robot-glow)"/>
+    <circle class="acb-robot-glow" cx="275" cy="210" r="20" fill="url(#acb-robot-glow)"/>
+    <ellipse cx="237" cy="210" rx="9" ry="12" fill="#2ee6d6"/>
+    <ellipse cx="275" cy="210" rx="9" ry="12" fill="#2ee6d6"/>
+    <circle cx="234" cy="205" r="2.5" fill="#ffffff" fill-opacity="0.9"/>
+    <circle cx="272" cy="205" r="2.5" fill="#ffffff" fill-opacity="0.9"/>
+    <path d="M243 256Q256 265 269 256" fill="none" stroke="#2ee6d6" stroke-width="6" stroke-linecap="round"/>
+  </g>
 </svg>
