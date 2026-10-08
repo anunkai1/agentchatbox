@@ -23,6 +23,7 @@ import {
 	buildClaudeSpawn,
 	buildPrompt,
 	DEFAULT_EFFORT,
+	parseEffort,
 	delegationLabel,
 	descendantsOf,
 	FileDelegationStore,
@@ -151,7 +152,7 @@ describe("claude stream parser", () => {
 describe("model version labels", () => {
 	it("prettifies wire model ids", () => {
 		expect(prettyModelName("claude-opus-5-5")).toBe("Opus 5.5");
-		expect(prettyModelName("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+		expect(prettyModelName("claude-haiku-5-5")).toBe("Haiku 5.5");
 		expect(prettyModelName("claude-sonnet-5")).toBe("Sonnet 5");
 		expect(prettyModelName("claude-fable-5-1")).toBe("Fable 5.1");
 	});
@@ -159,24 +160,37 @@ describe("model version labels", () => {
 	it("labels a mode with its resolved version", () => {
 		expect(delegationLabel("opus")).toBe("Opus");
 		expect(delegationLabel("opus", "claude-opus-5-5")).toBe("Opus 5.5");
-		expect(delegationLabel("haiku", "claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+		expect(delegationLabel("haiku", "claude-haiku-5-5")).toBe("Haiku 5.5");
 		// A cross-family alias still names both halves.
 		expect(delegationLabel("opus", "claude-fable-5-1")).toBe("Opus (Fable 5.1)");
 	});
 });
 
 describe("effort levels", () => {
-	it("defaults Opus and Sonnet to high, and leaves Haiku alone", () => {
-		expect(DEFAULT_EFFORT.opus).toBe("high");
-		expect(DEFAULT_EFFORT.sonnet).toBe("high");
-		expect(DEFAULT_EFFORT.haiku).toBeUndefined();
+	it("defaults to high", () => {
+		expect(DEFAULT_EFFORT).toBe("high");
 	});
 
-	it("passes --effort only when a level applies", () => {
-		const withEffort = buildClaudeSpawn({ task: "t", mode: "opus", effort: "high" });
-		expect(withEffort.args[withEffort.args.indexOf("--effort") + 1]).toBe("high");
-		const withoutEffort = buildClaudeSpawn({ task: "t", mode: "haiku" });
+	it("passes --effort only when a level is given", () => {
+		const withEffort = buildClaudeSpawn({ task: "t", mode: "opus", effort: "xhigh" });
+		expect(withEffort.args[withEffort.args.indexOf("--effort") + 1]).toBe("xhigh");
+		const withoutEffort = buildClaudeSpawn({ task: "t", mode: "opus" });
 		expect(withoutEffort.args).not.toContain("--effort");
+	});
+
+	it("runs Haiku on the pinned 5.5 id and the others on their aliases", () => {
+		const model = (mode: "opus" | "sonnet" | "haiku") => {
+			const { args } = buildClaudeSpawn({ task: "t", mode });
+			return args[args.indexOf("--model") + 1];
+		};
+		expect(model("haiku")).toBe("claude-haiku-5-5");
+		expect(model("opus")).toBe("opus");
+		expect(model("sonnet")).toBe("sonnet");
+	});
+
+	it("parses effort levels", () => {
+		expect(parseEffort(" Max ")).toBe("max");
+		expect(parseEffort("ultra")).toBeUndefined();
 	});
 
 	it("shows effort in the status label", () => {
@@ -216,9 +230,9 @@ describe("claude-delegate store", () => {
 		const { store } = tmpStore();
 		expect(store.readModel("opus")).toBeUndefined();
 		store.writeModel("opus", "claude-opus-5-5");
-		store.writeModel("haiku", "claude-haiku-4-5-20251001");
+		store.writeModel("haiku", "claude-haiku-5-5");
 		expect(store.readModel("opus")).toBe("claude-opus-5-5");
-		expect(store.readModel("haiku")).toBe("claude-haiku-4-5-20251001");
+		expect(store.readModel("haiku")).toBe("claude-haiku-5-5");
 	});
 
 	it("keeps each chat in its own file so chats cannot overwrite each other", () => {
@@ -316,6 +330,7 @@ function harness(
 	let current = mode;
 	const sessions: Record<string, string> = {};
 	const pins: Record<string, string> = {};
+	const efforts: Record<string, string> = {};
 	const store = {
 		readMode: () => current as never,
 		writeMode: (next: string) => {
@@ -333,6 +348,10 @@ function harness(
 		readModel: (forMode: string) => knownModels[forMode],
 		writeModel: (forMode: string, modelId: string) => {
 			knownModels[forMode] = modelId;
+		},
+		readEffort: (forMode: string) => efforts[forMode] ?? "high",
+		writeEffort: (forMode: string, level: string) => {
+			efforts[forMode] = level;
 		},
 	};
 	const handlers: Record<string, CommandHandler> = {};
@@ -402,6 +421,7 @@ function harness(
 		appendEntry,
 		sessions,
 		pins,
+		efforts,
 		entries,
 		ui,
 		uiCtx,
@@ -434,6 +454,26 @@ describe("claude-delegate registration", () => {
 		);
 		await h.command("menu", h.uiCtx);
 		expect(h.mode).toBe("opus");
+	});
+
+	it("follows the model pick with an effort pick for that model", async () => {
+		const h = harness("sonnet", { opus: "claude-opus-5-5" });
+		h.ui.select.mockImplementation(async (title: string, options: string[]) =>
+			title.startsWith("Effort")
+				? options.find((option) => option.endsWith("xhigh"))
+				: options.find((option) => option.includes("Opus 5.5")),
+		);
+		await h.command("menu", h.uiCtx);
+		expect(h.ui.select).toHaveBeenLastCalledWith("Effort for Opus", [
+			"low",
+			"medium",
+			"✓ high",
+			"xhigh",
+			"max",
+		]);
+		expect(h.efforts.opus).toBe("xhigh");
+		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-sticky", undefined);
+		expect(h.ui.setStatus).toHaveBeenCalledWith("claude-delegate", "Opus 5.5 · xhigh");
 	});
 
 	it("parses /cc arguments with an optional model token", () => {
@@ -488,7 +528,7 @@ describe("claude-delegate registration", () => {
 			return { resultText: "ok", isError: false, model: "claude-opus-5-5" };
 		});
 		await h.cc("do a thing", h.uiCtx);
-		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("haiku");
+		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("claude-haiku-5-5");
 		await h.cc("opus do a thing", h.uiCtx);
 		expect(seen[1][seen[1].indexOf("--model") + 1]).toBe("opus");
 	});
@@ -497,7 +537,7 @@ describe("claude-delegate registration", () => {
 		const h = harness("haiku", {}, async () => ({
 			resultText: "captcha wall",
 			isError: true,
-			model: "claude-haiku-4-5-20251001",
+			model: "claude-haiku-5-5",
 		}));
 		await h.cc("summarise inbox", h.uiCtx);
 		expect(h.ui.notify).toHaveBeenLastCalledWith("captcha wall", "error");
@@ -1503,7 +1543,7 @@ describe("chat history across pi and Claude Code", () => {
 				{
 					role: "custom",
 					customType: "note",
-					content: "Kronvest\n\n— Haiku 4.5 · 1 turn",
+					content: "Kronvest\n\n— Haiku 5.5 · 1 turn",
 					details: { source: "claude-delegate" },
 					timestamp: 3,
 				},

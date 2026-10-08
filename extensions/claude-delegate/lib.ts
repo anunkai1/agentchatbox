@@ -25,19 +25,29 @@ export const MODE_LABELS: Record<DelegationMode, string> = {
 	haiku: "Haiku",
 };
 
-/** Claude Code's own default is `medium`; the owner wants `high` for agentic browser work. */
-export type EffortLevel = "high";
-
-/** Haiku 4.5 has no effort parameter, so it stays undefined. */
-export const DEFAULT_EFFORT: Record<DelegationMode, EffortLevel | undefined> = {
-	opus: "high",
-	sonnet: "high",
-	haiku: undefined,
+/**
+ * Aliases that lag a new release get an exact model id instead. Haiku's alias
+ * still resolves to 4.5, so Haiku is pinned to 5.5; drop the entry once the
+ * alias catches up.
+ */
+export const MODE_MODEL: Partial<Record<DelegationMode, string>> = {
+	haiku: "claude-haiku-5-5",
 };
+
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/** Claude Code's own default is `medium`; the owner wants `high` for agentic browser work. */
+export const DEFAULT_EFFORT: EffortLevel = "high";
+
+export function parseEffort(raw: string): EffortLevel | undefined {
+	const value = raw.trim().toLowerCase();
+	return EFFORT_LEVELS.find((level) => level === value);
+}
 
 /**
  * Turn a wire model id into a short human label: `claude-opus-5-5` →
- * `Opus 5.5`, `claude-haiku-4-5-20251001` → `Haiku 4.5`.
+ * `Opus 5.5`, `claude-haiku-5-5` → `Haiku 5.5`.
  */
 export function prettyModelName(id: string): string {
 	const raw = id.replace(/^claude-/, "");
@@ -86,6 +96,9 @@ export interface DelegationStore {
 	 * with it keeps a conversation on one model when an alias moves on.
 	 */
 	readPinnedModel(key: string, mode: DelegationMode): string | undefined;
+	/** The effort level chosen for a mode; `DEFAULT_EFFORT` until set. */
+	readEffort(mode: DelegationMode): EffortLevel;
+	writeEffort(mode: DelegationMode, effort: EffortLevel): void;
 	/** Last model id seen for a mode, so labels keep the version between runs. */
 	readModel(mode: DelegationMode): string | undefined;
 	writeModel(mode: DelegationMode, modelId: string): void;
@@ -103,6 +116,7 @@ export const LEGACY_SESSIONS_FILE = join(
 );
 /** One file per mode, for the same reason. */
 export const DEFAULT_MODELS_DIR = join(homedir(), ".config", "acb", "claude-delegate-models");
+export const DEFAULT_EFFORTS_DIR = join(homedir(), ".config", "acb", "claude-delegate-efforts");
 
 interface SessionRecord {
 	claudeSessionId: string;
@@ -135,6 +149,7 @@ export class FileDelegationStore implements DelegationStore {
 		private readonly sessionsDir = DEFAULT_SESSIONS_DIR,
 		private readonly modelsDir = DEFAULT_MODELS_DIR,
 		private readonly legacySessionsPath: string | undefined = LEGACY_SESSIONS_FILE,
+		private readonly effortsDir = DEFAULT_EFFORTS_DIR,
 	) {}
 
 	readMode(): DelegationMode {
@@ -220,6 +235,18 @@ export class FileDelegationStore implements DelegationStore {
 		if (!modelId) return;
 		writeAtomic(join(this.modelsDir, mode), `${modelId}\n`, 0o644);
 	}
+
+	readEffort(mode: DelegationMode): EffortLevel {
+		try {
+			return parseEffort(readFileSync(join(this.effortsDir, mode), "utf8")) ?? DEFAULT_EFFORT;
+		} catch {
+			return DEFAULT_EFFORT;
+		}
+	}
+
+	writeEffort(mode: DelegationMode, effort: EffortLevel): void {
+		writeAtomic(join(this.effortsDir, mode), `${effort}\n`, 0o644);
+	}
 }
 
 /**
@@ -258,11 +285,11 @@ export interface SpawnOptions {
 	workspace?: string;
 	/** Chat history Claude Code has not seen yet, placed before the task. */
 	catchUp?: string;
-	/** Exact model id to run on; defaults to the mode's alias. */
+	/** Exact model id to run on; defaults to the mode's pinned id or alias. */
 	model?: string;
 	resumeSessionId?: string;
 	newSessionId?: string;
-	/** Passed as --effort; omitted for models without effort support. */
+	/** Passed as --effort. */
 	effort?: EffortLevel;
 }
 
@@ -288,7 +315,7 @@ export function buildClaudeSpawn(options: SpawnOptions): ClaudeSpawnPlan {
 		"--thinking-display",
 		"summarized",
 		"--model",
-		options.model ?? options.mode,
+		options.model ?? MODE_MODEL[options.mode] ?? options.mode,
 	];
 	if (options.effort) {
 		args.push("--effort", options.effort);

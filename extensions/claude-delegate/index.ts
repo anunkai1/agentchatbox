@@ -8,13 +8,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	buildClaudeSpawn,
 	capToolResult,
-	DEFAULT_EFFORT,
 	DEFAULT_WORKSPACE,
 	DELEGATION_MODES,
 	type DelegationMode,
 	type DelegationStore,
 	delegationLabel,
 	descendantsOf,
+	EFFORT_LEVELS,
 	FileDelegationStore,
 	MIRROR_PROVIDER,
 	MODE_LABELS,
@@ -22,6 +22,7 @@ import {
 	normaliseToolArgs,
 	PROMPT_MESSAGE_TYPE,
 	parseDelegationMode,
+	parseEffort,
 	processStartTicks,
 	type RunRecord,
 	RunRegistry,
@@ -217,7 +218,7 @@ export async function performDelegation(
 			model: resumeId ? store.readPinnedModel(key, mode) : undefined,
 			resumeSessionId: resumeId,
 			newSessionId,
-			effort: DEFAULT_EFFORT[mode],
+			effort: store.readEffort(mode),
 		});
 		return runTask(plan.args, {
 			cwd: plan.cwd,
@@ -260,7 +261,7 @@ export async function performDelegation(
 
 	return {
 		outcome,
-		label: delegationLabel(mode, outcome.model ?? store.readModel(mode), DEFAULT_EFFORT[mode]),
+		label: delegationLabel(mode, outcome.model ?? store.readModel(mode), store.readEffort(mode)),
 		restarted,
 	};
 }
@@ -694,7 +695,7 @@ export function registerClaudeDelegate(
 	// ACB reads extensionStatusLabels["claude-delegate"] for the default model.
 	// The text includes the resolved model version once a run has reported it.
 	const statusText = (mode: DelegationMode) =>
-		delegationLabel(mode, store.readModel(mode), DEFAULT_EFFORT[mode]);
+		delegationLabel(mode, store.readModel(mode), store.readEffort(mode));
 	// This chat's sticky mode: while set, ordinary messages go to Claude Code
 	// instead of the driver model. Restored from session entries on start.
 	let sticky: DelegationMode | undefined;
@@ -807,7 +808,7 @@ export function registerClaudeDelegate(
 				const resolved = delegationLabel(
 					mode,
 					model ?? store.readModel(mode),
-					DEFAULT_EFFORT[mode],
+					store.readEffort(mode),
 				);
 				const used = usageSummary(usage);
 				const footer = model ? `\n\n— ${resolved} (\`${model}\`)${used ? ` · ${used}` : ""}` : "";
@@ -1042,6 +1043,16 @@ export function registerClaudeDelegate(
 					entries.map((entry) => entry.label),
 				);
 				next = entries.find((entry) => entry.label === selected)?.mode;
+				if (next) {
+					// Effort is per model; dismissing this step keeps the current level.
+					const currentEffort = store.readEffort(next);
+					const chosen = await ctx.ui.select(
+						`Effort for ${MODE_LABELS[next]}`,
+						EFFORT_LEVELS.map((level) => `${level === currentEffort ? "✓ " : ""}${level}`),
+					);
+					const effort = chosen ? parseEffort(chosen.replace(/^✓ /, "")) : undefined;
+					if (effort) store.writeEffort(next, effort);
+				}
 			} else if (command === "status") {
 				ctx.ui.notify(`Default Claude Code model is ${statusText(current)}.`, "info");
 				return;
