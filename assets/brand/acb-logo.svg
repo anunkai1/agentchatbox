@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="agentchatbox">
+  <title>agentchatbox</title>
+  <style>
+    /* Intro plays once: letters draw in, the visor pops, the eyes light, the
+       smile draws. Then the eyes pulse and blink. Reduced-motion users get the
+       finished logo. */
+    .acb-draw { animation: acb-draw 0.6s cubic-bezier(0.2, 0.7, 0.3, 1) backwards; }
+    .acb-a { animation-delay: 0.15s; }
+    .acb-c { animation-duration: 0.8s; animation-delay: 0.45s; }
+    .acb-b { animation-delay: 0.9s; }
+    .acb-smile { animation-duration: 0.4s; animation-delay: 2.1s; }
+    .acb-visor { transform-box: fill-box; transform-origin: center; animation: acb-pop 0.45s ease-out 1.35s backwards; }
+    .acb-eyes { animation: acb-fade 0.3s ease-out 1.8s backwards; }
+    .acb-glow { transform-box: fill-box; transform-origin: center; animation: acb-pulse 2.4s ease-in-out 2.1s infinite; }
+    .acb-blink { transform-box: fill-box; transform-origin: center; animation: acb-blink 4s ease-in-out 2.5s infinite; }
+    @keyframes acb-draw {
+      from { stroke-dasharray: 100; stroke-dashoffset: 100; }
+      to { stroke-dasharray: 100; stroke-dashoffset: 0; }
+    }
+    @keyframes acb-pop {
+      from { opacity: 0; transform: scale(0.85); }
+    }
+    @keyframes acb-fade {
+      from { opacity: 0; }
+    }
+    @keyframes acb-pulse {
+      0%, 100% { opacity: 0.2; transform: scale(0.85); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+    @keyframes acb-blink {
+      0%, 56%, 66%, 100% { transform: scaleY(1); }
+      61% { transform: scaleY(0.08); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .acb-draw, .acb-visor, .acb-eyes, .acb-glow, .acb-blink { animation: none; }
+    }
+  </style>
+  <defs>
+    <linearGradient id="acb-robot-edge" x1="64" y1="72" x2="448" y2="432" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1ffce4"/>
+      <stop offset="0.55" stop-color="#3d9bff"/>
+      <stop offset="1" stop-color="#3a55e8"/>
+    </linearGradient>
+    <linearGradient id="acb-robot-silver" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#8fd9ff"/>
+    </linearGradient>
+    <radialGradient id="acb-robot-glow">
+      <stop offset="0" stop-color="#2ffff0" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#2ffff0" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="acb-robot-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f3a7a"/>
+      <stop offset="1" stop-color="#071a40"/>
+    </linearGradient>
+    <filter id="acb-robot-bloom" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="7" result="b"/>
+      <feColorMatrix in="b" type="matrix" values="0 0 0 0 0.18  0 0 0 0 0.95  0 0 0 0 0.9  0 0 0 0.75 0" result="c"/>
+      <feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <path d="M152 72H360A88 88 0 0 1 448 160V272A88 88 0 0 1 360 360H224L120 432L152 360A88 88 0 0 1 64 272V160A88 88 0 0 1 152 72Z" fill="url(#acb-robot-bg)" stroke="url(#acb-robot-edge)" stroke-width="14" stroke-linejoin="round"/>
+  <!-- The letters are the robot: C is the head, A and B flank it in one line. -->
+  <g transform="translate(14 0)" filter="url(#acb-robot-bloom)">
+    <path class="acb-draw acb-a" pathLength="100" d="M90 256L126 176L162 256M105 228H147" fill="none" stroke="url(#acb-robot-silver)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path class="acb-draw acb-c" pathLength="100" d="M315 174.7A72 72 0 1 0 315 257.3" fill="none" stroke="url(#acb-robot-silver)" stroke-width="26"/>
+    <path class="acb-draw acb-b" pathLength="100" d="M352 176V256M352 176H366A20 20 0 0 1 366 216H352M352 216H370A20 20 0 0 1 370 256H352" fill="none" stroke="url(#acb-robot-silver)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect class="acb-visor" x="210" y="186" width="92" height="52" rx="20" fill="#04122c" stroke="url(#acb-robot-silver)" stroke-width="4"/>
+    <g class="acb-eyes">
+      <circle class="acb-glow" cx="237" cy="210" r="20" fill="url(#acb-robot-glow)"/>
+      <circle class="acb-glow" cx="275" cy="210" r="20" fill="url(#acb-robot-glow)"/>
+      <g class="acb-blink">
+        <ellipse cx="237" cy="210" rx="9" ry="12" fill="#3dfff0"/>
+        <ellipse cx="275" cy="210" rx="9" ry="12" fill="#3dfff0"/>
+        <circle cx="234" cy="205" r="2.5" fill="#ffffff" fill-opacity="0.9"/>
+        <circle cx="272" cy="205" r="2.5" fill="#ffffff" fill-opacity="0.9"/>
+      </g>
+    </g>
+    <path class="acb-draw acb-smile" pathLength="100" d="M243 256Q256 265 269 256" fill="none" stroke="#3dfff0" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>
