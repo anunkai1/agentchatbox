@@ -1,4 +1,14 @@
-import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -56,6 +66,32 @@ describe("model thinking levels", () => {
 		expect(lstatSync(file).isSymbolicLink()).toBe(true);
 		expect(JSON.parse(readFileSync(target, "utf8"))).toEqual({
 			modelThinkingLevels: { "venice/m": "max" },
+		});
+	});
+
+	describe("pi's settings lock", () => {
+		it("does not write while pi holds the lock, and leaves pi's lock alone", () => {
+			mkdirSync(`${file}.lock`);
+			saveModelThinking("venice", "m", "max");
+			expect(existsSync(file)).toBe(false);
+			expect(existsSync(`${file}.lock`)).toBe(true);
+		});
+
+		it("takes over a lock pi abandoned and removes its own afterwards", () => {
+			mkdirSync(`${file}.lock`);
+			const old = new Date(Date.now() - 60_000);
+			utimesSync(`${file}.lock`, old, old);
+			saveModelThinking("venice", "m", "max");
+			expect(readModelThinking("venice", "m")).toBe("max");
+			expect(existsSync(`${file}.lock`)).toBe(false);
+		});
+
+		it("releases the lock after a save and after a failed one", () => {
+			saveModelThinking("venice", "m", "max");
+			expect(existsSync(`${file}.lock`)).toBe(false);
+			writeFileSync(file, "{ broken");
+			saveModelThinking("venice", "m", "low");
+			expect(existsSync(`${file}.lock`)).toBe(false);
 		});
 	});
 });
