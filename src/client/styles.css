@@ -1065,11 +1065,11 @@ body.sidebar-resizing iframe {
 	color: var(--text);
 	text-shadow: 0 0 14px rgba(29, 159, 165, 0.28);
 }
-/* ACB mark on the welcome / empty state. Sized for ~72px display,
+/* ACB mark on the welcome / empty state. Sized for ~108px display,
  * capped so it never gets visually heavy on wide screens. */
 .welcome-mark {
-	width: 72px;
-	height: 72px;
+	width: 108px;
+	height: 108px;
 	display: block;
 	margin-top: clamp(8px, 4vh, 36px);
 	filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.5));
@@ -3239,8 +3239,8 @@ body.modal-open {
 		gap: 14px;
 	}
 	.welcome-mark {
-		width: 56px;
-		height: 56px;
+		width: 84px;
+		height: 84px;
 		margin-top: 12px;
 	}
 	.welcome-title {
