@@ -493,6 +493,49 @@ while IFS= read -r line; do
 done
 `;
 
+const MODEL_SWITCH_THINKING_SCRIPT = `#!/usr/bin/env bash
+# Fake pi for the model-switch thinking restore. Like real pi, set_model resets
+# the level to the settings default ("off" here), and the new model tops out at
+# "medium", so set_thinking_level clamps high. Thinking changes are logged to the
+# marker file; get_state reports the clamped level once a switch has happened.
+marker="\${AGENTCHATBOX_FAKE_PI_MARKER:?missing marker}"
+sleep 0.05
+switched=0
+current=off
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      if [ "$switched" = "1" ]; then
+        echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"model-switch-session-001\\",\\"messageCount\\":0,\\"model\\":{\\"provider\\":\\"p2\\",\\"id\\":\\"m2\\"},\\"thinkingLevel\\":\\"$current\\"}}"
+      else
+        echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"model-switch-session-001","messageCount":0}}'
+      fi
+      ;;
+    "set_model")
+      switched=1
+      current=off
+      echo "default:off" >> "$marker"
+      echo '{"type":"response","command":"set_model","success":true,"data":{"provider":"p2","id":"m2","name":"m2"}}'
+      ;;
+    "set_thinking_level")
+      level="$(echo "$line" | jq -r '.level // ""')"
+      echo "level:$level" >> "$marker"
+      case "$level" in
+        high|max) current=medium ;;
+        *) current="$level" ;;
+      esac
+      echo '{"type":"response","command":"set_thinking_level","success":true}'
+      ;;
+    "")
+      ;;
+    *)
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"$type\\",\\"success\\":true}"
+      ;;
+  esac
+done
+`;
+
 /** Write a fake-pi shell script to a temp file and return its path. */
 function makeFakePi(
 	behavior:
@@ -512,6 +555,7 @@ function makeFakePi(
 		| "claude-run"
 		| "set-model"
 		| "thinking-queue"
+		| "model-switch-thinking"
 		| "compact",
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "fake-pi-"));
@@ -549,7 +593,9 @@ function makeFakePi(
 																	? EXIT_AFTER_DELAY_SCRIPT
 																	: behavior === "exit-after-ready"
 																		? EXIT_AFTER_READY_SCRIPT
-																		: EXIT_BEFORE_SESSION_SCRIPT;
+																			: behavior === "model-switch-thinking"
+																				? MODEL_SWITCH_THINKING_SCRIPT
+																				: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -947,6 +993,49 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			expect(last.thinkingLevel).toBe("high");
 		} finally {
 			close();
+		}
+	});
+
+	it("re-applies the chat's thinking level after a model switch and shows pi's clamped level", async () => {
+		// pi resets the level to its settings default on every model switch. The
+		// chat's level must be re-applied, and the pill must show the level pi
+		// clamped it to on the new model.
+		const markerDir = mkdtempSync(join(tmpdir(), "model-switch-thinking-"));
+		const marker = join(markerDir, "commands");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		fakePiPath = makeFakePi("model-switch-thinking");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "high",
+				}),
+			);
+			await inbox.waitFor(1);
+
+			ws.send(JSON.stringify({ type: "setModel", modelId: "m2", provider: "p2" }));
+			// Frames: the set_model response, the restored level's ack, then get_state
+			// reporting the clamped level.
+			const states = (await waitForType(inbox, "modelState", 3, 3000)) as Array<{
+				thinkingLevel?: string;
+			}>;
+			expect(states.map((state) => state.thinkingLevel)).toEqual(["high", "high", "medium"]);
+			expect(readFileSync(marker, "utf8").trim().split(/\n+/)).toEqual([
+				"default:off",
+				"level:high",
+			]);
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(markerDir, { recursive: true, force: true });
 		}
 	});
 

@@ -770,6 +770,7 @@ class SessionRegistry {
 				modelId: session.init.modelId,
 				thinkingLevel: session.init.thinkingLevel,
 			});
+			if (succeeded) this.restoreThinkingAfterModelSwitch(session);
 		}
 		if (line.type === "response" && line.command === "set_thinking_level") {
 			// pi's acknowledgement has neither the level nor a request id. The
@@ -944,6 +945,14 @@ class SessionRegistry {
 		}
 
 		deliver(session.ws, { type: "event", event: browserEvent(line) });
+	}
+
+	/** pi resets the level on every model switch; re-apply the chat's level and read back pi's clamp. */
+	private restoreThinkingAfterModelSwitch(session: LiveSession): void {
+		// A /think sent after the switch is already in flight and wins.
+		if (session.pendingThinking) return;
+		this.queueThinkingChange(session, session.init.thinkingLevel);
+		session.pi.send({ type: "get_state" });
 	}
 
 	private sendNextThinkingChange(session: LiveSession): void {
