@@ -2397,11 +2397,11 @@ export function renderShell(): void {
 		el(
 			"div",
 			{ class: "header-brand" },
-			// ACB robot mark on the left, then the chat title. The robot
-			// also sits on the welcome screen.
+			// ACB logo on the left, then the chat title. The same animated
+			// logo sits on the welcome screen.
 			el("img", {
 				class: "header-mark",
-				src: "/acb-robot.svg",
+				src: "/acb-logo.svg",
 				alt: "ACB",
 				width: 24,
 				height: 24,
@@ -2561,10 +2561,10 @@ export function renderShell(): void {
 	const welcome = el("div", { class: "welcome", id: "welcome" });
 	welcome.append(el("div", { class: "welcome-brand" }, "Agent Chat Box"));
 	welcome.append(
-		// ACB robot with letters behind its face. Glow is CSS-only, in acb-robot-letters.svg.
+		// ACB logo. Its intro and eye animation are CSS-only, in acb-logo.svg.
 		el("img", {
 			class: "welcome-mark",
-			src: "/acb-robot-letters.svg",
+			src: "/acb-logo.svg",
 			alt: "agentchatbox",
 			width: 72,
 			height: 72,
