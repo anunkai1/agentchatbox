@@ -34,39 +34,24 @@
       <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#b8d6e6"/>
     </linearGradient>
-    <radialGradient id="acb-robot-gloss" cx="0.35" cy="0.25" r="0.6">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
     <radialGradient id="acb-robot-glow">
       <stop offset="0" stop-color="#2ee6d6" stop-opacity="0.7"/>
       <stop offset="1" stop-color="#2ee6d6" stop-opacity="0"/>
     </radialGradient>
   </defs>
   <path d="M152 72H360A88 88 0 0 1 448 160V272A88 88 0 0 1 360 360H224L120 432L152 360A88 88 0 0 1 64 272V160A88 88 0 0 1 152 72Z" fill="#0a1f3b" stroke="url(#acb-robot-edge)" stroke-width="14" stroke-linejoin="round"/>
-  <!-- The ACB letters sit behind the robot. The face is translucent so they show through. -->
-  <g fill="none" stroke="#4aa8ff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" transform="translate(256 216) scale(1.25) translate(-241.5 -225)">
-    <path d="M104 272L140 178L176 272M116 240H164"/>
-    <path d="M297.2 195.4A46 46 0 1 0 297.2 254.6"/>
-    <path d="M332 180V270M332 180H350A22 22 0 0 1 350 224H332M332 224H356A23 23 0 0 1 356 270H332"/>
-  </g>
-  <g transform="translate(256 214) scale(1.1) translate(-256 -214)">
-    <rect x="236" y="292" width="40" height="20" rx="7" fill="#7fa6bf"/>
-    <g opacity="0.55">
-      <rect x="136" y="186" width="30" height="60" rx="13" fill="url(#acb-robot-silver)"/>
-      <rect x="346" y="186" width="30" height="60" rx="13" fill="url(#acb-robot-silver)"/>
-      <rect x="156" y="128" width="200" height="172" rx="62" fill="url(#acb-robot-silver)"/>
-      <rect x="156" y="128" width="200" height="172" rx="62" fill="url(#acb-robot-gloss)"/>
-    </g>
-    <circle cx="146" cy="216" r="6" fill="#0a1f3b"/>
-    <circle cx="366" cy="216" r="6" fill="#0a1f3b"/>
-    <rect x="180" y="174" width="152" height="82" rx="34" fill="#0a1f3b" fill-opacity="0.35"/>
-    <circle class="acb-robot-glow" cx="226" cy="214" r="26" fill="url(#acb-robot-glow)"/>
-    <circle class="acb-robot-glow" cx="286" cy="214" r="26" fill="url(#acb-robot-glow)"/>
-    <ellipse cx="226" cy="214" rx="13" ry="17" fill="#2ee6d6"/>
-    <ellipse cx="286" cy="214" rx="13" ry="17" fill="#2ee6d6"/>
-    <circle cx="222" cy="207" r="3.5" fill="#ffffff" fill-opacity="0.9"/>
-    <circle cx="282" cy="207" r="3.5" fill="#ffffff" fill-opacity="0.9"/>
-    <path d="M232 276Q256 292 280 276" fill="none" stroke="#0a1f3b" stroke-width="8" stroke-linecap="round"/>
-  </g>
+  <!-- The letters are the robot: C is the head, A the crest, B the ear. -->
+  <path d="M321.5 202.1A80 80 0 1 0 321.5 293.9" fill="none" stroke="url(#acb-robot-silver)" stroke-width="30"/>
+  <path d="M206 167L256 100L306 167M226 140H286" fill="none" stroke="url(#acb-robot-silver)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M336 212V284M336 212H352A18 18 0 0 1 352 248H336M336 248H354A18 18 0 0 1 354 284H336" fill="none" stroke="url(#acb-robot-silver)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="137" y="230" width="22" height="36" rx="11" fill="url(#acb-robot-silver)"/>
+  <circle cx="148" cy="248" r="4.5" fill="#0a1f3b"/>
+  <rect x="201" y="218" width="110" height="60" rx="22" fill="#0a1f3b" stroke="url(#acb-robot-silver)" stroke-width="4"/>
+  <circle class="acb-robot-glow" cx="232" cy="244" r="22" fill="url(#acb-robot-glow)"/>
+  <circle class="acb-robot-glow" cx="280" cy="244" r="22" fill="url(#acb-robot-glow)"/>
+  <ellipse cx="232" cy="244" rx="10" ry="14" fill="#2ee6d6"/>
+  <ellipse cx="280" cy="244" rx="10" ry="14" fill="#2ee6d6"/>
+  <circle cx="229" cy="238" r="2.8" fill="#ffffff" fill-opacity="0.9"/>
+  <circle cx="277" cy="238" r="2.8" fill="#ffffff" fill-opacity="0.9"/>
+  <path d="M236 292Q256 304 276 292" fill="none" stroke="#2ee6d6" stroke-width="6" stroke-linecap="round"/>
 </svg>
