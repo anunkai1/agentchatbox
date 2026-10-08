@@ -886,7 +886,7 @@ body.sidebar-resizing iframe {
 	height: 14px;
 }
 
-/* The "API ↗" header affordance — z.ai style icon-label-arrow button. */
+/* Settings: a round wrench button. */
 .header-overflow {
 	display: inline-flex;
 	align-items: center;
@@ -894,8 +894,10 @@ body.sidebar-resizing iframe {
 	background: transparent;
 	border: 1px solid var(--border-strong);
 	color: var(--text);
-	padding: 0 12px 0 10px;
-	border-radius: var(--radius-pill);
+	justify-content: center;
+	width: 32px;
+	padding: 0;
+	border-radius: 50%;
 	cursor: pointer;
 	font-family: inherit;
 	font-size: 13px;
@@ -3200,12 +3202,6 @@ body.modal-open {
 		justify-content: center;
 		border-radius: 50%;
 		flex-shrink: 0;
-	}
-	/* Keep the settings action inside the viewport too. The text label is
-	 * useful on wide screens, but an icon-only target avoids a clipped pill
-	 * when a long thread title is open on a phone. */
-	.header-overflow > span:last-child {
-		display: none;
 	}
 	.header-cc-icon svg {
 		width: 16px;

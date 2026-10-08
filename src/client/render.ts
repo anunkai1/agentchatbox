@@ -1526,7 +1526,8 @@ export function refreshCapabilitiesBadge(): void {
 			const status = state.extensionStatusLabels["codex-fast"];
 			const label =
 				status === "Enabled" ? "Fast" : status === "Standard" ? "Standard" : "Checking…";
-			fastButton.replaceChildren(iconEl(ZAP_ICON), ` ${label}`);
+			// The button reads "GPT"; the bolt marks Fast, and the tooltip names the tier.
+			fastButton.replaceChildren(...(status === "Enabled" ? [iconEl(ZAP_ICON), " GPT"] : ["GPT"]));
 			fastButton.title = `Codex response speed: ${label} (/fast)`;
 			fastButton.setAttribute("aria-label", `Configure Codex response speed (currently ${label})`);
 		}
@@ -1725,7 +1726,7 @@ export function refreshStatus(): void {
 	// Show the human-readable name when we have it (e.g. "DeepSeek V4
 	// Pro"), otherwise fall back to the raw id. Keep the raw id in the
 	// title attribute for hover-tooltips.
-	mp.textContent = `model: ${modelLabel}`;
+	mp.textContent = modelLabel;
 	mp.title = `Model (/model) — current id: ${state.currentModelId ?? "…"}`;
 	const tp = $<HTMLButtonElement>("#think-picker");
 	tp.textContent = `think: ${state.currentThinking}`;
@@ -2454,8 +2455,7 @@ export function renderShell(): void {
 				onclick: () => shellHandlers?.handleSlash("fast menu"),
 				style: "display:none",
 			},
-			iconEl(ZAP_ICON),
-			" Checking…",
+			"GPT",
 		),
 		el(
 			"button",
@@ -2466,7 +2466,7 @@ export function renderShell(): void {
 				title: "Model (/model)",
 				"aria-label": "Choose chat model",
 			},
-			"model: …",
+			"…",
 		),
 		// The hidden pickers still exist in the DOM so refreshStatus() can
 		// update them; they're just visually hidden via the .picker-hidden
@@ -2520,7 +2520,6 @@ export function renderShell(): void {
 			el("span", {
 				html: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94L14.7 6.3z"/></svg>`,
 			}),
-			el("span", { text: "Settings" }),
 		),
 	);
 	main.append(header);
