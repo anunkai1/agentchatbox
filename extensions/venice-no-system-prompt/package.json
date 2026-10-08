@@ -1,0 +1,19 @@
+{
+	"name": "acb-venice-no-system-prompt",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Stops Venice injecting its own system prompt into Pi requests.",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}
