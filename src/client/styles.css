@@ -675,9 +675,9 @@ body.sidebar-resizing iframe {
 .header {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 8px;
 	padding: 10px 16px;
-	border-bottom: 1px solid transparent;
+	border-bottom: 1px solid var(--border);
 	background: var(--bg);
 	min-height: 56px;
 }
@@ -727,6 +727,7 @@ body.sidebar-resizing iframe {
 	font-size: 14px;
 	padding: 6px 10px;
 	border-radius: var(--radius);
+	min-width: 0;
 }
 .header-mark {
 	width: 24px;
@@ -745,7 +746,7 @@ body.sidebar-resizing iframe {
 	background: transparent;
 	border: 1px solid var(--border-strong);
 	color: var(--text);
-	padding: 5px 12px;
+	padding: 0 12px;
 	border-radius: var(--radius-pill);
 	cursor: pointer;
 	font-family: inherit;
@@ -810,13 +811,13 @@ body.sidebar-resizing iframe {
 .header-cc {
 	flex-shrink: 0;
 	background: transparent;
-	border: 1px solid rgba(255, 255, 255, 0.22);
+	border: 1px solid var(--border-strong);
 	color: var(--text-secondary);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 36px;
-	height: 36px;
+	width: 32px;
+	height: 32px;
 	padding: 0;
 	border-radius: 50%;
 	cursor: pointer;
@@ -857,7 +858,7 @@ body.sidebar-resizing iframe {
 	background: var(--surface-hover);
 	border: 1px solid var(--border);
 	color: var(--text-muted);
-	padding: 6px 11px 6px 7px;
+	padding: 0 12px 0 6px;
 	border-radius: var(--radius-pill);
 	cursor: pointer;
 	font-family: inherit;
@@ -900,28 +901,41 @@ body.sidebar-resizing iframe {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	background: var(--brand-gradient);
-	border: 1px solid transparent;
-	color: #fff;
-	padding: 6px 10px 6px 8px;
+	background: transparent;
+	border: 1px solid var(--border-strong);
+	color: var(--text);
+	padding: 0 12px 0 10px;
 	border-radius: var(--radius-pill);
 	cursor: pointer;
 	font-family: inherit;
 	font-size: 13px;
 	font-weight: 500;
-	box-shadow: 0 2px 10px rgba(39, 196, 200, 0.12);
 	transition:
-		filter 0.12s,
-		box-shadow 0.12s;
+		background 0.12s,
+		border-color 0.12s;
 }
 .header-overflow:hover {
-	filter: brightness(1.12);
-	box-shadow: 0 3px 14px rgba(39, 196, 200, 0.22);
+	background: var(--surface-hover);
+	border-color: rgba(255, 255, 255, 0.28);
 }
 .header-overflow > span:first-child {
 	color: currentColor;
 	display: inline-flex;
 	align-items: center;
+}
+
+/* Every right-hand control shares one 32px pill height so the bar reads as a
+ * single row rather than a mix of sizes. */
+.header .picker-btn,
+.header .header-voice,
+.header .header-overflow {
+	display: inline-flex;
+	align-items: center;
+	height: 32px;
+	box-sizing: border-box;
+	line-height: 1;
+	white-space: nowrap;
+	flex-shrink: 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2962,17 +2976,19 @@ body.modal-open {
 
 /* ---------- capabilities badge ---------- */
 .caps-badge {
-	font-size: 11px;
-	padding: 2px 8px;
-	background: #1a2a1a;
-	color: #9ece6a;
-	border: 1px solid #2a4a2a;
-	border-radius: 10px;
+	font-size: 12px;
+	font-weight: 400;
+	padding: 0 12px;
+	background: transparent;
+	color: var(--text-muted);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-pill);
 	cursor: pointer;
 	white-space: nowrap;
 }
 .caps-badge:hover {
-	background: #243624;
+	background: var(--surface-hover);
+	color: var(--text-secondary);
 }
 
 /* ---------- capabilities popover ---------- */
