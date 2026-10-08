@@ -848,29 +848,28 @@ body.sidebar-resizing iframe {
 	filter: brightness(1.12);
 }
 
-/* Voice mode on/off pill. Off is a quiet outline; on takes the accent, so the
-   state reads at a glance. On a phone the label is hidden, leaving the icon
-   and the colour to carry it. */
+/* Voice mode on/off: a round button holding a "V". Off is a quiet outline; on
+   takes the brand gradient, so the state reads at a glance. */
 .header-voice {
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
-	background: var(--surface-hover);
-	border: 1px solid var(--border);
+	justify-content: center;
+	flex-shrink: 0;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	background: transparent;
+	border: 1px solid var(--border-strong);
 	color: var(--text-muted);
-	padding: 0 12px 0 6px;
-	border-radius: var(--radius-pill);
+	border-radius: 50%;
 	cursor: pointer;
-	font-family: inherit;
-	font-size: 13px;
-	font-weight: 600;
-	white-space: nowrap;
 	transition:
 		background 0.12s,
 		border-color 0.12s,
 		color 0.12s;
 }
 .header-voice:hover {
+	background: var(--surface-hover);
 	color: var(--text);
 }
 .header-voice.on {
@@ -879,21 +878,12 @@ body.sidebar-resizing iframe {
 	color: #fff;
 	box-shadow: 0 0 10px var(--brand-glow);
 }
-/* The "V" disc: a dim outline when off, solid white when on. The glyph is a
-   letter, so there is no vector art to carry — only the disc's fill changes. */
 .header-voice-v {
 	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 20px;
-	height: 20px;
-	border-radius: 50%;
-	border: 1.5px solid rgba(255, 255, 255, 0.22);
 }
-.header-voice.on .header-voice-v {
-	background: #fff;
-	border-color: #fff;
-	color: var(--brand-blue);
+.header-voice-v svg {
+	width: 14px;
+	height: 14px;
 }
 
 /* The "API ↗" header affordance — z.ai style icon-label-arrow button. */
@@ -927,7 +917,6 @@ body.sidebar-resizing iframe {
 /* Every right-hand control shares one 32px pill height so the bar reads as a
  * single row rather than a mix of sizes. */
 .header .picker-btn,
-.header .header-voice,
 .header .header-overflow {
 	display: inline-flex;
 	align-items: center;
@@ -3211,32 +3200,6 @@ body.modal-open {
 		justify-content: center;
 		border-radius: 50%;
 		flex-shrink: 0;
-	}
-	.header .header-voice {
-		gap: 0;
-	}
-	/* The 30px circle IS the button here, so an inner disc would draw a second
-	 * ring inside it. Drop the disc and let the button itself be the lamp: dim
-	 * with a grey V when off, brand gradient with a white V when on. */
-	.header-voice-v {
-		width: auto;
-		height: auto;
-		border: none;
-	}
-	.header-voice-v svg {
-		width: 13px;
-		height: 13px;
-	}
-	.header-voice.on .header-voice-v {
-		background: none;
-	}
-	.header-voice.on {
-		background: var(--brand-gradient);
-		border-color: transparent;
-		color: #fff;
-	}
-	.header-voice-label {
-		display: none;
 	}
 	/* Keep the settings action inside the viewport too. The text label is
 	 * useful on wide screens, but an icon-only target avoids a clipped pill
