@@ -2398,11 +2398,11 @@ export function renderShell(): void {
 			"div",
 			{ class: "header-brand" },
 			// ACB brand mark on the left, then the chat title. The
-			// colored robot-in-hexagon mark reads on both the dark UI
-			// and light contexts, so one raster asset serves everywhere.
+			// chat-bubble mark reads on both the dark UI and light
+			// contexts, so one asset serves everywhere.
 			el("img", {
 				class: "header-mark",
-				src: "/logo-mark.webp?v=ebfe29502536",
+				src: "/logo-bubble.svg?v=1",
 				alt: "ACB",
 				width: 24,
 				height: 24,
@@ -2562,14 +2562,8 @@ export function renderShell(): void {
 	const welcome = el("div", { class: "welcome", id: "welcome" });
 	welcome.append(el("div", { class: "welcome-brand" }, "Agent Chat Box"));
 	welcome.append(
-		el("img", {
-			class: "welcome-mark",
-			src: "/logo-mark.webp?v=ebfe29502536",
-			alt: "agentchatbox",
-			width: 72,
-			height: 72,
-			draggable: false,
-		}),
+		// Animated chat-bubble mark (typing dots, then A C B); CSS-only in styles.css.
+		el("div", { class: "welcome-mark-wrap", html: ACB_MARK_SVG }),
 	);
 	welcome.append(el("h1", { class: "welcome-title" }, "What can I do for you?"));
 	welcome.append(
@@ -2826,6 +2820,9 @@ export function renderShell(): void {
  * command behavior and prompt text are registered by the pi-owned
  * acb-workflows extension. Icons are inline SVGs so they stay crisp.
  */
+const ACB_MARK_SVG =
+	'<svg class="welcome-mark acb-mark" viewBox="0 0 512 512" role="img" aria-label="agentchatbox" width="72" height="72"><defs><linearGradient id="acb-mark-edge" x1="64" y1="96" x2="448" y2="420" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#2ee6d6"/><stop offset="0.6" stop-color="#4aa8ff"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient></defs><path d="M128 96H384Q448 96 448 160V288Q448 352 384 352H196L112 420L130 352H128Q64 352 64 288V160Q64 96 128 96Z" fill="#0a1f3b" fill-opacity="0.6" stroke="url(#acb-mark-edge)" stroke-width="14" stroke-linejoin="round"/><circle class="acb-dot" cx="200" cy="224" r="13"/><circle class="acb-dot d2" cx="256" cy="224" r="13"/><circle class="acb-dot d3" cx="312" cy="224" r="13"/><g transform="translate(14 0)" fill="none" stroke="#e8fdff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"><path class="acb-letter la" pathLength="100" d="M104 272L140 178L176 272M116 240H164"/><path class="acb-letter lc" pathLength="100" d="M297.2 195.4A46 46 0 1 0 297.2 254.6"/><path class="acb-letter lb" pathLength="100" d="M332 180V270M332 180H350A22 22 0 0 1 350 224H332M332 224H356A23 23 0 0 1 356 270H332"/></g></svg>';
+
 const WELCOME_SUGGESTIONS: {
 	title: string;
 	sub: string;
