@@ -16,7 +16,14 @@ export default defineConfig({
 		include: ["tests/**/*.test.ts"],
 		environment: "node",
 		// Never let an accidental import-time store use production uploads.
-		env: { UPLOADS_DIR: mkdtempSync(join(tmpdir(), "acb-test-uploads-")) },
+		env: {
+			UPLOADS_DIR: mkdtempSync(join(tmpdir(), "acb-test-uploads-")),
+			// Chat tests send setThinking, which saves into pi's settings file.
+			AGENTCHATBOX_PI_SETTINGS_FILE: join(
+				mkdtempSync(join(tmpdir(), "acb-test-pi-")),
+				"settings.json",
+			),
+		},
 		globalSetup: ["./tests/upload-test-sandbox.ts"],
 		// Server tests boot an express listener on an ephemeral port. Keep
 		// the default 5s timeout — the smoke round-trip should be fast.

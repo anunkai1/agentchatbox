@@ -42,6 +42,7 @@ import type {
 } from "../shared/protocol.js";
 import { config } from "./config.js";
 import { log } from "./logger.js";
+import { readModelThinking, saveModelThinking } from "./model-thinking.js";
 import type { ProjectRecord } from "./projects.js";
 import {
 	createProject,
@@ -237,7 +238,15 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 	// which owns project defaults, is authoritative here. A reconnect
 	// (sessionId present) keeps the client's model: we're resuming and
 	// the client knows the live model. See resolveInitDefaults.
-	const resolvedInit = resolveInitDefaults(resolveInitCwd(init), getProject(GLOBAL_PROJECT_ID));
+	const defaulted = resolveInitDefaults(resolveInitCwd(init), getProject(GLOBAL_PROJECT_ID));
+	// A level the user set for this model beats the project defaults.
+	const resolvedInit = defaulted.sessionId
+		? defaulted
+		: {
+				...defaulted,
+				thinkingLevel:
+					readModelThinking(defaulted.provider, defaulted.modelId) ?? defaulted.thinkingLevel,
+			};
 	const session = registry.acquire(resolvedInit);
 	registry.attach(session, ws);
 
@@ -407,6 +416,7 @@ async function onClientMessage(
 			// or request id. The registry serializes rapid clicks so each response
 			// can be matched to the exact level it confirms.
 			registry.queueThinkingChange(session, msg.level);
+			saveModelThinking(session.init.provider, session.init.modelId, msg.level);
 			break;
 		}
 		case "renameSession": {
@@ -548,10 +558,15 @@ async function onClientMessage(
 			// instead of silently inheriting the current session's model.
 			const project = msg.projectId ? getProject(msg.projectId) : getProject(GLOBAL_PROJECT_ID);
 			const cwd = project?.cwd ?? config.piCwd;
+			const provider = project?.defaultProvider ?? session.init.provider;
+			const modelId = project?.defaultModelId ?? session.init.modelId;
 			void replaceSession(ws, session, {
-				provider: project?.defaultProvider ?? session.init.provider,
-				modelId: project?.defaultModelId ?? session.init.modelId,
-				thinkingLevel: project?.defaultThinkingLevel ?? session.init.thinkingLevel,
+				provider,
+				modelId,
+				thinkingLevel:
+					readModelThinking(provider, modelId) ??
+					project?.defaultThinkingLevel ??
+					session.init.thinkingLevel,
 				cwd,
 			});
 			break;

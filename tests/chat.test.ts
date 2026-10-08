@@ -593,9 +593,9 @@ function makeFakePi(
 																	? EXIT_AFTER_DELAY_SCRIPT
 																	: behavior === "exit-after-ready"
 																		? EXIT_AFTER_READY_SCRIPT
-																			: behavior === "model-switch-thinking"
-																				? MODEL_SWITCH_THINKING_SCRIPT
-																				: EXIT_BEFORE_SESSION_SCRIPT;
+																		: behavior === "model-switch-thinking"
+																			? MODEL_SWITCH_THINKING_SCRIPT
+																			: EXIT_BEFORE_SESSION_SCRIPT;
 	writeFileSync(script, body, { mode: 0o755 });
 	return script;
 }
@@ -604,6 +604,7 @@ let fakePiPath: string | null = null;
 let authFile: string | null = null;
 let projectsFile: string | null = null;
 let sessionsRoot: string | null = null;
+let settingsFile: string | null = null;
 let server: HttpServer | null = null;
 let port = 0;
 
@@ -635,6 +636,10 @@ beforeEach(async () => {
 	// transcripts. Individual tests can create exact JSONL fixtures here.
 	sessionsRoot = mkdtempSync(join(tmpdir(), "acb-chat-sessions-"));
 	process.env.PI_CODING_AGENT_SESSION_DIR = sessionsRoot;
+	// Remembered per-model thinking levels live in pi's settings.json; keep each
+	// test on its own empty copy.
+	settingsFile = join(mkdtempSync(join(tmpdir(), "acb-chat-settings-")), "settings.json");
+	process.env.AGENTCHATBOX_PI_SETTINGS_FILE = settingsFile;
 	// Reset the module cache so each test re-reads config (and sees the
 	// current PI_BIN / PI_CWD / AGENTCHATBOX_PI_AUTH_FILE env vars). Without
 	// this, vitest's default module cache makes every test after the first
@@ -682,6 +687,11 @@ afterEach(async () => {
 		rmSync(sessionsRoot, { recursive: true, force: true });
 		sessionsRoot = null;
 	}
+	if (settingsFile) {
+		rmSync(join(settingsFile, ".."), { recursive: true, force: true });
+		settingsFile = null;
+	}
+	delete process.env.AGENTCHATBOX_PI_SETTINGS_FILE;
 	delete process.env.AGENTCHATBOX_PI_AUTH_FILE;
 	delete process.env.AGENTCHATBOX_PROJECTS_FILE;
 	delete process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -1036,6 +1046,88 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			close();
 			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
 			rmSync(markerDir, { recursive: true, force: true });
+		}
+	});
+
+	it("applies the level remembered for the new model when switching models", async () => {
+		writeFileSync(settingsFile!, JSON.stringify({ modelThinkingLevels: { "p2/m2": "low" } }));
+		const markerDir = mkdtempSync(join(tmpdir(), "model-switch-remembered-"));
+		const marker = join(markerDir, "commands");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		fakePiPath = makeFakePi("model-switch-thinking");
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "high",
+				}),
+			);
+			await inbox.waitFor(1);
+
+			ws.send(JSON.stringify({ type: "setModel", modelId: "m2", provider: "p2" }));
+			// The set_model response, then the ack of the remembered level. pi then
+			// reports the same level, so no third frame follows.
+			const states = (await waitForType(inbox, "modelState", 2, 3000)) as Array<{
+				thinkingLevel?: string;
+			}>;
+			expect(states.map((state) => state.thinkingLevel)).toEqual(["high", "low"]);
+			expect(readFileSync(marker, "utf8").trim().split(/\n+/)).toEqual([
+				"default:off",
+				"level:low",
+			]);
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(markerDir, { recursive: true, force: true });
+		}
+	});
+
+	it("starts a fresh session at the level remembered for its model", async () => {
+		writeFileSync(settingsFile!, JSON.stringify({ modelThinkingLevels: { "deepseek/m1": "max" } }));
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }),
+			);
+			const [ready] = (await waitForType(inbox, "ready", 1)) as Array<{ thinkingLevel?: string }>;
+			expect(ready?.thinkingLevel).toBe("max");
+		} finally {
+			close();
+		}
+	});
+
+	it("remembers a chosen thinking level for the current model and keeps other settings", async () => {
+		writeFileSync(
+			settingsFile!,
+			JSON.stringify({ defaultThinkingLevel: "high", modelThinkingLevels: { "x/y": "low" } }),
+		);
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }),
+			);
+			await waitForType(inbox, "ready", 1);
+			ws.send(JSON.stringify({ type: "setThinking", level: "max" }));
+			await vi.waitFor(() =>
+				expect(JSON.parse(readFileSync(settingsFile!, "utf8"))).toEqual({
+					defaultThinkingLevel: "high",
+					modelThinkingLevels: { "x/y": "low", "deepseek/m1": "max" },
+				}),
+			);
+		} finally {
+			close();
 		}
 	});
 

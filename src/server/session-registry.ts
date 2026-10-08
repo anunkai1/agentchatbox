@@ -46,6 +46,7 @@ import type {
 } from "../shared/protocol.js";
 import { config, getServerApiKey } from "./config.js";
 import { log } from "./logger.js";
+import { readModelThinking } from "./model-thinking.js";
 import { type PiProcess, spawnPi } from "./pi-process.js";
 import { browserReplayMessage, readPiSessionMessages } from "./session-list.js";
 import { safeUnref } from "./util.js";
@@ -947,11 +948,13 @@ class SessionRegistry {
 		deliver(session.ws, { type: "event", event: browserEvent(line) });
 	}
 
-	/** pi resets the level on every model switch; re-apply the chat's level and read back pi's clamp. */
+	/** pi resets the level on every model switch; re-apply the model's remembered level (else the chat's) and read back pi's clamp. */
 	private restoreThinkingAfterModelSwitch(session: LiveSession): void {
 		// A /think sent after the switch is already in flight and wins.
 		if (session.pendingThinking) return;
-		this.queueThinkingChange(session, session.init.thinkingLevel);
+		const level =
+			readModelThinking(session.init.provider, session.init.modelId) ?? session.init.thinkingLevel;
+		this.queueThinkingChange(session, level);
 		session.pi.send({ type: "get_state" });
 	}
 
