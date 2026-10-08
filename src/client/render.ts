@@ -46,7 +46,7 @@ import { setRichText, setUserRichText } from "./linkify.js";
 import { services } from "./services.js";
 import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { formatAbsolute, formatRelative } from "./time.js";
-import { sessionPath } from "./url.js";
+import { forkPath, sessionPath } from "./url.js";
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
@@ -273,11 +273,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 			}),
 		);
 		if (m.seq !== undefined) {
-			actions.append(
-				makeMessageActionButton("fork", "Fork this conversation here", () => {
-					services.forkFromMessage?.(m.seq as number);
-				}),
-			);
+			actions.append(makeForkLink(() => m.seq));
 		}
 		row.append(actions);
 		return row;
@@ -793,6 +789,40 @@ function makeMessageActionButton(
 }
 
 /**
+ * The fork control: an `<a href="/fork/<session>/<n>">` so the browser's own
+ * long-press / middle-click menu can open the fork in a new window (the fork
+ * is made when that URL loads). A plain tap still forks in place. The message
+ * ordinal may not exist yet (a streaming reply), so the href is refreshed
+ * whenever the pointer or focus arrives and left off until `getSeq` has one.
+ */
+function makeForkLink(getSeq: () => number | undefined): HTMLAnchorElement {
+	const title = "Fork this conversation here";
+	const link = el("a", {
+		class: "message-action",
+		"aria-label": title,
+		title,
+		rel: "noopener",
+	}) as HTMLAnchorElement;
+	link.append(messageIcon("fork"));
+	const refreshHref = () => {
+		const seq = getSeq();
+		if (state.sessionId && seq !== undefined) link.href = forkPath(state.sessionId, seq);
+		else link.removeAttribute("href");
+	};
+	refreshHref();
+	for (const type of ["pointerdown", "touchstart", "mouseenter", "focus"]) {
+		link.addEventListener(type, refreshHref, { passive: true });
+	}
+	link.addEventListener("click", (e) => {
+		if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+		e.preventDefault();
+		const seq = getSeq();
+		if (seq !== undefined) services.forkFromMessage?.(seq);
+	});
+	return link;
+}
+
+/**
  * Common actions for an assistant response. Actions resolve the message
  * lazily so the same bar can be attached to a streaming placeholder before
  * its final text and sequence number exist.
@@ -853,11 +883,9 @@ function makeAssistantMetaRow(
 		"aria-label": "Conversation actions",
 	});
 	actions.append(
-		makeMessageActionButton("fork", "Fork this conversation here", () => {
+		makeForkLink(() => {
 			const message = getMessage();
-			if (message?.kind === "assistant" && message.seq !== undefined) {
-				services.forkFromMessage?.(message.seq);
-			}
+			return message?.kind === "assistant" ? message.seq : undefined;
 		}),
 		makeMessageActionButton("share", "Copy a shareable link to this chat", () => {
 			services.copyShareLink?.();

@@ -99,7 +99,12 @@ import {
 	refreshCurrentModelLabel,
 	state,
 } from "./state.js";
-import { readSessionIdFromUrl, shareableSessionUrl, writeSessionIdToUrl } from "./url.js";
+import {
+	readForkFromUrl,
+	readSessionIdFromUrl,
+	shareableSessionUrl,
+	writeSessionIdToUrl,
+} from "./url.js";
 import {
 	cancelVoiceRecord,
 	handleDrop,
@@ -1403,6 +1408,9 @@ async function boot(): Promise<void> {
 	// from another machine/project) starts a fresh chat instead of handing
 	// `pi` a missing session id. This is pure client-side routing: the
 	// server already resumes by id; we're only choosing what to ask for.
+	// A `/fork/<id>/<n>` URL (a fork button opened in a new window) boots a
+	// fresh chat and forks into it on the first `ready`, below.
+	let pendingFork = readForkFromUrl();
 	const urlSessionId = readSessionIdFromUrl();
 	if (urlSessionId) {
 		const exists = await sessionExists(urlSessionId);
@@ -1544,6 +1552,11 @@ async function boot(): Promise<void> {
 		refreshStatus();
 	});
 	chatClient.onReady((info) => {
+		if (pendingFork) {
+			const { sessionId, messageCount } = pendingFork;
+			pendingFork = null;
+			chatClient.forkSession(sessionId, messageCount);
+		}
 		// A fresh `pi` child is up (new session, resume, or reconnect).
 		// Reset the live message ordinal — it gets re-seeded to the
 		// transcript length below if this is a resume with history.

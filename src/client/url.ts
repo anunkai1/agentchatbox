@@ -20,6 +20,7 @@
  */
 
 const SESSION_PREFIX = "/s/";
+const FORK_PREFIX = "/fork/";
 
 /**
  * Extract the session id from the current URL, or null when the URL
@@ -65,4 +66,26 @@ export function writeSessionIdToUrl(sessionId: string | null): void {
 export function shareableSessionUrl(sessionId: string | null): string | null {
 	if (!sessionId) return null;
 	return `${location.origin}${SESSION_PREFIX}${sessionId}`;
+}
+
+/**
+ * The path for "fork this chat at message N": `/fork/<sessionId>/<n>`.
+ * Used as the fork button's `href` so a long-press / middle-click can
+ * open the fork in a new window. The fork itself happens when that URL
+ * loads (see `readForkFromUrl`), so the link needs no server state.
+ */
+export function forkPath(sessionId: string, messageCount: number): string {
+	return `${FORK_PREFIX}${sessionId}/${messageCount}`;
+}
+
+/**
+ * Parse a `/fork/<sessionId>/<n>` URL, or null when the URL isn't one.
+ * Booting from such a URL starts a fresh chat, forks into it, and then
+ * `writeSessionIdToUrl` rewrites the address to `/s/<newId>` — so a reload
+ * reopens the fork instead of creating another one.
+ */
+export function readForkFromUrl(): { sessionId: string; messageCount: number } | null {
+	const m = /^\/fork\/([^/]+)\/(\d+)\/?$/.exec(location.pathname);
+	if (!m) return null;
+	return { sessionId: m[1], messageCount: Number(m[2]) };
 }
