@@ -65,6 +65,18 @@ export const PLAY_ICON = svg(
 	true,
 );
 
+/** Voice bar: skip back/forward by a few seconds (circular arrow with the amount inside). */
+export const SKIP_BACK_ICON = svg(
+	'<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><text x="12" y="15.5" text-anchor="middle" font-size="8" font-weight="700" fill="currentColor" stroke="none">10</text>',
+	false,
+	"22",
+);
+export const SKIP_FWD_ICON = svg(
+	'<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/><text x="12" y="15.5" text-anchor="middle" font-size="8" font-weight="700" fill="currentColor" stroke="none">10</text>',
+	false,
+	"22",
+);
+
 /** Badges and chips. */
 export const CLOCK_ICON = svg('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>');
 export const ZAP_ICON = svg('<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>');

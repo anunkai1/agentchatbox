@@ -47,6 +47,7 @@ import { services } from "./services.js";
 import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { formatAbsolute, formatRelative } from "./time.js";
 import { forkPath, sessionPath } from "./url.js";
+import { createVoiceBar } from "./voice-bar.js";
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
@@ -2621,6 +2622,7 @@ export function renderShell(): void {
 	// kept out of the visible draft.
 	composerWrap.append(el("div", { class: "attachment-previews", id: "attachment-previews" }));
 	composerWrap.append(el("div", { class: "composer-state hidden", id: "composer-state" }));
+	composerWrap.append(createVoiceBar());
 	const composer = el("div", { class: "composer", id: "composer" });
 	composer.append(
 		el(

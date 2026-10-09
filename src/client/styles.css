@@ -2056,6 +2056,138 @@ body.sidebar-resizing iframe {
 .composer-state.hidden {
 	display: none;
 }
+/* Seekable voice bar: sits above the composer while a reply is read aloud. */
+.voice-bar {
+	max-width: var(--chat-max);
+	margin: 0 auto 8px;
+	padding: 6px 10px 6px 8px;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	background: var(--surface);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-lg);
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.voice-bar.hidden {
+	display: none;
+}
+.voice-bar-btn {
+	flex: none;
+	display: grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	color: var(--text-secondary);
+	background: none;
+	border: 0;
+	border-radius: 50%;
+	cursor: pointer;
+}
+.voice-bar-btn:hover {
+	color: var(--text);
+	background: var(--surface-hover);
+}
+.voice-bar-play {
+	width: 36px;
+	height: 36px;
+	margin-right: 2px;
+	color: #fff;
+	background: var(--accent);
+}
+.voice-bar-play:hover {
+	color: #fff;
+	background: var(--accent-hover);
+}
+.voice-bar-time {
+	flex: none;
+	min-width: 3.2ch;
+	font-size: 12px;
+	color: var(--text-secondary);
+	font-variant-numeric: tabular-nums;
+	text-align: center;
+}
+.voice-bar-scrub {
+	--p: 0%;
+	flex: 1;
+	min-width: 0;
+	height: 28px;
+	margin: 0 4px;
+	background: none;
+	cursor: pointer;
+	appearance: none;
+	-webkit-appearance: none;
+}
+.voice-bar-scrub::-webkit-slider-runnable-track {
+	height: 4px;
+	border-radius: 4px;
+	background: linear-gradient(to right, var(--accent) var(--p), rgba(255, 255, 255, 0.14) var(--p));
+}
+.voice-bar-scrub::-moz-range-track {
+	height: 4px;
+	border-radius: 4px;
+	background: linear-gradient(to right, var(--accent) var(--p), rgba(255, 255, 255, 0.14) var(--p));
+}
+.voice-bar-scrub::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	width: 14px;
+	height: 14px;
+	margin-top: -5px;
+	border: 0;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 0 0 4px rgba(38, 137, 199, 0.3);
+}
+.voice-bar-scrub::-moz-range-thumb {
+	width: 14px;
+	height: 14px;
+	border: 0;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 0 0 4px rgba(38, 137, 199, 0.3);
+}
+@media (max-width: 520px) {
+	/* Phone: controls on top, scrubber with its times on a second row. */
+	.voice-bar {
+		display: grid;
+		grid-template-columns: auto auto auto 1fr auto;
+		grid-template-areas:
+			"play back fwd . close"
+			"elapsed scrub scrub scrub total";
+		column-gap: 6px;
+		padding: 8px 10px;
+		border-radius: 20px;
+	}
+	.voice-bar-play {
+		grid-area: play;
+		width: 44px;
+		height: 44px;
+	}
+	.voice-bar-back {
+		grid-area: back;
+	}
+	.voice-bar-fwd {
+		grid-area: fwd;
+	}
+	.voice-bar-close {
+		grid-area: close;
+	}
+	.voice-bar-elapsed {
+		grid-area: elapsed;
+	}
+	.voice-bar-scrub {
+		grid-area: scrub;
+		height: 32px;
+	}
+	.voice-bar-total {
+		grid-area: total;
+	}
+	.voice-bar-btn {
+		width: 40px;
+		height: 40px;
+	}
+}
 .composer-state-label {
 	min-width: 0;
 	overflow: hidden;

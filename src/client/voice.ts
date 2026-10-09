@@ -34,7 +34,15 @@ import {
 } from "./render.js";
 import { services } from "./services.js";
 import { state } from "./state.js";
+import {
+	bufferedSeconds,
+	type ChunkSpan,
+	chunkIndexAt,
+	positionAt,
+	type Slot,
+} from "./tts-timeline.js";
 import { chunkStartTime, trimChunkSilence } from "./tts-trim.js";
+import { bindVoiceBar, updateVoiceBar } from "./voice-bar.js";
 
 /**
  * Soft cap on what we send to TTS. Kept just under the server's hard cap
@@ -104,6 +112,21 @@ const TTS_SCHEDULE_LEAD = 0.08;
  */
 let liveNodes: AudioBufferSourceNode[] = [];
 let nextStartAt = 0;
+
+/**
+ * What the voice bar needs to scrub: every decoded chunk of the current
+ * utterance (kept until it ends or is stopped, so a seek can re-schedule audio
+ * that has already played) and where each scheduled piece sits on the audio
+ * clock. See tts-timeline.ts.
+ */
+interface Chunk extends ChunkSpan {
+	buffer: AudioBuffer;
+	/** Seconds of leading silence skipped inside `buffer`. */
+	offset: number;
+}
+let chunks: Chunk[] = [];
+let slots: Slot[] = [];
+let barTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Playback rate Web Audio applies to the current utterance, and the speed the
@@ -361,10 +384,6 @@ async function ensureAudioRunning(): Promise<AudioContext> {
 async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise<void> {
 	const decoded = await ctx.decodeAudioData(await wav.arrayBuffer());
 	if (gen !== speakGeneration) return; // superseded while decoding
-	const node = ctx.createBufferSource();
-	node.buffer = decoded;
-	node.playbackRate.value = activePlaybackRate;
-	node.connect(ctx.destination);
 	// Trim the model's per-chunk padding before scheduling: Kokoro surrounds every
 	// synthesized chunk with silence, and since a chunk boundary is (mostly) also a
 	// sentence boundary, the two pads meeting on the timeline are what a listener
@@ -372,19 +391,14 @@ async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise
 	// the trailing one is cut back to a breath, so sentences aren't run together.
 	// See tts-trim.ts.
 	const { offset, duration } = trimChunkSilence(decoded);
-	const playSeconds = duration / activePlaybackRate;
-	// Start where the previous chunk ends. If synthesis fell behind playback the
-	// timeline has already passed, so start now rather than in the past (which the
-	// audio clock would silently skip).
-	const startAt = chunkStartTime(ctx.currentTime, TTS_SCHEDULE_LEAD, nextStartAt);
-	// `offset` skips the leading silence inside the buffer; the stop() is what
-	// removes the excess trailing silence, and it also fires this node's `ended`
-	// at the trimmed end so the queue advances on the audible finish.
-	node.start(startAt, offset);
-	node.stop(startAt + playSeconds);
-	nextStartAt = startAt + playSeconds;
-	liveNodes.push(node);
-	node.onended = () => onChunkEnded(gen, node);
+	const chunk: Chunk = {
+		buffer: decoded,
+		offset,
+		start: bufferedSeconds(chunks),
+		play: duration / activePlaybackRate,
+	};
+	chunks.push(chunk);
+	placeChunk(ctx, gen, chunk, 0);
 	if (liveNodes.length === 1) {
 		// First chunk on the timeline: flip the button from its spinner to ⏹ and
 		// drop the synthesis banner in favour of the status bar's "♪ playing".
@@ -394,6 +408,33 @@ async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise
 		hideToast();
 		refreshStatus();
 	}
+	startBarTimer();
+	syncVoiceBar();
+}
+
+/**
+ * Put `chunk` on the audio timeline right after the previous one, skipping its
+ * first `skip` audible seconds (a seek into the middle of it).
+ */
+function placeChunk(ctx: AudioContext, gen: number, chunk: Chunk, skip: number): void {
+	const node = ctx.createBufferSource();
+	node.buffer = chunk.buffer;
+	node.playbackRate.value = activePlaybackRate;
+	node.connect(ctx.destination);
+	const playSeconds = chunk.play - skip;
+	// Start where the previous chunk ends. If synthesis fell behind playback the
+	// timeline has already passed, so start now rather than in the past (which the
+	// audio clock would silently skip).
+	const startAt = chunkStartTime(ctx.currentTime, TTS_SCHEDULE_LEAD, nextStartAt);
+	// `offset` skips the leading silence inside the buffer; the stop() is what
+	// removes the excess trailing silence, and it also fires this node's `ended`
+	// at the trimmed end so the queue advances on the audible finish.
+	node.start(startAt, chunk.offset + skip * activePlaybackRate);
+	node.stop(startAt + playSeconds);
+	nextStartAt = startAt + playSeconds;
+	liveNodes.push(node);
+	slots.push({ start: chunk.start + skip, at: startAt, play: playSeconds });
+	node.onended = () => onChunkEnded(gen, node);
 }
 
 /**
@@ -421,6 +462,7 @@ function onChunkEnded(gen: number, node: AudioBufferSourceNode): void {
  */
 function finishUtterance(): void {
 	nextStartAt = 0;
+	clearTimeline();
 	streamEnded = false;
 	userPaused = false;
 	state.audioPlaying = false;
@@ -452,6 +494,7 @@ function haltPlayback(): void {
 	}
 	liveNodes = [];
 	nextStartAt = 0;
+	clearTimeline();
 	streamEnded = false;
 	state.audioPlaying = false;
 	state.audioPaused = false;
@@ -542,6 +585,7 @@ export function pauseVoice(): void {
 	state.audioPaused = true;
 	state.audioPlaying = false;
 	refreshStatus();
+	syncVoiceBar();
 }
 
 /**
@@ -559,7 +603,91 @@ export function resumeVoice(): void {
 	state.audioPaused = false;
 	state.audioPlaying = true;
 	refreshStatus();
+	syncVoiceBar();
 }
+
+// ---------------------------------------------------------------------------
+// Voice bar: position readout and seeking
+// ---------------------------------------------------------------------------
+
+/** Forget the finished/stopped utterance's chunks and hide the bar. */
+function clearTimeline(): void {
+	chunks = [];
+	slots = [];
+	if (barTimer !== null) clearInterval(barTimer);
+	barTimer = null;
+	updateVoiceBar(null);
+}
+
+/** Current position on the utterance clock, in seconds. */
+function currentPosition(): number {
+	return audioCtx ? positionAt(slots, audioCtx.currentTime) : 0;
+}
+
+function syncVoiceBar(): void {
+	if (chunks.length === 0) return;
+	updateVoiceBar({
+		position: currentPosition(),
+		total: bufferedSeconds(chunks),
+		complete: streamEnded,
+		paused: userPaused,
+	});
+}
+
+/** Repaint the bar's position while there is audio; started with the first chunk. */
+function startBarTimer(): void {
+	if (barTimer === null) barTimer = setInterval(syncVoiceBar, 200);
+}
+
+/**
+ * Jump to `seconds` into the utterance. The scheduled audio is dropped and the
+ * chunks from there on are laid out again from now (a paused context stays
+ * paused, so a seek while paused takes effect on resume). Only what has been
+ * synthesized so far can be reached; seeking to the very end of a finished
+ * utterance finishes it.
+ */
+function seekVoice(seconds: number): void {
+	if (!audioCtx || chunks.length === 0) return;
+	const total = bufferedSeconds(chunks);
+	for (const node of liveNodes) {
+		node.onended = null; // stopping fires `ended`; it must not finalize
+		try {
+			node.stop();
+		} catch {
+			/* already ended */
+		}
+		node.disconnect();
+	}
+	liveNodes = [];
+	slots = [];
+	nextStartAt = 0;
+	// While synthesis is still running, stay just inside the buffered audio so the
+	// next chunk joins on. After the stream closed, the end means "done".
+	const end = streamEnded ? total : Math.max(0, total - 0.1);
+	const target = Math.min(Math.max(0, seconds), end);
+	const index = chunkIndexAt(chunks, target);
+	if (index < 0 || (streamEnded && target >= total - 0.05)) {
+		finishUtterance();
+		return;
+	}
+	const gen = speakGeneration;
+	for (let i = index; i < chunks.length; i++) {
+		const chunk = chunks[i];
+		placeChunk(audioCtx, gen, chunk, i === index ? target - chunk.start : 0);
+	}
+	if (!userPaused) {
+		state.audioPlaying = true;
+		refreshStatus();
+	}
+	syncVoiceBar();
+}
+
+bindVoiceBar({
+	togglePause: () => (userPaused ? resumeVoice() : pauseVoice()),
+	seek: seekVoice,
+	skip: (delta) => seekVoice(currentPosition() + delta),
+	close: stopAllVoice,
+});
 
 /**
  * Play/stop toggle for the per-message speak buttons. `src` is an
