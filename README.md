@@ -92,7 +92,7 @@ src/
     protocol.ts           # types shared by client and server
 extensions/
   auto-title/              # pi-owned first-turn session naming
-  acb-workflows/           # pi-owned welcome/web/code workflow commands
+  acb-workflows/           # pi-owned environment/orientation workflow commands
   codex-fast/              # pi-owned persistent Codex fast-tier toggle
 tests/                    # vitest, server-side + pure extension helpers
 scripts/                  # build + dev helpers

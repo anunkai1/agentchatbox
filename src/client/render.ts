@@ -2822,9 +2822,10 @@ export function renderShell(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Welcome-screen mode chips. Labels and icons are browser presentation;
- * command behavior and prompt text are registered by the pi-owned
- * acb-workflows extension. Icons are inline SVGs so they stay crisp.
+ * Welcome-screen mode chips: orientation questions about the current
+ * environment. Labels and icons are browser presentation; command behavior
+ * and prompt text are registered by the pi-owned acb-workflows extension.
+ * Icons are inline SVGs so they stay crisp.
  */
 const WELCOME_SUGGESTIONS: {
 	title: string;
@@ -2833,22 +2834,22 @@ const WELCOME_SUGGESTIONS: {
 	icon: string;
 }[] = [
 	{
-		title: "Magic Design",
-		sub: "Spin up an interactive UI from a description",
-		command: "design",
-		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.39 4.84L20 8l-4 3.9.94 5.5L12 14.77 7.06 17.4 8 11.9 4 8l5.61-1.16L12 2z"/></svg>`,
+		title: "Where am I working?",
+		sub: "Machine, working directory and repository",
+		command: "where",
+		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s7-6.6 7-11.5a7 7 0 10-14 0C5 15.4 12 22 12 22z"/><circle cx="12" cy="10.5" r="2.5"/></svg>`,
 	},
 	{
-		title: "Full-Stack",
-		sub: "Build a complete app — front, back, and data",
-		command: "fullstack",
-		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>`,
+		title: "What are my abilities?",
+		sub: "Tools, skills and models in this session",
+		command: "abilities",
+		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>`,
 	},
 	{
-		title: "Write",
-		sub: "Draft, edit, and refine long-form text",
-		command: "writing",
-		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6L8 22H2v-6L14 4z"/><path d="M13 5l6 6"/></svg>`,
+		title: "Tell me about my infrastructure",
+		sub: "Servers, hosted apps, backups and operational docs",
+		command: "infra",
+		icon: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>`,
 	},
 ];
 

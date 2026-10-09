@@ -12,22 +12,22 @@ export interface WorkflowCommand {
  */
 export const WORKFLOW_COMMANDS: readonly WorkflowCommand[] = [
 	{
-		name: "design",
-		description: "Design and build a small interactive web experience",
+		name: "where",
+		description: "Show where this session is working: machine, directory and repo",
 		buildPrompt: () =>
-			"Design and build a small interactive web page for me. Pick the layout, colors, and copy.",
+			"Where am I working? Tell me the machine, the working directory and the repository (with its remote), and which project instruction files apply here.",
 	},
 	{
-		name: "fullstack",
-		description: "Plan and scaffold a complete small full-stack application",
+		name: "abilities",
+		description: "Summarise the tools, skills and models available in this session",
 		buildPrompt: () =>
-			"Help me build a small full-stack web app: pick a stack, sketch the data model, and scaffold the project.",
+			"What are your abilities in this session? Summarise your tools, skills, extensions, models and slash commands.",
 	},
 	{
-		name: "writing",
-		description: "Start a structured writing and editing workflow",
+		name: "infra",
+		description: "Describe the infrastructure: servers, hosted apps, backups and docs",
 		buildPrompt: () =>
-			"Help me write a clear, well-structured piece on a topic of my choosing. Ask me what the topic is first.",
+			"Tell me about my infrastructure: the servers, hosted apps and backups, and where the operational documentation lives (/home/lepton/infra/docs/).",
 	},
 	{
 		name: "research",

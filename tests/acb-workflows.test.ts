@@ -34,10 +34,8 @@ describe("ACB pi workflows", () => {
 
 	it("keeps welcome prompts out of browser code", async () => {
 		const { handlers, sendUserMessage, ctx } = harness();
-		await handlers.get("design")!("", ctx);
-		expect(sendUserMessage).toHaveBeenCalledWith(
-			"Design and build a small interactive web page for me. Pick the layout, colors, and copy.",
-		);
+		await handlers.get("where")!("", ctx);
+		expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Where am I working?"));
 	});
 
 	it("builds sourced research prompts from trimmed arguments", async () => {
@@ -63,8 +61,8 @@ describe("ACB pi workflows", () => {
 
 	it("queues a follow-up when invoked during an active run", async () => {
 		const { handlers, sendUserMessage, notify, ctx } = harness(false);
-		await handlers.get("writing")!("", ctx);
+		await handlers.get("infra")!("", ctx);
 		expect(sendUserMessage).toHaveBeenCalledWith(expect.any(String), { deliverAs: "followUp" });
-		expect(notify).toHaveBeenCalledWith("/writing queued for the next turn", "info");
+		expect(notify).toHaveBeenCalledWith("/infra queued for the next turn", "info");
 	});
 });
