@@ -3,7 +3,7 @@ import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 import { config } from "../src/server/config.js";
 import { isAllowedWsOrigin, securityHeaders } from "../src/server/security.js";
-import { safeInlineRasterMime } from "../src/server/uploads-serving.js";
+import { safeInlineMime } from "../src/server/uploads-serving.js";
 
 let server: Server | null = null;
 afterEach(() => {
@@ -34,12 +34,10 @@ describe("HTTP and upload security", () => {
 		expect(isAllowedWsOrigin("https://example.com")).toBe(false);
 	});
 
-	it("only marks magic-matching raster images safe for inline display", () => {
-		expect(safeInlineRasterMime("safe.png", Buffer.from("89504e470d0a1a0a", "hex"))).toBe(
-			"image/png",
-		);
-		expect(safeInlineRasterMime("attack.html", Buffer.from("<script>alert(1)"))).toBeNull();
-		expect(safeInlineRasterMime("fake.png", Buffer.from("<script>alert(1)"))).toBeNull();
-		expect(safeInlineRasterMime("active.svg", Buffer.from("<svg onload='x'>"))).toBeNull();
+	it("inlines only magic-matching raster images and (sandboxed) SVG", () => {
+		expect(safeInlineMime("safe.png", Buffer.from("89504e470d0a1a0a", "hex"))).toBe("image/png");
+		expect(safeInlineMime("logo.SVG", Buffer.from("<svg>"))).toBe("image/svg+xml");
+		expect(safeInlineMime("attack.html", Buffer.from("<script>alert(1)"))).toBeNull();
+		expect(safeInlineMime("fake.png", Buffer.from("<script>alert(1)"))).toBeNull();
 	});
 });

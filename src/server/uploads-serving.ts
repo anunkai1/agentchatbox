@@ -39,9 +39,19 @@ export function safeInlineRasterMime(name: string, header: Buffer): string | nul
 }
 
 /**
+ * Inline MIME for an upload, or null to force a download. SVG is shown
+ * inline too: in an <img> browsers never run its scripts, and when opened
+ * directly the sandbox CSP below gives it an opaque origin with scripts off.
+ */
+export function safeInlineMime(name: string, header: Buffer): string | null {
+	if (extname(name).toLowerCase() === ".svg") return "image/svg+xml";
+	return safeInlineRasterMime(name, header);
+}
+
+/**
  * Serve uploads without ever executing user-controlled active content on the
- * application origin. Valid raster images remain inline for previews; every
- * other format is an octet-stream attachment under a restrictive sandbox.
+ * application origin. Valid raster images and sandboxed SVGs are inline for
+ * previews; every other format is an octet-stream attachment.
  */
 export function createUploadsServingRouter(): Router {
 	const router = express.Router();
@@ -71,10 +81,13 @@ export function createUploadsServingRouter(): Router {
 				}
 				const header = Buffer.alloc(16);
 				const { bytesRead } = await handle.read(header, 0, header.length, 0);
-				const mime = safeInlineRasterMime(name, header.subarray(0, bytesRead));
+				const mime = safeInlineMime(name, header.subarray(0, bytesRead));
 				res.setHeader("Cache-Control", "private, max-age=3600");
 				res.setHeader("Content-Length", String(stat.size));
-				res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
+				res.setHeader(
+					"Content-Security-Policy",
+					"sandbox; default-src 'none'; style-src 'unsafe-inline'",
+				);
 				res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
 				res.setHeader("X-Content-Type-Options", "nosniff");
 				if (mime) {
