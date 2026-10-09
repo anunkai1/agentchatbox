@@ -1066,6 +1066,12 @@ export function registerClaudeDelegate(
 			if (!next) return;
 
 			store.writeMode(next);
+			// A chat already on Claude Code switches with the default, so the
+			// pick applies to its next message rather than the next /cc on.
+			if (sticky && sticky !== next) {
+				sticky = next;
+				pi.appendEntry(STICKY_ENTRY_TYPE, { mode: next });
+			}
 			restoreStatus(ctx);
 			ctx.ui.notify(`Default Claude Code model set to ${statusText(next)}.`, "info");
 		},

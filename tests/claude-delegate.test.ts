@@ -769,6 +769,21 @@ describe("claude-delegate sticky mode", () => {
 		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "haiku" });
 	});
 
+	it("moves a chat already on Claude Code to a newly chosen default model", async () => {
+		const seen: string[][] = [];
+		const h = harness("sonnet", {}, (async (args: string[]) => {
+			seen.push(args);
+			return ok();
+		}) as never);
+		await h.cc("on", h.uiCtx);
+		await h.command("opus", h.uiCtx);
+		expect(h.appendEntry).toHaveBeenLastCalledWith(STICKY_ENTRY_TYPE, { mode: "opus" });
+		expect(h.ui.setStatus).toHaveBeenLastCalledWith("claude-sticky", "Opus · high");
+		h.input("hello");
+		await h.whenIdle();
+		expect(seen[0][seen[0].indexOf("--model") + 1]).toBe("opus");
+	});
+
 	it("passes extension prompts, slash input and steering through to pi", async () => {
 		const h = harness("opus", {}, ok);
 		await h.cc("on", h.uiCtx);
