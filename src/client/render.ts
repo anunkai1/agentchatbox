@@ -2397,11 +2397,11 @@ export function renderShell(): void {
 		el(
 			"div",
 			{ class: "header-brand" },
-			// ACB logo on the left, then the chat title. The same animated
-			// logo sits on the welcome screen.
+			// ACB logo on the left, then the chat title. Static copy: only the
+			// welcome-screen logo animates.
 			el("img", {
 				class: "header-mark",
-				src: "/acb-logo.svg",
+				src: "/acb-logo-static.svg",
 				alt: "ACB",
 				width: 24,
 				height: 24,
