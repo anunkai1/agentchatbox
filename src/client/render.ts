@@ -2398,8 +2398,8 @@ export function renderShell(): void {
 		el(
 			"div",
 			{ class: "header-brand" },
-			// ACB logo on the left, then the chat title. Static copy: only the
-			// welcome-screen logo animates.
+			// ACB logo (the still letter block) on the left, then the chat
+			// title. Only the welcome-screen logo animates.
 			el("img", {
 				class: "header-mark",
 				src: "/acb-logo-static.svg",
@@ -2562,15 +2562,22 @@ export function renderShell(): void {
 	const welcome = el("div", { class: "welcome", id: "welcome" });
 	welcome.append(el("div", { class: "welcome-brand" }, "Agent Chat Box"));
 	welcome.append(
-		// ACB logo. Its intro and eye animation are CSS-only, in acb-logo.svg.
-		el("img", {
-			class: "welcome-mark",
-			src: "/acb-logo.svg",
-			alt: "agentchatbox",
-			width: 72,
-			height: 72,
-			draggable: false,
-		}),
+		// ACB logo: robot letters in a spinning glass cube (acb-logo.svg).
+		// The cube's spin is SMIL, which CSS can't pause, so reduced-motion
+		// users get the still letter block instead.
+		el(
+			"picture",
+			{},
+			el("source", { media: "(prefers-reduced-motion: reduce)", srcset: "/acb-logo-static.svg" }),
+			el("img", {
+				class: "welcome-mark",
+				src: "/acb-logo.svg",
+				alt: "agentchatbox",
+				width: 72,
+				height: 72,
+				draggable: false,
+			}),
+		),
 	);
 	welcome.append(el("h1", { class: "welcome-title" }, "What can I do for you?"));
 	welcome.append(
