@@ -74,6 +74,24 @@ async function stampCacheBust() {
 	const htmlPath = resolve(root, "public/index.html");
 	let html = await readFile(htmlPath, "utf8");
 
+	// Brand assets (logos, favicons, og-image) are referenced from both
+	// index.html and app.js. Stamp those references with each file's own
+	// hash too, so a new logo shows on the next load instead of after the
+	// 24-hour cache for unstamped static files. app.js is stamped before it
+	// is hashed below.
+	let appJs = await readFile(appJsPath, "utf8");
+	for (const name of await readdir(resolve(root, "assets/brand"))) {
+		if (name.startsWith(".")) continue;
+		const hash = createHash("sha256")
+			.update(await readFile(resolve(root, "public", name)))
+			.digest("hex")
+			.slice(0, 12);
+		const ref = new RegExp(`/${name.replace(/[.]/g, "\\.")}(\\?v=[a-f0-9]+)?(?=["'])`, "g");
+		html = html.replace(ref, `/${name}?v=${hash}`);
+		appJs = appJs.replace(ref, `/${name}?v=${hash}`);
+	}
+	await writeFile(appJsPath, appJs);
+
 	const appBuf = await readFile(appJsPath);
 	const appHash = createHash("sha256").update(appBuf).digest("hex").slice(0, 12);
 	html = html.replace(/src="\/app\.js(\?v=[a-f0-9]+)?"/, `src="/app.js?v=${appHash}"`);
