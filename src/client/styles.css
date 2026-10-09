@@ -1068,8 +1068,8 @@ body.sidebar-resizing iframe {
 /* ACB mark on the welcome / empty state. Sized for ~108px display,
  * capped so it never gets visually heavy on wide screens. */
 .welcome-mark {
-	width: 108px;
-	height: 108px;
+	width: 168px;
+	height: 168px;
 	display: block;
 	margin-top: clamp(8px, 4vh, 36px);
 	filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.5));
@@ -3371,8 +3371,8 @@ body.modal-open {
 		gap: 14px;
 	}
 	.welcome-mark {
-		width: 84px;
-		height: 84px;
+		width: 132px;
+		height: 132px;
 		margin-top: 12px;
 	}
 	.welcome-title {

@@ -15,7 +15,7 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const OUT = resolve(import.meta.dirname, "../assets/brand/acb-logo.svg");
-const DUR = 6; // seconds per quarter turn
+const DUR = 2.5; // seconds per quarter turn
 const STEPS = 9; // keyframes per quarter turn
 const CAM = 5.6; // camera distance, in half cube widths
 const FOCAL = 700;
