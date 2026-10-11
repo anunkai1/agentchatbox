@@ -8,9 +8,9 @@
  * Every animation is finite: an endless one keeps the blur filters
  * re-rasterising each frame, which costs battery on phones.
  *
- * The header/favicon logo (acb-logo-static.svg, a letter block) is drawn by
- * hand; its PNG renders (favicons, apple-touch icon, og-image) are made from
- * it in a browser.
+ * The header/favicon logo (acb-logo-static.svg, this cube at rest redrawn
+ * bolder for small sizes) is drawn by hand; its PNG renders (favicons,
+ * apple-touch icon, og-image, README square) are made from it.
  *
  * Run: node scripts/generate-logo.mjs
  */
@@ -111,7 +111,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role=
   <style>
     /* The cube fades in and spins to a stop; the letters draw in, the visor
        pops, the eyes light, then pulse and blink twice before everything
-       rests. The page shows reduced-motion users the still letter block
+       rests. The page shows reduced-motion users the still cube
        (acb-logo-static.svg) instead. */
     .acb-cube { animation: acb-fade .6s ease-out backwards; }
     .acb-draw { animation: acb-draw .6s cubic-bezier(.2, .7, .3, 1) backwards; }

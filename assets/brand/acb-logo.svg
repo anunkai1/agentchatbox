@@ -4,7 +4,7 @@
   <style>
     /* The cube fades in and spins to a stop; the letters draw in, the visor
        pops, the eyes light, then pulse and blink twice before everything
-       rests. The page shows reduced-motion users the still letter block
+       rests. The page shows reduced-motion users the still cube
        (acb-logo-static.svg) instead. */
     .acb-cube { animation: acb-fade .6s ease-out backwards; }
     .acb-draw { animation: acb-draw .6s cubic-bezier(.2, .7, .3, 1) backwards; }

@@ -2423,7 +2423,7 @@ export function renderShell(): void {
 		el(
 			"div",
 			{ class: "header-brand" },
-			// ACB logo (the still letter block) on the left, then the chat
+			// ACB logo (the still cube) on the left, then the chat
 			// title. Only the welcome-screen logo animates.
 			el("img", {
 				class: "header-mark",
@@ -2589,7 +2589,7 @@ export function renderShell(): void {
 	welcome.append(
 		// ACB logo: robot letters in a spinning glass cube (acb-logo.svg).
 		// The cube's spin is SMIL, which CSS can't pause, so reduced-motion
-		// users get the still letter block instead.
+		// users get the still cube instead.
 		el(
 			"picture",
 			{},
