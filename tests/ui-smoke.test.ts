@@ -22,6 +22,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
 const SEEDED_ID = "seeded-session-001";
+const SEEDED_IMAGE = "0f8e2a6c-1b3d-4e5f-8a9b-0c1d2e3f4a5b.png";
+// A 1x1 PNG, so the served upload passes the server's magic-byte check.
+const PNG_1X1 = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+	"base64",
+);
 
 // Answers each prompt with "reply N"; resumes whatever --session it is given.
 const FAKE_PI = `#!/usr/bin/env bash
@@ -110,7 +116,10 @@ async function openPage(path: string): Promise<{ page: Page; sockets: WebSocketR
 		sockets.push(ws);
 	});
 	await page.route(
-		(url) => url.origin === base && !url.pathname.startsWith("/api/"),
+		(url) =>
+			url.origin === base &&
+			!url.pathname.startsWith("/api/") &&
+			!url.pathname.startsWith("/uploads/"),
 		(route) => {
 			const { pathname } = new URL(route.request().url());
 			if (pathname === "/app.js") {
@@ -160,7 +169,12 @@ beforeAll(async () => {
 				timestamp: "2026-01-01T00:00:01.000Z",
 				message: {
 					role: "user",
-					content: [{ type: "text", text: "stored question" }],
+					content: [
+						{
+							type: "text",
+							text: `![image: photo.png](upload:${SEEDED_IMAGE})\nstored question`,
+						},
+					],
 					timestamp: 1,
 				},
 			},
@@ -183,6 +197,8 @@ beforeAll(async () => {
 			.join("\n")
 			.concat("\n"),
 	);
+	mkdirSync(join(tmp, "uploads"));
+	writeFileSync(join(tmp, "uploads", SEEDED_IMAGE), PNG_1X1);
 	const fakePi = join(tmp, "pi");
 	writeFileSync(fakePi, FAKE_PI, { mode: 0o755 });
 	const authFile = join(tmp, "auth.json");
@@ -268,11 +284,14 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		await page.close();
 	});
 
-	it("opens a stored session from its /s/<id> link", async () => {
+	it("opens a stored session, with its attached picture, from its /s/<id> link", async () => {
 		const { page } = await openPage(`/s/${SEEDED_ID}`);
 		await expect.poll(() => messages(page).innerText()).toContain("stored answer");
 		expect(await messages(page).innerText()).toContain("stored question");
 		expect(new URL(page.url()).pathname).toBe(`/s/${SEEDED_ID}`);
+		// The attached picture is replayed from its stored upload reference.
+		const image = messages(page).locator(`img[src="/uploads/${SEEDED_IMAGE}"]`);
+		await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1);
 		await page.close();
 	});
 });

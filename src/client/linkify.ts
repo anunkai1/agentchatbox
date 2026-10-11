@@ -60,16 +60,18 @@ export function setRichText(container: HTMLElement, text: string): void {
 /**
  * Render a user-authored message. Older ACB versions stored pasted images
  * as ordinary `[image: name](url)` links; recognise that narrowly-defined
- * legacy form so existing transcript entries render as pictures too. Current
- * image attachments use structured transport references instead of adding
- * Markdown to the composer.
+ * legacy form so existing transcript entries render as pictures too. Replayed
+ * attachments carry `(upload:<file>)`, which the server stores instead of
+ * the /uploads/ URL (see rewriteUploadUrls); map it back to that URL.
  */
 export function setUserRichText(container: HTMLElement, text: string): void {
 	setRichText(
 		container,
-		text.replace(
-			/(^|[\s])\[image: ([^\]]+)\]\((\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)\)/g,
-			"$1![$2]($3)",
-		),
+		text
+			.replace(/(\[image: [^\]]+\])\(upload:([A-Za-z0-9-]+\.[A-Za-z0-9]+)\)/g, "$1(/uploads/$2)")
+			.replace(
+				/(^|[\s])\[image: ([^\]]+)\]\((\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)\)/g,
+				"$1![$2]($3)",
+			),
 	);
 }

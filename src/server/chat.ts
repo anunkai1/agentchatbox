@@ -798,9 +798,12 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif|tiff?)$/i;
  * images from BOTH `event.images` AND paths it detects in the prompt)
  * re-read the same file from disk and analyze it twice — one attachment
  * shows up as "Analyzing 2 images". So when structured image bytes are
- * present, the image link is reduced to a bare `[image: name]` label
- * (no path). Non-image files have no structured equivalent, so their
- * links are still rewritten to the real path for pi's `read` tool.
+ * present, the image link becomes `[image: name](upload:<filename>)`: the
+ * proxy only detects paths starting with `/`, `~`, `./` or a drive letter,
+ * and the browser maps `upload:` back to /uploads/ so the picture still
+ * renders when the transcript is replayed. Non-image files have no
+ * structured equivalent, so their links are still rewritten to the real
+ * path for pi's `read` tool.
  */
 export function rewriteUploadUrls(text: string, hasStructuredImages: boolean): string {
 	return text.replace(
@@ -808,7 +811,7 @@ export function rewriteUploadUrls(text: string, hasStructuredImages: boolean): s
 		(_full, kind: string, label: string, filename: string) => {
 			const name = (label ?? "").trim();
 			if (kind === "image" && hasStructuredImages && IMAGE_EXT_RE.test(filename)) {
-				return `[image: ${name}]`;
+				return `[image: ${name}](upload:${filename})`;
 			}
 			return `[${kind}: ${name}](${join(config.uploadsDir, filename)})`;
 		},

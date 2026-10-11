@@ -20,12 +20,14 @@ describe("rewriteUploadUrls", () => {
 		expect(out).not.toContain("(/uploads/abc.csv)");
 	});
 
-	it("collapses an image link to a bare label when structured bytes are present", () => {
+	it("keeps only an upload: reference for an image when structured bytes are present", () => {
 		const out = rewriteUploadUrls("[image: photo.png](/uploads/abc.png)", true);
-		expect(out).toBe("[image: photo.png]");
+		expect(out).toBe("[image: photo.png](upload:abc.png)");
 		// No readable path survives — the proxy must not re-read the file.
+		// This is pi-multimodal-proxy's absolute/home path detector.
+		const proxyPath = /(?:^|[\s"'(])((?:[a-zA-Z]:[/\\]|\/|~)[\w./\\+-]*[/\\][\w.+-]+\.(?:png))\b/;
+		expect(out).not.toMatch(proxyPath);
 		expect(out).not.toContain("/uploads/");
-		expect(out).not.toContain(".png)");
 	});
 
 	it("still rewrites an image link to a path when NO structured bytes are present (manual/quoted URL)", () => {
@@ -42,9 +44,9 @@ describe("rewriteUploadUrls", () => {
 			"and a doc [file: notes.txt](/uploads/u2.txt) " +
 			"and another [image: b.jpeg](/uploads/u3.jpeg)";
 		const out = rewriteUploadUrls(text, true);
-		// Both image links collapse to bare labels with no readable path.
-		expect(out).toContain("[image: a.png]");
-		expect(out).toContain("[image: b.jpeg]");
+		// Both image links keep only an upload: reference, no readable path.
+		expect(out).toContain("[image: a.png](upload:u1.png)");
+		expect(out).toContain("[image: b.jpeg](upload:u3.jpeg)");
 		expect(out).not.toContain("/uploads/u1.png");
 		expect(out).not.toContain("/uploads/u3.jpeg");
 		// The non-image file link is rewritten to a real (non-/uploads/) path
