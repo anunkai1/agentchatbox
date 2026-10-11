@@ -1854,6 +1854,12 @@ body.sidebar-resizing iframe {
 .user-message-actions {
 	margin-right: 4px;
 }
+/* Speak control joins the same strip as copy/fork: .message-action owns the
+   compact icon box, while .speak-btn supplies voice.ts's spinner/stop states.
+   The base .speak-btn top margin would misalign it in the row. */
+.user-message-actions .speak-btn {
+	margin-top: 0;
+}
 .message-action {
 	width: 26px;
 	height: 28px;

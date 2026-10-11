@@ -265,6 +265,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		row.append(bubble);
 		const actions = el("div", { class: "message-actions user-message-actions" });
 		actions.append(
+			makeMessageSpeakButton(() => m.text),
 			makeMessageActionButton("copy", "Copy your message", (button) => {
 				if (!services.copyText) return;
 				void services.copyText(m.text).then((ok) => {
@@ -787,6 +788,30 @@ function makeMessageActionButton(
 	button.append(messageIcon(icon));
 	button.addEventListener("click", () => onClick(button));
 	return button as HTMLButtonElement;
+}
+
+/**
+ * Speak button in a user message's action strip. Reads the message text back
+ * through the same local TTS path as the assistant voice strip (voice.ts owns
+ * the idle/loading/playing states, keyed on the button element). Styled as a
+ * .message-action so it sits with copy/fork.
+ */
+function makeMessageSpeakButton(getText: () => string): HTMLButtonElement {
+	const title = "Speak your message";
+	const button = el("button", {
+		class: "message-action speak-btn",
+		type: "button",
+		"aria-label": title,
+		title,
+	}) as HTMLButtonElement;
+	button.append(
+		el("span", { class: "message-action-icon", "aria-hidden": "true", html: SPEAK_ICON }),
+	);
+	button.addEventListener("click", () => {
+		const text = getText().trim();
+		if (text) services.toggleSpeak?.(text, button);
+	});
+	return button;
 }
 
 /**

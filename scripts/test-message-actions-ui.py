@@ -25,7 +25,7 @@ try:
     js('(0,eval)(window.__fixtureScript); void 0')
     js('''(() => {
       const {state, services, appendAssistantPlaceholder} = fixture;
-      window.calls = {copy: [], retry: [], fork: []};
+      window.calls = {copy: [], retry: [], fork: [], speak: []};
       services.copyText = async text => { calls.copy.push(text); return true; };
       services.sendPrompt = text => { calls.retry.push(text); return true; };
       services.forkFromMessage = seq => calls.fork.push(seq);
@@ -51,6 +51,21 @@ try:
         ]:
             js(f'document.querySelectorAll(\'[aria-label="{label}"]\')[{index}].click(); void 0')
             assert js(f'calls.{key}.at(-1)') == expected, (index, key)
-    print('PASS: older and latest streamed rows copy their own final text, retry their own prompt and fork their own sequence.')
+    # A user message gets a speak button beside copy, wired to TTS with its own
+    # text and the button itself as the play/stop identity token.
+    js('''(() => {
+      const {state, renderMessageNode, services} = fixture;
+      services.toggleSpeak = (text, src) => calls.speak.push({text, src});
+      state.messages.push({kind: 'user', text: 'Play **this** back, please.'});
+      document.getElementById('messages').append(renderMessageNode(state.messages.at(-1)));
+    })(); void 0''')
+    speak_selector = '.row-user .user-message-actions [aria-label="Speak your message"]'
+    assert js(f'document.querySelectorAll(\'{speak_selector}\').length') == 1
+    assert js(f'''document.querySelector('{speak_selector}').nextElementSibling
+      .getAttribute('aria-label')''') == 'Copy your message'
+    js(f'document.querySelector(\'{speak_selector}\').click(); void 0')
+    assert js('calls.speak.at(-1).text') == 'Play **this** back, please.'
+    assert js(f'calls.speak.at(-1).src === document.querySelector(\'{speak_selector}\')') is True
+    print('PASS: older and latest streamed rows copy their own final text, retry their own prompt and fork their own sequence; user rows speak their own text from a button beside copy.')
 finally:
     finish_scope()
