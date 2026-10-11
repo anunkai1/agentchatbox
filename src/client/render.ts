@@ -265,7 +265,13 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		row.append(bubble);
 		const actions = el("div", { class: "message-actions user-message-actions" });
 		actions.append(
-			makeMessageSpeakButton(() => m.text),
+			// .message-action lines it up with copy/fork; .speak-btn gets voice.ts's play states.
+			makeSpeakButton(
+				() => m.text,
+				"Speak your message",
+				"message-action speak-btn",
+				"message-action-icon",
+			),
 			makeMessageActionButton("copy", "Copy your message", (button) => {
 				if (!services.copyText) return;
 				void services.copyText(m.text).then((ok) => {
@@ -575,14 +581,24 @@ function makeVoiceTextBox(): HTMLDivElement {
 	return el("div", { class: "voice-text hidden" });
 }
 
-function makeImmediateVoiceButton(getText: () => string): HTMLButtonElement {
+/**
+ * A speak button: reads getText() through the local TTS path (voice.ts owns
+ * the idle/loading/playing states, keyed on the button element). Used by the
+ * assistant voice strip and by a user message's action strip.
+ */
+function makeSpeakButton(
+	getText: () => string,
+	title: string,
+	className: string,
+	iconClass: string,
+): HTMLButtonElement {
 	const button = el("button", {
-		class: "speak-btn voice-action immediate-voice",
+		class: className,
 		type: "button",
-		title: "Speak this answer immediately",
+		"aria-label": title,
+		title,
 	}) as HTMLButtonElement;
-	button.append(el("span", { class: "voice-icon", html: SPEAK_ICON }));
-	button.setAttribute("aria-label", "Speak this answer immediately");
+	button.append(el("span", { class: iconClass, "aria-hidden": "true", html: SPEAK_ICON }));
 	button.addEventListener("click", () => {
 		const text = getText().trim();
 		if (text) services.toggleSpeak?.(text, button);
@@ -603,7 +619,12 @@ function makeVoiceActions(
 		"aria-label": "Voice actions",
 	});
 	actions.append(
-		makeImmediateVoiceButton(getImmediateText),
+		makeSpeakButton(
+			getImmediateText,
+			"Speak this answer immediately",
+			"speak-btn voice-action immediate-voice",
+			"voice-icon",
+		),
 		makeVoiceVariantButton("long", getLongText, "Speak the detailed spoken version", getHint),
 		makeVoiceVariantButton("medium", getMediumText, "Speak a summary of the answer", getHint),
 		makeVoiceVariantButton("short", getShortText, "Speak a brief summary of the answer", getHint),
@@ -788,30 +809,6 @@ function makeMessageActionButton(
 	button.append(messageIcon(icon));
 	button.addEventListener("click", () => onClick(button));
 	return button as HTMLButtonElement;
-}
-
-/**
- * Speak button in a user message's action strip. Reads the message text back
- * through the same local TTS path as the assistant voice strip (voice.ts owns
- * the idle/loading/playing states, keyed on the button element). Styled as a
- * .message-action so it sits with copy/fork.
- */
-function makeMessageSpeakButton(getText: () => string): HTMLButtonElement {
-	const title = "Speak your message";
-	const button = el("button", {
-		class: "message-action speak-btn",
-		type: "button",
-		"aria-label": title,
-		title,
-	}) as HTMLButtonElement;
-	button.append(
-		el("span", { class: "message-action-icon", "aria-hidden": "true", html: SPEAK_ICON }),
-	);
-	button.addEventListener("click", () => {
-		const text = getText().trim();
-		if (text) services.toggleSpeak?.(text, button);
-	});
-	return button;
 }
 
 /**
