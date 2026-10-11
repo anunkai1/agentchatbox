@@ -57,7 +57,10 @@ export function createFilesRouter(): Router {
 				res.status(404).json({ error: "file not found" });
 				return;
 			}
-			const s = await handle.stat();
+			const s = await handle.stat().catch(async (error: unknown) => {
+				await handle.close().catch(() => {});
+				throw error;
+			});
 			if (!s.isFile()) {
 				await handle.close();
 				res.status(400).json({ error: "path is not a regular file" });

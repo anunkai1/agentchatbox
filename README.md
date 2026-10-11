@@ -94,7 +94,7 @@ extensions/
   auto-title/              # pi-owned first-turn session naming
   acb-workflows/           # pi-owned environment/orientation workflow commands
   codex-fast/              # pi-owned persistent Codex fast-tier toggle
-tests/                    # vitest, server-side + pure extension helpers
+tests/                    # vitest, server-side + pure extension helpers + UI smoke
 scripts/                  # build + dev helpers
   build-client.mjs        # esbuild bundler for the client
 ```
@@ -226,12 +226,12 @@ sudo systemctl enable --now agentchatbox
 ## Testing
 
 ```bash
-npm test          # vitest run (server-side unit + integration)
+npm test          # vitest run (server-side unit + integration, plus a headless-Chromium UI smoke test)
 npm run typecheck # tsc, both server and client configs
 npm run build     # full production build
 ```
 
-CI runs all three, plus `npm run lint` (biome), on push to `main` and on PRs. To catch lint failures before they reach CI, enable the tracked pre-commit hook once per clone: `git config core.hooksPath .githooks`. Tests live in `tests/`. The vitest config pins `UPLOADS_DIR` to a per-run temp directory and removes it afterwards, so tests never read or delete production uploads — even tests that intentionally import the upload-store singleton.
+CI runs all three, plus `npm run lint` (biome), on push to `main` and on PRs. To catch lint failures before they reach CI, enable the tracked pre-commit hook once per clone: `git config core.hooksPath .githooks`. Tests live in `tests/`. The UI smoke test (`tests/ui-smoke.test.ts`) needs a browser once per machine: `npx playwright-core install chromium-headless-shell`. The vitest config pins `UPLOADS_DIR` to a per-run temp directory and removes it afterwards, so tests never read or delete production uploads — even tests that intentionally import the upload-store singleton.
 
 ## Why a subprocess architecture?
 

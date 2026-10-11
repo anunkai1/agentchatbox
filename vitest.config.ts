@@ -4,12 +4,8 @@ import { join } from "node:path";
 import { defineConfig } from "vitest/config";
 
 /**
- * Vitest config. We only run server-side tests today; the client bundle
- * is exercised by the manual smoke scripts in `scripts/`.
- *
- * If client-side tests are added later, they will need a DOM environment
- * (jsdom or happy-dom) and a separate config file — keeping that out of
- * scope for the initial CI setup.
+ * Vitest config. Tests run in Node; tests/ui-smoke.test.ts drives the client
+ * bundle in headless Chromium through playwright-core.
  */
 export default defineConfig({
 	test: {

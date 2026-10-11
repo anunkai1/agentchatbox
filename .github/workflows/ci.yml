@@ -37,6 +37,10 @@ jobs:
         # voice/state modules.
         run: npm run typecheck
 
+      - name: Install headless Chromium
+        # For tests/ui-smoke.test.ts (playwright-core ships no browser).
+        run: npx playwright-core install --with-deps chromium-headless-shell
+
       - name: Test
         run: npm test -- --reporter=verbose 2>&1
 

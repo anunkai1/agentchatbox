@@ -1,0 +1,278 @@
+/**
+ * Browser smoke test: the real client bundle in headless Chromium against the
+ * real server, with a fake `pi` (jq-driven bash, like chat.test.ts).
+ *
+ * Covers the flows that server-only tests cannot see: send and render a reply,
+ * keep sending after the WebSocket drops (the "Reconnect leaves the tab unable
+ * to send" class of bug), and open a stored session from its /s/<id> link.
+ *
+ * The client is bundled in memory and served through Playwright routes, so the
+ * test never rewrites the live public/ directory. Needs a browser once per
+ * machine: `npx playwright-core install chromium-headless-shell`.
+ */
+
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { build } from "esbuild";
+import { type Browser, chromium, type Page, type WebSocketRoute } from "playwright-core";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+const root = resolve(import.meta.dirname, "..");
+const SEEDED_ID = "seeded-session-001";
+
+// Answers each prompt with "reply N"; resumes whatever --session it is given.
+const FAKE_PI = `#!/usr/bin/env bash
+session="live-session-001"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--session" ]; then session="$2"; shift; fi
+  shift
+done
+n=0
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    "get_state")
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"$session\\",\\"messageCount\\":0}}"
+      ;;
+    "prompt")
+      n=$((n + 1))
+      text="$(echo "$line" | jq -c '.message // ""')"
+      user="{\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":$text}],\\"timestamp\\":1}"
+      reply="{\\"role\\":\\"assistant\\",\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"reply $n\\"}],\\"api\\":\\"anthropic-messages\\",\\"provider\\":\\"zai\\",\\"model\\":\\"test\\",\\"stopReason\\":\\"stop\\",\\"timestamp\\":2}"
+      echo '{"type":"response","command":"prompt","success":true}'
+      echo '{"type":"agent_start"}'
+      echo '{"type":"turn_start"}'
+      echo "{\\"type\\":\\"message_start\\",\\"message\\":$user}"
+      echo "{\\"type\\":\\"message_end\\",\\"message\\":$user}"
+      echo "{\\"type\\":\\"message_start\\",\\"message\\":$reply}"
+      echo "{\\"type\\":\\"message_update\\",\\"message\\":$reply}"
+      echo "{\\"type\\":\\"message_end\\",\\"message\\":$reply}"
+      echo "{\\"type\\":\\"turn_end\\",\\"message\\":$reply,\\"toolResults\\":[]}"
+      echo '{"type":"agent_end","messages":[],"willRetry":false}'
+      ;;
+    "") ;;
+    *)
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"$type\\",\\"success\\":true}"
+      ;;
+  esac
+done
+`;
+
+let tmp: string;
+let server: ChildProcess | null = null;
+let serverLog = "";
+let browser: Browser | null = null;
+let base: string;
+let client: { html: string; js: string; css: string };
+
+async function freePort(): Promise<number> {
+	const probe = createServer();
+	await new Promise<void>((done) => probe.listen(0, "127.0.0.1", done));
+	const { port } = probe.address() as { port: number };
+	await new Promise((done) => probe.close(done));
+	return port;
+}
+
+async function bundleClient(): Promise<{ html: string; js: string; css: string }> {
+	const out = await build({
+		entryPoints: [join(root, "src/client/main.ts")],
+		bundle: true,
+		format: "esm",
+		target: ["es2022"],
+		platform: "browser",
+		write: false,
+		define: { "process.env.NODE_ENV": '"production"' },
+		logLevel: "silent",
+	});
+	return {
+		html: readFileSync(join(root, "index.html"), "utf8"),
+		js: out.outputFiles[0].text,
+		css: readFileSync(join(root, "src/client/styles.css"), "utf8"),
+	};
+}
+
+/** Serve the in-memory client for page loads; API and WS go to the server. */
+async function openPage(path: string): Promise<{ page: Page; sockets: WebSocketRoute[] }> {
+	if (!browser) throw new Error("browser not started");
+	const page = await browser.newPage();
+	const sockets: WebSocketRoute[] = [];
+	page.on("console", (msg) => {
+		serverLog += `[browser ${msg.type()}] ${msg.text()}\n`;
+	});
+	page.on("pageerror", (error) => {
+		serverLog += `[browser error] ${error.message}\n`;
+	});
+	await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+		ws.connectToServer();
+		sockets.push(ws);
+	});
+	await page.route(
+		(url) => url.origin === base && !url.pathname.startsWith("/api/"),
+		(route) => {
+			const { pathname } = new URL(route.request().url());
+			if (pathname === "/app.js") {
+				return route.fulfill({ body: client.js, contentType: "text/javascript" });
+			}
+			if (pathname === "/styles.css") {
+				return route.fulfill({ body: client.css, contentType: "text/css" });
+			}
+			if (pathname === "/" || pathname.startsWith("/s/")) {
+				return route.fulfill({ body: client.html, contentType: "text/html" });
+			}
+			return route.fulfill({ status: 404, body: "" });
+		},
+	);
+	await page.goto(`${base}${path}`);
+	return { page, sockets };
+}
+
+async function send(page: Page, text: string): Promise<void> {
+	await page.locator("#input").fill(text);
+	await page.locator("#send-btn").click();
+}
+
+const messages = (page: Page) => page.locator(".messages");
+
+beforeAll(async () => {
+	tmp = mkdtempSync(join(tmpdir(), "acb-ui-"));
+	const piCwd = join(tmp, "cwd");
+	const sessions = join(tmp, "sessions");
+	mkdirSync(piCwd);
+	const sessionDir = join(sessions, `--${piCwd.slice(1).replace(/\//g, "-")}--`);
+	mkdirSync(sessionDir, { recursive: true });
+	writeFileSync(
+		join(sessionDir, `2026-01-01T00-00-00-000Z_${SEEDED_ID}.jsonl`),
+		[
+			{
+				type: "session",
+				version: 3,
+				id: SEEDED_ID,
+				timestamp: "2026-01-01T00:00:00.000Z",
+				cwd: piCwd,
+			},
+			{
+				type: "message",
+				id: "m1",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:01.000Z",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "stored question" }],
+					timestamp: 1,
+				},
+			},
+			{
+				type: "message",
+				id: "m2",
+				parentId: "m1",
+				timestamp: "2026-01-01T00:00:02.000Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "stored answer" }],
+					provider: "zai",
+					model: "test",
+					stopReason: "stop",
+					timestamp: 2,
+				},
+			},
+		]
+			.map((line) => JSON.stringify(line))
+			.join("\n")
+			.concat("\n"),
+	);
+	const fakePi = join(tmp, "pi");
+	writeFileSync(fakePi, FAKE_PI, { mode: 0o755 });
+	const authFile = join(tmp, "auth.json");
+	writeFileSync(authFile, JSON.stringify({ zai: { key: "test-dummy" } }));
+
+	const port = await freePort();
+	base = `http://127.0.0.1:${port}`;
+	const [bundled] = await Promise.all([bundleClient()]);
+	client = bundled;
+	server = spawn(join(root, "node_modules/.bin/tsx"), [join(root, "src/server/index.ts")], {
+		cwd: tmp,
+		env: {
+			PATH: process.env.PATH,
+			HOME: tmp,
+			NODE_ENV: "test",
+			HOST: "127.0.0.1",
+			PORT: String(port),
+			PI_BIN: fakePi,
+			PI_CWD: piCwd,
+			PI_CODING_AGENT_SESSION_DIR: sessions,
+			UPLOADS_DIR: join(tmp, "uploads"),
+			AGENTCHATBOX_PI_AUTH_FILE: authFile,
+			AGENTCHATBOX_PROJECTS_FILE: join(tmp, "projects.json"),
+			AGENTCHATBOX_PINS_FILE: join(tmp, "pins.json"),
+			AGENTCHATBOX_PI_SETTINGS_FILE: join(tmp, "settings.json"),
+			AGENTCHATBOX_SESSION_CACHE_FILE: join(tmp, "session-cache.json"),
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	server.stdout?.on("data", (chunk) => {
+		serverLog += chunk;
+	});
+	server.stderr?.on("data", (chunk) => {
+		serverLog += chunk;
+	});
+	const deadline = Date.now() + 15_000;
+	for (;;) {
+		try {
+			if ((await fetch(`${base}/api/health`)).ok) break;
+		} catch {
+			/* not listening yet */
+		}
+		if (server.exitCode !== null || Date.now() > deadline) {
+			throw new Error(`test server did not start:\n${serverLog}`);
+		}
+		await new Promise((done) => setTimeout(done, 100));
+	}
+	// Route-fulfilled pages have no address space, so Chromium's Local Network
+	// Access checks would treat them as public and block the loopback socket.
+	browser = await chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+}, 60_000);
+
+afterAll(async () => {
+	await browser?.close();
+	if (server && server.exitCode === null) {
+		const exited = new Promise((done) => server?.once("exit", done));
+		server.kill("SIGTERM");
+		await exited;
+	}
+	if (tmp) rmSync(tmp, { recursive: true, force: true });
+});
+
+beforeEach((ctx) => {
+	ctx.onTestFailed(() => {
+		console.error(`server log:\n${serverLog.slice(-4000)}`);
+	});
+});
+
+describe("browser smoke", { timeout: 30_000 }, () => {
+	it("sends a message, keeps sending after the socket drops", async () => {
+		const { page, sockets } = await openPage("/");
+		await send(page, "first question");
+		await expect.poll(() => messages(page).innerText()).toContain("reply 1");
+		expect(await messages(page).innerText()).toContain("first question");
+
+		// Drop the connection the way a flaky network or a backgrounded phone does.
+		const before = sockets.length;
+		await sockets.at(-1)?.close({ code: 1001, reason: "test drop" });
+		await expect.poll(() => sockets.length, { timeout: 15_000 }).toBeGreaterThan(before);
+
+		await send(page, "second question");
+		await expect.poll(() => messages(page).innerText()).toContain("reply 2");
+		await page.close();
+	});
+
+	it("opens a stored session from its /s/<id> link", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+		expect(await messages(page).innerText()).toContain("stored question");
+		expect(new URL(page.url()).pathname).toBe(`/s/${SEEDED_ID}`);
+		await page.close();
+	});
+});
