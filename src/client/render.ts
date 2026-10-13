@@ -641,6 +641,24 @@ export function normaliseVoiceText(text: string): string {
 }
 
 /**
+ * Chat notice for a model turn that ended in a provider error. pi retries only
+ * transient errors and shows its own retry banner for those, so this never
+ * promises a retry. A 413 is called out because resending fails the same way.
+ */
+export function modelErrorNotice(errorMessage: string | undefined): string {
+	const raw = errorMessage ?? "";
+	if (/\b413\b|request entity too large|payload_too_large/i.test(raw)) {
+		return "The request was too large for the provider (HTTP 413), usually because of images in the chat history. Run /compact or start a new chat.";
+	}
+	const detail = raw
+		.replace(/<[^>]*>/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 300);
+	return detail ? `Model returned an error: ${detail}` : "Model returned an error.";
+}
+
+/**
  * The hint identifying which reply a variant press is about: the opening words
  * of that message, whitespace-collapsed, quotes stripped (it travels inside a
  * slash-command argument). /voice-last otherwise always voices the NEWEST

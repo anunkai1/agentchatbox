@@ -56,6 +56,7 @@ import {
 	jumpToPrevUserMessage,
 	lastAssistantVoiceBox,
 	matchesVoiceHint,
+	modelErrorNotice,
 	refreshSidebarSearchVisibility,
 	refreshStatus,
 	refreshWelcomeSuggestions,
@@ -1024,8 +1025,8 @@ function onEvent(event: Record<string, unknown>): void {
 			//
 			// ALSO suppress empty assistant messages whose stopReason is
 			// "error" — these happen when the provider returns an error
-			// (overloaded, context too long, rate limit) and the agent
-			// loop retries. Without this, each failed attempt renders as
+			// (overloaded, context too long, rate limit), whether or not
+			// pi then retries. Without this, each failed attempt renders as
 			// a frozen "streaming" row with a spinner and no text, which
 			// looks like the agent is stuck. Surface a visible error
 			// instead so it's clear what happened.
@@ -1072,7 +1073,7 @@ function onEvent(event: Record<string, unknown>): void {
 					state.messages.pop();
 					const errMsg = {
 						kind: "error" as const,
-						text: "Model returned an error (possibly context too long or provider overloaded). Retrying…",
+						text: modelErrorNotice((m as { errorMessage?: string }).errorMessage),
 					};
 					state.messages.push(errMsg);
 					appendNode(renderMessageNode(errMsg));

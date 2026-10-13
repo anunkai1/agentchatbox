@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { matchesVoiceHint, refreshCapabilitiesBadge, voiceHintFor } from "../src/client/render.js";
+import {
+	matchesVoiceHint,
+	modelErrorNotice,
+	refreshCapabilitiesBadge,
+	voiceHintFor,
+} from "../src/client/render.js";
 import { state } from "../src/client/state.js";
 
 // Markdown rendering needs a browser; these tests only touch the pieces that do not.
@@ -75,5 +80,22 @@ describe("Claude Code header toggle", () => {
 		expect(cc.classList.contains("on")).toBe(true);
 		expect(cc.attributes["aria-pressed"]).toBe("true");
 		expect(cc.title).toContain("/cc off");
+	});
+});
+
+describe("model error notice", () => {
+	it("explains a 413 instead of promising a retry", () => {
+		const notice = modelErrorNotice(
+			"413 \n<html><head><title>413 Request Entity Too Large</title></head></html>",
+		);
+		expect(notice).toContain("too large");
+		expect(notice).not.toContain("Retrying");
+	});
+
+	it("shows other errors as text, without markup", () => {
+		expect(modelErrorNotice("400 <b>bad</b>\n request")).toBe(
+			"Model returned an error: 400 bad request",
+		);
+		expect(modelErrorNotice(undefined)).toBe("Model returned an error.");
 	});
 });
