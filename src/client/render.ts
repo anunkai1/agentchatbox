@@ -2601,23 +2601,17 @@ export function renderShell(): void {
 	// surface rather than a wall of text.
 	const welcome = el("div", { class: "welcome", id: "welcome" });
 	welcome.append(el("div", { class: "welcome-brand" }, "Agent Chat Box"));
+	// ACB mark: the still cube, as in the header. Deliberately not animated:
+	// the old animated cube burnt ~20% of a core for 11s on every load.
 	welcome.append(
-		// ACB logo: robot letters in a spinning glass cube (acb-logo.svg).
-		// The cube's spin is SMIL, which CSS can't pause, so reduced-motion
-		// users get the still cube instead.
-		el(
-			"picture",
-			{},
-			el("source", { media: "(prefers-reduced-motion: reduce)", srcset: "/acb-logo-static.svg" }),
-			el("img", {
-				class: "welcome-mark",
-				src: "/acb-logo.svg",
-				alt: "agentchatbox",
-				width: 72,
-				height: 72,
-				draggable: false,
-			}),
-		),
+		el("img", {
+			class: "welcome-mark",
+			src: "/acb-logo-static.svg",
+			alt: "agentchatbox",
+			width: 72,
+			height: 72,
+			draggable: false,
+		}),
 	);
 	welcome.append(el("h1", { class: "welcome-title" }, "What can I do for you?"));
 	welcome.append(

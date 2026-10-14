@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="50 45 412 412" role="img" aria-label="agentchatbox">
   <title>agentchatbox</title>
-  <!-- The welcome cube at rest (acb-logo.svg), redrawn for small sizes
-       (header, favicons, app icon): thicker edges, solid dark glass and
-       bigger, heavier robot letters, so it still reads at 24px and on light
-       backgrounds. The cube outline is acb-logo.svg's final frame. -->
+  <!-- The ACB mark: a glass cube holding the robot letters ACB, drawn for
+       small sizes (header, favicons, app icon) and scaled up on the welcome
+       screen: thicker edges, solid dark glass and bigger, heavier robot
+       letters, so it still reads at 24px and on light backgrounds. -->
   <defs>
     <linearGradient id="edge" x1="0" y1="60" x2="0" y2="440" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#5ffff0"/><stop offset=".55" stop-color="#3d9bff"/><stop offset="1" stop-color="#4a63ff"/></linearGradient>
     <linearGradient id="deep" x1="0" y1="85" x2="0" y2="417" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#0c2a5c"/><stop offset="1" stop-color="#050d24"/></linearGradient>
@@ -14,7 +14,7 @@
     <path d="M92 153L141 85L371 85L420 153Z" fill="#1d6fd8" fill-opacity=".55"/>
     <path d="M119 417L92 153L420 153L393 417Z" fill="url(#deep)"/>
   </g>
-  <!-- Same letters as acb-logo.svg, on the front face. -->
+  <!-- The robot letters ACB, on the front face. -->
   <g transform="translate(256 283) scale(.72) translate(-227 -216)" fill="none" stroke="url(#silver)" stroke-linecap="round" stroke-linejoin="round">
     <path d="M40 288L95 144L150 288M62 240H128" stroke-width="35"/>
     <path d="M315 174.7A72 72 0 1 0 315 257.3" stroke-width="38" stroke-linecap="butt"/>

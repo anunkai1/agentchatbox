@@ -1065,8 +1065,9 @@ body.sidebar-resizing iframe {
 	color: var(--text);
 	text-shadow: 0 0 14px rgba(29, 159, 165, 0.28);
 }
-/* ACB mark on the welcome / empty state. Sized for ~108px display,
- * capped so it never gets visually heavy on wide screens. */
+/* ACB mark on the welcome / empty state: the still cube (identical to the
+ * header mark), sized up and capped so it never gets visually heavy on
+ * wide screens. */
 .welcome-mark {
 	width: 168px;
 	height: 168px;
