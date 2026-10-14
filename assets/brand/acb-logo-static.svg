@@ -3,25 +3,35 @@
   <!-- The ACB mark: a glass cube holding the robot letters ACB, drawn for
        small sizes (header, favicons, app icon) and scaled up on the welcome
        screen: thicker edges, solid dark glass and bigger, heavier robot
-       letters, so it still reads at 24px and on light backgrounds. -->
+       letters, so it still reads at 24px and on light backgrounds. Shown
+       large (the welcome screen), the strokes thin out to keep it light. -->
+  <style>
+    @media (min-width: 64px) {
+      .edges { stroke-width: 12px; }
+      .stroke { stroke-width: 24px; }
+      .bowl { stroke-width: 26px; }
+      .visor { stroke-width: 4px; }
+      .smile { stroke-width: 6px; }
+    }
+  </style>
   <defs>
     <linearGradient id="edge" x1="0" y1="60" x2="0" y2="440" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#5ffff0"/><stop offset=".55" stop-color="#3d9bff"/><stop offset="1" stop-color="#4a63ff"/></linearGradient>
     <linearGradient id="deep" x1="0" y1="85" x2="0" y2="417" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#0c2a5c"/><stop offset="1" stop-color="#050d24"/></linearGradient>
     <linearGradient id="silver" x1="0" y1="140" x2="0" y2="290" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#8fd9ff"/></linearGradient>
     <filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="9" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   </defs>
-  <g stroke="url(#edge)" stroke-width="22" stroke-linejoin="round" filter="url(#glow)">
+  <g class="edges" stroke="url(#edge)" stroke-width="22" stroke-linejoin="round" filter="url(#glow)">
     <path d="M92 153L141 85L371 85L420 153Z" fill="#1d6fd8" fill-opacity=".55"/>
     <path d="M119 417L92 153L420 153L393 417Z" fill="url(#deep)"/>
   </g>
   <!-- The robot letters ACB, on the front face. -->
   <g transform="translate(256 283) scale(.72) translate(-227 -216)" fill="none" stroke="url(#silver)" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M40 288L95 144L150 288M62 240H128" stroke-width="35"/>
-    <path d="M315 174.7A72 72 0 1 0 315 257.3" stroke-width="38" stroke-linecap="butt"/>
-    <path d="M350 144V288M350 144H372A34 34 0 0 1 372 212H350M350 212H376A38 38 0 0 1 376 288H350" stroke-width="35"/>
-    <rect x="210" y="186" width="92" height="52" rx="20" fill="#04122c" stroke-width="6"/>
+    <path class="stroke" d="M40 288L95 144L150 288M62 240H128" stroke-width="35"/>
+    <path class="bowl" d="M315 174.7A72 72 0 1 0 315 257.3" stroke-width="38" stroke-linecap="butt"/>
+    <path class="stroke" d="M350 144V288M350 144H372A34 34 0 0 1 372 212H350M350 212H376A38 38 0 0 1 376 288H350" stroke-width="35"/>
+    <rect class="visor" x="210" y="186" width="92" height="52" rx="20" fill="#04122c" stroke-width="6"/>
     <ellipse cx="237" cy="210" rx="11.7" ry="12" fill="#3dfff0" stroke="none"/>
     <ellipse cx="275" cy="210" rx="11.7" ry="12" fill="#3dfff0" stroke="none"/>
-    <path d="M243 256Q256 265 269 256" stroke="#3dfff0" stroke-width="9"/>
+    <path class="smile" d="M243 256Q256 265 269 256" stroke="#3dfff0" stroke-width="9"/>
   </g>
 </svg>
