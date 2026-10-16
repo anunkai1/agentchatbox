@@ -767,7 +767,7 @@ body.sidebar-resizing iframe {
 	border-color: var(--accent-border);
 	color: var(--accent);
 }
-/* Codex Fast is a thin GUI trigger for the extension-owned picker. The
+/* OpenAI Fast is a thin GUI trigger for the extension-owned picker. The
  * browser neither stores nor infers the selected tier. */
 .header-fast {
 	align-items: center;

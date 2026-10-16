@@ -2,7 +2,7 @@
 	"name": "acb-codex-fast",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Pi-owned OpenAI Codex fast service-tier toggle for AgentChatBox.",
+	"description": "Pi-owned OpenAI fast service-tier toggle for ChatGPT and legacy Codex sign-ins.",
 	"type": "module",
 	"keywords": [
 		"pi-package"

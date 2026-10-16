@@ -8,6 +8,10 @@ export interface FastModeStore {
 	write(enabled: boolean): void;
 }
 
+// Native OpenAI Responses models with Fast support. This list is independent
+// of the optional Codex CLI cache, which can omit newer models such as GPT-6.1.
+const FAST_OPENAI_MODELS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]);
+
 /**
  * Models currently advertised by Codex's live catalogue with the Fast
  * (`priority`) service tier. Keep unsupported Codex models on the standard
@@ -74,31 +78,36 @@ function isObjectPayload(payload: unknown): payload is Record<string, unknown> {
 	return payload !== null && typeof payload === "object" && !Array.isArray(payload);
 }
 
-function currentCodexModel(ctx: { model?: { provider: string; id: string } }): string | null {
-	return ctx.model?.provider === "openai-codex" ? ctx.model.id : null;
+function currentOpenAIModel(ctx: { model?: { provider: string; id: string } }) {
+	const model = ctx.model;
+	return model?.provider === "openai" || model?.provider === "openai-codex" ? model : null;
 }
 
 /**
- * Register Codex fast mode with pi. The extension owns the setting and request
- * rewrite; AgentChatBox only forwards `/fast` through pi RPC.
+ * Register OpenAI fast mode with pi, including legacy Codex sign-ins. The
+ * extension owns persistence and request rewriting; ACB only forwards `/fast`.
+ * Keep the existing store path and status key so saved preferences survive.
  */
 export function registerCodexFast(
 	pi: ExtensionAPI,
 	store: FastModeStore,
-	supportedModels: ReadonlySet<string> = loadFastCodexModels(),
+	supportedCodexModels: ReadonlySet<string> = loadFastCodexModels(),
 ): void {
-	pi.on("before_provider_request", (event, ctx) => {
-		const modelId = currentCodexModel(ctx);
-		if (!modelId || !supportedModels.has(modelId) || !store.read()) return;
-		if (!isObjectPayload(event.payload) || event.payload.model !== modelId) return;
+	const supportsFast = (model: { provider: string; id: string }) =>
+		(model.provider === "openai" ? FAST_OPENAI_MODELS : supportedCodexModels).has(model.id);
 
-		// Codex labels the user-facing choice "fast", while its catalogue maps
-		// that choice to the Responses API's `priority` service-tier id.
+	pi.on("before_provider_request", (event, ctx) => {
+		const model = currentOpenAIModel(ctx);
+		if (!model || !supportsFast(model) || !store.read()) return;
+		if (!isObjectPayload(event.payload) || event.payload.model !== model.id) return;
+
+		// Both ChatGPT OAuth and the legacy Codex endpoint accept `priority`.
+		// The current ChatGPT OAuth endpoint rejects the newer `fast` alias.
 		return { ...event.payload, service_tier: "priority" };
 	});
 
 	pi.registerCommand("fast", {
-		description: "toggle Codex fast mode (1.5x speed, increased usage)",
+		description: "toggle OpenAI fast mode (priority processing, increased usage)",
 		handler: async (rawArgs, ctx) => {
 			const command = rawArgs.trim().toLowerCase();
 			const current = store.read();
@@ -107,26 +116,26 @@ export function registerCodexFast(
 				return;
 			}
 
-			const modelId = currentCodexModel(ctx);
-			if (!modelId) {
-				ctx.ui.notify("/fast is available when an OpenAI Codex model is selected.", "warning");
+			const model = currentOpenAIModel(ctx);
+			if (!model) {
+				ctx.ui.notify("/fast is available when an OpenAI model is selected.", "warning");
 				return;
 			}
-			if (!supportedModels.has(modelId)) {
-				ctx.ui.notify(`Codex fast mode is not available for ${modelId}.`, "warning");
+			if (!supportsFast(model)) {
+				ctx.ui.notify(`OpenAI fast mode is not available for ${model.id}.`, "warning");
 				return;
 			}
 
 			if (command === "status") {
-				ctx.ui.notify(`Codex fast mode is ${current ? "enabled" : "disabled"}.`, "info");
+				ctx.ui.notify(`OpenAI fast mode is ${current ? "enabled" : "disabled"}.`, "info");
 				return;
 			}
 
 			let enabled: boolean;
 			if (command === "menu") {
-				const fastOption = `${current ? "✓ " : ""}Fast — 1.5× speed, increased usage`;
+				const fastOption = `${current ? "✓ " : ""}Fast — priority processing, increased usage`;
 				const standardOption = `${current ? "" : "✓ "}Standard — normal speed and usage`;
-				const selected = await ctx.ui.select("Codex response speed", [fastOption, standardOption]);
+				const selected = await ctx.ui.select("OpenAI response speed", [fastOption, standardOption]);
 				if (!selected) return;
 				enabled = selected === fastOption;
 			} else if (!command || command === "toggle") enabled = !current;
@@ -141,8 +150,8 @@ export function registerCodexFast(
 			ctx.ui.setStatus("codex-fast", enabled ? "Enabled" : "Standard");
 			ctx.ui.notify(
 				enabled
-					? "Codex fast mode enabled — 1.5x speed, increased usage."
-					: "Codex fast mode disabled — standard speed and usage.",
+					? "OpenAI fast mode enabled — priority processing, increased usage."
+					: "OpenAI fast mode disabled — standard speed and usage.",
 				"info",
 			);
 		},

@@ -1597,8 +1597,8 @@ export function refreshCapabilitiesBadge(): void {
 				status === "Enabled" ? "Fast" : status === "Standard" ? "Standard" : "Checking…";
 			// The button reads "GPT"; the bolt marks Fast, and the tooltip names the tier.
 			fastButton.replaceChildren(...(status === "Enabled" ? [iconEl(ZAP_ICON), " GPT"] : ["GPT"]));
-			fastButton.title = `Codex response speed: ${label} (/fast)`;
-			fastButton.setAttribute("aria-label", `Configure Codex response speed (currently ${label})`);
+			fastButton.title = `OpenAI response speed: ${label} (/fast)`;
+			fastButton.setAttribute("aria-label", `Configure OpenAI response speed (currently ${label})`);
 		}
 	}
 
@@ -2518,8 +2518,8 @@ export function renderShell(): void {
 				class: "picker-btn header-fast",
 				id: "fast-mode",
 				type: "button",
-				title: "Codex response speed: checking… (/fast)",
-				"aria-label": "Configure Codex response speed (currently checking)",
+				title: "OpenAI response speed: checking… (/fast)",
+				"aria-label": "Configure OpenAI response speed (currently checking)",
 				onclick: () => shellHandlers?.handleSlash("fast menu"),
 				style: "display:none",
 			},

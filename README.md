@@ -14,7 +14,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - Persistent sessions on disk (`pi` manages JSONL files — survive page reloads and server restarts)
 - **Automatic session titles** — the bundled pi extension replaces the temporary first-message title with a concise model-generated name after the first successful answer; manual renames always win
 - **Pi-owned workflows** — welcome shortcuts plus `/research`, `/fetch`, and `/codesearch` are pi extension commands available across clients; ACB’s legacy `/websearch` is a transport-only alias for `/research`
-- **Codex Fast control** — a header button and Settings row open the pi extension’s Fast/Standard picker; Settings mirrors the extension-reported current state while persistence and the `service_tier` rewrite remain extension-owned
+- **OpenAI Fast control** — a header button and Settings row open the pi extension’s Fast/Standard picker for supported OpenAI models, including ChatGPT subscription sign-in and legacy Codex sign-in. Settings mirrors the saved preference; persistence and the `service_tier: "priority"` request remain extension-owned. OpenAI may process a request on the standard tier instead; Fast is a request preference, not a speed guarantee.
 - **Keyboard, screen-reader, and touch friendly** — labelled controls, trapped/restored modal focus, keyboard-operable pickers and project folders, and 44px mobile action targets
 - **Shareable session links** — every chat lives at `/s/<session-id>`. Bookmark it, copy it (`/link` or the Settings menu), or open it on another device to resume the same conversation
 - Local TTS (Kokoro, 1.25× default playback) and STT (pi-stt-server daemons: Lappy GPU whisper, CPU fallback) — no paid cloud APIs
@@ -93,7 +93,7 @@ src/
 extensions/
   auto-title/              # pi-owned first-turn session naming
   acb-workflows/           # pi-owned environment/orientation workflow commands
-  codex-fast/              # pi-owned persistent Codex fast-tier toggle
+  codex-fast/              # pi-owned OpenAI fast-tier toggle (legacy store name)
 tests/                    # vitest, server-side + pure extension helpers + UI smoke
 scripts/                  # build + dev helpers
   build-client.mjs        # esbuild bundler for the client
