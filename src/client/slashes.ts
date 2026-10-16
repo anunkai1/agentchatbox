@@ -23,7 +23,6 @@ import {
 	openProjectEditor,
 	refreshStatus,
 	renderShell,
-	showToast,
 	syncDisplayPreferences,
 	toggleCapabilitiesPopover,
 } from "./render.js";
@@ -783,7 +782,7 @@ export function openModelPicker(): void {
 			row.append(star);
 
 			// Hearted models are personal quick-pins. They are stored in this
-			// browser and sorted to the top of their provider group.
+			// browser and shown in their own group at the top of the picker.
 			const pinned = isPinnedModel(m);
 			const heart = el(
 				"button",
@@ -923,22 +922,15 @@ function toggleDefaultModel(box: HTMLElement, m: ModelOption): void {
 	if (footer) footer.replaceWith(renderDefaultFooter());
 }
 
-/**
- * Walk every `.model-row` in the picker and resync its star button +
- * "default" badge to the current Global default. Called after a toggle.
- * Rows carry their model id/provider on dataset so this stays O(rows)
- * with no closure bookkeeping.
- */
+// Keep browser-local pins even if a model is temporarily unavailable.
+// Only available models are displayed; there is no limit on saved pins.
 const PINNED_MODELS_KEY = "acb-pinned-models-v1";
-const MAX_PINNED_MODELS = 5;
 type PinnedModel = { id: string; provider: string };
 function getPinnedModels(): PinnedModel[] {
 	try {
 		const raw = JSON.parse(localStorage.getItem(PINNED_MODELS_KEY) ?? "[]");
 		return Array.isArray(raw)
-			? raw
-					.filter((m) => m && typeof m.id === "string" && typeof m.provider === "string")
-					.slice(0, MAX_PINNED_MODELS)
+			? raw.filter((m) => m && typeof m.id === "string" && typeof m.provider === "string")
 			: [];
 	} catch {
 		return [];
@@ -951,16 +943,18 @@ function togglePinnedModel(box: HTMLElement, m: ModelOption): void {
 	const pins = getPinnedModels();
 	const index = pins.findIndex((p) => p.id === m.id && p.provider === m.provider);
 	if (index >= 0) pins.splice(index, 1);
-	else if (pins.length < MAX_PINNED_MODELS) pins.push({ id: m.id, provider: m.provider });
-	else {
-		showToast(`You can pin up to ${MAX_PINNED_MODELS} models`);
-		return;
-	}
+	else pins.push({ id: m.id, provider: m.provider });
 	localStorage.setItem(PINNED_MODELS_KEY, JSON.stringify(pins));
 	box.closest(".modal-overlay")?.remove();
 	openModelPicker();
 }
 
+/**
+ * Walk every `.model-row` in the picker and resync its star button +
+ * "default" badge to the current Global default. Called after a toggle.
+ * Rows carry their model id/provider on dataset so this stays O(rows)
+ * with no closure bookkeeping.
+ */
 function refreshDefaultStars(box: HTMLElement): void {
 	const d = defaultModelForNewChats();
 	const rows = box.querySelectorAll<HTMLElement>(".model-row");

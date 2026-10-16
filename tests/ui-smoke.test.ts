@@ -23,6 +23,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 const root = resolve(import.meta.dirname, "..");
 const SEEDED_ID = "seeded-session-001";
 const SEEDED_IMAGE = "0f8e2a6c-1b3d-4e5f-8a9b-0c1d2e3f4a5b.png";
+const MODELS = Array.from({ length: 12 }, (_, i) => ({
+	id: i === 0 ? "glm-5.2" : `model-${i + 1}`,
+	provider: "zai",
+	name: `Model ${i + 1}`,
+}));
 // A 1x1 PNG, so the served upload passes the server's magic-byte check.
 const PNG_1X1 = Buffer.from(
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
@@ -42,6 +47,9 @@ while IFS= read -r line; do
   case "$type" in
     "get_state")
       echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"$session\\",\\"messageCount\\":0}}"
+      ;;
+    "get_available_models")
+      echo '${JSON.stringify({ type: "response", command: "get_available_models", success: true, data: { models: MODELS } })}'
       ;;
     "prompt")
       n=$((n + 1))
@@ -281,6 +289,50 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 
 		await send(page, "second question");
 		await expect.poll(() => messages(page).innerText()).toContain("reply 2");
+		await page.close();
+	});
+
+	it("pins beyond five models even when saved pins are unavailable, and preserves them on reload", async () => {
+		const { page } = await openPage("/");
+		const pin = (model: { id: string; provider: string }) => ({
+			id: model.id,
+			provider: model.provider,
+		});
+		const unavailable = [
+			{ id: "removed-model", provider: "zai" },
+			{ id: "old-model", provider: "removed-provider" },
+		];
+		const initialPins = [...MODELS.slice(0, 3).map(pin), ...unavailable];
+		await page.evaluate((pins) => {
+			localStorage.setItem("acb-pinned-models-v1", JSON.stringify(pins));
+		}, initialPins);
+		await page.reload();
+		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
+		await page.locator("#model-picker").click();
+		const pinned = page.locator(".model-group-title-pinned");
+		await expect.poll(() => pinned.textContent()).toBe("♥ Pinned · 3");
+		const filter = page.getByRole("searchbox", { name: "Filter models" });
+		for (const [i, model] of MODELS.entries()) {
+			if (i < 3) continue;
+			await filter.fill(model.id);
+			await page.getByRole("button", { name: `Pin ${model.name} to the top`, exact: true }).click();
+			await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${i + 1}`);
+		}
+		const savedPins = () =>
+			page.evaluate(() => JSON.parse(localStorage.getItem("acb-pinned-models-v1") ?? "[]"));
+		const expectedPins = [...initialPins, ...MODELS.slice(3).map(pin)];
+		expect(await savedPins()).toEqual(expectedPins);
+
+		await page.reload();
+		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
+		await page.locator("#model-picker").click();
+		await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${MODELS.length}`);
+		// A pin beyond the old five-entry read limit is still visible and removable.
+		const last = MODELS.at(-1)!;
+		await filter.fill(last.id);
+		await page.getByRole("button", { name: `Unpin ${last.name}`, exact: true }).click();
+		await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${MODELS.length - 1}`);
+		expect(await savedPins()).toEqual(expectedPins.slice(0, -1));
 		await page.close();
 	});
 
