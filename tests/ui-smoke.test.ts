@@ -310,13 +310,22 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
 		await page.locator("#model-picker").click();
 		const pinned = page.locator(".model-group-title-pinned");
+		const pinnedGroup = page.locator(".model-group").filter({ has: pinned });
+		const providerGroup = page.locator(".model-group").filter({
+			has: page.getByRole("button", { name: "zai models", exact: true }),
+		});
 		await expect.poll(() => pinned.textContent()).toBe("♥ Pinned · 3");
+		expect(await providerGroup.locator(".model-row").count()).toBe(MODELS.length);
 		const filter = page.getByRole("searchbox", { name: "Filter models" });
 		for (const [i, model] of MODELS.entries()) {
 			if (i < 3) continue;
 			await filter.fill(model.id);
 			await page.getByRole("button", { name: `Pin ${model.name} to the top`, exact: true }).click();
 			await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${i + 1}`);
+			expect(await providerGroup.locator(".model-row").count()).toBe(MODELS.length);
+			expect(
+				await page.locator(`[data-model-id="${model.id}"] .model-pin-btn.is-pinned`).count(),
+			).toBe(2);
 		}
 		const savedPins = () =>
 			page.evaluate(() => JSON.parse(localStorage.getItem("acb-pinned-models-v1") ?? "[]"));
@@ -327,12 +336,22 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
 		await page.locator("#model-picker").click();
 		await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${MODELS.length}`);
-		// A pin beyond the old five-entry read limit is still visible and removable.
+		expect(await providerGroup.locator(".model-row").count()).toBe(MODELS.length);
+		// Either copy can unpin a model without removing it from its provider list.
 		const last = MODELS.at(-1)!;
-		await filter.fill(last.id);
-		await page.getByRole("button", { name: `Unpin ${last.name}`, exact: true }).click();
-		await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${MODELS.length - 1}`);
-		expect(await savedPins()).toEqual(expectedPins.slice(0, -1));
+		for (const group of [pinnedGroup, providerGroup]) {
+			await filter.fill(last.id);
+			await group.getByRole("button", { name: `Unpin ${last.name}`, exact: true }).click();
+			await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${MODELS.length - 1}`);
+			expect(await savedPins()).toEqual(expectedPins.slice(0, -1));
+			expect(await providerGroup.locator(".model-row").count()).toBe(MODELS.length);
+			await filter.fill(last.id);
+			await providerGroup
+				.getByRole("button", { name: `Pin ${last.name} to the top`, exact: true })
+				.click();
+			await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${MODELS.length}`);
+			expect(await savedPins()).toEqual(expectedPins);
+		}
 		await page.close();
 	});
 

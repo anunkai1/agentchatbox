@@ -645,23 +645,18 @@ export function openModelPicker(): void {
 		appendError("No models available (server has no provider keys configured).");
 		return;
 	}
-	// Pinned models live in their own group at the very top and are not
-	// repeated in their provider groups.
+	// Pinned models are shortcuts at the top, not replacements for their
+	// entries in the complete, alphabetically sorted provider lists.
 	const groups = new Map<string, ModelOption[]>();
 	const pinned = state.availableModels.filter(isPinnedModel);
 	if (pinned.length) groups.set("__pinned__", pinned);
 	for (const m of state.availableModels) {
-		if (isPinnedModel(m)) continue;
 		const list = groups.get(m.provider) ?? [];
 		list.push(m);
 		groups.set(m.provider, list);
 	}
 	for (const [, list] of groups) {
-		list.sort((a, b) => {
-			const ap = isPinnedModel(a);
-			const bp = isPinnedModel(b);
-			return ap !== bp ? (ap ? -1 : 1) : (a.name ?? a.id).localeCompare(b.name ?? b.id);
-		});
+		list.sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
 	}
 
 	const { overlay, box } = openModal("Choose model", "model-picker-box");
