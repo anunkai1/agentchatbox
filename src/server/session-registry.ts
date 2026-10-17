@@ -849,8 +849,12 @@ class SessionRegistry {
 		// is what makes this a transparent pipe rather than a silent dropper.
 		if (line.type === "response" && line.success !== false) return;
 
-		if (line.type === "message_end") {
-			// The JSONL changed. The next reconnect rebuilds the projection once;
+		if (
+			line.type === "message_end" ||
+			(line.type === "extension_ui_request" && line.statusKey === "claude-activity")
+		) {
+			// The JSONL changed (a /cc run saves its steps without pi's
+			// message_end). The next reconnect rebuilds the projection once;
 			// later reconnects reuse that bounded live-session cache.
 			session.replayMessages = null;
 		}
