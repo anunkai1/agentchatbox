@@ -9,17 +9,20 @@
  */
 
 import {
+	appendFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let root: string | null = null;
 let cwd: string;
@@ -253,6 +256,176 @@ describe("listPiSessions", () => {
 		const bbb = sessions.find((s) => s.id === "bbb");
 		expect(aaa?.pinned).toBe(true);
 		expect(bbb?.pinned).toBeUndefined();
+	});
+});
+
+describe("conversation activity times", () => {
+	const createdAt = "2026-06-15T10:00:00.000Z";
+	const repliedAt = "2026-06-16T12:00:00.000Z";
+
+	function seed(id: string, timestamp = createdAt, extra: Record<string, unknown>[] = []): string {
+		writeSession(
+			"--home-test-project--",
+			`${id}.jsonl`,
+			id,
+			timestamp,
+			["first prompt"],
+			extra.map((entry) => JSON.stringify(entry)),
+		);
+		return join(root!, "--home-test-project--", `${id}.jsonl`);
+	}
+
+	it("does not promote a touched or rewritten chat, including after a cache hit", async () => {
+		const old = seed("old");
+		seed("new", repliedAt);
+		const { listPiSessions } = await import("../src/server/session-list.js");
+		const before = listPiSessions(cwd);
+		expect(before.map((s) => s.id)).toEqual(["new", "old"]);
+		expect(listPiSessions(cwd)).toEqual(before); // in-memory cache hit
+
+		utimesSync(old, new Date("2026-10-18"), new Date("2026-10-18"));
+		expect(listPiSessions(cwd)).toEqual(before);
+		writeFileSync(old, readFileSync(old, "utf8").replace("first prompt", "redacted prompt"));
+		const after = listPiSessions(cwd);
+		expect(after.map((s) => s.id)).toEqual(["new", "old"]);
+		expect(after[1].title).toBe("redacted prompt");
+		expect(after[1].modifiedAt).toBe(createdAt);
+	});
+
+	it("sorts all listings by actual activity, including a continued older chat", async () => {
+		seed("continued", createdAt, [
+			{ type: "message", timestamp: repliedAt, message: { role: "assistant", content: "reply" } },
+		]);
+		seed("newer", "2026-06-16T10:00:00.000Z");
+		const { listPiSessions, listAllSessions } = await import("../src/server/session-list.js");
+		for (const sessions of [listPiSessions(cwd), listAllSessions([cwd])]) {
+			expect(sessions.map((s) => s.id)).toEqual(["continued", "newer"]);
+			expect(sessions[0].createdAt).toBe(createdAt);
+			expect(sessions[0].modifiedAt).toBe(repliedAt);
+		}
+	});
+
+	it("updates activity when a new message is appended but not when renamed or moved", async () => {
+		const file = seed("continued");
+		const { listPiSessions, setPiSessionName, movePiSession } = await import(
+			"../src/server/session-list.js"
+		);
+		expect(listPiSessions(cwd)[0].modifiedAt).toBe(createdAt);
+		appendFileSync(
+			file,
+			`${JSON.stringify({ type: "message", timestamp: repliedAt, message: { role: "user", content: "follow up" } })}\n`,
+		);
+		expect(listPiSessions(cwd)[0].modifiedAt).toBe(repliedAt);
+		expect(setPiSessionName(cwd, "continued", "renamed")).toBe(true);
+		expect(listPiSessions(cwd)[0].modifiedAt).toBe(repliedAt);
+		expect(movePiSession(cwd, "continued", "/home/other/project")).toBe("moved");
+		expect(listPiSessions("/home/other/project")[0].modifiedAt).toBe(repliedAt);
+	});
+
+	it("counts /cc custom messages whose timestamps follow their content", async () => {
+		seed("claude", createdAt, [
+			{
+				type: "custom_message",
+				customType: "claude-prompt",
+				content: 'A prompt with braces {} and a quoted "timestamp"',
+				display: true,
+				details: { timestamp: "2099-01-01T00:00:00.000Z" },
+				timestamp: repliedAt,
+			},
+			{
+				type: "custom_message",
+				customType: "claude-reply",
+				content: "reply",
+				timestamp: "2026-06-16T12:01:00.000Z",
+			},
+		]);
+		const { listPiSessions } = await import("../src/server/session-list.js");
+		expect(listPiSessions(cwd)[0].modifiedAt).toBe("2026-06-16T12:01:00.000Z");
+	});
+
+	it("ignores metadata, malformed timestamps and older messages appended after a newer one", async () => {
+		const file = seed("metadata", createdAt, [
+			{ type: "message", timestamp: repliedAt, message: { role: "assistant", content: "reply" } },
+			{
+				type: "message",
+				timestamp: createdAt,
+				message: { role: "user", content: "copied history" },
+			},
+			{
+				type: "message",
+				timestamp: "not a date",
+				message: { role: "assistant", content: "bad time" },
+			},
+			{ type: "message", message: { role: "user", timestamp: "2099-01-01T00:00:00.000Z" } },
+			{ type: "custom_message", timestamp: "invalid", content: "bad time" },
+			{ type: "session_info", timestamp: "2099-01-01T00:00:00.000Z", name: "renamed" },
+			{ type: "model_change", timestamp: "2099-01-01T00:00:00.000Z" },
+			{ type: "custom", timestamp: "2099-01-01T00:00:00.000Z", data: { internal: true } },
+		]);
+		appendFileSync(file, '{"type":"message","timestamp":'); // torn final write
+		const { listPiSessions } = await import("../src/server/session-list.js");
+		expect(listPiSessions(cwd)[0].modifiedAt).toBe(repliedAt);
+	});
+
+	it("reads the message envelope without parsing giant image payloads", async () => {
+		seed("image", createdAt, [
+			{
+				type: "message",
+				timestamp: repliedAt,
+				message: {
+					role: "user",
+					content: [{ type: "image", data: "a".repeat(2 * 1024 * 1024) }],
+					timestamp: "2099-01-01T00:00:00.000Z",
+				},
+			},
+		]);
+		const parse = vi.spyOn(JSON, "parse");
+		try {
+			const { listPiSessions } = await import("../src/server/session-list.js");
+			expect(listPiSessions(cwd)[0].modifiedAt).toBe(repliedAt);
+			expect(parse.mock.calls.some(([text]) => text.length > 1024 * 1024)).toBe(false);
+		} finally {
+			parse.mockRestore();
+		}
+	});
+
+	it("uses creation time for empty/legacy chats and freshly forked history", async () => {
+		writeSession("--home-test-project--", "empty.jsonl", "empty", createdAt, []);
+		seed("legacy"); // no envelope timestamps
+		const { listPiSessions, forkPiSession } = await import("../src/server/session-list.js");
+		expect(listPiSessions(cwd).every((s) => s.modifiedAt === createdAt)).toBe(true);
+		const forkId = forkPiSession(cwd, "legacy", 2);
+		const fork = listPiSessions(cwd).find((s) => s.id === forkId)!;
+		expect(fork.modifiedAt).toBe(fork.createdAt);
+		expect(listPiSessions(cwd)[0].id).toBe(forkId);
+	});
+
+	it("rejects persistent summaries from the old file-mtime cache version", async () => {
+		const file = seed("cached");
+		const st = statSync(file);
+		writeFileSync(
+			join(root!, ".agentchatbox-session-summaries.json"),
+			JSON.stringify({
+				version: 2,
+				entries: {
+					[file]: {
+						mtime: st.mtimeMs,
+						size: st.size,
+						summary: {
+							id: "cached",
+							cwd,
+							createdAt,
+							modifiedAt: st.mtime.toISOString(),
+							title: "stale title",
+							messageCount: 2,
+						},
+					},
+				},
+			}),
+		);
+		vi.resetModules();
+		const { listPiSessions } = await import("../src/server/session-list.js");
+		expect(listPiSessions(cwd)[0]).toMatchObject({ modifiedAt: createdAt, title: "first prompt" });
 	});
 });
 

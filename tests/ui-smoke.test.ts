@@ -12,7 +12,7 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -353,6 +353,43 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await savedPins()).toEqual(expectedPins);
 		}
 		await page.close();
+	});
+
+	it("keeps recently touched old files below genuinely recent conversations", async () => {
+		const piCwd = join(tmp, "cwd");
+		const dir = join(tmp, "sessions", `--${piCwd.slice(1).replace(/\//g, "-")}--`);
+		const files: string[] = [];
+		for (const [id, timestamp] of [
+			["old-touched", "2026-01-02T00:00:00.000Z"],
+			["recent-chat", "2026-01-03T00:00:00.000Z"],
+		]) {
+			const file = join(dir, `${id}.jsonl`);
+			files.push(file);
+			writeFileSync(
+				file,
+				[
+					{ type: "session", version: 3, id, timestamp: "2026-01-01T00:00:00.000Z", cwd: piCwd },
+					{ type: "message", timestamp, message: { role: "user", content: id } },
+				]
+					.map((entry) => JSON.stringify(entry))
+					.join("\n"),
+			);
+		}
+		// Simulate maintenance touching the older conversation most recently.
+		utimesSync(files[1], new Date("2026-01-03"), new Date("2026-01-03"));
+		utimesSync(files[0], new Date(), new Date());
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			const links = page.locator("#project-body-global .session-item-link");
+			await expect.poll(() => links.count()).toBeGreaterThanOrEqual(3);
+			const hrefs = await links.evaluateAll((rows) => rows.map((row) => row.getAttribute("href")));
+			expect(hrefs.indexOf("/s/recent-chat")).toBeLessThan(hrefs.indexOf("/s/old-touched"));
+			const meta = await page.locator('a[href="/s/old-touched"] .session-item-meta').innerText();
+			expect(meta).toContain("Jan 2");
+		} finally {
+			await page.close();
+			for (const file of files) rmSync(file);
+		}
 	});
 
 	it("opens a stored session, with its attached picture, from its /s/<id> link", async () => {

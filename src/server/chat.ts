@@ -934,7 +934,9 @@ function gatherSessions(): SessionSummary[] {
 	}
 	// Newest first so a freshly-created chat floats to the top of its
 	// folder even though `now` ties its createdAt/modifiedAt.
-	sessions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	sessions.sort(
+		(a, b) => b.modifiedAt.localeCompare(a.modifiedAt) || b.createdAt.localeCompare(a.createdAt),
+	);
 	return sessions;
 }
 

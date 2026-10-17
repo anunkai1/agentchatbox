@@ -242,6 +242,14 @@ The original prototype ran the agent in-process (Node-side Agent factory with lo
 
 The current model is simpler: the server owns `pi --mode rpc` per live session, forwards its stdout to an attached browser, and translates validated client messages into pi RPC commands on stdin. The server is just a pipe — the actual agent logic (tools, model routing, streaming, system prompt) lives inside `pi`, where it belongs. If a child crashes, only that WS connection sees it; the server and other connections are unaffected.
 
+## Conversation history
+
+The sidebar keeps pinned chats first, then sorts each project's chats by the latest
+recorded message time (including Claude Code `/cc` prompts and replies). Empty chats
+and forks use their creation time until new activity arrives. File modification
+times only invalidate the summary cache: copying, redacting, renaming or moving an
+old conversation does not make it look recent.
+
 ## Semantic session search (optional)
 
 The sidebar can optionally show a **search-by-meaning** box. Type a memory in

@@ -138,6 +138,22 @@ export function jsonlLineType(line: string): string | null {
 	return line.match(/^\s*\{\s*"type"\s*:\s*"([^"]+)"/)?.[1] ?? null;
 }
 
+/** Pi's message envelope precedes its potentially huge image-bearing payload.
+ * Parse only that envelope for activity time. Custom messages (including /cc)
+ * put their timestamp AFTER content, so those need the complete entry. Never
+ * use a nested message timestamp or metadata-only changes as chat activity. */
+function activityTimeFromLine(line: string, type: string): number {
+	try {
+		const payload = type === "message" ? line.search(/,\s*"message"\s*:/) : -1;
+		const entry = JSON.parse(payload < 0 ? line : `${line.slice(0, payload)}}`) as {
+			timestamp?: unknown;
+		};
+		return typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+	} catch {
+		return Number.NaN;
+	}
+}
+
 /** Extract only the first user-visible text JSON string from a message line.
  * Avoids JSON.parse of multi-megabyte image arrays merely to derive a 60-char
  * sidebar title. Pi serialises role before content and text-block type before
@@ -201,7 +217,8 @@ export interface SessionSummary {
 	cwd: string;
 	/** ISO timestamp the session was created. */
 	createdAt: string;
-	/** File mtime as ISO — used to sort "most recent" by default. */
+	/** Latest message/custom-message time as ISO, falling back to session creation.
+	 * File mtime is only a cache key: maintenance must not reorder chats. */
 	modifiedAt: string;
 	/**
 	 * Display title. Preference order: (1) the name the user set via
@@ -256,7 +273,7 @@ interface CachedSessionSummary {
  * mismatch is parsed again.
  */
 const sessionFileCache = new Map<string, CachedSessionSummary>();
-const SESSION_SUMMARY_CACHE_VERSION = 2;
+const SESSION_SUMMARY_CACHE_VERSION = 3;
 let summaryCacheLoaded = false;
 let summaryCacheDirty = false;
 let summaryCacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -353,6 +370,7 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 		let messageCount = 0;
 		let firstUserText: string | null = null;
 		let sessionName: string | null = null;
+		let activityTime = Number.NEGATIVE_INFINITY;
 		forEachJsonlLine(file, (line) => {
 			const trimmed = line.trim();
 			if (!trimmed) return;
@@ -363,6 +381,10 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 				} catch {
 					return;
 				}
+			}
+			if (type === "message" || type === "custom_message") {
+				const timestamp = activityTimeFromLine(trimmed, type);
+				if (Number.isFinite(timestamp)) activityTime = Math.max(activityTime, timestamp);
 			}
 			if (type === "message") {
 				messageCount++;
@@ -390,11 +412,15 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 		// check the cwd field on the session line.
 		if (sessionCwd !== resolve(cwd)) continue;
 
+		const createdTime = typeof header.timestamp === "string" ? Date.parse(header.timestamp) : NaN;
+		const createdAt = Number.isFinite(createdTime)
+			? new Date(createdTime).toISOString()
+			: st.birthtime.toISOString();
 		const summary: SessionSummary = {
 			id: String(header.id ?? name.replace(/\.jsonl$/, "")),
 			cwd: sessionCwd,
-			createdAt: String(header.timestamp ?? st.mtime.toISOString()),
-			modifiedAt: st.mtime.toISOString(),
+			createdAt,
+			modifiedAt: new Date(Math.max(Date.parse(createdAt), activityTime)).toISOString(),
 			title: sessionName ?? (firstUserText ? truncate(firstUserText, 60) : "(empty session)"),
 			messageCount,
 		};
@@ -412,7 +438,9 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
  * Apply pin state + sort, shared by the single-cwd and multi-cwd listings.
  */
 function finishSessions(items: SessionSummary[]): SessionSummary[] {
-	items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	items.sort(
+		(a, b) => b.modifiedAt.localeCompare(a.modifiedAt) || b.createdAt.localeCompare(a.createdAt),
+	);
 
 	// Apply the server-side pin set so the sidebar can float pinned
 	// sessions to the top. Pin state is NOT a pi concept — it lives in
