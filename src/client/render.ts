@@ -512,7 +512,7 @@ export function resetPendingVoice(): void {
 	state.pendingVoiceVariant = null;
 	state.pendingVoiceHint = null;
 	state.pendingVoiceBtn = null;
-	hideToast();
+	clearVoiceStatus();
 	refreshStatus();
 }
 
@@ -532,7 +532,7 @@ export function beginPendingVoice(
 	state.pendingVoiceVariant = variant;
 	state.pendingVoiceBtn = btn;
 	state.pendingVoiceHint = hint || null;
-	showTtsBanner(`${VOICE_NAMES[variant]} · generating spoken text via ${voiceRewriteLabel()}…`);
+	showVoiceStatus(`${VOICE_NAMES[variant]} · generating spoken text via ${voiceRewriteLabel()}…`);
 	refreshStatus();
 }
 
@@ -2210,61 +2210,69 @@ export function registerShellHandlers(h: ShellHandlers): void {
 	shellHandlers = h;
 }
 
-// ── Toast (extension notifications) ─────────────────────────────
-// A transient banner for extension_ui_request notify events (e.g. the
-// pi-voice-reply extension's "voice model failed" warning). Auto-dismisses
-// after 8s; click dismisses immediately. Created once in renderShell.
+// ── Notifications and bottom activity status ────────────────────
+// Routine info uses the footer; only warnings/errors interrupt with a toast.
+// Voice preparation has its own persistent entry, so stopping speech cannot
+// dismiss an unrelated notice (and an info update cannot hide an error).
 let toastEl: HTMLElement | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
+let statusNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Show a transient toast. The most recent call replaces any visible toast. */
+function setStatusActivity(id: string, text: string, detail = text): void {
+	const entry = document.getElementById(id);
+	const activity = document.getElementById("status-activity");
+	if (!entry || !activity) return;
+	entry.textContent = text;
+	entry.title = detail;
+	entry.hidden = !text;
+	activity.hidden = !Array.from(activity.children).some((child) => !(child as HTMLElement).hidden);
+}
+
+/** Info updates replace one footer entry; warnings/errors remain prominent. */
 export function showToast(message: string, type: "info" | "warning" | "error" = "info"): void {
+	if (type === "info") {
+		setStatusActivity("status-notice", message);
+		if (statusNoticeTimer) clearTimeout(statusNoticeTimer);
+		statusNoticeTimer = setTimeout(() => {
+			setStatusActivity("status-notice", "");
+			statusNoticeTimer = null;
+		}, 8000);
+		return;
+	}
 	if (!toastEl) return;
 	toastEl.textContent = message;
 	toastEl.className = `toast toast-${type}`;
 	toastEl.classList.remove("hidden");
 	if (toastTimer) clearTimeout(toastTimer);
-	toastTimer = setTimeout(() => {
-		toastEl?.classList.add("hidden");
-		toastTimer = null;
-	}, 8000);
+	toastTimer = setTimeout(dismissToast, 8000);
 }
 
-/**
- * Dismiss the toast / TTS banner immediately. Clears any children the
- * banner added and cancels the auto-dismiss timer.
- */
-export function hideToast(): void {
-	if (!toastEl) return;
-	toastEl.classList.add("hidden");
-	toastEl.replaceChildren();
-	if (toastTimer) {
-		clearTimeout(toastTimer);
-		toastTimer = null;
-	}
+function dismissToast(): void {
+	toastEl?.classList.add("hidden");
+	if (toastTimer) clearTimeout(toastTimer);
+	toastTimer = null;
 }
 
-/**
- * Persistent info banner for the TTS flow — mirrors the multimodal-proxy
- * toast (the blue bubble that appears while a vision call is in flight):
- * a bold header line (e.g. "🗣️ LongTTS · synthesizing via Kokoro…") plus
- * an optional one-line preview of the text being spoken. Unlike
- * showToast(), it does NOT auto-dismiss — it stays until hideToast()
- * (on playback start / stop / error) or until another showToast() /
- * showTtsBanner() replaces it. Built from DOM nodes (not innerHTML) so a
- * text preview containing markup is rendered safely.
- */
-export function showTtsBanner(header: string, bodyPreview?: string): void {
-	if (!toastEl) return;
-	toastEl.replaceChildren();
-	toastEl.append(el("div", { class: "toast-head" }, header));
-	if (bodyPreview) toastEl.append(el("div", { class: "toast-body" }, bodyPreview));
-	toastEl.className = "toast toast-info";
-	toastEl.classList.remove("hidden");
-	if (toastTimer) {
-		clearTimeout(toastTimer);
-		toastTimer = null;
-	}
+/** Voice preparation lasts until playback, cancellation or failure. */
+export function showVoiceStatus(header: string, bodyPreview?: string): void {
+	setStatusActivity(
+		"status-voice-detail",
+		header,
+		[header, bodyPreview].filter(Boolean).join("\n\n"),
+	);
+}
+
+export function clearVoiceStatus(): void {
+	setStatusActivity("status-voice-detail", "");
+}
+
+/** Tap a truncated footer entry to read it in full, including on touch screens. */
+function showStatusDetail(detail: string): void {
+	if (!detail) return;
+	const overlay = el("div");
+	const box = el("div", { class: "modal-box" });
+	box.append(el("h3", {}, "Status details"), el("div", { class: "status-detail-text" }, detail));
+	mountModal(overlay, box, { label: "Status details" });
 }
 
 export function renderShell(): void {
@@ -2286,6 +2294,10 @@ export function renderShell(): void {
 	state.audioPlaying = false;
 	state.audioPaused = false;
 	state.ttsInFlight = 0;
+	dismissToast();
+	if (statusNoticeTimer) clearTimeout(statusNoticeTimer);
+	statusNoticeTimer = null;
+	toastEl = null;
 	document.body.innerHTML = "";
 	const root = el("div", { id: "app" });
 	document.body.append(root);
@@ -2748,6 +2760,29 @@ export function renderShell(): void {
 		}),
 	);
 
+	// Routine notices and voice preparation stay above the stable status bar,
+	// never over the chat. Separate entries prevent their lifecycles colliding.
+	const activity = el("div", {
+		class: "status-activity",
+		id: "status-activity",
+		hidden: true,
+		role: "status",
+		"aria-live": "polite",
+	});
+	for (const id of ["status-voice-detail", "status-notice"]) {
+		activity.append(
+			el("button", {
+				class: "status-activity-entry",
+				id,
+				type: "button",
+				hidden: true,
+				"aria-haspopup": "dialog",
+				onclick: (e: MouseEvent) => showStatusDetail((e.currentTarget as HTMLElement).title),
+			}),
+		);
+	}
+	main.append(activity);
+
 	// Status bar — a fixed-height row of three one-line slots so its height
 	// can never change (see styles.css .status-bar). Core = stable info
 	// (model · think · tokens), voice = transport controls (never truncated),
@@ -2774,21 +2809,14 @@ export function renderShell(): void {
 	});
 	main.append(statusBar);
 
-	// Toast — fixed overlay for transient extension notifications
-	// (e.g. voice-model fallback warnings). Click dismisses.
+	// Warnings and errors still get a visible, dismissible overlay.
 	toastEl = el("div", {
 		class: "toast hidden",
 		role: "status",
 		"aria-live": "polite",
 		"aria-atomic": "true",
 	});
-	toastEl.addEventListener("click", () => {
-		toastEl?.classList.add("hidden");
-		if (toastTimer) {
-			clearTimeout(toastTimer);
-			toastTimer = null;
-		}
-	});
+	toastEl.addEventListener("click", dismissToast);
 	document.body.append(toastEl);
 
 	// File-input handler

@@ -2494,6 +2494,45 @@ body.sidebar-resizing iframe {
 /* Status bar                                                          */
 /* ------------------------------------------------------------------ */
 
+/* Temporary activity lines sit above (not inside) the model/token/cost bar.
+   They disappear when idle, leaving the existing metadata layout untouched. */
+.status-activity {
+	flex: 0 0 auto;
+	width: min(100%, var(--chat-max));
+	margin: 0 auto;
+	padding: 0 20px;
+}
+.status-activity[hidden],
+.status-activity-entry[hidden] {
+	display: none;
+}
+.status-activity-entry {
+	display: block;
+	width: 100%;
+	min-width: 0;
+	border: 0;
+	border-radius: 4px;
+	padding: 5px 4px;
+	background: transparent;
+	color: var(--text-secondary);
+	font: 12px / 1.4 var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	text-align: center;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+.status-activity-entry:hover,
+.status-activity-entry:focus-visible {
+	background: var(--accent-soft);
+	color: var(--text);
+}
+.status-detail-text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
 .status-bar {
 	/* Same approach as the mobile layout: a FIXED two-line box whose slots
 	   flow inline and wrap, so the full status (model · think · tokens ·
@@ -3842,23 +3881,6 @@ body.modal-open {
 }
 .toast.hidden {
 	display: none;
-}
-/* Two-line layout used by the TTS banner (showTtsBanner): a bold header
-   naming the variant + engine, then a dimmed one-line text preview. */
-.toast-head {
-	font-weight: 600;
-}
-.toast-body {
-	margin-top: 4px;
-	font-size: 12px;
-	line-height: 1.35;
-	opacity: 0.92;
-	max-height: 4.2em;
-	overflow: hidden;
-}
-.toast-info {
-	background: rgba(33, 150, 243, 0.95);
-	color: #fff;
 }
 .toast-warning {
 	background: rgba(255, 193, 7, 0.95);

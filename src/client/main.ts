@@ -218,7 +218,7 @@ function clearComposerDraft(): void {
 function handleSend(): void {
 	closeSlashMenu();
 	if (isUploadInProgress()) {
-		showToast("Upload in progress — wait for it to finish before sending.");
+		showToast("Upload in progress — wait for it to finish before sending.", "warning");
 		return;
 	}
 	const imageLimitError = promptImageLimitError();

@@ -276,6 +276,78 @@ beforeEach((ctx) => {
 });
 
 describe("browser smoke", { timeout: 30_000 }, () => {
+	for (const viewport of [
+		{ width: 1280, height: 900 },
+		{ width: 390, height: 844 },
+	]) {
+		it(`puts routine notices and voice preparation in the footer at ${viewport.width}px`, async () => {
+			const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+			try {
+				await page.setViewportSize(viewport);
+				await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+				const core = await page.locator("#status-core").innerText();
+				const notify = (message: string, notifyType = "info") =>
+					sockets.at(-1)!.send(
+						JSON.stringify({
+							type: "event",
+							event: {
+								type: "extension_ui_request",
+								id: "notice",
+								method: "notify",
+								message,
+								notifyType,
+							},
+						}),
+					);
+				const notice = page.locator("#status-notice");
+				notify("imggen: still working (20s elapsed)…");
+				await expect.poll(() => notice.innerText()).toContain("20s elapsed");
+				expect(await page.locator(".toast").isVisible()).toBe(false);
+				expect(await page.locator("#status-core").innerText()).toBe(core);
+				const bounds = await page.locator("#status-activity").boundingBox();
+				const bar = await page.locator("#status-bar").boundingBox();
+				const composer = await page.locator("#input").boundingBox();
+				expect(bounds!.y).toBeGreaterThanOrEqual(composer!.y + composer!.height);
+				expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(bar!.y);
+				expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+
+				const detail =
+					"Vision processing complete.\n<b>This stays literal</b>\n" + "Full details. ".repeat(40);
+				notify(detail);
+				await expect.poll(() => notice.textContent()).toBe(detail);
+				expect(await page.locator("#status-notice").count()).toBe(1);
+				await notice.click();
+				const dialog = page.getByRole("dialog", { name: "Status details" });
+				expect(await dialog.locator(".status-detail-text").textContent()).toBe(detail);
+				expect(await dialog.locator("b").count()).toBe(0);
+				await page.getByRole("button", { name: "Close Status details", exact: true }).click();
+
+				// A warning cannot be hidden by info or by cancelling voice preparation.
+				notify("A warning needs attention.", "warning");
+				await expect.poll(() => page.locator(".toast-warning").isVisible()).toBe(true);
+				await page.locator('[data-voice-variant="long"]').last().click();
+				await expect
+					.poll(() => page.locator("#status-voice-detail").innerText())
+					.toContain("generating spoken text");
+				notify("Image model changed.");
+				await expect.poll(() => notice.innerText()).toBe("Image model changed.");
+				expect(await page.locator("#status-voice-detail").isVisible()).toBe(true);
+				await page.locator("#status-bar [data-stop-voice]").click();
+				await expect.poll(() => page.locator("#status-voice-detail").isVisible()).toBe(false);
+				expect(await notice.isVisible()).toBe(true);
+				expect(await page.locator(".toast-warning").isVisible()).toBe(true);
+				notify("Image generation failed.", "error");
+				await expect
+					.poll(() => page.locator(".toast-error").innerText())
+					.toBe("Image generation failed.");
+				await page.locator(".toast-error").click();
+				expect(await page.locator(".toast").isVisible()).toBe(false);
+			} finally {
+				await page.close();
+			}
+		});
+	}
+
 	it("sends a message, keeps sending after the socket drops", async () => {
 		const { page, sockets } = await openPage("/");
 		await send(page, "first question");

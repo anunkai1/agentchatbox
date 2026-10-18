@@ -26,11 +26,11 @@ import {
 	addImageAttachmentPreview,
 	appendError,
 	autoSize,
-	hideToast,
+	clearVoiceStatus,
 	refreshStatus,
 	resetPendingVoice,
 	setStatusMessage,
-	showTtsBanner,
+	showVoiceStatus,
 } from "./render.js";
 import { services } from "./services.js";
 import { state } from "./state.js";
@@ -213,7 +213,7 @@ function ttsEngineLabel(): string {
 }
 
 /**
- * The active TTS voice for the banner — the user's pick if set, else the
+ * The active TTS voice for the status entry — the user's pick if set, else the
  * server default. null when neither is known yet.
  */
 function ttsVoiceLabel(): string | null {
@@ -223,7 +223,7 @@ function ttsVoiceLabel(): string | null {
 /**
  * Synthesize the given text via /api/tts and play it on the shared <audio>.
  * One call at a time — starting a new one stops the current playback.
- * `label` (e.g. "LongTTS") names the variant on the blue TTS banner.
+ * `label` (e.g. "LongTTS") names the variant in the bottom status area.
  */
 export async function speakText(text: string, label = "TTS"): Promise<void> {
 	// Strip markdown before synthesis: the raw text off the wire is full
@@ -234,17 +234,14 @@ export async function speakText(text: string, label = "TTS"): Promise<void> {
 	if (spoken.length > TTS_MAX_CHARS) {
 		spoken = `${spoken.slice(0, TTS_MAX_CHARS)} … message truncated.`;
 	}
-	// Raise the blue TTS banner (mirrors the multimodal-proxy toast): the
-	// header names the variant + the actually-configured engine (and voice,
-	// if known), the body shows a preview of the text about to be spoken.
-	// Persistent until playback starts, stops, or errors — at which point
-	// hideToast() clears it.
+	// Keep voice preparation in the footer until playback, stop or error.
+	// The full engine/voice label and spoken preview are available on tap.
 	const engine = ttsEngineLabel();
 	const voice = ttsVoiceLabel();
 	const synthHead = voice
 		? `${label} · synthesizing via ${engine} (${voice})…`
 		: `${label} · synthesizing via ${engine}…`;
-	showTtsBanner(synthHead, ttsPreview(spoken));
+	showVoiceStatus(synthHead, ttsPreview(spoken));
 	// Decide who does the speeding up for this utterance (see the state comment
 	// on ttsSpeedParam): the engine when it takes a speed, else Web Audio's rate.
 	if (state.ttsSpeedParam) {
@@ -289,7 +286,7 @@ export async function speakText(text: string, label = "TTS"): Promise<void> {
 		}
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
-		hideToast();
+		clearVoiceStatus();
 	} finally {
 		if (activeController === controller) activeController = null;
 		state.ttsInFlight--;
@@ -405,7 +402,7 @@ async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise
 		state.audioPlaying = true;
 		state.audioPaused = false;
 		setSpeakBtnState(currentSpeakSrc, "playing");
-		hideToast();
+		clearVoiceStatus();
 		refreshStatus();
 	}
 	startBarTimer();
@@ -480,7 +477,7 @@ function finishUtterance(): void {
 		setSpeakBtnState(currentSpeakSrc, "idle");
 		currentSpeakSrc = null;
 	}
-	hideToast();
+	clearVoiceStatus();
 	refreshStatus();
 	syncVoiceBar();
 }
@@ -556,8 +553,8 @@ export function stopAllVoice(): void {
 	activeController?.abort();
 	activeController = null;
 
-	// Clear the TTS banner if one is up (a stop is a full reset).
-	hideToast();
+	// A stop clears only voice preparation, not unrelated notices.
+	clearVoiceStatus();
 
 	// A stop is a full reset, so a subsequent speak must not start paused and the
 	// status-bar control must not keep showing "paused" once the audio is gone.
