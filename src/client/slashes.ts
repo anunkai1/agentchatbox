@@ -1298,7 +1298,7 @@ export function openModelsPanel(): void {
 	// Derive provider from the (source-tagged) model id so the row tells the
 	// truth for local picks too. The unified /imagemodel picker writes
 	// `local/<id>` or `venice/<id>`; bare legacy ids default to venice.
-	const imgModelRaw = img?.model ?? "z-image-turbo";
+	const imgModelRaw = img?.model ?? "local/qwen-image-2.1-local";
 	const imgSlash = imgModelRaw.indexOf("/");
 	const imgProvider = imgSlash >= 0 ? imgModelRaw.slice(0, imgSlash) : "venice";
 	const imgId = imgSlash >= 0 ? imgModelRaw.slice(imgSlash + 1) : imgModelRaw;

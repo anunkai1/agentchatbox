@@ -1248,7 +1248,7 @@ function onEvent(event: Record<string, unknown>): void {
 				// extension owns the state; this is a display-only mirror.
 				// (\S+) = stop at first whitespace, so we capture just the model id
 				// even when the notify appends extra context (e.g. pi-local-image's
-				// "... — port 8012, GPU switched").
+				// "... — CLI prepared, GPU prepared").
 				const imgMatch = e.message.match(/image model set to (\S+)/i);
 				if (imgMatch) {
 					state.currentImageModelLabel = imgMatch[1];

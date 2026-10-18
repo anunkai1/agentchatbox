@@ -4,16 +4,16 @@ import { localAiLabel, parseLocalAiState, QWEN_MODEL_LABEL } from "../extensions
 
 describe("local AI status", () => {
 	it("recognises the Qwen backend", () => {
-		expect(parseLocalAiState("Qwen API  : ready\nFLUX API  : unavailable")).toBe("qwen");
+		expect(parseLocalAiState("Qwen API  : ready\nQwen Image: ready")).toBe("qwen");
 		expect(localAiLabel("qwen")).toBe(`${QWEN_MODEL_LABEL} active`);
 	});
 
-	it("recognises the image backend", () => {
-		expect(parseLocalAiState("Qwen API  : unavailable\nFLUX API  : ready")).toBe("image");
+	it("does not treat the idle image CLI as a resident GPU model", () => {
+		expect(parseLocalAiState("Qwen API  : unavailable\nQwen Image: ready")).toBe("stopped");
 	});
 
 	it("distinguishes stopped and unreachable server4", () => {
-		expect(parseLocalAiState("Qwen API  : unavailable\nFLUX API  : unavailable")).toBe("stopped");
+		expect(parseLocalAiState("Qwen API  : unavailable\nQwen Image: unavailable")).toBe("stopped");
 		expect(parseLocalAiState("ssh: connect to host server4 failed", 255)).toBe("offline");
 	});
 });
@@ -41,7 +41,7 @@ function localAiHarness(
 	const setStatus = vi.fn();
 	const model = { provider: "local", id: "qwen3.8-27b-ud-q3" };
 	const exec = vi.fn(async () => ({
-		stdout: "Qwen API  : ready\nFLUX API  : unavailable",
+		stdout: "Qwen API  : ready\nQwen Image: ready",
 		code: 0,
 	}));
 	registerLocalAi({

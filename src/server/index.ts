@@ -287,9 +287,8 @@ app.get("/api/changelog", (req, res) => {
 });
 
 /**
- * Resolve the image-generation model the pi-venice-image extension would
- * use for a default (no-param) call, mirroring its resolution chain:
- * override file → VENICE_IMAGE_MODEL env → "z-image-turbo". Read-only —
+ * Display the unified image picker's default routing:
+ * override file → VENICE_IMAGE_MODEL env → local Qwen-Image-2.1. Read-only —
  * ACB never writes the override (the extension's /imagemodel command does).
  * Used by /api/health so the Models & services panel can show the truth
  * before any extension notify lands.
@@ -306,7 +305,7 @@ function readImageModel(): { model: string; source: "override" | "env" | "defaul
 	}
 	const envModel = process.env.VENICE_IMAGE_MODEL?.trim();
 	if (envModel) return { model: envModel, source: "env" };
-	return { model: "z-image-turbo", source: "default" };
+	return { model: "local/qwen-image-2.1-local", source: "default" };
 }
 
 // Health check. Reports configured provider keys, speech-to-text, local TTS,
@@ -346,9 +345,9 @@ app.get(
 			// "provider/modelId" string; undefined when the rewrite falls back to
 			// the session model. Read from env — not a secret, just a model id.
 			voiceRewriteModel: process.env.VOICE_REWRITE_MODEL?.trim() || undefined,
-			// Resolved image-generation model (pi-venice-image extension). The
+			// Resolved image-generation model (pi-local-image router). The
 			// extension resolves per call: explicit param → ~/.config/acb/image-model
-			// override → $VENICE_IMAGE_MODEL → "z-image-turbo". We mirror that chain
+			// override → $VENICE_IMAGE_MODEL → local Qwen. We mirror that chain
 			// here for display so the panel shows what a default call would use
 			// before any extension notify lands. Read-only — the extension still
 			// owns the override file and persistence.
