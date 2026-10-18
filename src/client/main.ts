@@ -948,7 +948,11 @@ function onEvent(event: Record<string, unknown>): void {
 					isError: tr.isError,
 				});
 				finalizeToolCall(tr.toolCallId, tr.toolName, text, tr.isError);
-				if (tr.isError) {
+				// pi marks every non-zero `bash` exit as a tool error, but a failed
+				// lookup (grep with no match, cat of a missing file) is ordinary
+				// work, and the transcript row already shows the exit code. Only
+				// other tools' failures are real failures worth a persistent notice.
+				if (tr.isError && tr.toolName !== "bash") {
 					showNotice(
 						`${tr.toolName} failed. ${text.slice(0, 300)}${text.length > 300 ? "…" : ""}`,
 						"error",

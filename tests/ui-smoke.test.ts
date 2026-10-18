@@ -462,6 +462,37 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("keeps a non-zero bash exit inline instead of raising an error notice", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			const failedTool = (toolName: string, toolCallId: string) => ({
+				type: "event",
+				event: {
+					type: "message_start",
+					message: {
+						role: "toolResult",
+						toolCallId,
+						toolName,
+						content: [{ type: "text", text: "grep: no match\n\nCommand exited with code 1" }],
+						isError: true,
+					},
+				},
+			});
+			const socket = sockets.at(-1)!;
+			socket.send(JSON.stringify(failedTool("bash", "call-bash")));
+			socket.send(JSON.stringify(failedTool("edit", "call-edit")));
+			// Only the edit failure earns a persistent notice: a non-zero exit is
+			// normal for lookups and stays in the transcript row.
+			await expect
+				.poll(() => page.locator(".composer-notice-error").innerText())
+				.toContain("edit failed");
+			expect(await page.locator(".composer-notice-error").count()).toBe(1);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("retries a failed upload only when its retry action is pressed", async () => {
 		const { page } = await openPage(`/s/${SEEDED_ID}`);
 		let attempts = 0;
