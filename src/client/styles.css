@@ -2507,12 +2507,25 @@ body.sidebar-resizing iframe {
 /* Status bar                                                          */
 /* ------------------------------------------------------------------ */
 
-/* Temporary activity lines sit above (not inside) the model/token/cost bar.
-   They disappear when idle, leaving the existing metadata layout untouched. */
+/* Share typography with the model/token/cost line, including at phone widths. */
+.status-activity,
+.status-bar {
+	width: min(100%, var(--chat-max));
+	max-width: var(--chat-max);
+	margin: 0 auto;
+	color: var(--text-muted);
+	font: 11px / 1.35 var(--font-mono);
+	letter-spacing: 0.01em;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}
+/* Temporary lines wrap fully. Unusually long notices scroll rather than
+   disappearing behind an ellipsis or pushing the input out of the viewport. */
 .status-activity {
 	flex: 0 0 auto;
-	width: min(100%, var(--chat-max));
-	margin: 0 auto;
+	max-height: min(20dvh, 120px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	padding: 0 20px;
 }
 .status-activity[hidden],
@@ -2525,15 +2538,14 @@ body.sidebar-resizing iframe {
 	min-width: 0;
 	border: 0;
 	border-radius: 4px;
-	padding: 5px 4px;
+	padding: 2px 0;
 	background: transparent;
-	color: var(--text-secondary);
-	font: 12px / 1.4 var(--font-mono);
-	font-variant-numeric: tabular-nums;
-	text-align: center;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+	color: inherit;
+	font: inherit;
+	letter-spacing: inherit;
+	text-align: inherit;
+	white-space: normal;
+	overflow-wrap: anywhere;
 	cursor: pointer;
 }
 .status-activity-entry:hover,
@@ -2555,23 +2567,11 @@ body.sidebar-resizing iframe {
 	   lines (a very long retry error or tool command) clips. */
 	display: block;
 	flex: 0 0 44px;
-	width: min(100%, var(--chat-max));
 	height: 44px;
 	min-height: 44px;
 	overflow: hidden;
 	padding: 4px 20px 8px;
-	color: var(--text-muted);
-	font-size: 11px;
-	max-width: var(--chat-max);
-	margin: 0 auto;
-	font-family: var(--font-mono);
-	letter-spacing: 0.01em;
-	line-height: 1.35;
-	text-align: center;
 	overflow-wrap: anywhere;
-	/* Digits render at a constant width, so per-second ticks (elapsed time,
-	   retry countdown) never shift the text around. */
-	font-variant-numeric: tabular-nums;
 }
 /* Slots flow inline and wrap inside the fixed box. Hovering shows the full
    value via the title set by refreshStatus(). */
@@ -3530,13 +3530,16 @@ body.modal-open {
 		min-height: 36px;
 		overflow: hidden;
 		padding: 2px 12px 4px;
-		/* Smaller than the desktop 11px mono so it reads like the 11px sans
-		   message timestamps (“just now”) — mono glyphs run visibly larger
-		   than sans at the same pt size, and two lines of status + a voice
-		   button line must fit the fixed height below. */
-		font-size: 9px;
 		text-align: center;
 		overflow-wrap: anywhere;
+	}
+	.status-activity {
+		padding-inline: 12px;
+	}
+	.status-activity,
+	.status-bar {
+		/* Match the existing compact metadata text on phones. */
+		font-size: 9px;
 	}
 	.status-slot {
 		display: inline;

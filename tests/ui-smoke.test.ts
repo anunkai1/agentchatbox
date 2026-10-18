@@ -279,6 +279,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 	for (const viewport of [
 		{ width: 1280, height: 900 },
 		{ width: 390, height: 844 },
+		{ width: 320, height: 700 },
 	]) {
 		it(`puts routine notices and voice preparation in the footer at ${viewport.width}px`, async () => {
 			const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
@@ -310,6 +311,31 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				expect(bounds!.y).toBeGreaterThanOrEqual(composer!.y + composer!.height);
 				expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(bar!.y);
 				expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+				const styles = await notice.evaluate((entry) => {
+					const activity = getComputedStyle(entry);
+					const core = getComputedStyle(document.querySelector("#status-core")!);
+					const keys = ["fontSize", "fontFamily", "lineHeight", "color", "letterSpacing"] as const;
+					return keys.map((key) => [key, activity[key], core[key]]);
+				});
+				for (const [name, activityStyle, coreStyle] of styles) {
+					expect(activityStyle, name).toBe(coreStyle);
+				}
+				const longStatus =
+					"imggen: preparing image generation on the local GPU, still working. ".repeat(4);
+				notify(longStatus);
+				await expect.poll(() => notice.textContent()).toBe(longStatus);
+				const wrapping = await notice.evaluate((entry) => ({
+					whiteSpace: getComputedStyle(entry).whiteSpace,
+					textOverflow: getComputedStyle(entry).textOverflow,
+					clippedX: entry.scrollWidth > entry.clientWidth,
+					clippedY: entry.scrollHeight > entry.clientHeight,
+				}));
+				expect(wrapping).toEqual({
+					whiteSpace: "normal",
+					textOverflow: "clip",
+					clippedX: false,
+					clippedY: false,
+				});
 
 				const detail =
 					"Vision processing complete.\n<b>This stays literal</b>\n" + "Full details. ".repeat(40);

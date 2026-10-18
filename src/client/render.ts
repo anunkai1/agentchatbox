@@ -2220,7 +2220,7 @@ export function clearVoiceStatus(): void {
 	setStatusActivity("status-voice-detail", "");
 }
 
-/** Tap a truncated footer entry to read it in full, including on touch screens. */
+/** Open footer details, including the spoken-text preview, on any screen size. */
 function showStatusDetail(detail: string): void {
 	if (!detail) return;
 	const overlay = el("div");
