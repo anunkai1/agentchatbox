@@ -1320,7 +1320,7 @@ export function openModelsPanel(): void {
 	box.append(
 		svcRow(
 			"Multimodal / vision",
-			"Reading images & video frames in chat. Routed by pi-multimodal-proxy.",
+			"Reading images in chat. Routed by pi-multimodal-proxy.",
 			modelLine(
 				pill("session", "implicit"),
 				// The extension reports its own resolved model and mode for this session.
