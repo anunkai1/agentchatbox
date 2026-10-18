@@ -289,15 +289,19 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				await page.clock.install();
 				const layout = () =>
 					page.evaluate(() => {
-						const activity = document.querySelector("#status-activity")!.getBoundingClientRect();
+						const bar = document.querySelector("#status-bar")!.getBoundingClientRect();
 						return {
-							height: activity.height,
-							y: activity.y,
+							height: bar.height,
+							y: bar.y,
 							composerY: document.querySelector("#input")!.getBoundingClientRect().y,
-							barY: document.querySelector("#status-bar")!.getBoundingClientRect().y,
 						};
 					});
 				const idleLayout = await layout();
+				expect(idleLayout.height).toBe(viewport.width > 700 ? 44 : 36);
+				expect(await page.locator("#status-bar > #status-activity").count()).toBe(1);
+				expect(await page.locator("#status-activity").evaluate((entry) => entry.offsetHeight)).toBe(
+					0,
+				);
 				const core = await page.locator("#status-core").innerText();
 				const notify = (message: string, notifyType = "info") =>
 					sockets.at(-1)!.send(
@@ -321,8 +325,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				const bounds = await page.locator("#status-activity").boundingBox();
 				const bar = await page.locator("#status-bar").boundingBox();
 				const composer = await page.locator("#input").boundingBox();
-				expect(bounds!.y).toBeGreaterThanOrEqual(composer!.y + composer!.height);
-				expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(bar!.y);
+				expect(bar!.y).toBeGreaterThanOrEqual(composer!.y + composer!.height);
+				expect(bounds!.y).toBeGreaterThanOrEqual(bar!.y);
+				expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(bar!.y + bar!.height);
 				expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
 				const styles = await notice.evaluate((entry) => {
 					const activity = getComputedStyle(entry);
@@ -339,13 +344,13 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				await expect.poll(() => notice.textContent()).toBe(longStatus);
 				const wrapping = await notice.evaluate((entry) => ({
 					whiteSpace: getComputedStyle(entry).whiteSpace,
-					lineClamp: getComputedStyle(entry).webkitLineClamp,
+					textOverflow: getComputedStyle(entry).textOverflow,
 					height: entry.getBoundingClientRect().height,
 					lineHeight: Number.parseFloat(getComputedStyle(entry).lineHeight),
 				}));
-				expect(wrapping.whiteSpace).toBe("normal");
-				expect(wrapping.lineClamp).toBe("2");
-				expect(wrapping.height).toBeLessThanOrEqual(2 * wrapping.lineHeight + 1);
+				expect(wrapping.whiteSpace).toBe("nowrap");
+				expect(wrapping.textOverflow).toBe("ellipsis");
+				expect(wrapping.height).toBeLessThanOrEqual(wrapping.lineHeight + 1);
 				expect(await layout()).toEqual(idleLayout);
 
 				const detail =
@@ -361,6 +366,12 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				expect(await layout()).toEqual(idleLayout);
 				await page.clock.fastForward(8000);
 				expect(await page.locator("#status-activity").isVisible()).toBe(false);
+				expect(await page.locator("#status-activity").evaluate((entry) => entry.offsetHeight)).toBe(
+					0,
+				);
+				expect(
+					await page.locator("#status-bar").evaluate((entry) => getComputedStyle(entry).display),
+				).toBe("block");
 				expect(await layout()).toEqual(idleLayout);
 
 				// A warning cannot be hidden by info or by cancelling voice preparation.
@@ -376,10 +387,18 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				const withVoice = await layout();
 				expect(withVoice.height).toBe(idleLayout.height);
 				for (const id of ["#status-voice-detail", "#status-notice"]) {
-					expect(
-						await page.locator(id).evaluate((entry) => getComputedStyle(entry).webkitLineClamp),
-					).toBe("1");
+					const entryBounds = await page.locator(id).boundingBox();
+					expect(entryBounds!.width).toBeGreaterThan(0);
+					expect(entryBounds!.y).toBeGreaterThanOrEqual(withVoice.y);
+					expect(entryBounds!.y + entryBounds!.height).toBeLessThanOrEqual(
+						withVoice.y + withVoice.height,
+					);
 				}
+				const stopBounds = await page.locator("#status-bar [data-stop-voice]").boundingBox();
+				expect(stopBounds!.x + stopBounds!.width).toBeLessThanOrEqual(viewport.width);
+				expect(stopBounds!.y + stopBounds!.height).toBeLessThanOrEqual(
+					withVoice.y + withVoice.height,
+				);
 				await page.locator("#status-bar [data-stop-voice]").click();
 				expect(await layout()).toEqual(withVoice);
 				await expect.poll(() => page.locator("#status-voice-detail").isVisible()).toBe(false);

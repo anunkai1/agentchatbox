@@ -2507,8 +2507,6 @@ body.sidebar-resizing iframe {
 /* Status bar                                                          */
 /* ------------------------------------------------------------------ */
 
-/* Share typography with the model/token/cost line, including at phone widths. */
-.status-activity,
 .status-bar {
 	width: min(100%, var(--chat-max));
 	max-width: var(--chat-max);
@@ -2519,35 +2517,44 @@ body.sidebar-resizing iframe {
 	text-align: center;
 	font-variant-numeric: tabular-nums;
 }
-/* Always reserve two text lines, including when idle, so progress updates
-   and their expiry cannot move the composer. Full text stays available on tap. */
-.status-activity {
-	display: flex;
-	flex-direction: column;
-	flex: 0 0 calc(2lh + 4px);
-	height: calc(2lh + 4px);
+/* Progress temporarily occupies line two of the existing bar. It never
+   creates a sibling block or reserves extra space when idle. */
+.status-bar:has(.status-activity:not([hidden])) {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-rows: 1fr 1fr;
+	column-gap: 8px;
+}
+.status-bar:has(.status-activity:not([hidden])) .status-summary {
+	grid-column: 1;
+	grid-row: 1;
 	overflow: hidden;
-	padding: 2px 20px;
+	white-space: nowrap;
+	text-overflow: ellipsis;
 }
-.status-activity[hidden] {
+.status-bar:has(.status-activity:not([hidden])) > .status-voice {
+	grid-column: 2;
+	grid-row: 1;
+	margin-left: 0;
+	white-space: nowrap;
+}
+.status-activity {
+	grid-column: 1 / -1;
+	grid-row: 2;
 	display: flex;
-	visibility: hidden;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	overflow: hidden;
 }
+.status-activity[hidden],
 .status-activity-entry[hidden] {
 	display: none;
 }
-/* If voice preparation and another notice coexist, give each one line. */
-.status-activity:has(.status-activity-entry:not([hidden]) ~ .status-activity-entry:not([hidden])) {
-	--activity-lines: 1;
-}
 .status-activity-entry {
-	display: -webkit-box;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: var(--activity-lines, 2);
+	display: block;
 	flex: 1;
-	width: 100%;
 	min-width: 0;
-	min-height: 0;
 	overflow: hidden;
 	border: 0;
 	border-radius: 4px;
@@ -2557,8 +2564,8 @@ body.sidebar-resizing iframe {
 	font: inherit;
 	letter-spacing: inherit;
 	text-align: inherit;
-	white-space: normal;
-	overflow-wrap: anywhere;
+	white-space: nowrap;
+	text-overflow: ellipsis;
 	cursor: pointer;
 }
 .status-activity-entry:hover,
@@ -2572,12 +2579,8 @@ body.sidebar-resizing iframe {
 }
 
 .status-bar {
-	/* Same approach as the mobile layout: a FIXED two-line box whose slots
-	   flow inline and wrap, so the full status (model · think · tokens ·
-	   active tool · cost) is readable instead of ellipsised on one line.
-	   The height is hard-fixed, so the composer above can never be pushed
-	   around when the text changes length or wraps. Anything past two
-	   lines (a very long retry error or tool command) clips. */
+	/* Keep the original two-line height in every state. Metadata can use
+	   both lines while idle; progress takes line two only while active. */
 	display: block;
 	flex: 0 0 44px;
 	height: 44px;
@@ -2590,8 +2593,11 @@ body.sidebar-resizing iframe {
    value via the title set by refreshStatus(). */
 .status-slot {
 	display: inline;
-	white-space: normal;
+	white-space: inherit;
 	min-width: 0;
+}
+.status-bar > .status-voice:not(:empty) {
+	margin-left: 14px;
 }
 /* Separate the slots when they share a line. */
 .status-slot + .status-slot:not(:empty) {
@@ -2632,7 +2638,10 @@ body.sidebar-resizing iframe {
 	background: rgba(239, 68, 68, 0.12);
 	border: 1px solid rgba(239, 68, 68, 0.4);
 	border-radius: 9px;
-	padding: 1px 8px;
+	display: inline-flex;
+	align-items: center;
+	height: 1lh;
+	padding: 0 6px;
 	cursor: pointer;
 	vertical-align: middle;
 }
@@ -2652,7 +2661,10 @@ body.sidebar-resizing iframe {
 	background: rgba(59, 130, 246, 0.12);
 	border: 1px solid rgba(59, 130, 246, 0.4);
 	border-radius: 9px;
-	padding: 1px 8px;
+	display: inline-flex;
+	align-items: center;
+	height: 1lh;
+	padding: 0 6px;
 	cursor: pointer;
 	vertical-align: middle;
 }
@@ -2662,6 +2674,10 @@ body.sidebar-resizing iframe {
 }
 .status-bar .status-voice-ctrl:active {
 	transform: translateY(1px);
+}
+.status-voice svg {
+	width: 1em;
+	height: 1em;
 }
 @keyframes streaming-pulse {
 	0%,
@@ -3546,17 +3562,13 @@ body.modal-open {
 		text-align: center;
 		overflow-wrap: anywhere;
 	}
-	.status-activity {
-		padding-inline: 12px;
-	}
-	.status-activity,
 	.status-bar {
 		/* Match the existing compact metadata text on phones. */
 		font-size: 9px;
 	}
 	.status-slot {
 		display: inline;
-		white-space: normal;
+		white-space: inherit;
 		overflow: visible;
 		text-overflow: clip;
 		min-width: 0;

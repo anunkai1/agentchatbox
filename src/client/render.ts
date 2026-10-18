@@ -1697,11 +1697,9 @@ export function refreshStatus(): void {
 	// Escape the dynamic bits we interpolate into innerHTML below.
 	const esc = escapeHtml;
 
-	// The status bar is a fixed-height row of three one-line slots (see
-	// styles.css .status-bar): core (stable), voice (transport controls),
-	// dynamic (transient). Every slot is nowrap + ellipsis, so nothing can
-	// ever wrap to a second line — the bar's height is constant and the
-	// composer above it never moves, no matter what appears or disappears.
+	// The existing fixed-height bar has two lines. Normally its metadata can
+	// wrap across both; activity temporarily takes the second line. Voice
+	// controls remain reachable beside the metadata without adding height.
 	const coreEl = $<HTMLSpanElement>("#status-core");
 	if (coreEl) {
 		// Core slot — stable info: model · think level · context fill.
@@ -2719,8 +2717,8 @@ export function renderShell(): void {
 		}),
 	);
 
-	// Routine notices and voice preparation stay above the stable status bar,
-	// never over the chat. Separate entries prevent their lifecycles colliding.
+	// Activity reuses the existing bar's second line, never a separate block.
+	// Separate entries keep info and voice-preparation lifecycles independent.
 	const activity = el("div", {
 		class: "status-activity",
 		id: "status-activity",
@@ -2740,18 +2738,13 @@ export function renderShell(): void {
 			}),
 		);
 	}
-	main.append(activity);
-
-	// Status bar — a fixed-height row of three one-line slots so its height
-	// can never change (see styles.css .status-bar). Core = stable info
-	// (model · think · tokens), voice = transport controls (never truncated),
-	// dynamic = transient info (streaming timer, retry, cost, queued…).
 	const statusBar = el("div", { class: "status-bar", id: "status-bar" });
-	statusBar.append(
+	const summary = el("span", { class: "status-summary" });
+	summary.append(
 		el("span", { class: "status-slot status-core", id: "status-core" }, "connecting…"),
-		el("span", { class: "status-slot status-voice", id: "status-voice" }),
 		el("span", { class: "status-slot status-dynamic", id: "status-dynamic" }),
 	);
+	statusBar.append(summary, el("span", { class: "status-voice", id: "status-voice" }), activity);
 	// Delegated click handler for the stop-voice button that refreshStatus()
 	// injects into the status bar as innerHTML. Delegation (one listener on
 	// the container, surviving innerHTML rebuilds) beats re-binding on every
