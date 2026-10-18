@@ -457,14 +457,23 @@ function onChunkEnded(gen: number, node: AudioBufferSourceNode): void {
 }
 
 /**
- * Playback of the current utterance is over: reset the timeline, the owning
- * button (spinner/⏹ → idle) and the status-bar voice indicator.
+ * Playback of the current utterance is over: reset the owning button
+ * (spinner/⏹ → idle) and the status-bar voice indicator. The decoded chunks and
+ * the voice bar stay, so a finished reply can be scrubbed back and replayed
+ * until the bar is closed or another utterance starts.
  */
 function finishUtterance(): void {
 	nextStartAt = 0;
-	clearTimeline();
-	streamEnded = false;
+	slots = [];
+	if (barTimer !== null) clearInterval(barTimer);
+	barTimer = null;
 	userPaused = false;
+	// A seek to the end while paused lands here with the context still suspended.
+	if (audioCtx?.state === "suspended") {
+		void audioCtx.resume().catch(() => {
+			/* the next speak resumes it again if this fails */
+		});
+	}
 	state.audioPlaying = false;
 	state.audioPaused = false;
 	if (currentSpeakSrc !== null) {
@@ -473,6 +482,7 @@ function finishUtterance(): void {
 	}
 	hideToast();
 	refreshStatus();
+	syncVoiceBar();
 }
 
 /**
@@ -610,7 +620,7 @@ export function resumeVoice(): void {
 // Voice bar: position readout and seeking
 // ---------------------------------------------------------------------------
 
-/** Forget the finished/stopped utterance's chunks and hide the bar. */
+/** Forget the stopped or superseded utterance's chunks and hide the bar. */
 function clearTimeline(): void {
 	chunks = [];
 	slots = [];
@@ -619,8 +629,14 @@ function clearTimeline(): void {
 	updateVoiceBar(null);
 }
 
-/** Current position on the utterance clock, in seconds. */
+/** True when the whole utterance has played and only its kept chunks remain. */
+function isFinished(): boolean {
+	return streamEnded && chunks.length > 0 && liveNodes.length === 0;
+}
+
+/** Current position on the utterance clock, in seconds; the end once finished. */
 function currentPosition(): number {
+	if (isFinished()) return bufferedSeconds(chunks);
 	return audioCtx ? positionAt(slots, audioCtx.currentTime) : 0;
 }
 
@@ -630,7 +646,7 @@ function syncVoiceBar(): void {
 		position: currentPosition(),
 		total: bufferedSeconds(chunks),
 		complete: streamEnded,
-		paused: userPaused,
+		paused: userPaused || isFinished(),
 	});
 }
 
@@ -644,7 +660,7 @@ function startBarTimer(): void {
  * chunks from there on are laid out again from now (a paused context stays
  * paused, so a seek while paused takes effect on resume). Only what has been
  * synthesized so far can be reached; seeking to the very end of a finished
- * utterance finishes it.
+ * utterance finishes it, and seeking back into one replays it.
  */
 function seekVoice(seconds: number): void {
 	if (!audioCtx || chunks.length === 0) return;
@@ -679,11 +695,16 @@ function seekVoice(seconds: number): void {
 		state.audioPlaying = true;
 		refreshStatus();
 	}
+	startBarTimer();
 	syncVoiceBar();
 }
 
 bindVoiceBar({
-	togglePause: () => (userPaused ? resumeVoice() : pauseVoice()),
+	togglePause: () => {
+		if (userPaused) resumeVoice();
+		else if (isFinished()) seekVoice(0);
+		else pauseVoice();
+	},
 	seek: seekVoice,
 	skip: (delta) => seekVoice(currentPosition() + delta),
 	close: stopAllVoice,
