@@ -1686,6 +1686,9 @@ export function toggleCapabilitiesPopover(): void {
 	mountModal(overlay, box, { label: "Loaded capabilities" });
 }
 
+/** Last markup written to each voice slot, so refreshStatus skips no-op rebuilds. */
+const voiceSlotHtml = new WeakMap<HTMLElement, string>();
+
 export function refreshStatus(): void {
 	refreshNotices();
 	// The human-readable model label is resolved once per model change
@@ -1754,7 +1757,13 @@ export function refreshStatus(): void {
 				html = `<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Cancel voice synthesis"><span class="speak-spinner"></span> ${state.ttsInFlight > 0 ? "synthesizing…" : "generating…"}</button>`;
 			}
 		}
-		voiceEl.innerHTML = html;
+		// Rebuild only on change: every status refresh lands here, and swapping the
+		// button out mid-click (mousedown on the old node, mouseup on the new) loses
+		// the click.
+		if (voiceSlotHtml.get(voiceEl) !== html) {
+			voiceSlotHtml.set(voiceEl, html);
+			voiceEl.innerHTML = html;
+		}
 	}
 
 	refreshCapabilitiesBadge();
