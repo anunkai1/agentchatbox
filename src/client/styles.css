@@ -1431,7 +1431,9 @@ body.sidebar-resizing iframe {
 	border-radius: 6px;
 	max-width: 100%;
 	overflow-x: auto;
-	white-space: pre;
+	/* Wrap long lines (e.g. one-line prompts) instead of scrolling sideways on phones. */
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 .body .text.markdown pre code {
 	background: none;
