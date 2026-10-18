@@ -2519,26 +2519,39 @@ body.sidebar-resizing iframe {
 	text-align: center;
 	font-variant-numeric: tabular-nums;
 }
-/* Temporary lines wrap fully. Unusually long notices scroll rather than
-   disappearing behind an ellipsis or pushing the input out of the viewport. */
+/* Always reserve two text lines, including when idle, so progress updates
+   and their expiry cannot move the composer. Full text stays available on tap. */
 .status-activity {
-	flex: 0 0 auto;
-	max-height: min(20dvh, 120px);
-	overflow-y: auto;
-	overscroll-behavior: contain;
-	padding: 0 20px;
+	display: flex;
+	flex-direction: column;
+	flex: 0 0 calc(2lh + 4px);
+	height: calc(2lh + 4px);
+	overflow: hidden;
+	padding: 2px 20px;
 }
-.status-activity[hidden],
+.status-activity[hidden] {
+	display: flex;
+	visibility: hidden;
+}
 .status-activity-entry[hidden] {
 	display: none;
 }
+/* If voice preparation and another notice coexist, give each one line. */
+.status-activity:has(.status-activity-entry:not([hidden]) ~ .status-activity-entry:not([hidden])) {
+	--activity-lines: 1;
+}
 .status-activity-entry {
-	display: block;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: var(--activity-lines, 2);
+	flex: 1;
 	width: 100%;
 	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
 	border: 0;
 	border-radius: 4px;
-	padding: 2px 0;
+	padding: 0;
 	background: transparent;
 	color: inherit;
 	font: inherit;

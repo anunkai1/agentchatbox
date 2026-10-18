@@ -286,6 +286,18 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			try {
 				await page.setViewportSize(viewport);
 				await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+				await page.clock.install();
+				const layout = () =>
+					page.evaluate(() => {
+						const activity = document.querySelector("#status-activity")!.getBoundingClientRect();
+						return {
+							height: activity.height,
+							y: activity.y,
+							composerY: document.querySelector("#input")!.getBoundingClientRect().y,
+							barY: document.querySelector("#status-bar")!.getBoundingClientRect().y,
+						};
+					});
+				const idleLayout = await layout();
 				const core = await page.locator("#status-core").innerText();
 				const notify = (message: string, notifyType = "info") =>
 					sockets.at(-1)!.send(
@@ -303,6 +315,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				const notice = page.locator("#status-notice");
 				notify("imggen: still working (20s elapsed)…");
 				await expect.poll(() => notice.innerText()).toContain("20s elapsed");
+				expect(await layout()).toEqual(idleLayout);
 				expect(await page.locator(".toast").count()).toBe(0);
 				expect(await page.locator("#status-core").innerText()).toBe(core);
 				const bounds = await page.locator("#status-activity").boundingBox();
@@ -326,16 +339,14 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				await expect.poll(() => notice.textContent()).toBe(longStatus);
 				const wrapping = await notice.evaluate((entry) => ({
 					whiteSpace: getComputedStyle(entry).whiteSpace,
-					textOverflow: getComputedStyle(entry).textOverflow,
-					clippedX: entry.scrollWidth > entry.clientWidth,
-					clippedY: entry.scrollHeight > entry.clientHeight,
+					lineClamp: getComputedStyle(entry).webkitLineClamp,
+					height: entry.getBoundingClientRect().height,
+					lineHeight: Number.parseFloat(getComputedStyle(entry).lineHeight),
 				}));
-				expect(wrapping).toEqual({
-					whiteSpace: "normal",
-					textOverflow: "clip",
-					clippedX: false,
-					clippedY: false,
-				});
+				expect(wrapping.whiteSpace).toBe("normal");
+				expect(wrapping.lineClamp).toBe("2");
+				expect(wrapping.height).toBeLessThanOrEqual(2 * wrapping.lineHeight + 1);
+				expect(await layout()).toEqual(idleLayout);
 
 				const detail =
 					"Vision processing complete.\n<b>This stays literal</b>\n" + "Full details. ".repeat(40);
@@ -347,6 +358,10 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				expect(await dialog.locator(".status-detail-text").textContent()).toBe(detail);
 				expect(await dialog.locator("b").count()).toBe(0);
 				await page.getByRole("button", { name: "Close Status details", exact: true }).click();
+				expect(await layout()).toEqual(idleLayout);
+				await page.clock.fastForward(8000);
+				expect(await page.locator("#status-activity").isVisible()).toBe(false);
+				expect(await layout()).toEqual(idleLayout);
 
 				// A warning cannot be hidden by info or by cancelling voice preparation.
 				notify("A warning needs attention.", "warning");
@@ -358,7 +373,15 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				notify("Image model changed.");
 				await expect.poll(() => notice.innerText()).toBe("Image model changed.");
 				expect(await page.locator("#status-voice-detail").isVisible()).toBe(true);
+				const withVoice = await layout();
+				expect(withVoice.height).toBe(idleLayout.height);
+				for (const id of ["#status-voice-detail", "#status-notice"]) {
+					expect(
+						await page.locator(id).evaluate((entry) => getComputedStyle(entry).webkitLineClamp),
+					).toBe("1");
+				}
 				await page.locator("#status-bar [data-stop-voice]").click();
+				expect(await layout()).toEqual(withVoice);
 				await expect.poll(() => page.locator("#status-voice-detail").isVisible()).toBe(false);
 				expect(await notice.isVisible()).toBe(true);
 				expect(await page.locator(".composer-notice-warning").isVisible()).toBe(true);
@@ -368,7 +391,6 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				notify("Image generation failed.", "error");
 				await expect.poll(() => error.innerText()).toContain("2 occurrences");
 				expect(await error.count()).toBe(1);
-				await page.clock.install();
 				await page.clock.fastForward(30_000);
 				expect(await error.isVisible()).toBe(true);
 				expect(await page.locator(".composer-notice-warning").isVisible()).toBe(true);
