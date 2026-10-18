@@ -4,7 +4,6 @@ import {
 	LOCAL_MODEL_ID,
 	LOCAL_PROVIDER,
 	type LocalAiState,
-	LTX_MODEL_LABEL,
 	localAiLabel,
 	parseLocalAiState,
 	QWEN_MODEL_LABEL,
@@ -68,20 +67,6 @@ async function startQwen(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void>
 	await selectQwen(pi, ctx);
 }
 
-async function startVideo(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
-	publishStatus(ctx, "stopped");
-	ctx.ui.setStatus(LOCAL_AI_STATUS_KEY, `Starting ${LTX_MODEL_LABEL}…`);
-	ctx.ui.notify("Starting LTX-2.5 video on server4…", "info");
-
-	const result = await ssh(pi, ["local-ai", "video"], 180_000);
-	if ((result.code ?? 1) !== 0) {
-		await readState(pi, ctx);
-		throw new Error(outputOf(result).slice(-500) || "server4 did not start LTX video");
-	}
-	publishStatus(ctx, "video");
-	ctx.ui.notify(`${LTX_MODEL_LABEL} is ready on :8188.`, "info");
-}
-
 async function stopLocalAi(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	ctx.ui.setStatus(LOCAL_AI_STATUS_KEY, "Stopping local AI…");
 	ctx.ui.notify("Stopping local AI on server4…", "info");
@@ -100,19 +85,15 @@ async function openMenu(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> 
 		state === "qwen"
 			? `✓ ${QWEN_MODEL_LABEL} active — use locally`
 			: `Use ${QWEN_MODEL_LABEL} locally`;
-	const useVideo =
-		state === "video" ? `✓ ${LTX_MODEL_LABEL} active` : `Use ${LTX_MODEL_LABEL} locally`;
 	const stop = state === "stopped" ? "✓ Local AI stopped" : "Stop local AI";
 	const refresh = "Refresh status";
-	const selected = await ctx.ui.select("Server4 local AI", [useQwen, useVideo, stop, refresh]);
+	const selected = await ctx.ui.select("Server4 local AI", [useQwen, stop, refresh]);
 	if (!selected) return;
 
 	try {
 		if (selected === useQwen) {
 			if (state === "qwen") await selectQwen(pi, ctx);
 			else await startQwen(pi, ctx);
-		} else if (selected === useVideo) {
-			if (state !== "video") await startVideo(pi, ctx);
 		} else if (selected === stop && state !== "stopped") {
 			await stopLocalAi(pi, ctx);
 		} else if (selected === refresh) {
@@ -157,17 +138,6 @@ export default function registerLocalAi(pi: ExtensionAPI): void {
 				}
 				return;
 			}
-			if (command === "video" || command === "ltx") {
-				try {
-					const state = await readState(pi, ctx);
-					if (state !== "video") await startVideo(pi, ctx);
-				} catch (error) {
-					await readState(pi, ctx);
-					const message = error instanceof Error ? error.message : String(error);
-					ctx.ui.notify(`Local AI failed: ${message}`, "error");
-				}
-				return;
-			}
 			if (command === "stop") {
 				try {
 					await stopLocalAi(pi, ctx);
@@ -178,7 +148,7 @@ export default function registerLocalAi(pi: ExtensionAPI): void {
 				}
 				return;
 			}
-			ctx.ui.notify("Usage: /localai [menu|qwen|video|status|stop]", "warning");
+			ctx.ui.notify("Usage: /localai [menu|qwen|status|stop]", "warning");
 		},
 	});
 }

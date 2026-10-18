@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import registerLocalAi from "../extensions/local-ai/index.js";
-import {
-	LTX_MODEL_LABEL,
-	localAiLabel,
-	parseLocalAiState,
-	QWEN_MODEL_LABEL,
-} from "../extensions/local-ai/lib.js";
+import { localAiLabel, parseLocalAiState, QWEN_MODEL_LABEL } from "../extensions/local-ai/lib.js";
 
 describe("local AI status", () => {
 	it("recognises the Qwen backend", () => {
@@ -15,11 +10,6 @@ describe("local AI status", () => {
 
 	it("recognises the image backend", () => {
 		expect(parseLocalAiState("Qwen API  : unavailable\nFLUX API  : ready")).toBe("image");
-	});
-
-	it("recognises LTX while ComfyUI is active or busy", () => {
-		expect(parseLocalAiState("LTX-2.5   : active")).toBe("video");
-		expect(parseLocalAiState("LTX-2.5   : busy")).toBe("video");
 	});
 
 	it("distinguishes stopped and unreachable server4", () => {
@@ -51,7 +41,7 @@ function localAiHarness(
 	const setStatus = vi.fn();
 	const model = { provider: "local", id: "qwen3.8-27b-ud-q3" };
 	const exec = vi.fn(async () => ({
-		stdout: "Qwen API  : ready\nFLUX API  : unavailable\nLTX-2.5   : unavailable",
+		stdout: "Qwen API  : ready\nFLUX API  : unavailable",
 		code: 0,
 	}));
 	registerLocalAi({
@@ -90,17 +80,5 @@ describe("local AI extension", () => {
 		const h = localAiHarness(false);
 		await h.command("qwen", h.ctx);
 		expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("Local AI failed:"), "error");
-	});
-
-	it("starts LTX video without changing the selected chat model", async () => {
-		const h = localAiHarness();
-		await h.command("video", h.ctx);
-		expect(h.exec).toHaveBeenCalledWith(
-			"ssh",
-			expect.arrayContaining(["server4", "local-ai", "video"]),
-			expect.anything(),
-		);
-		expect(h.notify).toHaveBeenCalledWith(`${LTX_MODEL_LABEL} is ready on :8188.`, "info");
-		expect(h.setStatus).toHaveBeenLastCalledWith("local-ai", `${LTX_MODEL_LABEL} active`);
 	});
 });
