@@ -302,7 +302,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				const notice = page.locator("#status-notice");
 				notify("imggen: still working (20s elapsed)…");
 				await expect.poll(() => notice.innerText()).toContain("20s elapsed");
-				expect(await page.locator(".toast").isVisible()).toBe(false);
+				expect(await page.locator(".toast").count()).toBe(0);
 				expect(await page.locator("#status-core").innerText()).toBe(core);
 				const bounds = await page.locator("#status-activity").boundingBox();
 				const bar = await page.locator("#status-bar").boundingBox();
@@ -324,7 +324,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 
 				// A warning cannot be hidden by info or by cancelling voice preparation.
 				notify("A warning needs attention.", "warning");
-				await expect.poll(() => page.locator(".toast-warning").isVisible()).toBe(true);
+				await expect.poll(() => page.locator(".composer-notice-warning").isVisible()).toBe(true);
 				await page.locator('[data-voice-variant="long"]').last().click();
 				await expect
 					.poll(() => page.locator("#status-voice-detail").innerText())
@@ -335,18 +335,169 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				await page.locator("#status-bar [data-stop-voice]").click();
 				await expect.poll(() => page.locator("#status-voice-detail").isVisible()).toBe(false);
 				expect(await notice.isVisible()).toBe(true);
-				expect(await page.locator(".toast-warning").isVisible()).toBe(true);
+				expect(await page.locator(".composer-notice-warning").isVisible()).toBe(true);
 				notify("Image generation failed.", "error");
-				await expect
-					.poll(() => page.locator(".toast-error").innerText())
-					.toBe("Image generation failed.");
-				await page.locator(".toast-error").click();
-				expect(await page.locator(".toast").isVisible()).toBe(false);
+				const error = page.locator(".composer-notice-error");
+				await expect.poll(() => error.innerText()).toContain("Image generation failed.");
+				notify("Image generation failed.", "error");
+				await expect.poll(() => error.innerText()).toContain("2 occurrences");
+				expect(await error.count()).toBe(1);
+				await page.clock.install();
+				await page.clock.fastForward(30_000);
+				expect(await error.isVisible()).toBe(true);
+				expect(await page.locator(".composer-notice-warning").isVisible()).toBe(true);
+				const errorBounds = await error.boundingBox();
+				const inputBounds = await page.locator("#input").boundingBox();
+				expect(errorBounds!.y).toBeLessThan(inputBounds!.y);
+				expect(errorBounds!.x + errorBounds!.width).toBeLessThanOrEqual(viewport.width);
+				await error.getByRole("button", { name: "Dismiss error", exact: true }).click();
+				expect(await error.count()).toBe(0);
+				await page.getByRole("button", { name: "Dismiss warning", exact: true }).click();
+				expect(await page.locator("#composer-notices").isVisible()).toBe(false);
 			} finally {
 				await page.close();
 			}
 		});
 	}
+
+	it("clears an upload blocker when the upload finishes without losing the draft", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		let releaseUpload = () => {};
+		const uploadReady = new Promise<void>((resolve) => {
+			releaseUpload = resolve;
+		});
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.route("**/api/upload", async (route) => {
+				await uploadReady;
+				await route.fulfill({
+					json: {
+						url: `/uploads/${SEEDED_IMAGE}`,
+						filename: "photo.png",
+						mimeType: "image/png",
+						size: PNG_1X1.length,
+					},
+				});
+			});
+			await page
+				.locator("#file-input")
+				.setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: PNG_1X1 });
+			await send(page, "keep this draft");
+			const blocker = page.locator(".composer-notice-warning");
+			await expect.poll(() => blocker.innerText()).toContain("Upload in progress");
+			expect(await page.locator("#input").inputValue()).toBe("keep this draft");
+			releaseUpload();
+			await expect.poll(() => blocker.count()).toBe(0);
+			expect(await page.locator("#input").inputValue()).toBe("keep this draft");
+		} finally {
+			releaseUpload();
+			await page.close();
+		}
+	});
+
+	it("retries a failed upload only when its retry action is pressed", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		let attempts = 0;
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.route("**/api/upload", (route) => {
+				attempts++;
+				return attempts === 1
+					? route.fulfill({ status: 503, json: { error: "Upload service unavailable" } })
+					: route.fulfill({
+							json: {
+								url: `/uploads/${SEEDED_IMAGE}`,
+								filename: "retry.png",
+								mimeType: "image/png",
+								size: PNG_1X1.length,
+							},
+						});
+			});
+			await page
+				.locator("#file-input")
+				.setInputFiles({ name: "retry.png", mimeType: "image/png", buffer: PNG_1X1 });
+			await expect
+				.poll(() => page.locator(".composer-notice-error").innerText())
+				.toContain("Could not upload retry.png");
+			expect(attempts).toBe(1);
+			await page.getByRole("button", { name: "Retry upload", exact: true }).click();
+			await expect.poll(() => page.locator(".composer-notice-error").count()).toBe(0);
+			await expect
+				.poll(() =>
+					page.locator(`#attachment-previews img[src="/uploads/${SEEDED_IMAGE}"]`).count(),
+				)
+				.toBe(1);
+			expect(attempts).toBe(2);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("offers reconnect for a blocked send and retains unrelated errors across reconnect", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			sockets.at(-1)!.send(
+				JSON.stringify({
+					type: "event",
+					event: {
+						type: "extension_ui_request",
+						method: "notify",
+						message: "Earlier failure",
+						notifyType: "error",
+					},
+				}),
+			);
+			await expect
+				.poll(() => page.locator(".composer-notice-error").innerText())
+				.toContain("Earlier failure");
+			await page.clock.install();
+			await page.clock.pauseAt(new Date(Date.now() + 1000));
+			const before = sockets.length;
+			await sockets.at(-1)!.close({ code: 1001, reason: "test drop" });
+			await expect.poll(() => page.locator("#status-dynamic").innerText()).toContain("closed");
+			await send(page, "draft for reconnect");
+			await expect
+				.poll(() => page.locator(".composer-notice-warning").innerText())
+				.toContain("draft was kept");
+			expect(await page.locator("#input").inputValue()).toBe("draft for reconnect");
+			await page.getByRole("button", { name: "Reconnect", exact: true }).click();
+			await expect.poll(() => sockets.length).toBeGreaterThan(before);
+			await expect.poll(() => page.locator(".composer-notice-warning").count()).toBe(0);
+			expect(await page.locator(".composer-notice-error").innerText()).toContain("Earlier failure");
+			expect(await page.locator("#input").inputValue()).toBe("draft for reconnect");
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("keeps automatic retry progress in the footer instead of retaining a failure card", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			const event = (event: Record<string, unknown>) =>
+				sockets.at(-1)!.send(JSON.stringify({ type: "event", event }));
+			event({ type: "auto_retry_end", success: false, finalError: "Provider unavailable" });
+			await expect
+				.poll(() => page.locator(".composer-notice-error").innerText())
+				.toContain("Provider unavailable");
+			event({
+				type: "auto_retry_start",
+				attempt: 1,
+				maxAttempts: 3,
+				delayMs: 10000,
+				errorMessage: "Provider unavailable",
+			});
+			await expect.poll(() => page.locator(".composer-notice-error").count()).toBe(0);
+			expect(await page.locator("#status-dynamic").innerText()).toContain("Retrying");
+			event({ type: "auto_retry_end", success: true });
+			await expect
+				.poll(() => page.locator("#status-dynamic").innerText())
+				.not.toContain("Retrying");
+		} finally {
+			await page.close();
+		}
+	});
 
 	it("sends a message, keeps sending after the socket drops", async () => {
 		const { page, sockets } = await openPage("/");

@@ -34,6 +34,7 @@ import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
 import { type ExtensionUiResponder, handleExtensionUiRequest } from "./extension-ui.js";
 import { setRichText } from "./linkify.js";
+import { clearNotice, refreshNotices, showNotice } from "./notices.js";
 import {
 	applySessionPrefs,
 	DISPLAY_DEFAULTS_KEY,
@@ -213,18 +214,24 @@ function clearComposerDraft(): void {
 	clearAttachmentPreviews();
 	clearSavedDraft();
 	autoSize();
+	refreshNotices();
 }
 
 function handleSend(): void {
 	closeSlashMenu();
 	if (isUploadInProgress()) {
-		showToast("Upload in progress — wait for it to finish before sending.", "warning");
+		showNotice("Upload in progress — wait for it to finish before sending.", "warning", {
+			key: "upload-pending",
+			resolved: () => !isUploadInProgress(),
+		});
 		return;
 	}
 	const imageLimitError = promptImageLimitError();
 	if (imageLimitError) {
-		appendError(imageLimitError);
-		showToast(imageLimitError, "warning");
+		showNotice(`${imageLimitError} Remove an image before sending.`, "warning", {
+			key: "image-limit",
+			resolved: () => !promptImageLimitError(),
+		});
 		return;
 	}
 	const input = $<HTMLTextAreaElement>("#input");
@@ -258,18 +265,23 @@ function stopRun(): void {
 	else abortPiHook();
 }
 
-/**
- * Send a typed message as the user. Agent workflow commands are owned by pi
- * extensions and arrive through the normal RPC event stream instead.
- */
+function showSendConnectionNotice(): void {
+	showNotice("Not connected — your draft was kept. Reconnect, then send it again.", "warning", {
+		key: "send-connection",
+		action: { label: "Reconnect", run: () => reconnectHook() },
+	});
+}
+
+/** Send a typed message as the user; agent workflows belong to pi extensions. */
 function sendAsUser(trimmed: string): boolean {
 	const images = collectUploadedImages();
 	if (!trimmed && images.length === 0) return false;
 	const messageText = withImageAttachmentMarkdown(trimmed);
 	if (!sendPromptHook(messageText, images.length > 0 ? images : undefined)) {
-		showToast("Not connected — your draft was kept.", "warning");
+		showSendConnectionNotice();
 		return false;
 	}
+	clearNotice("send-connection");
 	// Only clear the attachment references after the WebSocket accepted the
 	// prompt. If the connection is unavailable, the draft and attachments
 	// remain resubmittable.
@@ -325,6 +337,7 @@ function autoVoiceReply(stamp: number | null): void {
 type SendPromptHook = (text: string, images?: PromptImage[]) => boolean;
 let sendPromptHook: SendPromptHook = () => false;
 let abortPiHook: () => void = () => {};
+let reconnectHook: () => void = () => {};
 /** Closure over `chatClient.steer`, wired in boot(). */
 let steerHook: SendPromptHook = () => false;
 /** Closure over `chatClient.getSessionStats`, wired in boot(). onEvent is
@@ -463,9 +476,10 @@ function sendSteer(trimmed: string): boolean {
 	if (!trimmed && images.length === 0) return false;
 	const messageText = withImageAttachmentMarkdown(trimmed);
 	if (!steerHook(messageText, images.length > 0 ? images : undefined)) {
-		showToast("Not connected — your draft was kept.", "warning");
+		showSendConnectionNotice();
 		return false;
 	}
+	clearNotice("send-connection");
 	state.uploadedImages.clear();
 	const msg: PersistedMessage = { kind: "steer", text: messageText, delivered: false };
 	state.messages.push(msg);
@@ -934,6 +948,26 @@ function onEvent(event: Record<string, unknown>): void {
 					isError: tr.isError,
 				});
 				finalizeToolCall(tr.toolCallId, tr.toolName, text, tr.isError);
+				if (tr.isError) {
+					showNotice(
+						`${tr.toolName} failed. ${text.slice(0, 300)}${text.length > 300 ? "…" : ""}`,
+						"error",
+						{
+							key: `tool-error:${tr.toolCallId}`,
+							action: {
+								label: "View tool result",
+								run: () => {
+									const row = document.querySelector<HTMLElement>(
+										`[data-tool-call-id="${CSS.escape(tr.toolCallId)}"]`,
+									);
+									if (row?.querySelector(".tool-result-collapsed"))
+										row.querySelector<HTMLElement>(".tool-head")?.click();
+									row?.scrollIntoView({ block: "center", behavior: "smooth" });
+								},
+							},
+						},
+					);
+				}
 			}
 			break;
 
@@ -1053,6 +1087,11 @@ function onEvent(event: Record<string, unknown>): void {
 			}
 			const isEmptyError =
 				m.role === "assistant" && (m as { stopReason?: string }).stopReason === "error";
+			if (isEmptyError) {
+				showNotice(modelErrorNotice((m as { errorMessage?: string }).errorMessage), "error", {
+					key: "model-error",
+				});
+			}
 			const hasRawText =
 				(lastAssistant?.kind === "assistant" && lastAssistant.text.trim().length > 0) ||
 				finalText.trim().length > 0;
@@ -1189,6 +1228,7 @@ function onEvent(event: Record<string, unknown>): void {
 		}
 
 		case "auto_retry_start": {
+			clearNotice("model-error");
 			// pi hit a recoverable error (transient model/transport fault)
 			// and is backing off before the next attempt — the SAME event
 			// the CLI renders as "Retrying (1/3) in 8s… (interrupt to
@@ -1208,6 +1248,9 @@ function onEvent(event: Record<string, unknown>): void {
 		}
 
 		case "auto_retry_end":
+			if (e.success === false && typeof e.finalError === "string") {
+				showNotice(modelErrorNotice(e.finalError), "error", { key: "model-error" });
+			}
 			// Retry resolved (either the next attempt succeeded, failed out,
 			// or the user cancelled via abortRetry). Clear the banner.
 			state.retry = null;
@@ -1456,7 +1499,6 @@ async function boot(): Promise<void> {
 		handleFileAttach,
 		handlePaste,
 		handleDrop,
-		reconnect: () => chatClient.reconnect(),
 		abort: () => {
 			// Mirror the CLI: while a retry backoff is counting down,
 			// Stop cancels the retry (the CLI binds the same key to
@@ -1552,7 +1594,9 @@ async function boot(): Promise<void> {
 		state.connectionStatus = s;
 		refreshStatus();
 	});
+	reconnectHook = () => chatClient.reconnect();
 	chatClient.onReady((info) => {
+		clearNotice("send-connection");
 		if (pendingFork) {
 			const { sessionId, messageCount } = pendingFork;
 			pendingFork = null;
@@ -1629,7 +1673,10 @@ async function boot(): Promise<void> {
 		chatClient.getSessionStats();
 	});
 	chatClient.onEvent(onEvent);
-	chatClient.onError((msg) => appendError(msg));
+	chatClient.onError((msg) => {
+		if (msg === "not connected to server") showSendConnectionNotice();
+		else appendError(msg);
+	});
 	// /sessions picker: when the server replies with the list, fill the
 	// open modal. The listener is a no-op if no picker is open.
 	// Also refresh the sidebar session list.
@@ -1684,9 +1731,10 @@ async function boot(): Promise<void> {
 		if (typeof pct === "number") {
 			if (pct >= 85 && !state.contextWarned) {
 				state.contextWarned = true;
-				showToast(
+				showNotice(
 					`Context is ${pct}% full (${state.contextUsage?.tokens?.toLocaleString() ?? "?"} tok). /compact will summarize older turns before you run out.`,
 					"warning",
+					{ key: "context-full", resolved: () => (state.contextUsage?.percent ?? 100) < 70 },
 				);
 			} else if (pct < 70) {
 				state.contextWarned = false;
@@ -1830,7 +1878,10 @@ async function boot(): Promise<void> {
 		copyShareLink: () => {
 			const link = shareableSessionUrl(state.sessionId);
 			if (!link) {
-				showToast("No session link yet — send a message first.", "warning");
+				showNotice("No session link yet — send a message first.", "warning", {
+					key: "no-session-link",
+					resolved: () => Boolean(state.sessionId),
+				});
 				return;
 			}
 			void copyText(link).then((ok) => {

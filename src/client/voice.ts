@@ -21,6 +21,7 @@ import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile }
 import { $ } from "./dom.js";
 import { MIC_ICON, REC_ICON, SPEAK_ICON, STOP_ICON } from "./icons.js";
 import { markdownToSpeechText } from "./markdown.js";
+import { clearNotice, refreshNotices } from "./notices.js";
 import {
 	addFileUploadPreview,
 	addImageAttachmentPreview,
@@ -827,6 +828,7 @@ export async function attachFiles(files: File[]): Promise<void> {
 				uploadPreview.remove();
 				addImageAttachmentPreview(res.url, res.filename, () => {
 					state.uploadedImages.delete(res.url);
+					refreshNotices();
 				});
 			} else {
 				const insertion = `[file: ${res.filename}](${res.url})`;
@@ -843,10 +845,22 @@ export async function attachFiles(files: File[]): Promise<void> {
 				uploadPreview.cancelled();
 			} else {
 				uploadPreview.fail(message);
-				appendError(message);
+				const key = `upload-error:${file.name}`;
+				appendError(`Could not upload ${file.name}: ${message}`, {
+					key,
+					action: {
+						label: "Retry upload",
+						run: () => {
+							clearNotice(key);
+							uploadPreview.remove();
+							void attachFiles([file]);
+						},
+					},
+				});
 			}
 		} finally {
 			uploadCount--;
+			refreshNotices();
 		}
 	}
 }

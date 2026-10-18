@@ -43,6 +43,7 @@ import {
 	ZAP_ICON,
 } from "./icons.js";
 import { setRichText, setUserRichText } from "./linkify.js";
+import { mountNotices, type NoticeOptions, refreshNotices, showNotice } from "./notices.js";
 import { services } from "./services.js";
 import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { formatAbsolute, formatRelative } from "./time.js";
@@ -101,42 +102,6 @@ export function setStreaming(s: boolean): void {
 				: "Stop the current run";
 	startOrStopWorkingTick(s);
 	refreshStatus();
-}
-
-/** Update the short, plain-language state line immediately above the composer. */
-function refreshComposerState(): void {
-	const line = document.getElementById("composer-state");
-	if (!line) return;
-	line.className = "composer-state";
-	line.replaceChildren();
-	if (state.isStreaming) {
-		// Working status lives below the composer; navigation already has a
-		// floating jump-to-bottom button. A second, in-flow navigation row
-		// changes the scroll viewport while measuring whether it is pinned.
-		// Keep streaming status updates out of the composer's layout.
-		line.classList.add("hidden");
-		return;
-	}
-	if (state.connectionStatus === "closed" || state.connectionStatus === "stalled") {
-		line.append(
-			el("span", { class: "composer-state-label" }, "Connection lost · your draft will be kept"),
-		);
-		const reconnect = el(
-			"button",
-			{ class: "composer-reconnect-btn", type: "button", title: "Reconnect to agentchatbox" },
-			"Reconnect",
-		) as HTMLButtonElement;
-		reconnect.addEventListener("click", () => shellHandlers?.reconnect());
-		line.append(reconnect);
-		line.classList.add("composer-state-warning");
-		return;
-	}
-	if (state.connectionStatus === "connecting") {
-		line.textContent = "Connecting…";
-		line.classList.add("composer-state-connecting");
-		return;
-	}
-	line.classList.add("hidden");
 }
 
 /**
@@ -876,7 +841,10 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 	});
 	const sendActionPrompt = (text: string) => {
 		if (state.isStreaming) {
-			showToast("Wait for the current response to finish first.", "warning");
+			showNotice("Wait for the current response to finish first.", "warning", {
+				key: "response-busy",
+				resolved: () => !state.isStreaming,
+			});
 			return;
 		}
 		if (services.sendPrompt?.(text)) showToast("Message sent.");
@@ -1514,7 +1482,8 @@ export function finalizeToolCall(
 	if (wasPinned) scrollToBottom();
 }
 
-export function appendError(text: string): void {
+export function appendError(text: string, options?: NoticeOptions): void {
+	showNotice(text, "error", options);
 	appendNode(el("div", { class: "row row-error" }, el("div", { class: "body" }, text)));
 }
 
@@ -1718,6 +1687,7 @@ export function toggleCapabilitiesPopover(): void {
 }
 
 export function refreshStatus(): void {
+	refreshNotices();
 	// The human-readable model label is resolved once per model change
 	// (see state.refreshCurrentModelLabel) instead of searching the model
 	// list here on every status tick. Falls back to the raw id when no
@@ -1803,7 +1773,6 @@ export function refreshStatus(): void {
 	vp.textContent = `voice: ${state.ttsVoice ?? "default"}`;
 	const sp = $<HTMLButtonElement>("#speed-picker");
 	sp.textContent = `speed: ${state.ttsSpeed}×`;
-	refreshComposerState();
 }
 
 /**
@@ -1904,7 +1873,7 @@ function paintStatusDynamic(): void {
 			state.connectionStatus === "stalled"
 				? "⚠ stalled — reconnecting"
 				: `[${state.connectionStatus}]`;
-		dyn.push(esc(tag));
+		dyn.push(`<span class="retry-banner">${esc(tag)}</span>`);
 	}
 	const html = dyn.join(" · ");
 	// innerHTML (not textContent) so the streaming dot can be a styled,
@@ -2169,7 +2138,6 @@ export interface ShellHandlers {
 	handlePaste: (e: ClipboardEvent) => Promise<void>;
 	handleDrop: (e: DragEvent) => Promise<void>;
 	abort: () => void;
-	reconnect: () => void;
 	abortRetry: () => void;
 	/** Pin/unpin any session by id (sidebar star). Server persists + rebroadcasts. */
 	setSessionPinned: (sessionId: string, pinned: boolean) => void;
@@ -2211,11 +2179,8 @@ export function registerShellHandlers(h: ShellHandlers): void {
 }
 
 // ── Notifications and bottom activity status ────────────────────
-// Routine info uses the footer; only warnings/errors interrupt with a toast.
-// Voice preparation has its own persistent entry, so stopping speech cannot
-// dismiss an unrelated notice (and an info update cannot hide an error).
-let toastEl: HTMLElement | null = null;
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
+// Routine info uses the footer; warnings/errors stay beside the composer.
+// Voice preparation has its own persistent entry with an independent lifecycle.
 let statusNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function setStatusActivity(id: string, text: string, detail = text): void {
@@ -2239,18 +2204,7 @@ export function showToast(message: string, type: "info" | "warning" | "error" = 
 		}, 8000);
 		return;
 	}
-	if (!toastEl) return;
-	toastEl.textContent = message;
-	toastEl.className = `toast toast-${type}`;
-	toastEl.classList.remove("hidden");
-	if (toastTimer) clearTimeout(toastTimer);
-	toastTimer = setTimeout(dismissToast, 8000);
-}
-
-function dismissToast(): void {
-	toastEl?.classList.add("hidden");
-	if (toastTimer) clearTimeout(toastTimer);
-	toastTimer = null;
+	showNotice(message, type);
 }
 
 /** Voice preparation lasts until playback, cancellation or failure. */
@@ -2294,10 +2248,8 @@ export function renderShell(): void {
 	state.audioPlaying = false;
 	state.audioPaused = false;
 	state.ttsInFlight = 0;
-	dismissToast();
 	if (statusNoticeTimer) clearTimeout(statusNoticeTimer);
 	statusNoticeTimer = null;
-	toastEl = null;
 	document.body.innerHTML = "";
 	const root = el("div", { id: "app" });
 	document.body.append(root);
@@ -2670,11 +2622,18 @@ export function renderShell(): void {
 	// The old globe/reasoning buttons were removed because they had no
 	// direct effect (they opened other menus instead).
 	const composerWrap = el("div", { class: "composer-wrap" });
+	const notices = el("div", {
+		class: "composer-notices",
+		id: "composer-notices",
+		"aria-label": "Warnings and errors",
+		hidden: true,
+	});
+	composerWrap.append(notices);
+	mountNotices(notices, state.sessionId);
 	// A textarea cannot paint an inline image. Keep each attached image as a
 	// removable thumbnail just above the composer; its transport reference is
 	// kept out of the visible draft.
 	composerWrap.append(el("div", { class: "attachment-previews", id: "attachment-previews" }));
-	composerWrap.append(el("div", { class: "composer-state hidden", id: "composer-state" }));
 	composerWrap.append(createVoiceBar());
 	const composer = el("div", { class: "composer", id: "composer" });
 	composer.append(
@@ -2808,16 +2767,6 @@ export function renderShell(): void {
 		}
 	});
 	main.append(statusBar);
-
-	// Warnings and errors still get a visible, dismissible overlay.
-	toastEl = el("div", {
-		class: "toast hidden",
-		role: "status",
-		"aria-live": "polite",
-		"aria-atomic": "true",
-	});
-	toastEl.addEventListener("click", dismissToast);
-	document.body.append(toastEl);
 
 	// File-input handler
 	$("#file-input").addEventListener("change", (e) => {

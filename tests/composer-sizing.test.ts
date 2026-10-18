@@ -39,24 +39,23 @@ describe("composer layout", () => {
 	});
 
 	it("keeps streaming status out of composer flow without consulting scroll position", () => {
-		const added: string[] = [];
-		const line = {
-			className: "",
-			replaceChildren: vi.fn(),
-			classList: { add: (name: string) => added.push(name) },
-		};
 		const slot = { innerHTML: "", textContent: "", title: "" };
+		const dynamic = { ...slot };
 		vi.stubGlobal("document", {
-			getElementById: (id: string) => (id === "composer-state" ? line : null),
+			getElementById: () => null,
 			querySelector: (selector: string) => {
-				if (selector === ".messages-wrap" || selector === "#messages") {
+				if (
+					selector === ".messages-wrap" ||
+					selector === "#messages" ||
+					selector === "#composer-state"
+				) {
 					throw new Error("status must not measure the scrolling viewport");
 				}
-				return slot;
+				return selector === "#status-dynamic" ? dynamic : slot;
 			},
 		});
 		state.isStreaming = true;
 		refreshStatus();
-		expect(added).toContain("hidden");
+		expect(dynamic.innerHTML).toContain("streaming");
 	});
 });

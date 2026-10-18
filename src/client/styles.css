@@ -1980,7 +1980,63 @@ body.sidebar-resizing iframe {
 /* ------------------------------------------------------------------ */
 
 .composer-wrap {
+	flex: 0 0 auto;
 	padding: 10px 20px 8px;
+}
+
+/* Failures stay next to the input until dismissed; only the notice list scrolls. */
+.composer-notices {
+	max-width: var(--chat-max);
+	max-height: min(30dvh, 240px);
+	margin: 0 auto 8px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.composer-notices[hidden] {
+	display: none;
+}
+.composer-notice {
+	padding: 10px 12px;
+	border: 1px solid currentColor;
+	border-left-width: 3px;
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+	font-size: 12px;
+	line-height: 1.4;
+	text-align: left;
+}
+.composer-notice + .composer-notice {
+	margin-top: 6px;
+}
+.composer-notice-error {
+	color: #fca5a5;
+}
+.composer-notice-warning {
+	color: var(--c-warn);
+}
+.composer-notice-message {
+	margin: 4px 0 8px;
+	color: var(--text);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.composer-notice-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.composer-notice-actions button {
+	min-height: 32px;
+	padding: 4px 10px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	background: var(--surface-hover);
+	color: var(--text);
+	font: inherit;
+	cursor: pointer;
+}
+.composer-notice-actions button:hover {
+	border-color: currentColor;
 }
 
 /* Slash-command autocomplete. It is anchored to the composer so it stays
@@ -2048,23 +2104,6 @@ body.sidebar-resizing iframe {
 	font-size: 13px;
 }
 
-/* Attached images use structured transport references rather than visible
- * Markdown. Show a compact, removable preview above the composer instead. */
-.composer-state {
-	max-width: var(--chat-max);
-	margin: 0 auto 5px;
-	padding: 0 10px;
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	font-size: 12px;
-	line-height: 1.35;
-	color: var(--text-secondary);
-	text-align: left;
-}
-.composer-state.hidden {
-	display: none;
-}
 /* Seekable voice bar: sits above the composer while a reply is read aloud. */
 .voice-bar {
 	max-width: var(--chat-max);
@@ -2197,33 +2236,7 @@ body.sidebar-resizing iframe {
 		height: 40px;
 	}
 }
-.composer-state-label {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.composer-reconnect-btn {
-	flex: 0 0 auto;
-	padding: 3px 8px;
-	border: 1px solid var(--border-strong);
-	border-radius: 999px;
-	background: var(--surface);
-	color: inherit;
-	font: 11px var(--font-sans);
-	cursor: pointer;
-}
-.composer-reconnect-btn:hover {
-	background: var(--surface-hover);
-	border-color: currentColor;
-}
-.composer-state-warning {
-	color: var(--c-warn);
-}
-.composer-state-connecting {
-	color: var(--text-muted);
-}
-
+/* Attached images use structured references and removable composer previews. */
 .attachment-previews {
 	max-width: var(--chat-max);
 	margin: 0 auto 7px;
@@ -3457,9 +3470,6 @@ body.modal-open {
 	.composer-actions {
 		gap: 2px;
 	}
-	.composer-state {
-		padding-inline: 4px;
-	}
 	/* The control line has to hold nine controls in ~338px at a 412px phone
 	 * width, so the icon strip and the voice chips are trimmed here (see
 	 * .assistant-controls). Below ~400px the two groups wrap to two tight
@@ -3856,49 +3866,6 @@ body.modal-open {
 }
 .projects-container.collapsed .projects-container-body {
 	display: none;
-}
-
-/* ── Toast (extension notifications) ────────────────────────────── */
-/* Transient banner for extension_ui_request notify events, e.g. the
-   pi-voice-reply "voice model failed, fell back to session model"
-   warning. Fixed at top-center, auto-dismisses after 8s, click to
-   dismiss. Works on both light/dark themes via semi-transparent bg. */
-.toast {
-	position: fixed;
-	top: 14px;
-	left: 50%;
-	transform: translateX(-50%);
-	z-index: 9999;
-	max-width: min(640px, 92vw);
-	padding: 10px 18px;
-	border-radius: 9px;
-	font-size: 13px;
-	line-height: 1.4;
-	box-shadow: 0 3px 14px rgba(0, 0, 0, 0.22);
-	cursor: pointer;
-	user-select: none;
-	animation: toast-in 0.22s ease-out;
-}
-.toast.hidden {
-	display: none;
-}
-.toast-warning {
-	background: rgba(255, 193, 7, 0.95);
-	color: #3d2e00;
-}
-.toast-error {
-	background: rgba(244, 67, 54, 0.95);
-	color: #fff;
-}
-@keyframes toast-in {
-	from {
-		opacity: 0;
-		transform: translateX(-50%) translateY(-10px);
-	}
-	to {
-		opacity: 1;
-		transform: translateX(-50%) translateY(0);
-	}
 }
 
 /* ── Extension UI relay dialogs (select/confirm/input) ──────────── */
