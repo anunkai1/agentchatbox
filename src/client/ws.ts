@@ -169,6 +169,16 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const STALE_AFTER_MS = 2 * HEARTBEAT_INTERVAL_MS;
 /** How often the watchdog wakes up to check for staleness. */
 const WATCHDOG_TICK_MS = 5_000;
+/**
+ * A socket still not open after this long is abandoned and retried. A
+ * connect started while Android had the tab or radio asleep can otherwise
+ * sit in CONNECTING until the OS TCP timeout.
+ */
+const CONNECT_TIMEOUT_MS = 6_000;
+/** On returning to the tab, a heartbeat should have arrived within this. */
+const RESUME_STALE_AFTER_MS = HEARTBEAT_INTERVAL_MS + 5_000;
+/** Lets frames buffered while the tab was frozen arrive before judging staleness. */
+const RESUME_GRACE_MS = 1_000;
 
 export function createChatClient(): ChatClient {
 	let ws: WebSocket | null = null;
@@ -217,8 +227,12 @@ export function createChatClient(): ChatClient {
 		// are ignored, so an old socket closing can never clobber the new one.
 		const socket = new WebSocket(url);
 		ws = socket;
+		const connectTimer = setTimeout(() => {
+			if (socket === ws && currentStatus === "connecting") restart();
+		}, CONNECT_TIMEOUT_MS);
 
 		socket.addEventListener("open", () => {
+			clearTimeout(connectTimer);
 			if (socket !== ws) return;
 			attempt = 0;
 			setStatus("open");
@@ -308,6 +322,7 @@ export function createChatClient(): ChatClient {
 		});
 
 		socket.addEventListener("close", (ev) => {
+			clearTimeout(connectTimer);
 			if (socket !== ws) return;
 			setStatus("closed");
 			ws = null;
@@ -320,7 +335,10 @@ export function createChatClient(): ChatClient {
 			// The user reloads this tab to start fresh, or uses the other tab.
 			// Any other close code (heartbeat timeout, reconnect race,
 			// transient network drop) reconnects normally below.
-			if (ev.code === 4001) return;
+			if (ev.code === 4001) {
+				manualClose = true; // also stops the resume handler retrying
+				return;
+			}
 			if (!manualClose) {
 				const base = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
 				// Apply ±20% jitter so multiple browser tabs reconnecting
@@ -339,6 +357,20 @@ export function createChatClient(): ChatClient {
 		});
 	}
 
+	/**
+	 * Drop the current socket and connect now, skipping any backoff. The old
+	 * socket is detached first so its close event is ignored; waiting for it
+	 * is slow when the TCP connection is already dead, because the browser
+	 * holds the closing handshake open for its own timeout.
+	 */
+	function restart() {
+		const old = ws;
+		ws = null;
+		old?.close();
+		attempt = 0;
+		connect();
+	}
+
 	function send(msg: Record<string, unknown>): boolean {
 		if (!ws || ws.readyState !== WebSocket.OPEN) {
 			for (const l of errorListeners) l("not connected to server");
@@ -354,33 +386,29 @@ export function createChatClient(): ChatClient {
 	 * Liveness watchdog. Runs on a fixed cadence and checks whether we've
 	 * heard from the server recently. If the socket claims OPEN but we
 	 * haven't received any frame (heartbeat or otherwise) within
-	 * STALE_AFTER_MS, the connection is wedged — usually because Android
+	 * `staleAfter`, the connection is wedged — usually because Android
 	 * suspended the tab and the OS killed the underlying TCP socket while
-	 * the browser still believes it's OPEN. We surface a "stalled" status
-	 * and force a reconnect so the user is told something is wrong and we
-	 * recover, instead of hanging silently until the browser's own TCP
-	 * timeout fires (which can take minutes).
+	 * the browser still believes it's OPEN. Reconnect straight away instead
+	 * of hanging until the browser's own TCP timeout (which can take minutes).
 	 */
-	function checkStale() {
+	function checkStale(staleAfter = STALE_AFTER_MS) {
 		if (currentStatus !== "open") return;
-		if (Date.now() - lastMessageAt < STALE_AFTER_MS) return;
-		// Wedged. Tell the UI, then force a reconnect.
+		if (Date.now() - lastMessageAt < staleAfter) return;
 		setStatus("stalled");
-		try {
-			if (ws) ws.close();
-		} catch {
-			/* ignore */
-		}
-		// The close handler will schedule a reconnect; reset attempt so
-		// it happens fast rather than after a long backoff.
-		attempt = 0;
+		restart();
 	}
 	watchdog = setInterval(checkStale, WATCHDOG_TICK_MS);
-	// When the user returns to a backgrounded tab, JS resumes. Run the
-	// check immediately instead of waiting up to WATCHDOG_TICK_MS for the
-	// next tick — this is the primary case the watchdog exists for.
+	// Returning to a backgrounded tab is the main case this file exists for.
+	// A dropped connection may be waiting out a backoff timer, or stuck in a
+	// connect attempt made while the phone was asleep: retry now. An "open"
+	// socket that has missed a heartbeat is dead too.
 	document.addEventListener("visibilitychange", () => {
-		if (document.visibilityState === "visible") checkStale();
+		if (document.visibilityState !== "visible" || manualClose) return;
+		if (currentStatus === "open") {
+			setTimeout(() => checkStale(RESUME_STALE_AFTER_MS), RESUME_GRACE_MS);
+		} else {
+			restart();
+		}
 	});
 
 	return {
@@ -458,15 +486,7 @@ export function createChatClient(): ChatClient {
 		onForked: (l) => subscribe(forkedListeners, l),
 		onCapabilities: (l) => subscribe(capabilitiesListeners, l),
 		onSessionStats: (l) => subscribe(sessionStatsListeners, l),
-		reconnect: () => {
-			// Detach the old socket first: its async close event is then ignored
-			// (see connect()), and connect() cancels any pending backoff timer.
-			const old = ws;
-			ws = null;
-			old?.close();
-			attempt = 0;
-			connect();
-		},
+		reconnect: restart,
 		close: () => {
 			manualClose = true;
 			if (reconnectTimer) clearTimeout(reconnectTimer);

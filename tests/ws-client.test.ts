@@ -44,12 +44,19 @@ async function makeClient() {
 	return createChatClient();
 }
 
+let onVisible: () => void = () => {};
+
 beforeEach(() => {
 	vi.useFakeTimers();
 	FakeSocket.instances = [];
 	vi.stubGlobal("WebSocket", FakeSocket);
 	vi.stubGlobal("location", { protocol: "http:", host: "acb.test" });
-	vi.stubGlobal("document", { addEventListener: () => {}, visibilityState: "visible" });
+	vi.stubGlobal("document", {
+		addEventListener: (_type: string, fn: () => void) => {
+			onVisible = fn;
+		},
+		visibilityState: "visible",
+	});
 });
 
 afterEach(() => {
@@ -105,7 +112,7 @@ describe("chat client reconnect", () => {
 		const client = await makeClient();
 		FakeSocket.instances[0].open();
 		FakeSocket.instances[0].finishClose();
-		vi.advanceTimersByTime(15_000);
+		vi.advanceTimersByTime(1_000);
 		expect(FakeSocket.instances).toHaveLength(2);
 		client.close();
 	});
@@ -114,6 +121,56 @@ describe("chat client reconnect", () => {
 		const client = await makeClient();
 		FakeSocket.instances[0].open();
 		FakeSocket.instances[0].finishClose(4001);
+		vi.advanceTimersByTime(15_000);
+		expect(FakeSocket.instances).toHaveLength(1);
+		client.close();
+	});
+
+	it("returning to the tab skips a pending backoff and connects now", async () => {
+		const client = await makeClient();
+		const first = FakeSocket.instances[0];
+		first.open();
+		first.finishClose();
+		onVisible();
+		expect(FakeSocket.instances).toHaveLength(2);
+		client.close();
+	});
+
+	it("returning to the tab replaces an open socket that missed its heartbeat", async () => {
+		const client = await makeClient();
+		FakeSocket.instances[0].open();
+		vi.setSystemTime(Date.now() + 30_000);
+		onVisible();
+		expect(FakeSocket.instances).toHaveLength(1); // frames buffered while frozen get a moment
+		vi.advanceTimersByTime(1_000);
+		expect(FakeSocket.instances).toHaveLength(2);
+		client.close();
+	});
+
+	it("returning to the tab keeps a healthy socket", async () => {
+		const client = await makeClient();
+		FakeSocket.instances[0].open();
+		onVisible();
+		vi.advanceTimersByTime(1_000);
+		expect(FakeSocket.instances).toHaveLength(1);
+		client.close();
+	});
+
+	it("abandons a connect attempt that never opens", async () => {
+		const client = await makeClient();
+		vi.advanceTimersByTime(6_000);
+		expect(FakeSocket.instances).toHaveLength(2);
+		FakeSocket.instances[1].open();
+		client.init({ provider: "p", modelId: "m", thinkingLevel: "off" });
+		expect(FakeSocket.instances[1].sent).toHaveLength(1);
+		client.close();
+	});
+
+	it("returning to the tab does not fight a takeover (4001)", async () => {
+		const client = await makeClient();
+		FakeSocket.instances[0].open();
+		FakeSocket.instances[0].finishClose(4001);
+		onVisible();
 		vi.advanceTimersByTime(15_000);
 		expect(FakeSocket.instances).toHaveLength(1);
 		client.close();
