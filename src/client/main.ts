@@ -947,31 +947,10 @@ function onEvent(event: Record<string, unknown>): void {
 					result: text,
 					isError: tr.isError,
 				});
+				// Tool failures belong inline: the agent can inspect and retry them.
+				// isError alone does not mean the user needs to intervene; session
+				// and connection failures still use the separate notice paths.
 				finalizeToolCall(tr.toolCallId, tr.toolName, text, tr.isError);
-				// pi marks every non-zero `bash` exit as a tool error, but a failed
-				// lookup (grep with no match, cat of a missing file) is ordinary
-				// work, and the transcript row already shows the exit code. Only
-				// other tools' failures are real failures worth a persistent notice.
-				if (tr.isError && tr.toolName !== "bash") {
-					showNotice(
-						`${tr.toolName} failed. ${text.slice(0, 300)}${text.length > 300 ? "…" : ""}`,
-						"error",
-						{
-							key: `tool-error:${tr.toolCallId}`,
-							action: {
-								label: "View tool result",
-								run: () => {
-									const row = document.querySelector<HTMLElement>(
-										`[data-tool-call-id="${CSS.escape(tr.toolCallId)}"]`,
-									);
-									if (row?.querySelector(".tool-result-collapsed"))
-										row.querySelector<HTMLElement>(".tool-head")?.click();
-									row?.scrollIntoView({ block: "center", behavior: "smooth" });
-								},
-							},
-						},
-					);
-				}
 			}
 			break;
 

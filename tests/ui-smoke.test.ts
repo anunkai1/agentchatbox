@@ -462,32 +462,50 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("keeps a non-zero bash exit inline instead of raising an error notice", async () => {
+	it("keeps tool failures inspectable inline without raising error notices", async () => {
 		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
 		try {
 			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
-			const failedTool = (toolName: string, toolCallId: string) => ({
-				type: "event",
-				event: {
-					type: "message_start",
-					message: {
-						role: "toolResult",
-						toolCallId,
-						toolName,
-						content: [{ type: "text", text: "grep: no match\n\nCommand exited with code 1" }],
-						isError: true,
-					},
-				},
-			});
+			await page.getByTitle("Settings", { exact: true }).click();
+			await page.getByRole("button", { name: /Tool calls/ }).click();
+			await page.getByRole("button", { name: "Done", exact: true }).click();
 			const socket = sockets.at(-1)!;
-			socket.send(JSON.stringify(failedTool("bash", "call-bash")));
-			socket.send(JSON.stringify(failedTool("edit", "call-edit")));
-			// Only the edit failure earns a persistent notice: a non-zero exit is
-			// normal for lookups and stays in the transcript row.
-			await expect
-				.poll(() => page.locator(".composer-notice-error").innerText())
-				.toContain("edit failed");
-			expect(await page.locator(".composer-notice-error").count()).toBe(1);
+			for (const [toolName, text] of [
+				["bash", "grep: no match\n\nCommand exited with code 1"],
+				["edit", "Could not find edits[2]. The oldText must match exactly."],
+				["read", "ENOENT: no such file or directory"],
+			]) {
+				const toolCallId = `call-${toolName}`;
+				socket.send(
+					JSON.stringify({
+						type: "event",
+						event: { type: "tool_execution_start", toolName, toolCallId, args: {} },
+					}),
+				);
+				socket.send(
+					JSON.stringify({
+						type: "event",
+						event: {
+							type: "message_start",
+							message: {
+								role: "toolResult",
+								toolCallId,
+								toolName,
+								content: [{ type: "text", text }],
+								isError: true,
+							},
+						},
+					}),
+				);
+				const row = page.locator(`[data-tool-call-id="${toolCallId}"]`);
+				await expect.poll(() => row.locator(".tool-status-error").count()).toBe(1);
+				expect(await row.locator(".tool-result.tool-error").textContent()).toBe(text);
+				expect(await row.locator(".tool-result").isVisible()).toBe(false);
+				await row.locator(".tool-head").click();
+				expect(await row.locator(".tool-result").isVisible()).toBe(true);
+				expect(await page.locator(".composer-notice-error").count()).toBe(0);
+			}
+			expect(await page.locator("#composer-notices").isVisible()).toBe(false);
 		} finally {
 			await page.close();
 		}
