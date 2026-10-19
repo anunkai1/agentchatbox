@@ -680,6 +680,17 @@ function finishTokenSpeed(message: AssistantMessage): void {
 	if (tokens > 0 && elapsedSeconds > 0) speed.finalTokensPerSecond = tokens / elapsedSeconds;
 }
 
+/** Keep provider failures in the transcript, not in a second composer popup. */
+function appendModelError(errorMessage: string | undefined): void {
+	const text = modelErrorNotice(errorMessage);
+	const last = state.messages.at(-1);
+	// Retry exhaustion can report the same failure again after message_end.
+	if (last?.kind === "error" && last.text === text) return;
+	const message = { kind: "error" as const, text };
+	state.messages.push(message);
+	appendNode(renderMessageNode(message));
+}
+
 function onEvent(event: Record<string, unknown>): void {
 	// The server forwards raw `pi --mode rpc` events, which is a
 	// superset of the bare `AgentEvent` union. Cast to a permissive
@@ -1068,13 +1079,8 @@ function onEvent(event: Record<string, unknown>): void {
 					else if (block.type === "thinking") finalThinking += (block as ThinkingContent).thinking;
 				}
 			}
-			const isEmptyError =
+			const isModelError =
 				m.role === "assistant" && (m as { stopReason?: string }).stopReason === "error";
-			if (isEmptyError) {
-				showNotice(modelErrorNotice((m as { errorMessage?: string }).errorMessage), "error", {
-					key: "model-error",
-				});
-			}
 			const hasRawText =
 				(lastAssistant?.kind === "assistant" && lastAssistant.text.trim().length > 0) ||
 				finalText.trim().length > 0;
@@ -1089,16 +1095,11 @@ function onEvent(event: Record<string, unknown>): void {
 				!hasRawThinking &&
 				lastAssistantDom
 			) {
-				if (isEmptyError) {
-					// Replace the frozen empty row with a visible error notice.
+				if (isModelError) {
+					// Replace the frozen empty row with an inline error.
 					removeLiveAssistantRow(lastAssistantDom);
 					state.messages.pop();
-					const errMsg = {
-						kind: "error" as const,
-						text: modelErrorNotice((m as { errorMessage?: string }).errorMessage),
-					};
-					state.messages.push(errMsg);
-					appendNode(renderMessageNode(errMsg));
+					appendModelError((m as { errorMessage?: string }).errorMessage);
 				} else {
 					removeLiveAssistantRow(lastAssistantDom);
 					state.messages.pop();
@@ -1128,6 +1129,9 @@ function onEvent(event: Record<string, unknown>): void {
 					lastAssistantDom.thinkingWrap.remove();
 				}
 			}
+			// A failed response may contain partial text or thinking. Keep it,
+			// but still show why the response ended.
+			if (isModelError) appendModelError((m as { errorMessage?: string }).errorMessage);
 			refreshStatus();
 			break;
 		}
@@ -1211,7 +1215,6 @@ function onEvent(event: Record<string, unknown>): void {
 		}
 
 		case "auto_retry_start": {
-			clearNotice("model-error");
 			// pi hit a recoverable error (transient model/transport fault)
 			// and is backing off before the next attempt — the SAME event
 			// the CLI renders as "Retrying (1/3) in 8s… (interrupt to
@@ -1232,7 +1235,7 @@ function onEvent(event: Record<string, unknown>): void {
 
 		case "auto_retry_end":
 			if (e.success === false && typeof e.finalError === "string") {
-				showNotice(modelErrorNotice(e.finalError), "error", { key: "model-error" });
+				appendModelError(e.finalError);
 			}
 			// Retry resolved (either the next attempt succeeded, failed out,
 			// or the user cancelled via abortRetry). Clear the banner.

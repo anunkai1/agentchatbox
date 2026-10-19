@@ -658,7 +658,42 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("keeps automatic retry progress in the footer instead of retaining a failure card", async () => {
+	it("keeps model errors inline for empty and partial responses without popups", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			const event = (event: Record<string, unknown>) =>
+				sockets.at(-1)!.send(JSON.stringify({ type: "event", event }));
+			const errorMessage = '402 "Insufficient USD or Diem balance to complete request."';
+			const responses = [
+				[],
+				[{ type: "text", text: "Partial answer before failure" }],
+				[{ type: "thinking", thinking: "Thinking before failure" }],
+			];
+			for (const [index, content] of responses.entries()) {
+				const message = {
+					role: "assistant",
+					content,
+					stopReason: "error",
+					errorMessage,
+					timestamp: Date.now(),
+				};
+				event({ type: "message_start", message });
+				event({ type: "message_update", message });
+				event({ type: "message_end", message });
+				event({ type: "auto_retry_end", success: false, finalError: errorMessage });
+				await expect.poll(() => page.locator(".row-error").count()).toBe(index + 1);
+				expect(await page.locator(".row-error").last().innerText()).toContain(errorMessage);
+				expect(await page.locator(".composer-notice-error").count()).toBe(0);
+			}
+			expect(await messages(page).innerText()).toContain("Partial answer before failure");
+			expect(await page.locator("#composer-notices").isVisible()).toBe(false);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("keeps automatic retry progress in the footer and final failures inline", async () => {
 		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
 		try {
 			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
@@ -666,8 +701,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				sockets.at(-1)!.send(JSON.stringify({ type: "event", event }));
 			event({ type: "auto_retry_end", success: false, finalError: "Provider unavailable" });
 			await expect
-				.poll(() => page.locator(".composer-notice-error").innerText())
+				.poll(() => page.locator(".row-error").innerText())
 				.toContain("Provider unavailable");
+			expect(await page.locator(".composer-notice-error").count()).toBe(0);
 			event({
 				type: "auto_retry_start",
 				attempt: 1,
