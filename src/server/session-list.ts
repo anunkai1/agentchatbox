@@ -187,6 +187,29 @@ function claudePromptTextFromLine(line: string): string | null {
 	}
 }
 
+/** A worker chat's status, from the delegate extension's `delegation` entries. */
+export interface DelegationSummary {
+	status: string;
+	parentSessionId?: string;
+}
+
+function delegationFromLine(line: string): DelegationSummary | null {
+	if (!/"customType"\s*:\s*"delegation"/.test(line)) return null;
+	try {
+		const data = (JSON.parse(line) as { data?: { status?: unknown; parentSessionId?: unknown } })
+			.data;
+		if (typeof data?.status !== "string") return null;
+		return {
+			status: data.status,
+			...(typeof data.parentSessionId === "string"
+				? { parentSessionId: data.parentSessionId }
+				: {}),
+		};
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Default root for `pi`'s session storage. Overridable via the
  * PI_CODING_AGENT_SESSION_DIR env var (the env var `pi` itself reads).
@@ -229,6 +252,8 @@ export interface SessionSummary {
 	title: string;
 	/** Number of `message` entries in the JSONL. */
 	messageCount: number;
+	/** Latest status the delegate extension recorded for a worker chat. */
+	delegation?: DelegationSummary;
 	/** True if pinned to the top of the sidebar (from `data/pins.json`). */
 	pinned?: boolean;
 	/**
@@ -273,7 +298,7 @@ interface CachedSessionSummary {
  * mismatch is parsed again.
  */
 const sessionFileCache = new Map<string, CachedSessionSummary>();
-const SESSION_SUMMARY_CACHE_VERSION = 3;
+const SESSION_SUMMARY_CACHE_VERSION = 4;
 let summaryCacheLoaded = false;
 let summaryCacheDirty = false;
 let summaryCacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -370,6 +395,7 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 		let messageCount = 0;
 		let firstUserText: string | null = null;
 		let sessionName: string | null = null;
+		let delegation: SessionSummary["delegation"];
 		let activityTime = Number.NEGATIVE_INFINITY;
 		forEachJsonlLine(file, (line) => {
 			const trimmed = line.trim();
@@ -391,6 +417,8 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 				if (firstUserText === null) firstUserText = firstUserTextFromLine(trimmed);
 			} else if (type === "custom_message") {
 				if (firstUserText === null) firstUserText = claudePromptTextFromLine(trimmed);
+			} else if (type === "custom") {
+				delegation = delegationFromLine(trimmed) ?? delegation;
 			} else if (type === "session_info") {
 				try {
 					const e = JSON.parse(trimmed) as Record<string, unknown>;
@@ -423,6 +451,7 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
 			modifiedAt: new Date(Math.max(Date.parse(createdAt), activityTime)).toISOString(),
 			title: sessionName ?? (firstUserText ? truncate(firstUserText, 60) : "(empty session)"),
 			messageCount,
+			...(delegation ? { delegation } : {}),
 		};
 		sessionFileCache.set(file, { mtime, size: st.size, summary });
 		schedulePersistentSummaryCacheWrite();
@@ -515,8 +544,29 @@ function listOrphanedSessions(knownCwds: string[]): SessionSummary[] {
  * Memoized set of every cwd that has sessions on disk, derived by peeking
  * at one first-line per session dir under the root. Invalidated when the
  * root's mtime changes (a new cwd dir appears) — see listOrphanedSessions.
+ * pi can create a dir before its first JSONL, which does not touch the
+ * root's mtime, so dirs without a readable session yet are re-checked on
+ * every call until one appears.
  */
-let orphanCwdCache: { rootMtime: number; cwds: string[] } | null = null;
+let orphanCwdCache: { rootMtime: number; cwds: string[]; unresolved: string[] } | null = null;
+
+/** The cwd recorded in the first valid `session` line of a session dir. */
+function cwdOfSessionDir(dir: string): string | null {
+	try {
+		if (!statSync(dir).isDirectory()) return null;
+		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".jsonl")) continue;
+			const firstLine = readFirstLine(join(dir, file));
+			if (!firstLine) continue;
+			try {
+				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+				// All files in a `--<cwd>--` dir share this cwd.
+				if (parsed?.type === "session" && parsed.cwd) return String(parsed.cwd);
+			} catch {}
+		}
+	} catch {}
+	return null;
+}
 
 function discoverOrphanCwds(): string[] {
 	const root = defaultSessionsRoot();
@@ -528,35 +578,29 @@ function discoverOrphanCwds(): string[] {
 		return [];
 	}
 	if (orphanCwdCache && orphanCwdCache.rootMtime === mtime) {
-		return orphanCwdCache.cwds;
+		const cache = orphanCwdCache;
+		cache.unresolved = cache.unresolved.filter((dir) => {
+			const cwd = cwdOfSessionDir(dir);
+			if (cwd && !cache.cwds.includes(cwd)) cache.cwds = [...cache.cwds, cwd];
+			return !cwd;
+		});
+		return cache.cwds;
 	}
-	// Recompute: one first-line read per session dir (every file in a
-	// `--<cwd>--` dir shares that cwd, so the first valid `session` line
-	// is enough — matches the prior per-dir `break`).
 	const cwds = new Set<string>();
+	const unresolved: string[] = [];
 	for (const name of readdirSync(root)) {
 		const dir = join(root, name);
-		try {
-			if (!statSync(dir).isDirectory()) continue;
-		} catch {
+		const cwd = cwdOfSessionDir(dir);
+		if (cwd) {
+			cwds.add(cwd);
 			continue;
 		}
-		for (const file of readdirSync(dir)) {
-			if (!file.endsWith(".jsonl")) continue;
-			const firstLine = readFirstLine(join(dir, file));
-			if (!firstLine) continue;
-			try {
-				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
-				if (parsed?.type === "session" && parsed.cwd) {
-					cwds.add(String(parsed.cwd));
-					break; // all files in this dir share this cwd
-				}
-			} catch {}
-		}
+		try {
+			if (statSync(dir).isDirectory()) unresolved.push(dir);
+		} catch {}
 	}
-	const arr = [...cwds];
-	orphanCwdCache = { rootMtime: mtime, cwds: arr };
-	return arr;
+	orphanCwdCache = { rootMtime: mtime, cwds: [...cwds], unresolved };
+	return orphanCwdCache.cwds;
 }
 
 /**

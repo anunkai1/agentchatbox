@@ -383,6 +383,10 @@ body.sidebar-resizing iframe {
 	flex: 1;
 	min-width: 0;
 }
+.session-worker-status {
+	flex-shrink: 0;
+	font-size: 11px;
+}
 /* Mark titles the user has explicitly renamed so they're visually
  * distinguishable from auto-derived (first-message) titles. */
 .session-item-title.renamed {

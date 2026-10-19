@@ -899,7 +899,7 @@ async function purgeSessionFromSearchIndex(sessionId: string): Promise<void> {
  * reaches the desktop and vice versa. Also fires on the original client,
  * so the caller doesn't need a separate reply.
  */
-function broadcastSessions(): void {
+export function broadcastSessions(): void {
 	const sessions = gatherSessions();
 	broadcast({ type: "sessions", sessions });
 }
@@ -916,6 +916,12 @@ function broadcastSessions(): void {
  */
 function gatherSessions(): SessionSummary[] {
 	const sessions = listAllSessions(projectCwds());
+	for (const s of sessions) {
+		// A worker whose child is gone (server restart, crash) is not working.
+		if (s.delegation?.status === "working" && !registry.liveFor(s.id)) {
+			s.delegation = { ...s.delegation, status: "stopped" };
+		}
+	}
 	const onDisk = new Set(sessions.map((s) => s.id));
 	const now = new Date().toISOString();
 	for (const live of registry.liveSessions()) {

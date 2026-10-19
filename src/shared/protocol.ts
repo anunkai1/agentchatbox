@@ -169,6 +169,12 @@ export interface SessionSummary {
 	title: string;
 	messageCount: number;
 	/**
+	 * Set on chats started by the delegate extension: the worker's latest
+	 * status ("working" | "needs_input" | "done" | "failed" | "stopped") and
+	 * the chat that delegated it.
+	 */
+	delegation?: { status: string; parentSessionId?: string };
+	/**
 	 * True if the user pinned this session to the top of the sidebar.
 	 * Pin state is stored server-side in `data/pins.json` (NOT in pi's
 	 * session JSONL — pi has no pin concept), so it syncs across devices.

@@ -25,6 +25,7 @@ import { asyncHandler } from "./async-handler.js";
 import { mountChatWs, shutdownChatWs } from "./chat.js";
 import { config, readPiAuth } from "./config.js";
 import { createFilesRouter } from "./files.js";
+import { createInternalSessionsRouter } from "./internal-sessions.js";
 import { jsonErrorHandler } from "./json-error.js";
 import { log } from "./logger.js";
 import { modelsCache } from "./models-cache.js";
@@ -95,6 +96,7 @@ try {
 // API routes
 app.use("/api/upload", createUploadsRouter(uploadStore));
 app.use("/api/file", createFilesRouter());
+app.use("/api/internal", createInternalSessionsRouter());
 app.use("/api/transcribe", createTranscribeRouter());
 app.use("/api/tts", createTtsRouter());
 

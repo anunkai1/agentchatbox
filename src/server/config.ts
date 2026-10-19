@@ -15,6 +15,7 @@
  * from process.cwd() — see paths.ts.
  */
 
+import { randomBytes } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -23,6 +24,8 @@ import { projectRoot } from "./paths.js";
 export interface ServerConfig {
 	port: number;
 	host: string;
+	/** Per-boot secret for /api/internal, handed only to this server's pi children. */
+	internalToken: string;
 	/** Folder for uploaded files. Created on boot. */
 	uploadsDir: string;
 	/** Max size of one upload in bytes. Default 2 GiB. */
@@ -164,6 +167,7 @@ if (maxUploadStorageBytes < maxUploadBytes) {
 export const config: ServerConfig = {
 	port: positiveInt("PORT", 3000, 65_535),
 	host: process.env.HOST ?? "127.0.0.1",
+	internalToken: randomBytes(32).toString("hex"),
 	uploadsDir: process.env.UPLOADS_DIR
 		? resolve(process.env.UPLOADS_DIR)
 		: resolve(projectRoot, "uploads"),

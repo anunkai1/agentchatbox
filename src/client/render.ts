@@ -3717,6 +3717,15 @@ export function renderSidebarProjects(_projects: ProjectSummary[]): void {
 	renderSidebarSessions(lastSessions);
 }
 
+/** Sidebar badge for chats the delegate extension started as workers. */
+const WORKER_STATUS: Record<string, { icon: string; label: string }> = {
+	working: { icon: "🟢", label: "Worker: working" },
+	needs_input: { icon: "❓", label: "Worker: needs you" },
+	done: { icon: "✅", label: "Worker: done" },
+	failed: { icon: "❌", label: "Worker: failed" },
+	stopped: { icon: "⏹", label: "Worker: stopped" },
+};
+
 /**
  * Build a single sidebar session row. Handles the click-to-resume and
  * hover-revealed pin/rename actions. The title and pin state both come
@@ -3745,6 +3754,12 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 
 	const titleRow = el("div", { class: "session-item-title-row" });
 	const titleEl = el("div", { class: "session-item-title" }, displayTitle);
+	const worker = s.delegation ? WORKER_STATUS[s.delegation.status] : undefined;
+	if (worker) {
+		titleRow.append(
+			el("span", { class: "session-worker-status", title: worker.label }, worker.icon),
+		);
+	}
 	titleRow.append(titleEl);
 
 	// The pin is a sibling of the link, not a button nested inside it. This

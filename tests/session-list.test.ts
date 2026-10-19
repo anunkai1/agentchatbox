@@ -914,3 +914,48 @@ describe("findSessionCwd", () => {
 		expect(findSessionCwd("orphan1", [cwd])).toBe(orphanCwd);
 	});
 });
+
+describe("worker status from delegation entries", () => {
+	it("reports the latest delegation entry on the summary", async () => {
+		const status = (value: string) =>
+			JSON.stringify({
+				type: "custom",
+				customType: "delegation",
+				data: { status: value, parentSessionId: "parent-1" },
+			});
+		writeSession(
+			"--home-test-project--",
+			"w.jsonl",
+			"worker-1",
+			"2026-06-15T10:00:00.000Z",
+			["task"],
+			[status("working"), status("done")],
+		);
+		writeSession("--home-test-project--", "p.jsonl", "plain-1", "2026-06-15T11:00:00.000Z", ["hi"]);
+		const { listPiSessions } = await import("../src/server/session-list.js");
+		const byId = new Map(listPiSessions(cwd).map((s) => [s.id, s]));
+		expect(byId.get("worker-1")?.delegation).toEqual({
+			status: "done",
+			parentSessionId: "parent-1",
+		});
+		expect(byId.get("plain-1")?.delegation).toBeUndefined();
+	});
+});
+
+describe("orphan folder discovery", () => {
+	it("finds a chat whose folder existed before its first file", async () => {
+		const { listAllSessions } = await import("../src/server/session-list.js");
+		const dir = join(root!, "--home-worker-repo--");
+		mkdirSync(dir);
+		// Pin the root's mtime so only the cache's own re-check can find the file.
+		const pinned = new Date("2026-01-01T00:00:00Z");
+		utimesSync(root!, pinned, pinned);
+		expect(listAllSessions([cwd]).some((s) => s.id === "late")).toBe(false);
+		writeFileSync(
+			join(dir, "late.jsonl"),
+			`${JSON.stringify({ type: "session", id: "late", timestamp: "2026-06-15T10:00:00.000Z", cwd: "/home/worker/repo" })}\n`,
+		);
+		utimesSync(root!, pinned, pinned);
+		expect(listAllSessions([cwd]).find((s) => s.id === "late")?.projectId).toBe("other");
+	});
+});

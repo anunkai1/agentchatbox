@@ -183,6 +183,10 @@ export class PiProcess extends EventEmitter {
 			env: {
 				...process.env,
 				ACB_UPLOADS_DIR: config.uploadsDir,
+				// The delegate extension starts and messages other chats through
+				// this server's /api/internal routes (internal-sessions.ts).
+				ACB_INTERNAL_URL: `http://127.0.0.1:${config.port}`,
+				ACB_INTERNAL_TOKEN: config.internalToken,
 			},
 		});
 		this.child = child;

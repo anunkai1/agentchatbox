@@ -612,6 +612,14 @@ class SessionRegistry {
 		if (!isWorking(session)) this.scheduleIdleReap(session);
 	}
 
+	/**
+	 * A child started over /api/internal has no view. Arm the normal idle reap
+	 * so it is cleaned up once its work ends; agent_start cancels the timer.
+	 */
+	releaseUnattached(session: LiveSession): void {
+		if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
+	}
+
 	/** Force-kill a session and remove it from the registry. */
 	kill(session: LiveSession): void {
 		if (session.idleTimer) {
@@ -700,6 +708,11 @@ class SessionRegistry {
 		) {
 			if (typeof line.statusText === "string") session.statusFrames.set(line.statusKey, line);
 			else session.statusFrames.delete(line.statusKey);
+			// The delegate extension saves a worker's status in its JSONL, then
+			// publishes it here so every sidebar refreshes.
+			if (line.statusKey === "delegation") {
+				for (const listener of this.sessionInfoChangedListeners) listener();
+			}
 			// A detached /cc run that just finished leaves the session idle.
 			if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
 		}
