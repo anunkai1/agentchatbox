@@ -18,9 +18,15 @@ const notices = new Map<string, Notice>();
 let container: HTMLElement | null = null;
 let session: string | null | undefined;
 
-export function mountNotices(target: HTMLElement, sessionId: string | null): void {
-	if (session !== sessionId) notices.clear();
+/** Notices belong to the bound session: switching to another one drops them,
+ *  even when no shell rebuild follows (an empty new chat has no transcript). */
+export function setNoticeSession(sessionId: string | null): void {
+	if (session === sessionId) return;
 	session = sessionId;
+	for (const key of [...notices.keys()]) clearNotice(key);
+}
+
+export function mountNotices(target: HTMLElement): void {
 	container = target;
 	container.replaceChildren();
 	refreshNotices();

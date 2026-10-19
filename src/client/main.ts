@@ -34,7 +34,7 @@ import type { LiveAssistantDom } from "./dom.js";
 import { $ } from "./dom.js";
 import { type ExtensionUiResponder, handleExtensionUiRequest } from "./extension-ui.js";
 import { setRichText } from "./linkify.js";
-import { clearNotice, refreshNotices, showNotice } from "./notices.js";
+import { clearNotice, refreshNotices, setNoticeSession, showNotice } from "./notices.js";
 import {
 	applySessionPrefs,
 	DISPLAY_DEFAULTS_KEY,
@@ -1443,6 +1443,7 @@ async function boot(): Promise<void> {
 		const exists = await sessionExists(urlSessionId);
 		if (exists) {
 			state.sessionId = urlSessionId;
+			setNoticeSession(urlSessionId);
 			applySessionPrefs();
 			syncDisplayPreferences();
 		} else {
@@ -1596,6 +1597,7 @@ async function boot(): Promise<void> {
 		// Track the session id for export/display.
 		if (info.sessionId) {
 			state.sessionId = info.sessionId;
+			setNoticeSession(info.sessionId);
 			applySessionPrefs();
 			syncDisplayPreferences();
 			// A cached/server sidebar snapshot can name a resumed session before
@@ -1757,6 +1759,7 @@ async function boot(): Promise<void> {
 				JSON.stringify(state.messages[state.messages.length - 1]) ===
 					JSON.stringify(projected[projected.length - 1]));
 		state.sessionId = sessionId;
+		setNoticeSession(sessionId);
 		applySessionPrefs();
 		syncDisplayPreferences();
 		syncCurrentSessionTitle(sidebarSessionsForCache);

@@ -2636,7 +2636,7 @@ export function renderShell(): void {
 		hidden: true,
 	});
 	composerWrap.append(notices);
-	mountNotices(notices, state.sessionId);
+	mountNotices(notices);
 	// A textarea cannot paint an inline image. Keep each attached image as a
 	// removable thumbnail just above the composer; its transport reference is
 	// kept out of the visible draft.

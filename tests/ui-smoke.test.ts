@@ -587,6 +587,33 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("drops the previous chat's notices when an empty new chat becomes ready", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			sockets.at(-1)!.send(
+				JSON.stringify({
+					type: "event",
+					event: {
+						type: "extension_ui_request",
+						method: "notify",
+						message: "Failure in the old chat",
+						notifyType: "error",
+					},
+				}),
+			);
+			await expect
+				.poll(() => page.locator(".composer-notice-error").innerText())
+				.toContain("Failure in the old chat");
+			await page.locator(".new-chat-btn").click();
+			// The empty replacement session sends `ready` but no transcript.
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/live-session-001");
+			expect(await page.locator(".composer-notice-error").count()).toBe(0);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("keeps automatic retry progress in the footer instead of retaining a failure card", async () => {
 		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
 		try {
