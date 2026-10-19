@@ -2,9 +2,9 @@
  * Client-side service registry — a tiny leaf module that breaks the
  * render↔main / render↔voice import cycle.
  *
- * `render.ts` needs to (a) fork a message and (b) request a voice reply /
- * speak — capabilities owned by `main.ts` and `voice.ts`. But `voice.ts`
- * imports `render.ts` statically (for appendError/refreshStatus), so
+ * `render.ts` needs to send prompts and request a voice reply / speak —
+ * capabilities owned by `main.ts` and `voice.ts`. But `voice.ts` imports
+ * `render.ts` statically (for appendError/refreshStatus), so
  * `render.ts` importing either back would form a cycle. Previously this
  * was papered over with ~`import("./main.js").then(...)` /
  * `import("./voice.js").then(...)` dynamic imports.
@@ -16,8 +16,6 @@
  */
 
 export interface ClientServices {
-	/** Fork the current chat at a message ordinal (per-message fork button). */
-	forkFromMessage(messageCount: number): void;
 	/** Send a slash command / prompt with no local echo (voice-reply button). */
 	sendSlashCommand(text: string): void;
 	/** Send the composer's contents exactly as pressing Enter would (voice-mode auto-send). */

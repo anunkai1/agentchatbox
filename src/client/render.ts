@@ -795,11 +795,11 @@ function makeMessageActionButton(
 }
 
 /**
- * The fork control: an `<a href="/fork/<session>/<n>">` so the browser's own
- * long-press / middle-click menu can open the fork in a new window (the fork
- * is made when that URL loads). A plain tap still forks in place. The message
- * ordinal may not exist yet (a streaming reply), so the href is refreshed
- * whenever the pointer or focus arrives and left off until `getSeq` has one.
+ * The fork control: an `<a href="/fork/<session>/<n>" target="_blank">`, so
+ * a tap opens the fork in a new window (the fork is made when that URL
+ * loads) and this chat stays put. The message ordinal may not exist yet (a
+ * streaming reply), so the href is refreshed whenever the pointer or focus
+ * arrives and left off until `getSeq` has one.
  */
 function makeForkLink(getSeq: () => number | undefined): HTMLAnchorElement {
 	const title = "Fork this conversation here";
@@ -807,6 +807,7 @@ function makeForkLink(getSeq: () => number | undefined): HTMLAnchorElement {
 		class: "message-action",
 		"aria-label": title,
 		title,
+		target: "_blank",
 		rel: "noopener",
 	}) as HTMLAnchorElement;
 	link.append(messageIcon("fork"));
@@ -819,12 +820,6 @@ function makeForkLink(getSeq: () => number | undefined): HTMLAnchorElement {
 	for (const type of ["pointerdown", "touchstart", "mouseenter", "focus"]) {
 		link.addEventListener(type, refreshHref, { passive: true });
 	}
-	link.addEventListener("click", (e) => {
-		if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-		e.preventDefault();
-		const seq = getSeq();
-		if (seq !== undefined) services.forkFromMessage?.(seq);
-	});
 	return link;
 }
 

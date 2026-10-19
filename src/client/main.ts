@@ -1858,9 +1858,6 @@ async function boot(): Promise<void> {
 	// registry (a leaf module) so render.ts doesn't have to dynamic-import
 	// this file or voice.ts — breaking the render↔{main,voice} cycle.
 	setServices({
-		forkFromMessage: (count) => {
-			if (state.sessionId) chatClient.forkSession(state.sessionId, count);
-		},
 		sendSlashCommand: (text) => {
 			sendPromptHook(text);
 		},
