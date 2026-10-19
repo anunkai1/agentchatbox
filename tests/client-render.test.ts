@@ -3,6 +3,8 @@ import {
 	matchesVoiceHint,
 	modelErrorNotice,
 	refreshCapabilitiesBadge,
+	refreshStatus,
+	setStatusMessage,
 	voiceHintFor,
 } from "../src/client/render.js";
 import { state } from "../src/client/state.js";
@@ -14,6 +16,7 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 	state.capabilities = [];
 	state.extensionStatusLabels = {};
+	state.audioPlaying = false;
 });
 
 describe("voice variant hint", () => {
@@ -97,5 +100,44 @@ describe("model error notice", () => {
 			"Model returned an error: 400 bad request",
 		);
 		expect(modelErrorNotice(undefined)).toBe("Model returned an error.");
+	});
+});
+
+describe("footer voice controls", () => {
+	it("stay available while a recording status message is shown", () => {
+		// Minimal slot: writing text replaces the markup, as in the DOM.
+		const slot = () => {
+			let html = "";
+			return {
+				title: "",
+				get innerHTML() {
+					return html;
+				},
+				set innerHTML(value: string) {
+					html = value;
+				},
+				get textContent() {
+					return html.replace(/<[^>]*>/g, "");
+				},
+				set textContent(value: string) {
+					html = value;
+				},
+			};
+		};
+		const slots = new Map<string, ReturnType<typeof slot>>();
+		vi.stubGlobal("document", {
+			getElementById: () => null,
+			querySelector: (selector: string) => {
+				if (!slots.has(selector)) slots.set(selector, slot());
+				return slots.get(selector);
+			},
+		});
+		state.audioPlaying = true;
+		refreshStatus();
+		const voice = slots.get("#status-voice")!;
+		expect(voice.innerHTML).toContain("data-stop-voice");
+		setStatusMessage("recording… click the mic to stop, ✕ to cancel");
+		refreshStatus();
+		expect(voice.innerHTML).toContain("data-stop-voice");
 	});
 });

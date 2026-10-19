@@ -1891,17 +1891,16 @@ function paintStatusDynamic(): void {
 }
 
 /**
- * Transient whole-bar message used by the voice recorder ("recording…",
+ * Transient message used by the voice recorder ("recording…",
  * "transcribing…", "transcribed (N chars)…" states). Painted into the core
  * slot and cleared by the next refreshStatus — the same lifecycle as the
  * old `$("#status-bar").textContent = …` writes, but routed through a slot
  * so the fixed-height bar layout is never replaced by a raw text node.
+ * Voice playback controls stay in their own slot throughout.
  */
 export function setStatusMessage(text: string): void {
 	const coreEl = $<HTMLSpanElement>("#status-core");
 	if (coreEl) coreEl.textContent = text;
-	const voiceEl = $<HTMLSpanElement>("#status-voice");
-	if (voiceEl) voiceEl.textContent = "";
 	const dynEl = $<HTMLSpanElement>("#status-dynamic");
 	if (dynEl) dynEl.textContent = "";
 }
