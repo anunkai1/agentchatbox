@@ -511,6 +511,50 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("keeps stop confirmations inline but still warns about unexpected time limits", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			const socket = sockets.at(-1)!;
+			socket.send(
+				JSON.stringify({
+					type: "event",
+					event: {
+						type: "message_start",
+						message: {
+							role: "custom",
+							customType: "note",
+							content: "⏹ Stopped.",
+							details: { source: "claude-delegate" },
+						},
+					},
+				}),
+			);
+			const notify = (message: string) =>
+				socket.send(
+					JSON.stringify({
+						type: "event",
+						event: {
+							type: "extension_ui_request",
+							method: "notify",
+							message,
+							notifyType: "warning",
+						},
+					}),
+				);
+			notify("⏹ Stopped.");
+			notify("⏱ Stopped: the run hit the 3h time limit.");
+			const warning = page.locator(".composer-notice-warning");
+			await expect.poll(() => warning.count()).toBe(1);
+			expect(await warning.innerText()).toContain("time limit");
+			expect(await messages(page).innerText()).toContain("⏹ Stopped.");
+			await warning.getByRole("button", { name: "Dismiss warning", exact: true }).click();
+			expect(await page.locator("#composer-notices").isVisible()).toBe(false);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("retries a failed upload only when its retry action is pressed", async () => {
 		const { page } = await openPage(`/s/${SEEDED_ID}`);
 		let attempts = 0;

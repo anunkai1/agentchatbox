@@ -795,7 +795,9 @@ export function registerClaudeDelegate(
 				const why = timedOut
 					? `⏱ Stopped: the run hit the ${formatElapsed(maxRunMs)} time limit.`
 					: "⏹ Stopped.";
-				ctx.ui.notify(why, "warning");
+				// An explicit stop already has an inline confirmation. Only an
+				// unexpected time-limit stop needs an additional warning.
+				if (timedOut) ctx.ui.notify(why, "warning");
 				pi.sendMessage({
 					customType: "note",
 					content: why,

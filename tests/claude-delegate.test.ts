@@ -1110,7 +1110,7 @@ describe("stopping runs", () => {
 		};
 	}
 
-	it("/cc stop cancels this chat's live run and says so in the chat", async () => {
+	it("/cc stop confirms inline without a redundant warning", async () => {
 		const h = harness("opus", {}, hanging() as never);
 		await h.cc("on", h.uiCtx);
 		h.input("do a long thing");
@@ -1118,7 +1118,7 @@ describe("stopping runs", () => {
 		await h.cc("stop", h.uiCtx);
 		await h.whenIdle();
 		expect(h.ui.notify).toHaveBeenCalledWith("Stopping 1 Claude Code run…", "info");
-		expect(h.ui.notify).toHaveBeenCalledWith("⏹ Stopped.", "warning");
+		expect(h.ui.notify).not.toHaveBeenCalledWith("⏹ Stopped.", expect.anything());
 		const note = h.sendMessage.mock.calls
 			.map((call) => call[0])
 			.find((m) => m.customType === "note");
@@ -1187,7 +1187,7 @@ describe("stopping runs", () => {
 		await flush();
 		h.shutdown();
 		await running;
-		expect(h.ui.notify).toHaveBeenCalledWith("⏹ Stopped.", "warning");
+		expect(h.ui.notify).not.toHaveBeenCalledWith("⏹ Stopped.", expect.anything());
 	});
 });
 
