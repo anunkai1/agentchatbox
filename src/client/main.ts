@@ -1267,9 +1267,6 @@ function onEvent(event: Record<string, unknown>): void {
 				refreshStatus();
 				if (e.statusKey === "claude-progress") syncStopButton();
 			} else if (e.method === "notify" && typeof e.message === "string") {
-				// Older, already-running extensions also notify after an explicit
-				// stop. The inline confirmation is enough; don't duplicate it.
-				if (e.notifyType === "warning" && e.message === "⏹ Stopped.") break;
 				const notifyType =
 					e.notifyType === "error" ? "error" : e.notifyType === "warning" ? "warning" : "info";
 				// pi-voice-reply reports a failed /voice-last only through notify.

@@ -542,7 +542,6 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 						},
 					}),
 				);
-			notify("⏹ Stopped.");
 			notify("⏱ Stopped: the run hit the 3h time limit.");
 			const warning = page.locator(".composer-notice-warning");
 			await expect.poll(() => warning.count()).toBe(1);
