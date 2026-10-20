@@ -190,21 +190,13 @@ function claudePromptTextFromLine(line: string): string | null {
 /** A worker chat's status, from the delegate extension's `delegation` entries. */
 export interface DelegationSummary {
 	status: string;
-	parentSessionId?: string;
 }
 
 function delegationFromLine(line: string): DelegationSummary | null {
 	if (!/"customType"\s*:\s*"delegation"/.test(line)) return null;
 	try {
-		const data = (JSON.parse(line) as { data?: { status?: unknown; parentSessionId?: unknown } })
-			.data;
-		if (typeof data?.status !== "string") return null;
-		return {
-			status: data.status,
-			...(typeof data.parentSessionId === "string"
-				? { parentSessionId: data.parentSessionId }
-				: {}),
-		};
+		const status = (JSON.parse(line) as { data?: { status?: unknown } }).data?.status;
+		return typeof status === "string" ? { status } : null;
 	} catch {
 		return null;
 	}
@@ -298,7 +290,7 @@ interface CachedSessionSummary {
  * mismatch is parsed again.
  */
 const sessionFileCache = new Map<string, CachedSessionSummary>();
-const SESSION_SUMMARY_CACHE_VERSION = 4;
+const SESSION_SUMMARY_CACHE_VERSION = 5;
 let summaryCacheLoaded = false;
 let summaryCacheDirty = false;
 let summaryCacheWriteTimer: ReturnType<typeof setTimeout> | null = null;

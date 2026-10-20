@@ -219,10 +219,7 @@ describe("delegate extension", () => {
 
 		await h.events.get("message_end")!({ message: { role: "user" } }, worker);
 		expect(h.pi.getSessionName()).toBe("Fix page");
-		expect(h.pi.appendEntry).toHaveBeenLastCalledWith("delegation", {
-			status: "working",
-			parentSessionId: "parent-1",
-		});
+		expect(h.pi.appendEntry).toHaveBeenLastCalledWith("delegation", { status: "working" });
 		expect(worker.ui.setStatus).toHaveBeenLastCalledWith("delegation", "working");
 
 		await h.tools

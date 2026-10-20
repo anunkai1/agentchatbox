@@ -170,10 +170,9 @@ export interface SessionSummary {
 	messageCount: number;
 	/**
 	 * Set on chats started by the delegate extension: the worker's latest
-	 * status ("working" | "needs_input" | "done" | "failed" | "stopped") and
-	 * the chat that delegated it.
+	 * status ("working" | "needs_input" | "done" | "failed" | "stopped").
 	 */
-	delegation?: { status: string; parentSessionId?: string };
+	delegation?: { status: string };
 	/**
 	 * True if the user pinned this session to the top of the sidebar.
 	 * Pin state is stored server-side in `data/pins.json` (NOT in pi's

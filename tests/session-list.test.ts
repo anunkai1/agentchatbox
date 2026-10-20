@@ -921,7 +921,7 @@ describe("worker status from delegation entries", () => {
 			JSON.stringify({
 				type: "custom",
 				customType: "delegation",
-				data: { status: value, parentSessionId: "parent-1" },
+				data: { status: value, parentSessionId: "parent-1" }, // older entries carry the parent
 			});
 		writeSession(
 			"--home-test-project--",
@@ -934,10 +934,7 @@ describe("worker status from delegation entries", () => {
 		writeSession("--home-test-project--", "p.jsonl", "plain-1", "2026-06-15T11:00:00.000Z", ["hi"]);
 		const { listPiSessions } = await import("../src/server/session-list.js");
 		const byId = new Map(listPiSessions(cwd).map((s) => [s.id, s]));
-		expect(byId.get("worker-1")?.delegation).toEqual({
-			status: "done",
-			parentSessionId: "parent-1",
-		});
+		expect(byId.get("worker-1")?.delegation).toEqual({ status: "done" });
 		expect(byId.get("plain-1")?.delegation).toBeUndefined();
 	});
 });

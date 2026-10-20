@@ -111,10 +111,7 @@ export default function registerDelegate(
 
 	/** Save the worker's status in its JSONL (the sidebar reads it) and tell ACB. */
 	function publish(ctx: ExtensionContext, record: Delegation): void {
-		pi.appendEntry("delegation", {
-			status: record.status,
-			parentSessionId: record.parentSessionId,
-		});
+		pi.appendEntry("delegation", { status: record.status });
 		ctx.ui.setStatus("delegation", record.status);
 	}
 
