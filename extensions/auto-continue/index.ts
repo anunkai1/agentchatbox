@@ -67,6 +67,8 @@ export default function registerAutoContinue(pi: ExtensionAPI): void {
 		// preflight compacts the context first if it is still over threshold.
 		// sendUserMessage is fire-and-forget at the extension surface; the
 		// runtime wrapper emits an extension error event if it rejects.
+		// A delegated worker's run is not over yet (extensions/delegate).
+		pi.events.emit("auto-continue:resume", {});
 		pi.sendUserMessage(CONTINUE_PROMPT);
 		applyDecision(state, decision);
 	});

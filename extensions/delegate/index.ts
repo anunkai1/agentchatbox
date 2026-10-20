@@ -75,6 +75,8 @@ export default function registerDelegate(
 ): void {
 	let pendingReport: { status: DelegationStatus; summary: string } | null = null;
 	let publishedThisRun = false;
+	/** auto-continue announced it is resuming a reply cut off at the output limit. */
+	let resuming = false;
 
 	const sessionId = (ctx: ExtensionContext) => ctx.sessionManager.getSessionId();
 	const self = (ctx: ExtensionContext) => readDelegation(sessionId(ctx));
@@ -349,10 +351,28 @@ export default function registerDelegate(
 		const last = lastAssistant(ctx.sessionManager.getBranch());
 		// `aborted` is on the event from pi 1.3; older pi only marks the message.
 		const aborted = (event as { aborted?: boolean }).aborted === true || last.aborted === true;
-		await settle(ctx, record, {
+		const outcome: { status: DelegationStatus; summary: string } = {
 			status: aborted ? "stopped" : (report?.status ?? (last.error ? "failed" : "needs_input")),
 			summary: report?.summary ?? last.error ?? last.text,
+		};
+		if (!last.cutOff || report || aborted) {
+			await settle(ctx, record, outcome);
+			return;
+		}
+		// A reply cut off at the output limit is resumed by auto-continue from
+		// its own agent_settled handler, which may run after this one. Decide
+		// once every handler has run; the resumed run reports when it ends.
+		setImmediate(() => {
+			const resumed = resuming;
+			resuming = false;
+			if (resumed) return;
+			settle(ctx, record, outcome).catch((error: unknown) => {
+				ctx.ui.notify(`Could not report to the main chat: ${String(error)}`, "warning");
+			});
 		});
+	});
+	pi.events.on("auto-continue:resume", () => {
+		resuming = true;
 	});
 
 	// Claude Code workers: the claude-delegate extension announces each run.

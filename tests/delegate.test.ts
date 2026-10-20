@@ -277,6 +277,51 @@ describe("delegate extension", () => {
 		});
 	});
 
+	it("waits for auto-continue to resume a reply cut off at the output limit", async () => {
+		const h = harness();
+		await h.tools
+			.get("delegate")!
+			.execute(
+				"call",
+				{ title: "Q", task: "t", cwd: tmpdir() },
+				undefined,
+				undefined,
+				h.ctx("parent-1"),
+			);
+		const cutOff = [
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "Half of the answ" }],
+					stopReason: "length",
+				},
+			},
+		];
+		const settled = () => new Promise((resolve) => setImmediate(resolve));
+		const worker = h.ctx("worker-1", cutOff);
+		h.acb.prompt.mockClear();
+
+		// auto-continue's handler may run after this extension's.
+		await h.events.get("agent_settled")!({}, worker);
+		h.pi.events.emit("auto-continue:resume", {});
+		await settled();
+		expect(h.telegram).not.toHaveBeenCalled();
+		expect(h.acb.prompt).not.toHaveBeenCalled();
+		expect(readDelegation("worker-1")).toMatchObject({ status: "working", reportSeq: 0 });
+
+		// Past auto-continue's budget nothing resumes it, so the cut-off reply is the report.
+		await h.events.get("message_end")!({ message: { role: "user" } }, worker);
+		await h.events.get("agent_settled")!({}, worker);
+		await settled();
+		expect(readDelegation("worker-1")).toMatchObject({
+			status: "needs_input",
+			summary: "Half of the answ",
+			reportSeq: 1,
+		});
+		expect(h.acb.prompt).toHaveBeenCalledWith("parent-1", "/delegate report worker-1", expect.anything());
+	});
+
 	it("does not wake anyone when the owner stops a worker", async () => {
 		const h = harness();
 		await h.tools

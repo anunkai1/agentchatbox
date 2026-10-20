@@ -92,6 +92,7 @@ describe("auto-continue state machine", () => {
 interface FakePi {
 	on(name: string, handler: (event: unknown, ctx: FakeCtx) => void): void;
 	sendUserMessage(content: string): void;
+	events: { emit(channel: string, data: unknown): void };
 }
 interface FakeCtx {
 	ui: { notify(text: string, kind?: string): void };
@@ -100,6 +101,7 @@ interface FakeCtx {
 function makeFake() {
 	const handlers: Record<string, Array<(event: unknown, ctx: FakeCtx) => void>> = {};
 	const sent: string[] = [];
+	const announced: string[] = [];
 	const notifications: Array<{ text: string; kind?: string }> = [];
 	const pi: FakePi = {
 		on(name, handler) {
@@ -107,6 +109,12 @@ function makeFake() {
 		},
 		sendUserMessage(content) {
 			sent.push(content);
+		},
+		// The delegate extension listens so a worker's cut-off reply is not its report.
+		events: {
+			emit(channel) {
+				announced.push(`${channel} before message ${sent.length + 1}`);
+			},
 		},
 	};
 	const ctx: FakeCtx = {
@@ -116,6 +124,7 @@ function makeFake() {
 	return {
 		pi,
 		sent,
+		announced,
 		notifications,
 		assistantEnd: (stopReason: string) =>
 			emit("message_end", {
@@ -129,6 +138,7 @@ function makeFake() {
 
 function runScenario(steps: Array<["stop", string] | ["tool"] | ["settle"]>): {
 	sent: string[];
+	announced: string[];
 	notifications: Array<{ text: string; kind?: string }>;
 } {
 	const fake = makeFake();
@@ -138,18 +148,22 @@ function runScenario(steps: Array<["stop", string] | ["tool"] | ["settle"]>): {
 		else if (kind === "tool") fake.toolEnd();
 		else fake.settled();
 	}
-	return { sent: fake.sent, notifications: fake.notifications };
+	return { sent: fake.sent, announced: fake.announced, notifications: fake.notifications };
 }
 
 describe("auto-continue pi adapter", () => {
 	it("sends the continue prompt once per truncated turn, with the resume count", () => {
-		const { sent, notifications } = runScenario([
+		const { sent, announced, notifications } = runScenario([
 			["stop", "length"],
 			["settle"],
 			["stop", "length"],
 			["settle"],
 		]);
 		expect(sent).toHaveLength(2);
+		expect(announced).toEqual([
+			"auto-continue:resume before message 1",
+			"auto-continue:resume before message 2",
+		]);
 		expect(sent[0]).toBe(CONTINUE_PROMPT);
 		expect(sent[1]).toBe(CONTINUE_PROMPT);
 		expect(notifications[0]?.text).toContain("1/3");

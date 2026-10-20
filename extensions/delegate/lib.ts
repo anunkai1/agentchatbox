@@ -266,6 +266,8 @@ export function lastAssistant(entries: readonly unknown[]): {
 	text: string;
 	error?: string;
 	aborted?: boolean;
+	/** Cut off at the output limit, which auto-continue may resume. */
+	cutOff?: boolean;
 } {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i] as {
@@ -287,6 +289,7 @@ export function lastAssistant(entries: readonly unknown[]): {
 			text: text.trim(),
 			...(stopReason === "error" ? { error: errorMessage || "the model request failed" } : {}),
 			...(stopReason === "aborted" ? { aborted: true } : {}),
+			...(stopReason === "length" ? { cutOff: true } : {}),
 		};
 	}
 	return { text: "" };
