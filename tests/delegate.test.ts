@@ -1,16 +1,31 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerDelegate from "../extensions/delegate/index.js";
 import {
+	BRIEF_GUIDANCE,
+	buildBrief,
+	type Delegation,
+	DISPATCH_GUIDANCE,
 	formatStatusList,
 	parseDelegateArgs,
+	REPORT_GUIDANCE,
 	readDelegation,
 	resolveModelToken,
+	STATUS_NOTE,
+	writeDelegation,
 } from "../extensions/delegate/lib.js";
 
 type Handler = (...args: unknown[]) => Promise<unknown>;
+type Tool = {
+	name: string;
+	execute: Handler;
+	description: string;
+	promptGuidelines?: string[];
+	parameters: { properties: Record<string, { description?: string }> };
+	annotations?: { readOnlyHint?: boolean };
+};
 
 const MODELS = [
 	{ provider: "anthropic", id: "claude-sonnet-5-5" },
@@ -19,12 +34,12 @@ const MODELS = [
 ];
 
 function harness() {
-	const tools = new Map<string, { execute: Handler }>();
+	const tools = new Map<string, Tool>();
 	const events = new Map<string, Handler>();
 	const commands = new Map<string, Handler>();
 	let sessionName: string | undefined;
 	const pi = {
-		registerTool: (tool: { name: string; execute: Handler }) => tools.set(tool.name, tool),
+		registerTool: (tool: Tool) => tools.set(tool.name, tool),
 		registerCommand: (name: string, options: { handler: Handler }) =>
 			commands.set(name, options.handler),
 		on: (event: string, handler: Handler) => events.set(event, handler),
@@ -59,9 +74,60 @@ function harness() {
 	return { pi, acb, telegram, tools, events, commands, ctx };
 }
 
+let recordsDir: string;
 beforeEach(() => {
-	process.env.ACB_DELEGATIONS_DIR = mkdtempSync(join(tmpdir(), "acb-delegations-"));
+	recordsDir = mkdtempSync(join(tmpdir(), "acb-delegations-"));
+	vi.stubEnv("ACB_DELEGATIONS_DIR", recordsDir);
 });
+afterEach(() => {
+	vi.unstubAllEnvs();
+	rmSync(recordsDir, { recursive: true, force: true });
+});
+
+function saveWorker(id: string, overrides: Partial<Delegation> = {}): Delegation {
+	const model = { provider: "openai", modelId: "gpt-6.1-sol", thinkingLevel: "high" };
+	const record: Delegation = {
+		id,
+		title: "Fix journal",
+		task: "Restore the journal page; verify with the journal tests.",
+		cwd: tmpdir(),
+		parentSessionId: "parent-1",
+		parentModel: model,
+		workerModel: model,
+		status: "working",
+		createdAt: "2026-01-01T00:00:00.000Z",
+		updatedAt: "2026-01-01T01:00:00.000Z",
+		reportSeq: 0,
+		...overrides,
+	};
+	writeDelegation(record);
+	return record;
+}
+
+async function workerStatus(h: ReturnType<typeof harness>, params = {}) {
+	const result = (await h.tools.get("delegate_status")!.execute("call", params)) as {
+		content: Array<{ text: string }>;
+		structuredContent: {
+			note: string;
+			total: number;
+			offset: number;
+			nextOffset: number | null;
+			workers: Array<
+				Pick<
+					Delegation,
+					"id" | "title" | "task" | "cwd" | "parentSessionId" | "status" | "updatedAt"
+				> & {
+					recordPath: string;
+					url: string;
+					parentUrl: string;
+					summary: string | null;
+				}
+			>;
+		};
+	};
+	expect(JSON.parse(result.content[0].text)).toEqual(result.structuredContent);
+	return result.structuredContent;
+}
 
 describe("delegate extension", () => {
 	it("starts a worker chat in the given folder with the parent's model", async () => {
@@ -237,7 +303,7 @@ describe("delegate extension", () => {
 		);
 		await command("fix uploads", h.ctx("parent-1"));
 		expect(h.pi.sendUserMessage).toHaveBeenLastCalledWith(
-			expect.stringMatching(/tool\. Pick[\s\S]*Task: fix uploads$/),
+			expect.stringMatching(/delegate tool or delegate_message[\s\S]*Task: fix uploads$/),
 		);
 	});
 
@@ -253,7 +319,215 @@ describe("delegate extension", () => {
 				h.ctx("parent-1"),
 			);
 		await h.commands.get("delegate")!("status", h.ctx("parent-1"));
-		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain("🟢 [Fix page](/s/worker-1) · tmp");
+		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain(
+			"🟢 [Fix page](/s/worker-1) · working (recorded) · /tmp",
+		);
+		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain(STATUS_NOTE);
+	});
+});
+
+describe("delegation guidance and context reuse", () => {
+	it("supplies a brief template and adds collaboration/report guidance to every brief", () => {
+		const h = harness();
+		const task = [
+			"Goal and why: Restore the journal so the owner can read it.",
+			"Known facts: src/page.ts fails with 'missing journal'; owner said 'fix this'.",
+			"Done when: Journal tests pass; return the changed paths and test output.",
+		].join("\n");
+		const brief = buildBrief(saveWorker("worker-1", { task }));
+		expect(brief).toContain(task);
+		expect(brief).toContain("You are not alone. Other workers may be editing this repository");
+		expect(brief).toContain("preserve their changes and do not undo them");
+		expect(brief).toContain("rather than inventing facts or asking the owner unnecessarily");
+		expect(brief).toContain(REPORT_GUIDANCE);
+		expect(brief).toMatch(/result first, then evidence[\s\S]*then open questions/);
+		expect(brief).toContain("normally under 300 words");
+		expect(h.tools.get("delegate")!.parameters.properties.task.description).toBe(BRIEF_GUIDANCE);
+		expect(h.tools.get("delegation_report")!.parameters.properties.summary.description).toBe(
+			REPORT_GUIDANCE,
+		);
+	});
+
+	it("guides approved independent dispatches, topic reuse and no speculative progress", async () => {
+		const h = harness();
+		const tool = h.tools.get("delegate")!;
+		expect(tool.promptGuidelines).toEqual([...DISPATCH_GUIDANCE, BRIEF_GUIDANCE]);
+		expect(tool.description).toContain("ordinary requests are not approval");
+		expect(tool.description).toContain("independently/concurrently");
+		expect(tool.description).toContain("Do not split tightly dependent work unnecessarily");
+		expect(tool.description).toContain("After all dispatches");
+		expect(tool.description).toContain("Do not reuse an unrelated worker");
+		expect(h.tools.get("delegate_message")!.description).toContain("retains context");
+		expect(h.tools.get("delegate_status")!.promptGuidelines?.join(" ")).toContain(
+			"never guess results or progress",
+		);
+		await h.commands.get("d")!("fix uploads and investigate the printer", h.ctx("parent-1"));
+		const prompt = h.pi.sendUserMessage.mock.calls[0][0];
+		for (const guidance of [...DISPATCH_GUIDANCE, BRIEF_GUIDANCE])
+			expect(prompt).toContain(guidance);
+		expect(prompt).toContain("Task: fix uploads and investigate the printer");
+	});
+
+	it("allows independent workers to be dispatched concurrently in the same repository", async () => {
+		const h = harness();
+		const results = await Promise.all(
+			["Fix uploads", "Fix journal"].map((title) =>
+				h.tools
+					.get("delegate")!
+					.execute(
+						"call",
+						{ title, task: title, cwd: tmpdir() },
+						undefined,
+						undefined,
+						h.ctx("parent-1"),
+					),
+			),
+		);
+		expect(h.acb.create).toHaveBeenCalledTimes(2);
+		expect(results).toHaveLength(2);
+		expect(readDelegation("worker-1")?.title).toBe("Fix uploads");
+		expect(readDelegation("worker-2")?.title).toBe("Fix journal");
+	});
+
+	it("finds and resumes the same-topic worker without a new chat or model/parent change", async () => {
+		const h = harness();
+		const record = saveWorker("journal-worker", {
+			status: "done",
+			workerModel: { provider: "anthropic", modelId: "claude-opus-5-5", thinkingLevel: "low" },
+		});
+		const data = await workerStatus(h, { query: "journal restore", parentSessionId: "parent-1" });
+		expect(data.workers.map((r) => r.id)).toEqual([record.id]);
+		await h.tools.get("delegate_message")!.execute("call", {
+			worker: data.workers[0].id,
+			message: "Also cover the missing-journal regression.",
+		});
+		expect(h.acb.create).not.toHaveBeenCalled();
+		expect(h.acb.prompt).toHaveBeenCalledWith(
+			record.id,
+			"Also cover the missing-journal regression.",
+			record.workerModel,
+		);
+		await h.events.get("message_end")!({ message: { role: "user" } }, h.ctx(record.id));
+		expect(readDelegation(record.id)).toMatchObject({
+			parentSessionId: "parent-1",
+			workerModel: record.workerModel,
+			status: "working",
+		});
+	});
+
+	it.each([
+		"needs_input",
+		"failed",
+	] as const)("delivers a useful %s report unchanged to the parent and Telegram", async (status) => {
+		const h = harness();
+		saveWorker("worker-1");
+		const summary =
+			status === "needs_input"
+				? "Result: Need a database choice.\nEvidence: Found SQLite and Postgres configs.\nOpen questions: Use SQLite? Recommended for this local task."
+				: "Result: Blocked by missing fixtures.\nEvidence: Test runner reports ENOENT; no files changed.\nOpen questions: Restore fixtures, then rerun journal tests.";
+		await h.tools
+			.get("delegation_report")!
+			.execute("call", { status, summary }, undefined, undefined, h.ctx("worker-1"));
+		await h.events.get("agent_settled")!({}, h.ctx("worker-1"));
+		expect(readDelegation("worker-1")).toMatchObject({ status, summary, reportSeq: 1 });
+		expect(h.telegram).toHaveBeenCalledWith(expect.stringContaining(summary));
+		await h.commands.get("d")!("report worker-1", h.ctx("parent-1"));
+		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain(summary);
+		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain("do not invent missing evidence");
+	});
+});
+
+describe("record-backed delegate_status", () => {
+	it("returns factual task/status/repo/parent metadata without observing or mutating workers", async () => {
+		const h = harness();
+		const record = saveWorker("old-worker", { summary: "Previous report only." });
+		const file = join(recordsDir, `${record.id}.json`);
+		const before = readFileSync(file, "utf8");
+		const data = await workerStatus(h, { worker: record.id });
+		expect(data).toMatchObject({ total: 1, offset: 0, nextOffset: null, note: STATUS_NOTE });
+		expect(data.workers[0]).toEqual({
+			id: record.id,
+			title: record.title,
+			task: record.task,
+			recordPath: file,
+			cwd: record.cwd,
+			parentSessionId: record.parentSessionId,
+			status: "working",
+			createdAt: record.createdAt,
+			updatedAt: record.updatedAt,
+			summary: "Previous report only.",
+			url: "/s/old-worker",
+			parentUrl: "/s/parent-1",
+		});
+		expect(data.note).toContain("not proof that it is still running");
+		expect(data.note).toContain("may predate the current turn");
+		expect(h.tools.get("delegate_status")!.annotations?.readOnlyHint).toBe(true);
+		expect(readFileSync(file, "utf8")).toBe(before);
+		expect(h.acb.create).not.toHaveBeenCalled();
+		expect(h.acb.prompt).not.toHaveBeenCalled();
+		expect(h.telegram).not.toHaveBeenCalled();
+	});
+
+	it("pages the last ten and searches older task/title records before limiting", async () => {
+		const h = harness();
+		saveWorker("older-journal");
+		for (let day = 2; day <= 13; day++) {
+			saveWorker(`uploads-${day}`, {
+				title: "Uploads",
+				task: "Fix uploads",
+				createdAt: `2026-01-${String(day).padStart(2, "0")}T00:00:00.000Z`,
+			});
+		}
+		const first = await workerStatus(h);
+		expect(first).toMatchObject({ total: 13, offset: 0, nextOffset: 10 });
+		expect(first.workers).toHaveLength(10);
+		expect(first.workers[0].id).toBe("uploads-13");
+		const next = await workerStatus(h, { offset: first.nextOffset });
+		expect(next).toMatchObject({ total: 13, offset: 10, nextOffset: null });
+		expect(next.workers.map((r) => r.id)).toEqual(["uploads-3", "uploads-2", "older-journal"]);
+		const topic = await workerStatus(h, { query: "RESTORE journal", cwd: tmpdir(), limit: 1 });
+		expect(topic.workers.map((r) => r.id)).toEqual(["older-journal"]);
+		expect(topic.total).toBe(1);
+		await h.commands.get("d")!("status", h.ctx("parent-1"));
+		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain("Last 10 delegations");
+		expect(h.pi.sendMessage.mock.calls[0][0].content).not.toContain("older-journal");
+	});
+
+	it("bounds long task/report excerpts but searches and links to the complete saved context", async () => {
+		const h = harness();
+		const record = saveWorker("long-brief", {
+			task: `${"Known facts. ".repeat(500)} Searchable ending.`,
+			summary: "Evidence. ".repeat(500),
+		});
+		const data = await workerStatus(h, { query: "searchable ending" });
+		expect(data.total).toBe(1);
+		const result = data.workers[0];
+		expect(result.task.length).toBeLessThan(1_100);
+		expect(result.summary!.length).toBeLessThan(1_100);
+		expect(result.task).toContain("[truncated; read recordPath for full text]");
+		expect(JSON.parse(readFileSync(result.recordPath, "utf8"))).toMatchObject({
+			task: record.task,
+			summary: record.summary,
+		});
+	});
+
+	it("filters exact worker, parent and cwd, and tolerates absent/corrupt records", async () => {
+		const h = harness();
+		expect(await workerStatus(h)).toMatchObject({ total: 0, workers: [], nextOffset: null });
+		saveWorker("worker-1", { status: "needs_input" });
+		saveWorker("worker-2", { status: "failed", parentSessionId: "parent-2" });
+		writeFileSync(join(recordsDir, "broken.json"), "{");
+		expect((await workerStatus(h, { parentSessionId: "parent-2" })).workers[0].status).toBe(
+			"failed",
+		);
+		expect((await workerStatus(h, { worker: "worker-1" })).workers[0].status).toBe("needs_input");
+		for (const params of [
+			{ worker: "unknown" },
+			{ cwd: "/another/repo" },
+			{ query: "unrelated" },
+		]) {
+			expect(await workerStatus(h, params)).toMatchObject({ total: 0, workers: [] });
+		}
 	});
 });
 
@@ -307,6 +581,7 @@ describe("delegate when the chat limit is reached", () => {
 describe("/d shortcut", () => {
 	it("is the same command as /delegate", async () => {
 		const h = harness();
+		expect(h.commands.get("d")).toBe(h.commands.get("delegate"));
 		await h.commands.get("d")!("status", h.ctx("parent-1"));
 		expect(h.pi.sendMessage.mock.calls[0][0].content).toBe("No delegations yet.");
 	});

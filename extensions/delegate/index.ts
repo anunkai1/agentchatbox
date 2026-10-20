@@ -1,24 +1,30 @@
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import Type from "typebox";
 import {
 	AcbSessions,
+	BRIEF_GUIDANCE,
 	buildBrief,
 	chatLink,
 	type Delegation,
 	type DelegationStatus,
+	DISPATCH_GUIDANCE,
 	delegatePrompt,
+	delegationsDir,
 	formatReport,
 	formatStatusList,
 	lastAssistant,
 	listDelegations,
 	type ModelChoice,
 	parseDelegateArgs,
+	REPORT_GUIDANCE,
 	readDelegation,
 	readDelivered,
 	resolveModelToken,
+	STATUS_NOTE,
+	STATUSES,
 	telegramText,
 	writeDelegation,
 	writeDelivered,
@@ -26,6 +32,13 @@ import {
 
 const PUBLIC_URL = process.env.ACB_PUBLIC_URL ?? "https://agent.mavali.top";
 const REPORT_TOOL = "delegation_report";
+
+/** Keep status pages small; the saved record remains available for full context. */
+function statusExcerpt(text: string): string {
+	return text.length <= 1_000
+		? text
+		: `${text.slice(0, 1_000)}… [truncated; read recordPath for full text]`;
+}
 
 function sendTelegram(text: string): void {
 	try {
@@ -87,14 +100,15 @@ export default function registerDelegate(
 		label: "Delegate",
 		description: [
 			"Start a worker: a separate ACB chat that does a task in the background while this chat stays free.",
-			"Use only when the owner asks to delegate, hand off or run something in the background, or accepts your suggestion to.",
+			...DISPATCH_GUIDANCE,
 			"cwd is the folder of the repository the task belongs to: look it up in /home/lepton/infra/apps/REGISTRY.md (host/server config is /home/lepton/infra); for tasks that are not about code use this chat's folder. If it is unclear, ask the owner first.",
-			"The worker cannot see this conversation, so the task must be a complete brief.",
-			"Afterwards tell the owner in one line, with the link, and end your turn. The worker's report arrives here as a new message.",
+			BRIEF_GUIDANCE,
+			"The worker's report arrives here as a new message. Omit model unless the owner specified one; workers inherit this chat's model and thinking level.",
 		].join(" "),
+		promptGuidelines: [...DISPATCH_GUIDANCE, BRIEF_GUIDANCE],
 		parameters: Type.Object({
 			title: Type.String({ description: "Short chat title, e.g. 'Fix journal page'" }),
-			task: Type.String({ description: "Complete, self-contained brief for the worker" }),
+			task: Type.String({ description: BRIEF_GUIDANCE }),
 			cwd: Type.String({ description: "Absolute path of the folder the worker runs in" }),
 			model: Type.Optional(
 				Type.String({ description: "provider/model-id, only if the owner asked for a model" }),
@@ -130,7 +144,7 @@ export default function registerDelegate(
 				content: [
 					{
 						type: "text",
-						text: `Worker started: ${chatLink(record.title, id)} in ${cwd} (${workerModel.provider}/${workerModel.modelId}). Tell the owner in one line with that link, then end your turn.`,
+						text: `Worker started: ${chatLink(record.title, id)} in ${cwd} (${workerModel.provider}/${workerModel.modelId}). After all independent tasks in the approved request are dispatched, give the owner the links and end your turn.`,
 					},
 				],
 				details: undefined,
@@ -139,10 +153,87 @@ export default function registerDelegate(
 	});
 
 	pi.registerTool({
+		name: "delegate_status",
+		label: "Worker status",
+		description:
+			"List or look up ACB delegation records to answer worker-status questions factually or find a same-topic worker before spawning. Defaults to the last 10 across chats; filters apply before paging. Includes original task, repo, parent and worker links, recorded status and timestamps. Long task/report text is excerpted; read recordPath for full context. This does not observe live activity or detailed progress.",
+		promptGuidelines: [
+			"Use delegate_status for worker-status questions and before spawning to find same-topic workers; never guess results or progress. A recorded working status is not proof that a process is still running.",
+		],
+		annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+		parameters: Type.Object({
+			worker: Type.Optional(Type.String({ description: "Exact worker session id" })),
+			query: Type.Optional(
+				Type.String({
+					description: "Case-insensitive words to match in the title and original task",
+				}),
+			),
+			cwd: Type.Optional(Type.String({ description: "Exact absolute repository/folder path" })),
+			parentSessionId: Type.Optional(
+				Type.String({ description: "Only workers delegated by this parent session id" }),
+			),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 10 })),
+			offset: Type.Optional(Type.Integer({ minimum: 0, default: 0 })),
+		}),
+		outputSchema: Type.Object({
+			note: Type.String(),
+			total: Type.Integer(),
+			offset: Type.Integer(),
+			nextOffset: Type.Union([Type.Integer(), Type.Null()]),
+			workers: Type.Array(
+				Type.Object({
+					id: Type.String(),
+					title: Type.String(),
+					task: Type.String(),
+					recordPath: Type.String(),
+					cwd: Type.String(),
+					parentSessionId: Type.String(),
+					url: Type.String(),
+					parentUrl: Type.String(),
+					status: Type.Union(STATUSES.map((status) => Type.Literal(status))),
+					createdAt: Type.String(),
+					updatedAt: Type.String(),
+					summary: Type.Union([Type.String(), Type.Null()]),
+				}),
+			),
+		}),
+		async execute(_id, params) {
+			const records = listDelegations(Infinity, undefined, params);
+			const offset = params.offset ?? 0;
+			const end = offset + (params.limit ?? 10);
+			const data = {
+				note: STATUS_NOTE,
+				total: records.length,
+				offset,
+				nextOffset: end < records.length ? end : null,
+				workers: records.slice(offset, end).map((r) => ({
+					id: r.id,
+					title: r.title,
+					task: statusExcerpt(r.task),
+					recordPath: join(delegationsDir(), `${r.id}.json`),
+					cwd: r.cwd,
+					parentSessionId: r.parentSessionId,
+					url: `/s/${r.id}`,
+					parentUrl: `/s/${r.parentSessionId}`,
+					status: r.status,
+					createdAt: r.createdAt,
+					updatedAt: r.updatedAt,
+					summary: r.summary === undefined ? null : statusExcerpt(r.summary),
+				})),
+			};
+			return {
+				content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+				structuredContent: data,
+				details: data,
+			};
+		},
+	});
+
+	pi.registerTool({
 		name: "delegate_message",
 		label: "Message worker",
 		description:
-			"Send a follow-up instruction to a worker started with delegate (its id is in the /s/<id> link). It continues in its own chat and reports again.",
+			"Send a follow-up instruction to an existing worker (find its id and original task with delegate_status). Prefer this for the same topic instead of spawning a new conversation: it retains context and reports again to its original parent. Do not pick an unrelated worker just because it shares a repo.",
 		parameters: Type.Object({
 			worker: Type.String({ description: "Worker chat id" }),
 			message: Type.String({ description: "The instruction" }),
@@ -161,15 +252,14 @@ export default function registerDelegate(
 	pi.registerTool({
 		name: REPORT_TOOL,
 		label: "Report to main chat",
-		description:
-			"Worker chats only: report to the chat that delegated this task, then end your turn. done = finished (what changed, checks passed, anything open); needs_input = you need the owner's decision (the question); failed = cannot finish (why).",
+		description: `Worker chats only: report to the chat that delegated this task, then end your turn. done = finished; needs_input = you need the owner's decision; failed = cannot finish. ${REPORT_GUIDANCE}`,
 		parameters: Type.Object({
 			status: Type.Union([
 				Type.Literal("done"),
 				Type.Literal("needs_input"),
 				Type.Literal("failed"),
 			]),
-			summary: Type.String({ description: "Short report for the main chat" }),
+			summary: Type.String({ description: REPORT_GUIDANCE }),
 		}),
 		defaultActive: false,
 		async execute(_id, params, _signal, _onUpdate, ctx) {

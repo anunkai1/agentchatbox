@@ -69,16 +69,36 @@ export function writeDelegation(record: Delegation, dir = delegationsDir()): voi
 	renameSync(temp, file);
 }
 
-export function listDelegations(limit: number, dir = delegationsDir()): Delegation[] {
+export interface DelegationFilter {
+	worker?: string;
+	query?: string;
+	cwd?: string;
+	parentSessionId?: string;
+}
+
+/** Filter before taking the last N, so older workers can be found by topic. */
+export function listDelegations(
+	limit: number,
+	dir = delegationsDir(),
+	filter: DelegationFilter = {},
+): Delegation[] {
 	let names: string[];
 	try {
 		names = readdirSync(dir).filter((name) => name.endsWith(".json"));
 	} catch {
 		return [];
 	}
+	const words = filter.query?.toLowerCase().split(/\s+/).filter(Boolean) ?? [];
 	return names
 		.map((name) => readDelegation(name.slice(0, -5), dir))
 		.filter((record): record is Delegation => record !== null)
+		.filter(
+			(r) =>
+				(!filter.worker || r.id === filter.worker) &&
+				(!filter.cwd || r.cwd === filter.cwd) &&
+				(!filter.parentSessionId || r.parentSessionId === filter.parentSessionId) &&
+				words.every((word) => `${r.title}\n${r.task}`.toLowerCase().includes(word)),
+		)
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 		.slice(0, limit);
 }
@@ -96,17 +116,28 @@ export function ago(fromIso: string, now = Date.now()): string {
 	return `${Math.round(hours / 24)} days ago`;
 }
 
-function folderName(cwd: string): string {
-	return cwd.split("/").filter(Boolean).pop() ?? cwd;
-}
+export const STATUS_NOTE =
+	"Recorded status only, not live progress: working is saved at worker creation or turn start, not proof that it is still running. Records can be stale after interruptions; summaries are the last recorded reports and may predate the current turn. Do not infer results or detailed progress.";
+
+export const BRIEF_GUIDANCE =
+	"The worker cannot see this conversation. Write a self-contained brief with sections: Goal and why; Known facts (relevant paths, errors and the owner's words); Done when (required checks and the evidence to return). Include only supplied or verified facts, not invented details. Investigate gaps where possible; ask the owner only if genuinely blocked, not when the task is already clear.";
+
+export const DISPATCH_GUIDANCE = [
+	"Delegate only when the owner explicitly asks to delegate, hand off or run work in the background, or accepts your suggestion; ordinary requests are not approval.",
+	"Before spawning, use delegate_status to find relevant existing workers by topic. Prefer delegate_message for the same topic to retain context; compare the title, task and parent chat, not just the repository. Do not reuse an unrelated worker merely because it shares a repo.",
+	"For an explicitly delegated request with independent tasks, split and dispatch them independently/concurrently where appropriate. Do not split tightly dependent work unnecessarily. After all dispatches, briefly give the owner the session links and end your turn; do not wait or poll for completion.",
+];
+
+export const REPORT_GUIDANCE =
+	"Report result first, then evidence (changes and checks actually run), then open questions; be concise, normally under 300 words. For needs_input, state the exact decision/question, relevant findings and options or a recommendation. For failed, state the blocker, partial work/checks and the next useful step. Never claim unperformed checks or guess results.";
 
 export function formatStatusList(records: Delegation[], now = Date.now()): string {
 	if (records.length === 0) return "No delegations yet.";
 	const lines = records.map(
 		(r) =>
-			`- ${STATUS_ICONS[r.status]} ${chatLink(r.title, r.id)} · ${folderName(r.cwd)} · ${ago(r.createdAt, now)}`,
+			`- ${STATUS_ICONS[r.status]} ${chatLink(r.title, r.id)} · ${r.status} (recorded) · ${r.cwd} · updated ${ago(r.updatedAt, now)} · ${chatLink("parent", r.parentSessionId)}`,
 	);
-	return `**Last ${records.length} delegation${records.length === 1 ? "" : "s"}**\n\n${lines.join("\n")}`;
+	return `**Last ${records.length} delegation${records.length === 1 ? "" : "s"}**\n\n${lines.join("\n")}\n\n_${STATUS_NOTE}_`;
 }
 
 /** The first message of a worker chat. The worker cannot see the parent chat. */
@@ -121,10 +152,13 @@ export function buildBrief(
 		record.task.trim(),
 		"",
 		"---",
-		`You are a worker in ${record.cwd}. Do the task, then call delegation_report:`,
+		`You are a worker in ${record.cwd}. Work from the goal and reason, known facts, and definition of done above. Investigate missing details rather than inventing facts or asking the owner unnecessarily when the task is clear.`,
+		"You are not alone. Other workers may be editing this repository; preserve their changes and do not undo them.",
+		"Do the task, then call delegation_report:",
 		"- `done` when finished: what changed, which checks passed, anything still open;",
 		"- `needs_input` when you need the owner's decision, with the question;",
 		"- `failed` when you cannot finish, with the reason.",
+		REPORT_GUIDANCE,
 		"The owner may also message you here directly.",
 	].join("\n");
 }
@@ -135,7 +169,7 @@ export function formatReport(record: Delegation): string {
 		"",
 		record.summary?.trim() || "(no summary)",
 		"",
-		"_This is a worker's report, not a message from the owner. Check it against what was asked, then tell the owner the outcome, send the worker more work with delegate_message, start the next step, or ask the owner._",
+		"_This is a worker's report, not a message from the owner. Check its result and evidence against the brief; do not invent missing evidence. Then tell the owner the outcome, continue the same topic with delegate_message, take an already approved next step, or ask the owner a necessary question._",
 	].join("\n");
 }
 
@@ -194,7 +228,13 @@ export function resolveModelToken<T extends ModelLike>(
 
 export function delegatePrompt(task: string, model?: ModelLike): string {
 	const using = model ? ` Use model ${model.provider}/${model.id}.` : "";
-	return `Delegate this to a worker with the delegate tool.${using} Pick the right folder first.\n\nTask: ${task}`;
+	return [
+		`Delegate this request with the delegate tool or delegate_message for an existing worker.${using} Pick the right folder first.`,
+		...DISPATCH_GUIDANCE,
+		BRIEF_GUIDANCE,
+		"",
+		`Task: ${task}`,
+	].join("\n");
 }
 
 /** The newest assistant message on the branch: its text and how it ended. */
