@@ -1,6 +1,6 @@
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const STATUSES = ["working", "needs_input", "done", "failed", "stopped"] as const;
 export type DelegationStatus = (typeof STATUSES)[number];
@@ -37,6 +37,8 @@ export interface Delegation {
 	/** Used to resume the parent if its chat has been closed. */
 	parentModel: ModelChoice;
 	workerModel: ModelChoice;
+	/** Claude Code model (opus/sonnet/haiku) when the worker runs in Claude Code mode. */
+	claude?: string;
 	status: DelegationStatus;
 	summary?: string;
 	createdAt: string;
@@ -142,8 +144,23 @@ export function formatStatusList(records: Delegation[], now = Date.now()): strin
 
 /** The first message of a worker chat. The worker cannot see the parent chat. */
 export function buildBrief(
-	record: Pick<Delegation, "title" | "task" | "cwd" | "parentSessionId">,
+	record: Pick<Delegation, "title" | "task" | "cwd" | "parentSessionId" | "claude">,
 ): string {
+	// Claude Code cannot call pi tools, so it reports with a closing status line.
+	const report = record.claude
+		? [
+				`Claude Code starts in its own workspace: work in ${record.cwd}, and first read the AGENTS.md there (if any) and follow it.`,
+				"Do the task. When you stop, end your final reply with exactly one of these lines:",
+				"- `Status: done` when finished: what changed, which checks passed, anything still open;",
+				"- `Status: needs_input` when you need the owner's decision, with the question;",
+				"- `Status: failed` when you cannot finish, with the reason.",
+			]
+		: [
+				"Do the task, then call delegation_report:",
+				"- `done` when finished: what changed, which checks passed, anything still open;",
+				"- `needs_input` when you need the owner's decision, with the question;",
+				"- `failed` when you cannot finish, with the reason.",
+			];
 	return [
 		`Delegated from ${chatLink("main chat", record.parentSessionId)}.`,
 		"",
@@ -154,22 +171,26 @@ export function buildBrief(
 		"---",
 		`You are a worker in ${record.cwd}. Work from the goal and reason, known facts, and definition of done above. Investigate missing details rather than inventing facts or asking the owner unnecessarily when the task is clear.`,
 		"You are not alone. Other workers may be editing this repository; preserve their changes and do not undo them.",
-		"Do the task, then call delegation_report:",
-		"- `done` when finished: what changed, which checks passed, anything still open;",
-		"- `needs_input` when you need the owner's decision, with the question;",
-		"- `failed` when you cannot finish, with the reason.",
+		...report,
+		"Your report also reaches the owner on Telegram, so do not message them yourself.",
 		REPORT_GUIDANCE,
 		"The owner may also message you here directly.",
 	].join("\n");
 }
 
-export function formatReport(record: Delegation): string {
+/** How the reviewing chat sends a worker more work: a pi tool, or cli.ts for Claude Code. */
+const NEXT_STEP = {
+	pi: "continue the same topic with delegate_message",
+	cli: "continue the same topic with `node /home/lepton/agentchatbox/extensions/delegate/cli.ts message <worker id>` (message on stdin)",
+};
+
+export function formatReport(record: Delegation, via: keyof typeof NEXT_STEP = "pi"): string {
 	return [
 		`**Worker report** · ${STATUS_ICONS[record.status]} ${STATUS_LABELS[record.status]} · ${chatLink(record.title, record.id)}`,
 		"",
 		record.summary?.trim() || "(no summary)",
 		"",
-		"_This is a worker's report, not a message from the owner. Check its result and evidence against the brief; do not invent missing evidence. Then tell the owner the outcome, continue the same topic with delegate_message, take an already approved next step, or ask the owner a necessary question._",
+		`_This is a worker's report, not a message from the owner. Check its result and evidence against the brief; do not invent missing evidence. Then tell the owner the outcome, ${NEXT_STEP[via]}, take an already approved next step, or ask the owner a necessary question. Worker id: ${record.id}_`,
 	].join("\n");
 }
 
@@ -187,6 +208,7 @@ export function telegramText(record: Delegation, publicUrl: string): string {
 export type DelegateArgs =
 	| { kind: "status" }
 	| { kind: "report"; id: string }
+	| { kind: "start"; id: string }
 	/** `rest` is the task if `first` turns out to name a model. */
 	| { kind: "task"; task: string; first: string; rest: string }
 	| { kind: "usage" };
@@ -197,6 +219,8 @@ export function parseDelegateArgs(raw: string): DelegateArgs {
 	if (args === "status") return { kind: "status" };
 	const report = args.match(/^report\s+(\S+)$/);
 	if (report) return { kind: "report", id: report[1] };
+	const start = args.match(/^start\s+(\S+)$/);
+	if (start) return { kind: "start", id: start[1] };
 	const [first, ...rest] = args.split(/\s+/);
 	return { kind: "task", task: args, first, rest: rest.join(" ") };
 }
@@ -268,6 +292,21 @@ export function lastAssistant(entries: readonly unknown[]): {
 	return { text: "" };
 }
 
+const STATUS_LINE = /^\W*status\W*[:-][\s*_`]*(done|needs[_ ]input|failed)\b.*$/gim;
+
+/** A Claude Code worker's closing `Status: …` line, and its reply without it. */
+export function parseStatusLine(text: string): {
+	status?: Exclude<DelegationStatus, "working" | "stopped">;
+	summary: string;
+} {
+	const matches = [...text.matchAll(STATUS_LINE)];
+	const last = matches.at(-1);
+	if (!last || last.index === undefined) return { summary: text.trim() };
+	const word = last[1].toLowerCase().replace(" ", "_") as "done" | "needs_input" | "failed";
+	const summary = `${text.slice(0, last.index)}${text.slice(last.index + last[0].length)}`.trim();
+	return { status: word, summary };
+}
+
 /** The parent records which report it has delivered apart from the worker's file. */
 export function readDelivered(id: string, dir = delegationsDir()): number {
 	try {
@@ -283,11 +322,11 @@ export function writeDelivered(id: string, seq: number, dir = delegationsDir()):
 }
 
 /** Client for ACB's /api/internal session routes (src/server/internal-sessions.ts). */
+// No constructor parameter properties: cli.ts runs this file with Node's
+// built-in TypeScript stripping, which only removes erasable syntax.
 export class AcbSessions {
-	constructor(
-		private readonly baseUrl = process.env.ACB_INTERNAL_URL,
-		private readonly token = process.env.ACB_INTERNAL_TOKEN,
-	) {}
+	private readonly baseUrl = process.env.ACB_INTERNAL_URL;
+	private readonly token = process.env.ACB_INTERNAL_TOKEN;
 
 	get available(): boolean {
 		return Boolean(this.baseUrl && this.token);
@@ -320,4 +359,60 @@ export class AcbSessions {
 		if (!response.ok) throw new Error(`ACB: ${data.error ?? `HTTP ${response.status}`}`);
 		return data;
 	}
+}
+
+export interface WorkerClient {
+	create(cwd: string, model: ModelChoice): Promise<string>;
+	prompt(sessionId: string, message: string, model: ModelChoice): Promise<void>;
+}
+
+/**
+ * Start a worker chat. Used by the delegate tool and by cli.ts (Claude Code).
+ * The worker's own copy of the extension sends the brief on `/delegate start`.
+ */
+export async function startWorker(
+	acb: WorkerClient,
+	request: Pick<
+		Delegation,
+		"title" | "task" | "cwd" | "parentSessionId" | "parentModel" | "workerModel" | "claude"
+	>,
+): Promise<Delegation> {
+	const cwd = resolve(request.cwd);
+	if (!isAbsolute(request.cwd) || !statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) {
+		throw new Error(`${request.cwd} is not an existing folder`);
+	}
+	const id = await acb.create(cwd, request.workerModel);
+	const now = new Date().toISOString();
+	const record: Delegation = {
+		...request,
+		id,
+		title: request.title.trim(),
+		cwd,
+		status: "working",
+		createdAt: now,
+		updatedAt: now,
+		reportSeq: 0,
+	};
+	if (!record.claude) delete record.claude;
+	writeDelegation(record);
+	await acb.prompt(id, `/delegate start ${id}`, request.workerModel);
+	return record;
+}
+
+/** Send an existing worker a follow-up; it continues in its own chat and reports again. */
+export async function messageWorker(
+	acb: WorkerClient,
+	id: string,
+	message: string,
+): Promise<Delegation> {
+	const record = readDelegation(id);
+	if (!record) throw new Error(`no worker with id ${id}`);
+	await acb.prompt(record.id, message, record.workerModel);
+	return record;
+}
+
+export function workerLabel(record: Pick<Delegation, "claude" | "workerModel">): string {
+	return record.claude
+		? `Claude Code ${record.claude}`
+		: `${record.workerModel.provider}/${record.workerModel.modelId}`;
 }

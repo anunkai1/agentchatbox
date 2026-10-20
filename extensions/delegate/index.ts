@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { statSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import Type from "typebox";
 import {
@@ -18,20 +17,33 @@ import {
 	lastAssistant,
 	listDelegations,
 	type ModelChoice,
+	messageWorker,
 	parseDelegateArgs,
+	parseStatusLine,
 	REPORT_GUIDANCE,
 	readDelegation,
 	readDelivered,
 	resolveModelToken,
 	STATUS_NOTE,
 	STATUSES,
+	startWorker,
 	telegramText,
+	workerLabel,
 	writeDelegation,
 	writeDelivered,
 } from "./lib.js";
 
 const PUBLIC_URL = process.env.ACB_PUBLIC_URL ?? "https://agent.mavali.top";
 const REPORT_TOOL = "delegation_report";
+const CLAUDE_MODES = ["opus", "sonnet", "haiku"];
+
+/** What the claude-delegate extension announces about a Claude Code run. */
+interface ClaudeRunEvent {
+	ctx: ExtensionContext;
+	text?: string;
+	error?: string;
+	cancelled?: boolean;
+}
 
 /** Keep status pages small; the saved record remains available for full context. */
 function statusExcerpt(text: string): string {
@@ -86,6 +98,17 @@ export default function registerDelegate(
 		return { provider: model.provider, modelId: model.id, thinkingLevel };
 	}
 
+	/** The Claude Code model this chat is in (/cc on), asked of claude-delegate. */
+	function claudeMode(): string | undefined {
+		let mode: string | undefined;
+		pi.events.emit("claude-delegate:query", {
+			reply: (m?: string) => {
+				mode = m;
+			},
+		});
+		return mode;
+	}
+
 	/** Save the worker's status in its JSONL (the sidebar reads it) and tell ACB. */
 	function publish(ctx: ExtensionContext, record: Delegation): void {
 		pi.appendEntry("delegation", {
@@ -115,36 +138,29 @@ export default function registerDelegate(
 			),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const cwd = resolve(params.cwd);
-			if (!isAbsolute(params.cwd) || !statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) {
-				throw new Error(`${params.cwd} is not an existing folder`);
-			}
 			const parentModel = currentModel(ctx);
-			const workerModel = params.model
-				? pickModel(ctx, params.model, parentModel.thinkingLevel)
-				: parentModel;
-			const id = await acb.create(cwd, workerModel);
-			const now = new Date().toISOString();
-			const record: Delegation = {
-				id,
-				title: params.title.trim(),
+			// A chat in Claude Code mode (/cc on) gets Claude Code workers too.
+			const sticky = claudeMode();
+			const named = params.model?.toLowerCase();
+			const claude =
+				sticky && (!named || CLAUDE_MODES.includes(named)) ? (named ?? sticky) : undefined;
+			const record = await startWorker(acb, {
+				title: params.title,
 				task: params.task,
-				cwd,
+				cwd: params.cwd,
 				parentSessionId: sessionId(ctx),
 				parentModel,
-				workerModel,
-				status: "working",
-				createdAt: now,
-				updatedAt: now,
-				reportSeq: 0,
-			};
-			writeDelegation(record);
-			await acb.prompt(id, buildBrief(record), workerModel);
+				workerModel:
+					params.model && !claude
+						? pickModel(ctx, params.model, parentModel.thinkingLevel)
+						: parentModel,
+				claude,
+			});
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Worker started: ${chatLink(record.title, id)} in ${cwd} (${workerModel.provider}/${workerModel.modelId}). After all independent tasks in the approved request are dispatched, give the owner the links and end your turn.`,
+						text: `Worker started: ${chatLink(record.title, record.id)} in ${record.cwd} (${workerLabel(record)}). After all independent tasks in the approved request are dispatched, give the owner the links and end your turn.`,
 					},
 				],
 				details: undefined,
@@ -239,9 +255,7 @@ export default function registerDelegate(
 			message: Type.String({ description: "The instruction" }),
 		}),
 		async execute(_id, params) {
-			const record = readDelegation(params.worker);
-			if (!record) throw new Error(`no worker with id ${params.worker}`);
-			await acb.prompt(record.id, params.message, record.workerModel);
+			const record = await messageWorker(acb, params.worker, params.message);
 			return {
 				content: [{ type: "text", text: `Sent to ${chatLink(record.title, record.id)}.` }],
 				details: undefined,
@@ -281,10 +295,8 @@ export default function registerDelegate(
 		}
 	});
 
-	// Every worker run starts with a user message: the brief, the owner, or
-	// a delegate_message. By then pi has written the chat to disk.
-	pi.on("message_end", async (event, ctx) => {
-		if (publishedThisRun || event.message.role !== "user") return;
+	/** A worker run started: show it as working. */
+	function markWorking(ctx: ExtensionContext): void {
 		const record = self(ctx);
 		if (!record) return;
 		publishedThisRun = true;
@@ -293,21 +305,16 @@ export default function registerDelegate(
 		writeDelegation(record);
 		if (!pi.getSessionName()) pi.setSessionName(record.title);
 		publish(ctx, record);
-	});
+	}
 
-	pi.on("agent_settled", async (event, ctx) => {
-		const record = self(ctx);
-		const report = pendingReport;
-		pendingReport = null;
-		publishedThisRun = false;
-		if (!record) return;
-		const last = lastAssistant(ctx.sessionManager.getBranch());
-		// `aborted` is on the event from pi 1.3; older pi only marks the message.
-		const aborted = (event as { aborted?: boolean }).aborted === true || last.aborted === true;
-		record.status = aborted
-			? "stopped"
-			: (report?.status ?? (last.error ? "failed" : "needs_input"));
-		record.summary = report?.summary ?? last.error ?? last.text;
+	/** A worker run ended: record the outcome, tell the owner and wake the main chat. */
+	async function settle(
+		ctx: ExtensionContext,
+		record: Delegation,
+		outcome: { status: DelegationStatus; summary: string },
+	): Promise<void> {
+		record.status = outcome.status;
+		record.summary = outcome.summary;
 		record.updatedAt = new Date().toISOString();
 		if (record.status !== "stopped") record.reportSeq++;
 		writeDelegation(record);
@@ -325,6 +332,46 @@ export default function registerDelegate(
 				`⚠️ Worker "${record.title}" could not report to the main chat: ${reason}\n\n${PUBLIC_URL}/s/${record.id}`,
 			);
 		}
+	}
+
+	// Every pi worker run starts with a user message: the brief, the owner, or
+	// a delegate_message. By then pi has written the chat to disk.
+	pi.on("message_end", async (event, ctx) => {
+		if (!publishedThisRun && event.message.role === "user") markWorking(ctx);
+	});
+
+	pi.on("agent_settled", async (event, ctx) => {
+		const record = self(ctx);
+		const report = pendingReport;
+		const workerRun = publishedThisRun;
+		pendingReport = null;
+		publishedThisRun = false;
+		if (!record) return;
+		// In Claude Code mode the work happens outside pi; a stray pi run is not a report.
+		if (record.claude && !workerRun) return;
+		const last = lastAssistant(ctx.sessionManager.getBranch());
+		// `aborted` is on the event from pi 1.3; older pi only marks the message.
+		const aborted = (event as { aborted?: boolean }).aborted === true || last.aborted === true;
+		await settle(ctx, record, {
+			status: aborted ? "stopped" : (report?.status ?? (last.error ? "failed" : "needs_input")),
+			summary: report?.summary ?? last.error ?? last.text,
+		});
+	});
+
+	// Claude Code workers: the claude-delegate extension announces each run.
+	pi.events.on("claude-delegate:run-start", (data) => {
+		markWorking((data as ClaudeRunEvent).ctx);
+	});
+	pi.events.on("claude-delegate:run-end", async (data) => {
+		const run = data as ClaudeRunEvent;
+		const record = self(run.ctx);
+		publishedThisRun = false;
+		if (!record) return;
+		const parsed = parseStatusLine(run.text ?? "");
+		await settle(run.ctx, record, {
+			status: run.cancelled ? "stopped" : run.error ? "failed" : (parsed.status ?? "needs_input"),
+			summary: run.error ?? parsed.summary,
+		});
 	});
 
 	const delegateCommand: Parameters<ExtensionAPI["registerCommand"]>[1] = {
@@ -350,6 +397,18 @@ export default function registerDelegate(
 					if (!record || record.parentSessionId !== sessionId(ctx)) return;
 					if (record.reportSeq <= readDelivered(record.id)) return;
 					writeDelivered(record.id, record.reportSeq);
+					// In Claude Code mode the owner talks to Claude Code, so it reviews.
+					if (claudeMode()) {
+						let accepted = false;
+						pi.events.emit("claude-delegate:run", {
+							ctx,
+							task: formatReport(record, "cli"),
+							accept: () => {
+								accepted = true;
+							},
+						});
+						if (accepted) return;
+					}
 					pi.sendMessage(
 						{
 							customType: "note",
@@ -359,6 +418,28 @@ export default function registerDelegate(
 						},
 						{ triggerTurn: true, deliverAs: "followUp" },
 					);
+					return;
+				}
+				case "start": {
+					// Sent by the delegating chat right after creating this worker.
+					const record = readDelegation(args.id);
+					if (!record || record.id !== sessionId(ctx)) return;
+					if (record.claude) {
+						let accepted = false;
+						pi.events.emit("claude-delegate:start", {
+							ctx,
+							mode: record.claude,
+							task: buildBrief(record),
+							accept: () => {
+								accepted = true;
+							},
+						});
+						if (accepted) return;
+						ctx.ui.notify("Claude Code is not available here; this worker uses pi.", "warning");
+						delete record.claude;
+						writeDelegation(record);
+					}
+					pi.sendUserMessage(buildBrief(record));
 					return;
 				}
 				case "task": {

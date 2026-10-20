@@ -128,6 +128,8 @@ export interface LiveSession {
 	pi: PiProcess;
 	init: InitMessage;
 	sessionId: string;
+	/** pi's session name from the latest get_state, for chats not on disk yet. */
+	name?: string;
 	ws: PiSocket | null;
 	ready: boolean;
 	busy: boolean;
@@ -337,10 +339,23 @@ class SessionRegistry {
 	 * first message lands, so without this a just-created empty chat is
 	 * invisible in the sidebar until the next page refresh).
 	 */
-	liveSessions(): Array<{ sessionId: string; cwd?: string }> {
-		const out: Array<{ sessionId: string; cwd?: string }> = [];
+	liveSessions(): Array<{
+		sessionId: string;
+		cwd?: string;
+		name?: string;
+		delegationStatus?: string;
+	}> {
+		const out: ReturnType<SessionRegistry["liveSessions"]> = [];
 		for (const [id, s] of this.entries) {
-			if (id && s.ready) out.push({ sessionId: id, cwd: s.init.cwd });
+			if (!id || !s.ready) continue;
+			// A worker in Claude Code mode has no JSONL until its first reply.
+			const status = s.statusFrames.get("delegation")?.statusText;
+			out.push({
+				sessionId: id,
+				cwd: s.init.cwd,
+				...(s.name ? { name: s.name } : {}),
+				...(typeof status === "string" ? { delegationStatus: status } : {}),
+			});
 		}
 		return out;
 	}
@@ -727,8 +742,10 @@ class SessionRegistry {
 				| {
 						model?: { provider?: unknown; id?: unknown };
 						thinkingLevel?: unknown;
+						sessionName?: unknown;
 				  }
 				| undefined;
+			session.name = typeof data?.sessionName === "string" ? data.sessionName : undefined;
 			const provider = data?.model?.provider;
 			const modelId = data?.model?.id;
 			const thinkingLevel = data?.thinkingLevel;

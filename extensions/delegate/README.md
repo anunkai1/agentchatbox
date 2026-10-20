@@ -90,3 +90,13 @@ creation or turn start. It does not prove the process is still running;
 interruptions can leave stale records. A summary is the last recorded
 report and may predate the current turn. Do not infer detailed activity or results
 from a timestamp, status or absence of a new report.
+
+## Claude Code mode
+
+A main chat in Claude Code mode (`/cc on`) gets Claude Code workers on the same Claude model, unless the owner names another. The worker chat switches itself on with `/delegate start <id>`, so the owner's messages in it also go to Claude Code.
+
+- Claude Code cannot call pi tools, so the worker ends its last reply with `Status: done`, `Status: needs_input` or `Status: failed`. Without that line the worker counts as needing the owner.
+- claude-delegate announces each run on `pi.events` (`claude-delegate:run-start`, `claude-delegate:run-end`), and the worker reports through the same path as a pi worker: status icon, Telegram, and waking the main chat.
+- A report for a main chat in Claude Code mode goes to Claude Code (`claude-delegate:run`), not to pi.
+- Claude Code in the main chat delegates, messages workers and lists them with `node extensions/delegate/cli.ts` (`help` explains). claude-delegate gives it the chat's ids in `ACB_CHAT_ID`, `ACB_CHAT_MODEL`, `ACB_CHAT_THINKING` and `ACB_CLAUDE_MODE`.
+- Claude Code starts in the browser-harness workspace, so the brief tells it to work in the task's folder and read that folder's `AGENTS.md` first.

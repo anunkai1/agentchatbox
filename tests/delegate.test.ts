@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import {
 	DISPATCH_GUIDANCE,
 	formatStatusList,
 	parseDelegateArgs,
+	parseStatusLine,
 	REPORT_GUIDANCE,
 	readDelegation,
 	resolveModelToken,
@@ -38,7 +40,16 @@ function harness() {
 	const events = new Map<string, Handler>();
 	const commands = new Map<string, Handler>();
 	let sessionName: string | undefined;
+	// pi.events: the bus claude-delegate talks to this extension on.
+	const bus = new EventEmitter();
 	const pi = {
+		events: {
+			emit: (channel: string, data: unknown) => bus.emit(channel, data),
+			on: (channel: string, handler: (data: unknown) => void) => {
+				bus.on(channel, handler);
+				return () => bus.off(channel, handler);
+			},
+		},
 		registerTool: (tool: Tool) => tools.set(tool.name, tool),
 		registerCommand: (name: string, options: { handler: Handler }) =>
 			commands.set(name, options.handler),
@@ -143,12 +154,13 @@ describe("delegate extension", () => {
 			)) as { content: Array<{ text: string }> };
 		const model = { provider: "openai", modelId: "gpt-6.1-sol", thinkingLevel: "high" };
 		expect(h.acb.create).toHaveBeenCalledWith(tmpdir(), model);
-		expect(h.acb.prompt).toHaveBeenCalledWith(
-			"worker-1",
-			expect.stringContaining("Fix the journal page"),
-			model,
-		);
-		expect(h.acb.prompt.mock.calls[0][1]).toContain("[main chat](/s/parent-1)");
+		expect(h.acb.prompt).toHaveBeenCalledWith("worker-1", "/delegate start worker-1", model);
+		// The worker's own copy of the extension then sends the brief.
+		await h.commands.get("delegate")!("start worker-1", h.ctx("worker-1"));
+		const brief = h.pi.sendUserMessage.mock.calls[0][0];
+		expect(brief).toContain("Fix the journal page");
+		expect(brief).toContain("[main chat](/s/parent-1)");
+		expect(brief).toContain("delegation_report");
 		expect(result.content[0].text).toContain("[Fix page](/s/worker-1)");
 		expect(readDelegation("worker-1")).toMatchObject({
 			parentSessionId: "parent-1",
@@ -584,5 +596,172 @@ describe("/d shortcut", () => {
 		expect(h.commands.get("d")).toBe(h.commands.get("delegate"));
 		await h.commands.get("d")!("status", h.ctx("parent-1"));
 		expect(h.pi.sendMessage.mock.calls[0][0].content).toBe("No delegations yet.");
+	});
+});
+
+describe("Claude Code workers", () => {
+	function claudeChat(h: ReturnType<typeof harness>, mode = "opus") {
+		const starts: Array<{ mode: string; task: string }> = [];
+		h.pi.events.on("claude-delegate:query", (data) =>
+			(data as { reply(mode?: string): void }).reply(mode),
+		);
+		h.pi.events.on("claude-delegate:start", (data) => {
+			const start = data as { mode: string; task: string; accept(): void };
+			start.accept();
+			starts.push({ mode: start.mode, task: start.task });
+		});
+		return starts;
+	}
+
+	async function delegate(h: ReturnType<typeof harness>, model?: string) {
+		return (await h.tools.get("delegate")!.execute(
+			"call",
+			{
+				title: "Fix page",
+				task: "Fix the journal page",
+				cwd: tmpdir(),
+				...(model ? { model } : {}),
+			},
+			undefined,
+			undefined,
+			h.ctx("parent-1"),
+		)) as { content: Array<{ text: string }> };
+	}
+
+	it("follow the main chat's Claude Code mode and report with a status line", async () => {
+		const h = harness();
+		const starts = claudeChat(h);
+		const result = await delegate(h);
+		expect(readDelegation("worker-1")?.claude).toBe("opus");
+		expect(result.content[0].text).toContain("(Claude Code opus)");
+		await h.commands.get("delegate")!("start worker-1", h.ctx("worker-1"));
+		expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(starts).toHaveLength(1);
+		expect(starts[0].mode).toBe("opus");
+		expect(starts[0].task).toContain("Status: done");
+		expect(starts[0].task).not.toContain("call delegation_report");
+		expect(starts[0].task).toContain(`work in ${tmpdir()}, and first read the AGENTS.md there`);
+	});
+
+	it("use a named Claude Code model", async () => {
+		const h = harness();
+		claudeChat(h);
+		await delegate(h, "sonnet");
+		expect(readDelegation("worker-1")?.claude).toBe("sonnet");
+	});
+
+	it("report through the same path as pi workers when a run ends", async () => {
+		const h = harness();
+		claudeChat(h);
+		await delegate(h);
+		const worker = h.ctx("worker-1");
+		h.pi.events.emit("claude-delegate:run-start", { ctx: worker });
+		expect(readDelegation("worker-1")?.status).toBe("working");
+		expect(worker.ui.setStatus).toHaveBeenLastCalledWith("delegation", "working");
+		h.acb.prompt.mockClear();
+		h.pi.events.emit("claude-delegate:run-end", {
+			ctx: worker,
+			text: "Fixed the page; 12 tests pass.\n\nStatus: done",
+		});
+		await vi.waitFor(() => expect(h.acb.prompt).toHaveBeenCalled());
+		expect(readDelegation("worker-1")).toMatchObject({
+			status: "done",
+			summary: "Fixed the page; 12 tests pass.",
+			reportSeq: 1,
+		});
+		expect(h.acb.prompt).toHaveBeenCalledWith(
+			"parent-1",
+			"/delegate report worker-1",
+			expect.anything(),
+		);
+		expect(h.telegram).toHaveBeenCalledWith(expect.stringContaining("✅ Worker done"));
+	});
+
+	it("treat a missing status line as needing the owner, and a stop as stopped", async () => {
+		const h = harness();
+		claudeChat(h);
+		await delegate(h);
+		const worker = h.ctx("worker-1");
+		h.pi.events.emit("claude-delegate:run-end", { ctx: worker, text: "Which DB?" });
+		await vi.waitFor(() => expect(readDelegation("worker-1")?.status).toBe("needs_input"));
+		h.acb.prompt.mockClear();
+		h.telegram.mockClear();
+		h.pi.events.emit("claude-delegate:run-end", { ctx: worker, cancelled: true });
+		await vi.waitFor(() => expect(readDelegation("worker-1")?.status).toBe("stopped"));
+		expect(h.acb.prompt).not.toHaveBeenCalled();
+		expect(h.telegram).not.toHaveBeenCalled();
+	});
+
+	it("ignore a pi run that is not the worker's own", async () => {
+		const h = harness();
+		claudeChat(h);
+		await delegate(h);
+		h.acb.prompt.mockClear();
+		await h.events.get("agent_settled")!({}, h.ctx("worker-1"));
+		expect(readDelegation("worker-1")?.status).toBe("working");
+		expect(h.acb.prompt).not.toHaveBeenCalled();
+	});
+
+	it("fall back to pi when Claude Code is unavailable", async () => {
+		const h = harness();
+		h.pi.events.on("claude-delegate:query", (data) =>
+			(data as { reply(mode?: string): void }).reply("opus"),
+		);
+		await delegate(h);
+		await h.commands.get("delegate")!("start worker-1", h.ctx("worker-1"));
+		expect(readDelegation("worker-1")?.claude).toBeUndefined();
+		expect(h.pi.sendUserMessage.mock.calls[0][0]).toContain("delegation_report");
+	});
+
+	it("read the closing status line", () => {
+		expect(parseStatusLine("All good.\nStatus: done")).toEqual({
+			status: "done",
+			summary: "All good.",
+		});
+		expect(parseStatusLine("Q?\n**Status:** needs input")).toEqual({
+			status: "needs_input",
+			summary: "Q?",
+		});
+		expect(parseStatusLine("Status: failed — no access")).toEqual({
+			status: "failed",
+			summary: "",
+		});
+		expect(parseStatusLine("No status here")).toEqual({ summary: "No status here" });
+	});
+});
+
+describe("reports to a main chat in Claude Code mode", () => {
+	it("go to Claude Code, with the command-line way to answer the worker", async () => {
+		const h = harness();
+		writeDelegation({
+			id: "worker-9",
+			title: "Fix page",
+			task: "t",
+			cwd: "/tmp",
+			parentSessionId: "parent-1",
+			parentModel: { provider: "openai", modelId: "gpt-6.1-sol", thinkingLevel: "high" },
+			workerModel: { provider: "openai", modelId: "gpt-6.1-sol", thinkingLevel: "high" },
+			claude: "opus",
+			status: "done",
+			summary: "Fixed.",
+			createdAt: "2026-10-20T00:00:00.000Z",
+			updatedAt: "2026-10-20T00:00:00.000Z",
+			reportSeq: 1,
+		});
+		const runs: string[] = [];
+		h.pi.events.on("claude-delegate:query", (d) =>
+			(d as { reply(m?: string): void }).reply("opus"),
+		);
+		h.pi.events.on("claude-delegate:run", (d) => {
+			const run = d as { task: string; accept(): void };
+			run.accept();
+			runs.push(run.task);
+		});
+		await h.commands.get("delegate")!("report worker-9", h.ctx("parent-1"));
+		expect(h.pi.sendMessage).not.toHaveBeenCalled();
+		expect(runs).toHaveLength(1);
+		expect(runs[0]).toContain("Fixed.");
+		expect(runs[0]).toContain("cli.ts message <worker id>");
+		expect(runs[0]).toContain("Worker id: worker-9");
 	});
 });

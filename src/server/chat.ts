@@ -933,9 +933,10 @@ function gatherSessions(): SessionSummary[] {
 			cwd,
 			createdAt: now,
 			modifiedAt: now,
-			title: "New chat",
+			title: live.name ?? "New chat",
 			messageCount: 0,
 			projectId: pid === GLOBAL_PROJECT_ID ? "global" : pid,
+			...(live.delegationStatus ? { delegation: { status: live.delegationStatus } } : {}),
 		});
 	}
 	// Newest first so a freshly-created chat floats to the top of its

@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -23,18 +31,18 @@ import {
 	buildClaudeSpawn,
 	buildPrompt,
 	DEFAULT_EFFORT,
-	parseEffort,
 	delegationLabel,
 	descendantsOf,
 	FileDelegationStore,
 	normaliseToolArgs,
 	parseDelegationMode,
+	parseEffort,
 	prettyModelName,
-	RunRegistry,
 	processStartTicks,
-	saveAttachedImages,
+	RunRegistry,
 	type StreamEvent,
 	StreamParser,
+	saveAttachedImages,
 	withImagePaths,
 } from "../extensions/claude-delegate/lib.js";
 import { buildCatchUp, foldClaudeSteps } from "../extensions/claude-delegate/transcript.js";
@@ -368,8 +376,17 @@ function harness(
 	const appendEntry = vi.fn((customType: string, data: unknown) => {
 		entries.push({ type: "custom", customType, data });
 	});
+	const bus = new EventEmitter();
+	const events = {
+		emit: (channel: string, data: unknown) => bus.emit(channel, data),
+		on: (channel: string, handler: (data: unknown) => void) => {
+			bus.on(channel, handler);
+			return () => bus.off(channel, handler);
+		},
+	};
 	const delegate = registerClaudeDelegate(
 		{
+			events,
 			registerCommand(name: string, options: { handler: CommandHandler }) {
 				handlers[name] = options.handler;
 			},
@@ -427,6 +444,7 @@ function harness(
 		uiCtx,
 		sendMessage,
 		appendMessage,
+		events,
 	};
 }
 
@@ -811,8 +829,7 @@ describe("attached images reaching Claude Code", () => {
 
 	/** Run a test with ACB_UPLOADS_DIR pointed at a throwaway directory. */
 	const withUploadsDir =
-		(run: (dir: string) => void | Promise<void>) =>
-		async (): Promise<void> => {
+		(run: (dir: string) => void | Promise<void>) => async (): Promise<void> => {
 			const dir = mkdtempSync(join(tmpdir(), "claude-delegate-uploads-"));
 			const previous = process.env.ACB_UPLOADS_DIR;
 			process.env.ACB_UPLOADS_DIR = dir;
@@ -879,10 +896,7 @@ describe("attached images reaching Claude Code", () => {
 		"passes a pasted image's path on to Claude Code",
 		withUploadsDir(async (dir) => {
 			const prompts: string[] = [];
-			const h = harness("sonnet", {}, (async (
-				_args: string[],
-				options: { prompt: string },
-			) => {
+			const h = harness("sonnet", {}, (async (_args: string[], options: { prompt: string }) => {
 				prompts.push(options.prompt);
 				return { resultText: "the button is cut off", isError: false, model: "claude-sonnet-5-5" };
 			}) as never);
@@ -1753,5 +1767,69 @@ describe("chat history mirroring against pi's real session manager", () => {
 		mirrorReplyToSession(ctx, "b", "m");
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(notify.mock.calls[0][0]).toContain("session API changed");
+	});
+});
+
+describe("claude-delegate and delegated workers", () => {
+	const ok = async () => ({ resultText: "Fixed it.\nStatus: done", isError: false });
+
+	it("tells the delegate extension whether this chat is in Claude Code mode", async () => {
+		const h = harness("sonnet", {}, ok);
+		const ask = () => {
+			let mode: string | undefined;
+			h.events.emit("claude-delegate:query", { reply: (m?: string) => (mode = m) });
+			return mode;
+		};
+		expect(ask()).toBeUndefined();
+		await h.cc("on opus", h.uiCtx);
+		expect(ask()).toBe("opus");
+	});
+
+	it("starts a worker in Claude Code mode and announces the run", async () => {
+		const h = harness("sonnet", {}, ok);
+		const seen: Array<[string, Record<string, unknown>]> = [];
+		h.events.on("claude-delegate:run-start", (d) => seen.push(["start", d as never]));
+		h.events.on("claude-delegate:run-end", (d) => seen.push(["end", d as never]));
+		const accept = vi.fn();
+		h.events.emit("claude-delegate:start", {
+			ctx: h.uiCtx,
+			mode: "opus",
+			task: "the brief",
+			accept,
+		});
+		expect(accept).toHaveBeenCalled();
+		await h.whenIdle();
+		expect(h.appendEntry).toHaveBeenCalledWith(STICKY_ENTRY_TYPE, { mode: "opus" });
+		expect(h.sendMessage.mock.calls[0][0]).toMatchObject({ content: "the brief" });
+		expect(seen.map(([kind]) => kind)).toEqual(["start", "end"]);
+		expect(seen[1][1]).toMatchObject({ text: "Fixed it.\nStatus: done" });
+	});
+
+	it("refuses an unknown model", () => {
+		const h = harness("sonnet", {}, ok);
+		const accept = vi.fn();
+		h.events.emit("claude-delegate:start", { ctx: h.uiCtx, mode: "gpt", task: "x", accept });
+		expect(accept).not.toHaveBeenCalled();
+	});
+});
+
+describe("claude-delegate for delegated reports", () => {
+	it("reviews a worker report only while in Claude Code mode, with the chat's ids", async () => {
+		const seen: Array<Record<string, string>> = [];
+		const h = harness("sonnet", {}, (async (
+			_args: string[],
+			options: { env: Record<string, string> },
+		) => {
+			seen.push(options.env);
+			return { resultText: "ok", isError: false };
+		}) as never);
+		const accept = vi.fn();
+		h.events.emit("claude-delegate:run", { ctx: h.uiCtx, task: "report", accept });
+		expect(accept).not.toHaveBeenCalled();
+		await h.cc("on haiku", h.uiCtx);
+		h.events.emit("claude-delegate:run", { ctx: h.uiCtx, task: "report", accept });
+		expect(accept).toHaveBeenCalled();
+		await h.whenIdle();
+		expect(seen[0]).toMatchObject({ ACB_CHAT_ID: "chat-1", ACB_CLAUDE_MODE: "haiku" });
 	});
 });

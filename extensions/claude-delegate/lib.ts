@@ -251,6 +251,7 @@ export const TASK_PREAMBLE = [
 	"- For browser work, use the `browser-harness` project skill, never Anthropic's built-in browser/computer-use skills: only browser-harness drives the owner's logged-in Chrome.",
 	"- Save files the owner should see, such as screenshots, to /home/lepton/agentchatbox/uploads/<descriptive-name> and link them as /uploads/<descriptive-name>; images render in the chat.",
 	"- Images the owner attaches arrive as Markdown links to /uploads/<name>; open /home/lepton/agentchatbox/uploads/<name> with the Read tool.",
+	"- When the owner asks to delegate, or to check or message workers, use `node /home/lepton/agentchatbox/extensions/delegate/cli.ts help`.",
 ].join("\n");
 
 /**

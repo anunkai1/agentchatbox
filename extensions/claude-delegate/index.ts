@@ -184,6 +184,8 @@ export interface DelegationRequest {
 	catchUp?: (fresh: boolean) => string | undefined;
 	/** Aborting kills the run's whole process group. */
 	signal?: AbortSignal;
+	/** Extra environment for Claude Code (the chat's ids for delegate's cli.ts). */
+	env?: Record<string, string>;
 	/** Called with Claude Code's pid as soon as it is running. */
 	onSpawn?: (pid: number) => void;
 }
@@ -223,6 +225,7 @@ export async function performDelegation(
 		return runTask(plan.args, {
 			cwd: plan.cwd,
 			env: {
+				...request.env,
 				BH_TAB_SCOPE: `claude:${key}`,
 				PATH: `${homedir()}/.npm-global/bin:${homedir()}/.local/bin:${process.env.PATH ?? ""}`,
 			},
@@ -684,6 +687,25 @@ function describeRun(run: RunRecord, key: string): string {
 	return `pid ${run.pid} · ${MODE_LABELS[run.mode]} · ${age} · ${where}`;
 }
 
+/**
+ * Who Claude Code is working for, so the delegate extension's cli.ts can
+ * start workers from this chat and resume it for their reports.
+ */
+function chatEnv(
+	ctx: unknown,
+	key: string,
+	mode: DelegationMode,
+	thinking?: string,
+): Record<string, string> {
+	const model = (ctx as { model?: { provider?: string; id?: string } }).model;
+	return {
+		ACB_CHAT_ID: key,
+		ACB_CLAUDE_MODE: mode,
+		...(thinking ? { ACB_CHAT_THINKING: thinking } : {}),
+		...(model?.provider && model.id ? { ACB_CHAT_MODEL: `${model.provider}/${model.id}` } : {}),
+	};
+}
+
 export function registerClaudeDelegate(
 	pi: ExtensionAPI,
 	store: DelegationStore,
@@ -770,6 +792,8 @@ export function registerClaudeDelegate(
 			let replies = 0;
 			let pid: number | undefined;
 			let timedOut = false;
+			// What the delegate extension is told when the run ends.
+			const ended: { text?: string; error?: string; cancelled?: boolean } = {};
 			// A hung run must not live forever: past the limit it is stopped.
 			const limit = setTimeout(() => {
 				timedOut = true;
@@ -788,10 +812,12 @@ export function registerClaudeDelegate(
 				ctx.ui.setStatus("claude-progress", `${label} · ${doing} · ${elapsed}${queued}${warn}`);
 			};
 			const fail = (failure: string, model: string) => {
+				ended.error = failure;
 				ctx.ui.notify(failure, "error");
 				mirrorReplyToSession(ctx, `⚠ ${failure}`, model, trace.takeTrailingThinking());
 			};
 			const stopped = (model: string) => {
+				ended.cancelled = true;
 				const why = timedOut
 					? `⏱ Stopped: the run hit the ${formatElapsed(maxRunMs)} time limit.`
 					: "⏹ Stopped.";
@@ -812,6 +838,8 @@ export function registerClaudeDelegate(
 					model ?? store.readModel(mode),
 					store.readEffort(mode),
 				);
+				ended.text = text;
+				ended.error = undefined;
 				const used = usageSummary(usage);
 				const footer = model ? `\n\n— ${resolved} (\`${model}\`)${used ? ` · ${used}` : ""}` : "";
 				const content = `${text || "Task finished with no summary text."}${footer}`;
@@ -827,6 +855,8 @@ export function registerClaudeDelegate(
 				mirrorReplyToSession(ctx, content, model ?? mode, trace.takeTrailingThinking());
 			};
 			live = { key, mode, channel, beat, abort };
+			// The delegate extension turns these into a worker's status and report.
+			pi.events?.emit("claude-delegate:run-start", { ctx });
 			const heartbeat = setInterval(beat, HEARTBEAT_MS);
 			beat();
 			try {
@@ -837,6 +867,7 @@ export function registerClaudeDelegate(
 					channel,
 					catchUp: (fresh) => (fresh ? catchUps.fresh : catchUps.resumed),
 					signal: abort.signal,
+					env: chatEnv(ctx, key, mode, pi.getThinkingLevel?.()),
 					onSpawn: (spawned) => {
 						// A retry after a vanished conversation is a second process.
 						if (pid !== undefined) {
@@ -909,6 +940,7 @@ export function registerClaudeDelegate(
 				ctx.ui.setStatus("claude-progress", undefined);
 				// Restore the steady-state label (now with the resolved version).
 				restoreStatus(ctx);
+				pi.events?.emit("claude-delegate:run-end", { ctx, ...ended });
 			}
 		};
 		const next = queue.then(run);
@@ -1005,6 +1037,39 @@ export function registerClaudeDelegate(
 			}
 			await delegateDirect(task, requested ?? sticky ?? store.readMode(), ctx, sessionKey(ctx));
 		},
+	});
+
+	// The delegate extension asks whether this chat is in Claude Code mode,
+	// and starts Claude Code workers in it (sticky, so the owner's follow-ups
+	// in the worker chat go to Claude Code too).
+	pi.events?.on("claude-delegate:query", (data) => {
+		(data as { reply(mode?: DelegationMode): void }).reply(sticky);
+	});
+	// A worker's report for a main chat in Claude Code mode.
+	pi.events?.on("claude-delegate:run", (data) => {
+		const run = data as {
+			ctx: StatusContext & { ui: { notify(message: string, type?: string): void } };
+			task: string;
+			accept(): void;
+		};
+		if (!sticky) return;
+		run.accept();
+		void delegateDirect(run.task, sticky, run.ctx, sessionKey(run.ctx));
+	});
+	pi.events?.on("claude-delegate:start", (data) => {
+		const start = data as {
+			ctx: StatusContext & { ui: { notify(message: string, type?: string): void } };
+			mode: string;
+			task: string;
+			accept(): void;
+		};
+		const mode = DELEGATION_MODES.find((m) => m === start.mode);
+		if (!mode) return;
+		start.accept();
+		sticky = mode;
+		pi.appendEntry(STICKY_ENTRY_TYPE, { mode });
+		restoreStatus(start.ctx);
+		void delegateDirect(start.task, mode, start.ctx, sessionKey(start.ctx));
 	});
 
 	pi.on("input", (event, ctx) => {
