@@ -281,3 +281,33 @@ describe("delegate helpers", () => {
 		expect(formatStatusList([])).toBe("No delegations yet.");
 	});
 });
+
+describe("delegate when the chat limit is reached", () => {
+	it("tells the owner when a worker cannot wake its main chat", async () => {
+		const h = harness();
+		await h.tools
+			.get("delegate")!
+			.execute(
+				"call",
+				{ title: "Fix page", task: "t", cwd: tmpdir() },
+				undefined,
+				undefined,
+				h.ctx("parent-1"),
+			);
+		h.acb.prompt.mockRejectedValueOnce(new Error("ACB: Chat limit reached"));
+		await h.events.get("agent_settled")!({}, h.ctx("worker-1"));
+		expect(h.telegram).toHaveBeenLastCalledWith(
+			expect.stringContaining(
+				'Worker "Fix page" could not report to the main chat: ACB: Chat limit reached',
+			),
+		);
+	});
+});
+
+describe("/d shortcut", () => {
+	it("is the same command as /delegate", async () => {
+		const h = harness();
+		await h.commands.get("d")!("status", h.ctx("parent-1"));
+		expect(h.pi.sendMessage.mock.calls[0][0].content).toBe("No delegations yet.");
+	});
+});

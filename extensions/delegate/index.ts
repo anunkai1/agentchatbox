@@ -227,21 +227,24 @@ export default function registerDelegate(
 		try {
 			await acb.prompt(record.parentSessionId, `/delegate report ${record.id}`, record.parentModel);
 		} catch (error) {
-			ctx.ui.notify(
-				`Could not reach the main chat: ${error instanceof Error ? error.message : String(error)}`,
-				"warning",
+			// Usually the chat limit. Nobody may be watching this worker, so
+			// tell the owner directly.
+			const reason = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`Could not reach the main chat: ${reason}`, "warning");
+			notifyOwner(
+				`⚠️ Worker "${record.title}" could not report to the main chat: ${reason}\n\n${PUBLIC_URL}/s/${record.id}`,
 			);
 		}
 	});
 
-	pi.registerCommand("delegate", {
+	const delegateCommand: Parameters<ExtensionAPI["registerCommand"]>[1] = {
 		description:
-			"/delegate [model] <task> hands a task to a worker chat; /delegate status lists the last 10",
+			"/delegate (or /d) [model] <task> hands a task to a worker chat; /delegate status lists the last 10",
 		handler: async (rawArgs, ctx) => {
 			const args = parseDelegateArgs(rawArgs);
 			switch (args.kind) {
 				case "usage":
-					ctx.ui.notify("Usage: /delegate [model] <task>, or /delegate status", "warning");
+					ctx.ui.notify("Usage: /d [model] <task>, or /d status", "warning");
 					return;
 				case "status":
 					pi.sendMessage({
@@ -278,5 +281,7 @@ export default function registerDelegate(
 				}
 			}
 		},
-	});
+	};
+	pi.registerCommand("delegate", delegateCommand);
+	pi.registerCommand("d", delegateCommand);
 }

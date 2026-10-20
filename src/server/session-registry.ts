@@ -395,7 +395,9 @@ class SessionRegistry {
 			if (!candidate.ws && !isWorking(candidate)) this.kill(candidate);
 		}
 		if (this.entries.size + this.pending.size >= config.maxLiveSessions) {
-			throw new Error(`live session limit reached (${config.maxLiveSessions})`);
+			throw new Error(
+				`Chat limit reached: all ${config.maxLiveSessions} chat slots are in use (running or open in a browser). Stop a running chat or close a chat tab, then try again.`,
+			);
 		}
 		if (!getServerApiKey(init.provider)) {
 			throw new Error(
