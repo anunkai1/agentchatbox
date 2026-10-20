@@ -817,10 +817,12 @@ export function registerClaudeDelegate(
 				mirrorReplyToSession(ctx, `⚠ ${failure}`, model, trace.takeTrailingThinking());
 			};
 			const stopped = (model: string) => {
-				ended.cancelled = true;
 				const why = timedOut
 					? `⏱ Stopped: the run hit the ${formatElapsed(maxRunMs)} time limit.`
 					: "⏹ Stopped.";
+				// Only the owner stops a run on purpose; a time-limit stop is a failure.
+				if (timedOut) ended.error = why;
+				else ended.cancelled = true;
 				// An explicit stop already has an inline confirmation. Only an
 				// unexpected time-limit stop needs an additional warning.
 				if (timedOut) ctx.ui.notify(why, "warning");

@@ -1167,9 +1167,16 @@ describe("stopping runs", () => {
 
 	it("stops a run at the time limit and says why", async () => {
 		const h = harness("opus", {}, hanging() as never, [], { maxRunMs: 30 });
+		const ended: unknown[] = [];
+		h.events.on("claude-delegate:run-end", (d) => ended.push(d));
 		await h.cc("do a long thing", h.uiCtx);
 		expect(h.ui.notify).toHaveBeenCalledWith(expect.stringContaining("time limit"), "warning");
 		expect(MAX_RUN_MS).toBe(3 * 60 * 60 * 1000);
+		// Not an owner's stop: a worker reports it as a failure (extensions/delegate).
+		expect(ended).toEqual([
+			expect.objectContaining({ error: expect.stringContaining("time limit") }),
+		]);
+		expect(ended[0]).not.toHaveProperty("cancelled");
 	});
 
 	it("registers a run for /cc ps and removes it when the run ends", async () => {
