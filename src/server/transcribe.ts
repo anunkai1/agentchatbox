@@ -1,19 +1,17 @@
 /**
  * Voice-note transcription endpoint.
  *
- * Proxies to the resident pi-stt-server daemons instead of shelling out to a
+ * Proxies to the resident pi-stt-server daemon instead of shelling out to a
  * per-request faster-whisper process (the old path reloaded the model from
- * disk for every voice note). Engine selection lives inside the daemons;
- * this router owns only the ORDER:
+ * disk for every voice note). Engine selection (Bark, Qwen3-ASR fallback)
+ * lives inside the daemon; this router owns only which daemons to try:
  *
- *   STT_PRIMARY_URL   default http://127.0.0.1:8183 — Lappy's GPU whisper
- *                     (large-v3-turbo, int8_float16) via lappy-stt-tunnel
- *   STT_FALLBACK_URL  default http://127.0.0.1:8182 — this host's CPU
- *                     pi-stt-server (qwen3-asr-0.6B int8, whisper small)
+ *   STT_PRIMARY_URL   default http://127.0.0.1:8182 — Server2's pi-stt-server
+ *                     (on Lappy, the same daemon via lappy-stt-tunnel)
+ *   STT_FALLBACK_URL  default unset — an optional second daemon
  *
- * A Lappy sleep/deploy degrades to the CPU daemon transparently; both failing
- * returns 502 to the browser, same visible behaviour as the old helper
- * failing. See /home/lepton/pi-stt-server for the daemon contract:
+ * Every daemon failing returns 502 to the browser, same visible behaviour as
+ * the old helper failing. See /home/lepton/pi-stt-server for the daemon contract:
  *   POST /transcribe  raw audio bytes → { text, engine, model, ... }
  *   GET  /health      → capability/residency metadata
  *
@@ -35,8 +33,7 @@ const upload = multer({
 });
 
 /** Defaults; read per-call in sttChain() so tests and .env overrides apply. */
-const DEFAULT_PRIMARY_URL = "http://127.0.0.1:8183";
-const DEFAULT_FALLBACK_URL = "http://127.0.0.1:8182";
+const DEFAULT_PRIMARY_URL = "http://127.0.0.1:8182";
 
 /**
  * Bounded wait for one daemon's answer. Voice notes transcribe in seconds, and
@@ -66,11 +63,9 @@ interface SttAttempt {
  * handler and the health probe share one source of truth for what is primary.
  */
 export function sttChain(): SttAttempt[] {
-	// Unset → default URL; empty string → fallback disabled (Lappy has no
-	// second daemon to fall back to).
+	// Unset or empty fallback → only the primary daemon is tried.
 	const primary = process.env.STT_PRIMARY_URL?.trim() || DEFAULT_PRIMARY_URL;
-	const fallbackRaw = process.env.STT_FALLBACK_URL;
-	const fallback = fallbackRaw === undefined ? DEFAULT_FALLBACK_URL : fallbackRaw.trim();
+	const fallback = process.env.STT_FALLBACK_URL?.trim();
 	const chain: SttAttempt[] = [{ url: primary, name: "primary" }];
 	if (fallback && fallback !== primary) {
 		chain.push({ url: fallback, name: "fallback" });

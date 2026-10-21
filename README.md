@@ -17,7 +17,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - **OpenAI Fast control** — a header button and Settings row open the pi extension’s Fast/Standard picker for supported OpenAI models, including ChatGPT subscription sign-in and legacy Codex sign-in. Settings mirrors the saved preference; persistence and the `service_tier: "priority"` request remain extension-owned. OpenAI may process a request on the standard tier instead; Fast is a request preference, not a speed guarantee.
 - **Keyboard, screen-reader, and touch friendly** — labelled controls, trapped/restored modal focus, keyboard-operable pickers and project folders, and 44px mobile action targets
 - **Shareable session links** — every chat lives at `/s/<session-id>`. Bookmark it, copy it (`/link` or the Settings menu), or open it on another device to resume the same conversation
-- Local TTS (Kokoro, 1.25× default playback) and STT (pi-stt-server daemons: Lappy GPU whisper, CPU fallback) — no paid cloud APIs
+- Local TTS (Kokoro, 1.25× default playback) and STT (pi-stt-server: Bark, Qwen3-ASR fallback) — no paid cloud APIs
 - Slash commands, model switching mid-conversation, session history / resume / rename
 - Session list / transcript replay via `/api/sessions`
 
@@ -140,8 +140,8 @@ Non-secret server settings go through `.env`; chat-provider availability comes f
 | `PI_BIN`                       | `pi`                          | Path to the `pi` CLI binary (overridable for tests) |
 | `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
 | `AGENTCHATBOX_TRUSTED_EXTERNAL_PROJECTS` | (unset)             | Exact `id:/canonical/path` external repos; non-deletable by ACB |
-| `STT_PRIMARY_URL`              | `http://127.0.0.1:8183`       | Primary STT daemon (Lappy GPU whisper via lappy-stt-tunnel) |
-| `STT_FALLBACK_URL`             | `http://127.0.0.1:8182`       | Fallback STT daemon (this host's CPU pi-stt-server); empty string disables |
+| `STT_PRIMARY_URL`              | `http://127.0.0.1:8182`       | STT daemon (Server2's pi-stt-server; on Lappy via lappy-stt-tunnel) |
+| `STT_FALLBACK_URL`             | (unset)                       | Optional second STT daemon; unset or empty disables |
 | `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
 | `AUTO_TITLE_MODEL`             | active session model          | Optional `provider/modelId` used for automatic first-turn session titles |
 | `*_API_KEY`                    | (unset)                       | Optional: env keys for non-chat tools (e.g. `VENICE_API_KEY` for pi-venice-image, `GEMINI_API_KEY` for YouTube transcripts). Chat auth itself is NOT configured here — see below. |
