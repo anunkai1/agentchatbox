@@ -102,6 +102,7 @@ import {
 	state,
 } from "./state.js";
 import {
+	readAskFromUrl,
 	readForkFromUrl,
 	readSessionIdFromUrl,
 	shareableSessionUrl,
@@ -1442,6 +1443,10 @@ async function boot(): Promise<void> {
 	// fresh chat and forks into it on the first `ready`, below.
 	let pendingFork = readForkFromUrl();
 	const urlSessionId = readSessionIdFromUrl();
+	// A `/?ask=` link becomes the new chat's draft; onReady's draft restore
+	// moves it into the composer and the session URL replaces the query.
+	const ask = readAskFromUrl();
+	if (ask) persistDraft(ask);
 	if (urlSessionId) {
 		const exists = await sessionExists(urlSessionId);
 		if (exists) {

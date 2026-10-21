@@ -89,3 +89,14 @@ export function readForkFromUrl(): { sessionId: string; messageCount: number } |
 	if (!m) return null;
 	return { sessionId: m[1], messageCount: Number(m[2]) };
 }
+
+/**
+ * The question in a `/?ask=<text>` link (e.g. the Shed briefing's "Tell me
+ * more" buttons), or null. Booting from such a URL starts a fresh chat with
+ * the text left in the composer; it is never sent automatically, because any
+ * page can build this link.
+ */
+export function readAskFromUrl(): string | null {
+	if (location.pathname !== "/") return null;
+	return new URLSearchParams(location.search).get("ask")?.trim() || null;
+}
