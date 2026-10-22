@@ -251,6 +251,21 @@ and forks use their creation time until new activity arrives. File modification
 times only invalidate the summary cache: copying, redacting, renaming or moving an
 old conversation does not make it look recent.
 
+Delegated chats (`/delegate` or `/d`) appear as indented workers underneath their
+parent chat, even when they work in another project. Each worker shows its actual
+working-folder name (hover for the full path), and the parent shows worker and
+needs-input counts. The parent and workers form one collapsible family; pagination
+keeps them together and worker activity brings the family forward. Pinning a worker
+keeps it first within its family rather than separating it from its parent.
+Opening a worker reveals its ancestors and scrolls it into view. If its parent is
+deleted, the worker remains accessible in its own project.
+
+This is display ancestry only: worker cwd, project membership, transcript storage
+and `AGENTS.md` loading are unchanged. The server reads parent links from the
+extension's existing `~/.config/acb/delegations/` records (or `ACB_DELEGATIONS_DIR`),
+so existing workers are included without rewriting transcripts. Status badges show
+the extension's recorded task status, not live-process liveness.
+
 ## Semantic session search (optional)
 
 The sidebar can optionally show a **search-by-meaning** box. Type a memory in

@@ -387,6 +387,52 @@ body.sidebar-resizing iframe {
 	flex-shrink: 0;
 	font-size: 11px;
 }
+.session-item[data-depth] {
+	padding-left: calc(10px + var(--session-depth, 0) * 14px);
+}
+.session-child::before {
+	content: "";
+	position: absolute;
+	left: calc(var(--session-depth, 0) * 14px);
+	top: 4px;
+	bottom: 4px;
+	border-left: 1px solid var(--border);
+	pointer-events: none;
+}
+.session-parent .session-item-title-row {
+	padding-left: 18px;
+}
+.session-tree-toggle {
+	position: absolute;
+	left: calc(6px + var(--session-depth, 0) * 14px);
+	top: 2px;
+	width: 22px;
+	height: 28px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--text-secondary);
+	cursor: pointer;
+	z-index: 1;
+}
+.session-tree-toggle:hover {
+	background: var(--surface-hover);
+}
+.session-worker-folder {
+	color: var(--text-secondary);
+}
+.session-folder-icon {
+	display: inline-block;
+	margin-right: 3px;
+	vertical-align: -1px;
+}
+.session-working-folder {
+	overflow-wrap: anywhere;
+}
+.session-worker-count.needs-input {
+	color: var(--accent);
+}
 /* Mark titles the user has explicitly renamed so they're visually
  * distinguishable from auto-derived (first-message) titles. */
 .session-item-title.renamed {
@@ -512,6 +558,9 @@ body.sidebar-resizing iframe {
 .session-item-meta {
 	font-size: 11px;
 	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 .sidebar-empty {
 	padding: 16px 12px;
@@ -4230,6 +4279,13 @@ select:focus-visible,
 		grid-template-rows: 22px 32px;
 		align-items: center;
 		padding: 1px 4px 1px 10px;
+	}
+	.session-item[data-depth] {
+		padding-left: calc(10px + var(--session-depth, 0) * 14px);
+	}
+	.session-tree-toggle {
+		top: 0;
+		height: 24px;
 	}
 	.session-item:not(.search-hit) .session-item-actions {
 		display: flex !important;

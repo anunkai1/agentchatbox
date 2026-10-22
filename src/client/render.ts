@@ -45,6 +45,12 @@ import {
 import { setRichText, setUserRichText } from "./linkify.js";
 import { mountNotices, type NoticeOptions, refreshNotices, showNotice } from "./notices.js";
 import { services } from "./services.js";
+import {
+	buildSessionTree,
+	type SessionNode,
+	type SessionTreeRow,
+	visibleSessionRows,
+} from "./session-tree.js";
 import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { formatAbsolute, formatRelative } from "./time.js";
 import { forkPath, sessionPath } from "./url.js";
@@ -3177,6 +3183,17 @@ function renderSidebarSearchResults(hits: SessionSearchHit[]): void {
 		if (h.sessionId === state.sessionId) item.classList.add("active");
 		item.append(el("div", { class: "session-item-title" }, h.title || "Untitled"));
 		item.append(el("div", { class: "search-snippet" }, h.snippet));
+		const session = lastSessions.find((s) => s.id === h.sessionId);
+		if (session?.delegation) {
+			const parent = lastSessions.find((s) => s.id === session.delegation?.parentSessionId);
+			item.append(
+				el("div", {
+					class: "session-item-meta",
+					text: `${parent ? `↳ ${parent.title} · ` : ""}${session.cwd}`,
+					title: `Working folder: ${session.cwd}`,
+				}),
+			);
+		}
 		const timeStr = formatRelativeTime(h.modifiedAt);
 		item.append(el("div", { class: "session-item-meta" }, `${h.messageCount} msgs · ${timeStr}`));
 		item.addEventListener("click", (e) => {
@@ -3195,6 +3212,7 @@ function renderSidebarSearchResults(hits: SessionSearchHit[]): void {
  * Called by main.ts when the server delivers the session list. Each project
  * is a collapsible folder (state in localStorage); sessions inside are sorted
  * newest-first, with pinned sessions floating to the top of their folder.
+ * Delegated workers stay under their parent regardless of their actual cwd.
  * Orphaned sessions (a deleted project's leftovers) land in a trailing
  * "Other" bucket. When the search box is active this is a no-op.
  */
@@ -3224,15 +3242,36 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	projectsPane.innerHTML = "";
 	sessionsPane.innerHTML = "";
 
-	// Project order from state.projects; sessions tagged "other" trail last.
+	// Build ancestry before project buckets: visual nesting must not change cwd.
+	const { roots, parents } = buildSessionTree(sessions);
 	const projects = [...state.projects];
-	const projectIds = projects.map((p) => p.id);
-	const buckets = new Map<string, SessionSummary[]>();
-	for (const pid of [...projectIds, "other"]) buckets.set(pid, []);
-	for (const s of sessions) {
-		const pid = s.projectId ?? "global";
-		const key = buckets.has(pid) ? pid : "other";
-		buckets.get(key)!.push(s);
+	const buckets = new Map<string, SessionNode[]>();
+	for (const project of projects) buckets.set(project.id, []);
+	buckets.set("other", []);
+	const bucketFor = (node: SessionNode) => {
+		const pid = node.session.projectId ?? "global";
+		return buckets.has(pid) ? pid : "other";
+	};
+	for (const node of roots) buckets.get(bucketFor(node))!.push(node);
+	if (!state.sessionId) sidebarRevealedPath = null;
+	if (state.sessionId) {
+		const path = [state.sessionId];
+		while (parents.has(path.at(-1)!)) path.push(parents.get(path.at(-1)!)!);
+		const root = roots.find((node) => node.session.id === path.at(-1));
+		const revealPath = path.join("/");
+		if (root && sidebarRevealedPath !== revealPath) {
+			sidebarRevealedPath = revealPath;
+			sidebarPendingReveal = state.sessionId;
+			const collapsedWorkers = readCollapseState(WORKER_COLLAPSE_KEY);
+			for (const id of path.slice(1)) collapsedWorkers.delete(id);
+			writeCollapseState(collapsedWorkers, WORKER_COLLAPSE_KEY);
+			const pid = bucketFor(root);
+			const collapsedProjects = readCollapseState();
+			collapsedProjects.delete(pid);
+			if (pid !== "global" && pid !== "other") collapsedProjects.delete(PROJECTS_CONTAINER_ID);
+			writeCollapseState(collapsedProjects);
+			sidebarPages.set(pid, Math.floor(buckets.get(pid)!.indexOf(root) / SIDEBAR_PAGE_SIZE));
+		}
 	}
 
 	// (Global always renders below with its own empty-state hint, so no
@@ -3255,16 +3294,12 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	// 2) Bottom pane — Global as its own top-level folder (the default
 	//    home for new chats).
 	if (globalProject) {
-		const items = (buckets.get("global") ?? [])
-			.slice()
-			.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
+		const items = buckets.get("global") ?? [];
 		sessionsPane.append(renderProjectFolder(globalProject, items));
 	}
 
 	// 3) Trailing "Other" bucket for orphaned sessions (deleted projects).
-	const other = (buckets.get("other") ?? [])
-		.slice()
-		.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
+	const other = buckets.get("other") ?? [];
 	if (other.length > 0) {
 		sessionsPane.append(
 			renderProjectFolder({ id: "other", name: "Other", icon: "", cwd: "" }, other),
@@ -3276,9 +3311,13 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 
 /** localStorage-backed collapse state per project id. */
 const PROJECT_COLLAPSE_KEY = "acb-project-collapse";
-function readCollapseState(): Set<string> {
+const WORKER_COLLAPSE_KEY = "acb-worker-collapse";
+const sidebarPages = new Map<string, number>();
+let sidebarRevealedPath: string | null = null;
+let sidebarPendingReveal: string | null = null;
+function readCollapseState(key = PROJECT_COLLAPSE_KEY): Set<string> {
 	try {
-		const raw = localStorage.getItem(PROJECT_COLLAPSE_KEY);
+		const raw = localStorage.getItem(key);
 		if (!raw) return new Set();
 		const arr = JSON.parse(raw) as unknown;
 		return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === "string")) : new Set();
@@ -3286,9 +3325,9 @@ function readCollapseState(): Set<string> {
 		return new Set();
 	}
 }
-function writeCollapseState(set: Set<string>): void {
+function writeCollapseState(set: Set<string>, key = PROJECT_COLLAPSE_KEY): void {
 	try {
-		localStorage.setItem(PROJECT_COLLAPSE_KEY, JSON.stringify([...set]));
+		localStorage.setItem(key, JSON.stringify([...set]));
 	} catch {
 		/* ignore quota */
 	}
@@ -3303,7 +3342,7 @@ function writeCollapseState(set: Set<string>): void {
 const PROJECTS_CONTAINER_ID = "__projects__";
 function renderProjectsContainer(
 	userProjects: ProjectSummary[],
-	buckets: Map<string, SessionSummary[]>,
+	buckets: Map<string, SessionNode[]>,
 ): HTMLElement {
 	const collapsed = readCollapseState().has(PROJECTS_CONTAINER_ID);
 	const wrap = el("div", { class: `projects-container${collapsed ? " collapsed" : ""}` });
@@ -3346,9 +3385,7 @@ function renderProjectsContainer(
 
 	const body = el("div", { class: "projects-container-body", id: bodyId });
 	for (const p of userProjects) {
-		const items = (buckets.get(p.id) ?? [])
-			.slice()
-			.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
+		const items = buckets.get(p.id) ?? [];
 		body.append(renderProjectFolder(p, items));
 	}
 	if (collapsed) body.style.display = "none";
@@ -3493,7 +3530,7 @@ type WindowedSessionList = HTMLDivElement & {
 	dispose?: () => void;
 };
 
-function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList {
+function renderWindowedSessionList(items: SessionTreeRow[]): WindowedSessionList {
 	const compactLayout = window.matchMedia(
 		"(hover: none), (pointer: coarse), (max-width: 720px)",
 	).matches;
@@ -3526,7 +3563,7 @@ function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList
 
 		const fragment = document.createDocumentFragment();
 		for (let i = start; i < end; i++) {
-			const row = renderSessionItem(items[i]);
+			const row = renderSessionItem(items[i].node.session, items[i]);
 			row.classList.add("windowed-session-item");
 			row.style.top = `${i * rowPitch}px`;
 			row.style.height = `${rowHeight}px`;
@@ -3542,8 +3579,20 @@ function renderWindowedSessionList(items: SessionSummary[]): WindowedSessionList
 		boundPane = null;
 	};
 	queueMicrotask(() => {
+		if (!list.isConnected) return;
 		boundPane = list.closest<HTMLElement>(".sidebar-pane");
 		boundPane?.addEventListener("scroll", refresh, { passive: true });
+		const activeIndex = items.findIndex((row) => row.node.session.id === sidebarPendingReveal);
+		if (boundPane && activeIndex >= 0) {
+			const top =
+				list.getBoundingClientRect().top -
+				boundPane.getBoundingClientRect().top +
+				activeIndex * rowPitch;
+			if (top < 0 || top + rowPitch > boundPane.clientHeight) {
+				boundPane.scrollTop += top - Math.max(0, (boundPane.clientHeight - rowPitch) / 2);
+			}
+			sidebarPendingReveal = null;
+		}
 		refresh();
 	});
 	return list;
@@ -3563,7 +3612,7 @@ function renderBrandFolderIcon(): HTMLElement {
 	});
 }
 
-function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLElement {
+function renderProjectFolder(p: ProjectSummary, items: SessionNode[]): HTMLElement {
 	const collapsed = readCollapseState().has(p.id);
 	const isOther = p.id === "other";
 	const isGlobal = p.id === "global";
@@ -3632,14 +3681,10 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	wrap.append(header);
 
 	const body = el("div", { class: "project-folder-body", id: bodyId });
-	// Pinned sessions stay first, then the remaining sessions are split into
-	// explicit pages. Pagination controls are kept above the rows so the user
-	// never has to scroll to the bottom of a page just to change pages.
-	const pinned = items.filter((s) => s.pinned);
-	const rest = items.filter((s) => !s.pinned);
-	const orderedItems = [...pinned, ...rest];
-	const totalPages = Math.max(1, Math.ceil(orderedItems.length / SIDEBAR_PAGE_SIZE));
-	let page = 0;
+	// Page whole families, then flatten their expanded rows for virtualisation.
+	// Workers can never end up on a different page from their parent.
+	const totalPages = Math.max(1, Math.ceil(items.length / SIDEBAR_PAGE_SIZE));
+	let page = Math.min(sidebarPages.get(p.id) ?? 0, totalPages - 1);
 	let windowed: WindowedSessionList | null = null;
 	const pagination = el("div", { class: "sidebar-pagination" });
 	const previous = el(
@@ -3658,7 +3703,11 @@ function renderProjectFolder(p: ProjectSummary, items: SessionSummary[]): HTMLEl
 	const renderPage = () => {
 		windowed?.dispose?.();
 		const start = page * SIDEBAR_PAGE_SIZE;
-		const pageItems = orderedItems.slice(start, start + SIDEBAR_PAGE_SIZE);
+		sidebarPages.set(p.id, page);
+		const pageItems = visibleSessionRows(
+			items.slice(start, start + SIDEBAR_PAGE_SIZE),
+			readCollapseState(WORKER_COLLAPSE_KEY),
+		);
 		body.replaceChildren();
 		if (totalPages > 1) body.append(pagination);
 		windowed = renderWindowedSessionList(pageItems);
@@ -3732,7 +3781,7 @@ const WORKER_STATUS: Record<string, { icon: string; label: string }> = {
  * from the server (pi's session_info line + data/pins.json), so this is
  * a pure projection of `s` — no local override store.
  */
-function renderSessionItem(s: SessionSummary): HTMLElement {
+function renderSessionItem(s: SessionSummary, treeRow?: SessionTreeRow): HTMLElement {
 	const displayTitle = s.title || "Untitled";
 	const pinned = !!s.pinned;
 
@@ -3740,6 +3789,32 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	// invalid interactive-content nesting, and Chrome on Android can then
 	// dispatch a tap to the wrong sibling control.
 	const item = el("div", { class: "session-item" });
+	item.dataset.sessionId = s.id;
+	if (treeRow) {
+		item.dataset.depth = String(treeRow.depth);
+		item.style.setProperty("--session-depth", String(Math.min(treeRow.depth, 4)));
+		if (treeRow.depth > 0) item.classList.add("session-child");
+		if (treeRow.node.children.length) {
+			const collapsed = readCollapseState(WORKER_COLLAPSE_KEY).has(s.id);
+			const toggle = el("button", {
+				class: "session-tree-toggle",
+				type: "button",
+				text: collapsed ? "▸" : "▾",
+				title: `${collapsed ? "Expand" : "Collapse"} workers for ${displayTitle}`,
+				"aria-label": `${collapsed ? "Expand" : "Collapse"} workers for ${displayTitle}`,
+				"aria-expanded": String(!collapsed),
+			});
+			toggle.addEventListener("click", () => {
+				const set = readCollapseState(WORKER_COLLAPSE_KEY);
+				if (set.has(s.id)) set.delete(s.id);
+				else set.add(s.id);
+				writeCollapseState(set, WORKER_COLLAPSE_KEY);
+				renderSidebarSessions(lastSessions);
+			});
+			item.append(toggle);
+			item.classList.add("session-parent");
+		}
+	}
 	const link = el("a", {
 		class: "session-item-link",
 		href: sessionPath(s.id),
@@ -3824,7 +3899,33 @@ function renderSessionItem(s: SessionSummary): HTMLElement {
 	}
 	link.append(titleRow);
 	const timeStr = formatRelativeTime(s.modifiedAt);
-	link.append(el("div", { class: "session-item-meta" }, `${s.messageCount} msgs · ${timeStr}`));
+	const meta = el("div", { class: "session-item-meta" });
+	if (s.delegation) {
+		const folder = s.cwd.replace(/\/+$/, "").split("/").pop() || s.cwd;
+		const folderLabel = el("span", {
+			class: "session-worker-folder",
+			title: `Working folder: ${s.cwd}`,
+			"aria-label": `Working folder: ${s.cwd}`,
+		});
+		folderLabel.append(
+			el("span", { class: "session-folder-icon", html: FOLDER_ICON, "aria-hidden": "true" }),
+			document.createTextNode(folder),
+		);
+		meta.append(folderLabel);
+		meta.append(document.createTextNode(" · "));
+	}
+	if (treeRow?.node.workerCount) {
+		const { workerCount, needsInputCount } = treeRow.node;
+		meta.append(
+			el("span", {
+				class: `session-worker-count${needsInputCount ? " needs-input" : ""}`,
+				text: `${workerCount} worker${workerCount === 1 ? "" : "s"}${needsInputCount ? ` · ${needsInputCount} needs input` : ""}`,
+			}),
+		);
+	} else {
+		meta.append(document.createTextNode(`${s.messageCount} msgs · ${timeStr}`));
+	}
+	link.append(meta);
 	item.append(link);
 	item.append(actions);
 	const moreBtn = el("button", {
@@ -3865,6 +3966,14 @@ function openSessionActions(titleEl: HTMLElement, actions: HTMLElement, s: Sessi
 	const box = el("div", { class: "modal-box session-action-sheet" });
 	box.append(el("h3", { text: title }));
 	box.append(el("p", { class: "session-action-sheet-hint", text: "Conversation actions" }));
+	if (s.delegation) {
+		box.append(
+			el("p", {
+				class: "session-action-sheet-hint session-working-folder",
+				text: `Working folder: ${s.cwd}`,
+			}),
+		);
+	}
 
 	const pinButton = el(
 		"button",

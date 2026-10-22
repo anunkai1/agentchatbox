@@ -44,6 +44,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { Message } from "@earendil-works/pi-ai";
 import { truncate } from "../shared/content.js";
 import { GLOBAL_PROJECT_ID, projectIdForCwd } from "./projects.js";
+import { sessionDelegation } from "./session-delegations.js";
 import { readPinnedSessions } from "./session-pins.js";
 
 /**
@@ -190,6 +191,7 @@ function claudePromptTextFromLine(line: string): string | null {
 /** A worker chat's status, from the delegate extension's `delegation` entries. */
 export interface DelegationSummary {
 	status: string;
+	parentSessionId?: string;
 }
 
 function delegationFromLine(line: string): DelegationSummary | null {
@@ -459,6 +461,12 @@ function listSessionsInCwd(cwd: string): SessionSummary[] {
  * Apply pin state + sort, shared by the single-cwd and multi-cwd listings.
  */
 function finishSessions(items: SessionSummary[]): SessionSummary[] {
+	// Join at read time so old workers gain their parent link without rewriting
+	// transcripts or changing cwd. Never cache these fields in transcript summaries.
+	for (const session of items) {
+		const delegation = sessionDelegation(session.id);
+		if (delegation) session.delegation = delegation;
+	}
 	items.sort(
 		(a, b) => b.modifiedAt.localeCompare(a.modifiedAt) || b.createdAt.localeCompare(a.createdAt),
 	);
