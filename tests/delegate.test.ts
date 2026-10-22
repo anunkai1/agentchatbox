@@ -253,6 +253,98 @@ describe("delegate extension", () => {
 		);
 	});
 
+	it("reminds resumed Pi workers to report even when they started in Claude Code", async () => {
+		const h = harness();
+		saveWorker("worker-1", { claude: "opus", status: "needs_input" });
+		const reminder = await h.events.get("before_agent_start")!({}, h.ctx("worker-1"));
+		expect(h.pi.setActiveTools).toHaveBeenCalledWith(["read", "delegation_report"]);
+		expect(reminder).toMatchObject({
+			message: {
+				customType: "delegation-report-reminder",
+				content: expect.stringContaining("call delegation_report"),
+				display: false,
+			},
+		});
+		expect(await h.events.get("before_agent_start")!({}, h.ctx("ordinary-chat"))).toBeUndefined();
+	});
+
+	it.each([
+		[undefined, "done"],
+		["opus", "done"],
+		["opus", "needs_input"],
+		["opus", "failed"],
+	] as const)("accepts an explicit status in Pi after starting with %s (%s)", async (claude, status) => {
+		const h = harness();
+		saveWorker("worker-1", { claude });
+		const worker = h.ctx("worker-1", [
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: `Result and evidence.\n\nStatus: ${status}` }],
+				},
+			},
+		]);
+		await h.events.get("message_end")!({ message: { role: "user" } }, worker);
+		await h.events.get("agent_settled")!({}, worker);
+		expect(readDelegation("worker-1")).toMatchObject({
+			status,
+			summary: "Result and evidence.",
+			reportSeq: 1,
+		});
+		expect(h.telegram).toHaveBeenCalledTimes(1);
+		expect(h.acb.prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		["error", {}, "failed"],
+		["aborted", {}, "stopped"],
+		["stop", { aborted: true }, "stopped"],
+	])("does not let a done status override %s / %j", async (stopReason, event, status) => {
+		const h = harness();
+		saveWorker("worker-1");
+		await h.events.get("agent_settled")!(
+			event,
+			h.ctx("worker-1", [
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "Status: done" }],
+						stopReason,
+						errorMessage: "Request failed",
+					},
+				},
+			]),
+		);
+		expect(readDelegation("worker-1")?.status).toBe(status);
+	});
+
+	it("prefers the structured report over a conflicting status line", async () => {
+		const h = harness();
+		saveWorker("worker-1");
+		const worker = h.ctx("worker-1", [
+			{
+				type: "message",
+				message: { role: "assistant", content: "Old text.\nStatus: needs_input" },
+			},
+		]);
+		await h.tools
+			.get("delegation_report")!
+			.execute(
+				"call",
+				{ status: "done", summary: "Verified completion." },
+				undefined,
+				undefined,
+				worker,
+			);
+		await h.events.get("agent_settled")!({}, worker);
+		expect(readDelegation("worker-1")).toMatchObject({
+			status: "done",
+			summary: "Verified completion.",
+		});
+	});
+
 	it("treats stopping without a report as needing the owner", async () => {
 		const h = harness();
 		await h.tools
@@ -319,7 +411,11 @@ describe("delegate extension", () => {
 			summary: "Half of the answ",
 			reportSeq: 1,
 		});
-		expect(h.acb.prompt).toHaveBeenCalledWith("parent-1", "/delegate report worker-1", expect.anything());
+		expect(h.acb.prompt).toHaveBeenCalledWith(
+			"parent-1",
+			"/delegate report worker-1",
+			expect.anything(),
+		);
 	});
 
 	it("does not wake anyone when the owner stops a worker", async () => {

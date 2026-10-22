@@ -289,9 +289,21 @@ export default function registerDelegate(
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
-		if (self(ctx) && !pi.getActiveTools().includes(REPORT_TOOL)) {
+		if (!self(ctx)) return;
+		if (!pi.getActiveTools().includes(REPORT_TOOL)) {
 			pi.setActiveTools([...pi.getActiveTools(), REPORT_TOOL]);
 		}
+		// Repeat on resumed turns too: the initial brief may have come from
+		// Claude Code, whose workers report with a closing status line.
+		return {
+			message: {
+				customType: "delegation-report-reminder",
+				content:
+					"This is a delegated worker chat. Before ending this turn, call delegation_report: done when finished, needs_input only for an actual owner decision, or failed when blocked. If the tool is unavailable, end with Status: done, Status: needs_input or Status: failed. " +
+					REPORT_GUIDANCE,
+				display: false,
+			},
+		};
 	});
 
 	/** A worker run started: show it as working. */
@@ -351,9 +363,14 @@ export default function registerDelegate(
 		const last = lastAssistant(ctx.sessionManager.getBranch());
 		// `aborted` is on the event from pi 1.3; older pi only marks the message.
 		const aborted = (event as { aborted?: boolean }).aborted === true || last.aborted === true;
+		// Accept the same explicit status after switching from Claude Code to
+		// Pi; never guess completion from prose such as "the work is done".
+		const parsed = parseStatusLine(last.text);
 		const outcome: { status: DelegationStatus; summary: string } = {
-			status: aborted ? "stopped" : (report?.status ?? (last.error ? "failed" : "needs_input")),
-			summary: report?.summary ?? last.error ?? last.text,
+			status: aborted
+				? "stopped"
+				: (report?.status ?? (last.error ? "failed" : (parsed.status ?? "needs_input"))),
+			summary: report?.summary ?? last.error ?? parsed.summary,
 		};
 		if (!last.cutOff || report || aborted) {
 			await settle(ctx, record, outcome);

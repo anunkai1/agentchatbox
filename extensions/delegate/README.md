@@ -58,10 +58,18 @@ words, in this order:
    question and useful findings/options/recommendation. For `failed`, include
    partial work and a useful next step.
 
+Pi workers are reminded to report on every turn, including resumed turns.
+Both Pi and Claude Code accept an explicit closing `Status: done`,
+`Status: needs_input` or `Status: failed` line. This also works after switching
+an existing worker from Claude Code to Pi. A structured `delegation_report`
+takes precedence; cancellation and provider errors keep their existing handling.
+Without either explicit report format, the conservative fallback remains
+`needs_input`; completion is never inferred from ordinary prose.
+
 The existing statuses (`done`, `needs_input`, `failed`), parent delivery,
 sequence-based deduplication and Telegram notification behaviour are unchanged.
 The parent should assess the evidence against the brief, not invent missing
-results. The fallback when a worker ends without an explicit report is unchanged.
+results.
 
 ## Factual status and topic search
 

@@ -297,7 +297,7 @@ export function lastAssistant(entries: readonly unknown[]): {
 
 const STATUS_LINE = /^\W*status\W*[:-][\s*_`]*(done|needs[_ ]input|failed)\b.*$/gim;
 
-/** A Claude Code worker's closing `Status: …` line, and its reply without it. */
+/** A worker's explicit closing `Status: …` line, and its reply without it. */
 export function parseStatusLine(text: string): {
 	status?: Exclude<DelegationStatus, "working" | "stopped">;
 	summary: string;
