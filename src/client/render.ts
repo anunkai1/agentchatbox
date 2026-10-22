@@ -3923,8 +3923,9 @@ function renderSessionItem(s: SessionSummary, treeRow?: SessionTreeRow): HTMLEle
 			}),
 		);
 	} else {
-		meta.append(document.createTextNode(`${s.messageCount} msgs · ${timeStr}`));
+		meta.append(document.createTextNode(`${s.messageCount} msgs`));
 	}
+	meta.append(document.createTextNode(` · ${timeStr}`));
 	link.append(meta);
 	item.append(link);
 	item.append(actions);

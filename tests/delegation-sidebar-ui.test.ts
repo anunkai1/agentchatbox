@@ -85,6 +85,7 @@ describe("delegation sidebar browser", { timeout: 30_000 }, () => {
 		it(`nests cross-project workers and shows folder at ${width}px`, async () => {
 			const page = await open(width);
 			try {
+				await page.clock.setFixedTime(new Date("2026-01-01T04:00:00Z"));
 				await render(page, [parent, child]);
 				const rows = page.locator("#project-body-global .session-item");
 				await expect.poll(() => rows.count()).toBe(2);
@@ -96,12 +97,18 @@ describe("delegation sidebar browser", { timeout: 30_000 }, () => {
 				expect(await rows.first().locator(".session-worker-count").innerText()).toContain(
 					"1 needs input",
 				);
+				expect(await rows.first().locator(".session-item-meta").innerText()).toBe(
+					"1 worker · 1 needs input · 4h ago",
+				);
 				const titleBounds = await rows.nth(1).locator(".session-item-title").boundingBox();
 				expect(titleBounds!.width).toBeGreaterThan(80);
 				const bounds = await folder.boundingBox();
 				expect(bounds!.width).toBeGreaterThan(45);
 				await page.getByRole("button", { name: "Collapse workers for Parent task" }).click();
 				await expect.poll(() => page.locator('a[href="/s/child"]').count()).toBe(0);
+				expect(await rows.first().locator(".session-item-meta").innerText()).toBe(
+					"1 worker · 1 needs input · 4h ago",
+				);
 				await render(page, [parent, child]);
 				expect(await page.locator('a[href="/s/child"]').count()).toBe(0);
 				await page.getByRole("button", { name: "Expand workers for Parent task" }).click();
