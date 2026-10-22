@@ -21,7 +21,7 @@ import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile }
 import { $ } from "./dom.js";
 import { MIC_ICON, REC_ICON, SPEAK_ICON, STOP_ICON } from "./icons.js";
 import { markdownToSpeechText } from "./markdown.js";
-import { clearNotice, refreshNotices } from "./notices.js";
+import { clearNotice, refreshNotices, showNotice } from "./notices.js";
 import {
 	addFileUploadPreview,
 	addImageAttachmentPreview,
@@ -1012,6 +1012,55 @@ function watchForSpeech(
  */
 let transcribing = false;
 
+async function transcribeRecording(blob: Blob, secs: number, key: string): Promise<void> {
+	if (transcribing || mediaRecorder?.state === "recording") {
+		setStatusMessage("finish the current recording or transcription before retrying…");
+		return;
+	}
+	clearNotice(key);
+	setStatusMessage(`transcribing ${secs.toFixed(1)}s of audio…`);
+	const btn = $<HTMLButtonElement>("#voice-btn");
+	transcribing = true;
+	btn.disabled = true;
+	try {
+		const text = await transcribeAudio(blob);
+		if (text) {
+			const ta = $<HTMLTextAreaElement>("#input");
+			const start = ta.selectionStart;
+			const end = ta.selectionEnd;
+			const before = ta.value.slice(0, start);
+			const after = ta.value.slice(end);
+			const lead = before.length > 0 && !/\s$/.test(before) ? " " : "";
+			ta.value = before + lead + text + after;
+			ta.selectionStart = ta.selectionEnd = before.length + lead.length + text.length;
+			ta.focus();
+		}
+		autoSize();
+		if (state.voiceMode && text.trim()) {
+			setStatusMessage(`transcribed (${text.length} chars), sending…`);
+			services.submitComposer?.();
+		} else {
+			setStatusMessage(`transcribed (${text.length} chars). Press Enter to send.`);
+		}
+	} catch (err) {
+		showNotice(
+			`Transcription failed: ${err instanceof Error ? err.message : String(err)}. Recording kept in this tab until dismissed, switching chats or reloading.`,
+			"error",
+			{
+				key,
+				action: {
+					label: "Retry transcription",
+					run: () => void transcribeRecording(blob, secs, key),
+				},
+			},
+		);
+		setStatusMessage("transcription failed — recording available to retry");
+	} finally {
+		transcribing = false;
+		btn.disabled = false;
+	}
+}
+
 export async function handleVoiceRecord(): Promise<void> {
 	if (transcribing) {
 		setStatusMessage("still transcribing the previous recording…");
@@ -1043,7 +1092,6 @@ export async function handleVoiceRecord(): Promise<void> {
 			// Canonical teardown: ensure the mic button reverts to its
 			// idle icon no matter how recording stopped (button click,
 			// an OS/permission revoke, etc.).
-			const btn = $<HTMLButtonElement>("#voice-btn");
 			setRecordingUi(false);
 			micStream.getTracks().forEach((t) => {
 				t.stop();
@@ -1055,41 +1103,8 @@ export async function handleVoiceRecord(): Promise<void> {
 			}
 			const blob = new Blob(recordedChunks, { type: "audio/webm" });
 			const secs = (Date.now() - recordingStart) / 1000;
-			setStatusMessage(`transcribing ${secs.toFixed(1)}s of audio…`);
-			// Hold the mic until this lands, so a second recording can't race it.
-			transcribing = true;
-			btn.disabled = true;
-			try {
-				const text = await transcribeAudio(blob);
-				// Insert the transcript at the cursor, preserving any text
-				// already in the box — so recording again appends rather
-				// than wiping what's there. A single space is added before
-				// the transcript only when needed (non-empty prefix that
-				// doesn't already end in whitespace).
-				if (text) {
-					const ta = $<HTMLTextAreaElement>("#input");
-					const start = ta.selectionStart;
-					const end = ta.selectionEnd;
-					const before = ta.value.slice(0, start);
-					const after = ta.value.slice(end);
-					const lead = before.length > 0 && !/\s$/.test(before) ? " " : "";
-					ta.value = before + lead + text + after;
-					ta.selectionStart = ta.selectionEnd = before.length + lead.length + text.length;
-					ta.focus();
-				}
-				autoSize();
-				if (state.voiceMode && text.trim()) {
-					setStatusMessage(`transcribed (${text.length} chars), sending…`);
-					services.submitComposer?.();
-				} else {
-					setStatusMessage(`transcribed (${text.length} chars). Press Enter to send.`);
-				}
-			} catch (err) {
-				appendError(`transcription failed: ${err instanceof Error ? err.message : String(err)}`);
-			} finally {
-				transcribing = false;
-				btn.disabled = false;
-			}
+			recordedChunks = [];
+			await transcribeRecording(blob, secs, `voice-recording-${recordingStart}`);
 		};
 		recordingStart = Date.now();
 		discardMessage = null;

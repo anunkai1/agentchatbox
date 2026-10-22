@@ -3,7 +3,7 @@
  *
  * Proxies to the resident pi-stt-server daemon instead of shelling out to a
  * per-request faster-whisper process (the old path reloaded the model from
- * disk for every voice note). Engine selection (Bark, Qwen3-ASR fallback)
+ * disk for every voice note). Engine selection (multilingual Qwen3-ASR by default)
  * lives inside the daemon; this router owns only which daemons to try:
  *
  *   STT_PRIMARY_URL   default http://127.0.0.1:8182 — Server2's pi-stt-server
@@ -35,12 +35,8 @@ const upload = multer({
 /** Defaults; read per-call in sttChain() so tests and .env overrides apply. */
 const DEFAULT_PRIMARY_URL = "http://127.0.0.1:8182";
 
-/**
- * Bounded wait for one daemon's answer. Voice notes transcribe in seconds, and
- * both daemons are tried in turn, so a hung one should hand over quickly
- * rather than keep the user waiting minutes.
- */
-const STT_TIMEOUT_MS = Number(process.env.STT_CLIENT_TIMEOUT_MS) || 30_000;
+/** Match the daemon's five-minute processing budget, including slow CPU notes. */
+const STT_TIMEOUT_MS = Number(process.env.STT_CLIENT_TIMEOUT_MS) || 300_000;
 
 const HEALTH_CACHE_MS = 60 * 1000;
 
@@ -76,7 +72,7 @@ export function sttChain(): SttAttempt[] {
 async function postToDaemon(
 	url: string,
 	audio: Buffer,
-): Promise<{ ok: true; body: SttDaemonResponse } | { ok: false; error: string }> {
+): Promise<{ ok: true; body: SttDaemonResponse } | { ok: false; error: string; status?: number }> {
 	let response: globalThis.Response;
 	try {
 		response = await fetch(`${url}/transcribe`, {
@@ -102,6 +98,7 @@ async function postToDaemon(
 	if (!response.ok || typeof body.text !== "string") {
 		return {
 			ok: false,
+			status: response.status,
 			error: `stt daemon at ${url} failed (${response.status}): ${body.error ?? body.text?.slice(0, 200) ?? "no transcript"}`,
 		};
 	}
@@ -129,6 +126,10 @@ export function createTranscribeRouter(): Router {
 					res.json(transcript);
 					return;
 				}
+				if (result.status === 413) {
+					res.status(413).json({ error: "Audio is too long. Record no more than five minutes." });
+					return;
+				}
 				failures.push(result.error);
 			}
 			// The detail names internal addresses, so it goes to the log, not the browser.
@@ -144,7 +145,7 @@ export function createTranscribeRouter(): Router {
 // Used by /api/health to report whether voice-note transcription is available.
 // Cached (createCachedProbe) so the browser's frequent polls never hit the
 // daemons more than once a minute. A daemon's /health is cheap (no model
-// loading is triggered by a probe), so probing both is fine.
+// loading is triggered by a probe), so checking the configured chain is cheap.
 // ---------------------------------------------------------------------------
 
 export const checkSttAvailable = createCachedProbe(HEALTH_CACHE_MS, computeSttAvailable);

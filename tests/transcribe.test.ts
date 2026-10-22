@@ -67,8 +67,8 @@ describe("transcribe router", () => {
 	});
 
 	it("returns the primary daemon's transcript", async () => {
-		const mock = stubDaemonFetch(() =>
-			new Response(JSON.stringify({ text: "hello", engine: "whisper" }), { status: 200 }),
+		const mock = stubDaemonFetch(
+			() => new Response(JSON.stringify({ text: "hello", engine: "whisper" }), { status: 200 }),
 		);
 		base = await listen(app);
 		const resp = await postAudio(base, Buffer.from("audio"));
@@ -80,6 +80,32 @@ describe("transcribe router", () => {
 		const daemonCalls = mock.mock.calls.filter((c) => String(c[0]).includes(".test:"));
 		expect(daemonCalls.length).toBe(1);
 		expect(String(daemonCalls[0]?.[0])).toBe("http://primary.test:9991/transcribe");
+	});
+
+	it("allows the daemon's full five-minute processing budget", async () => {
+		const timeout = vi.spyOn(AbortSignal, "timeout");
+		stubDaemonFetch(async () => {
+			await new Promise((resolve) => setImmediate(resolve));
+			return new Response(JSON.stringify({ text: "slow CPU transcript" }));
+		});
+		base = await listen(app);
+		const resp = await postAudio(base, Buffer.from("long audio"));
+		expect(await resp.json()).toEqual({ text: "slow CPU transcript" });
+		expect(timeout).toHaveBeenCalledWith(300_000);
+	});
+
+	it("reports the audio length limit without trying another daemon", async () => {
+		const mock = stubDaemonFetch(
+			() =>
+				new Response(JSON.stringify({ error: "decoded audio exceeds 300s limit" }), {
+					status: 413,
+				}),
+		);
+		base = await listen(app);
+		const resp = await postAudio(base, Buffer.from("long audio"));
+		expect(resp.status).toBe(413);
+		expect((await resp.json()).error).toContain("five minutes");
+		expect(mock.mock.calls.filter((c) => String(c[0]).includes(".test:"))).toHaveLength(1);
 	});
 
 	it("falls back when the primary daemon is unreachable", async () => {

@@ -276,6 +276,69 @@ beforeEach((ctx) => {
 });
 
 describe("browser smoke", { timeout: 30_000 }, () => {
+	it("retains a failed voice recording and retries the same audio on request", async () => {
+		const { page } = await openPage("/");
+		try {
+			const bodies: Buffer[] = [];
+			await page.route("**/api/transcribe", async (route) => {
+				bodies.push(route.request().postDataBuffer()!);
+				await route.fulfill({
+					status: bodies.length === 1 ? 502 : 200,
+					contentType: "application/json",
+					body: JSON.stringify(
+						bodies.length === 1 ? { error: "temporary failure" } : { text: "recovered voice note" },
+					),
+				});
+			});
+			await page.evaluate(() => {
+				Object.defineProperty(navigator, "mediaDevices", {
+					configurable: true,
+					value: {
+						getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
+					},
+				});
+				Object.defineProperty(window, "AudioContext", {
+					configurable: true,
+					value: class {
+						constructor() {
+							throw new Error("no audio monitor in test");
+						}
+					},
+				});
+				Object.defineProperty(window, "MediaRecorder", {
+					configurable: true,
+					value: class {
+						state = "inactive";
+						ondataavailable?: (event: { data: Blob }) => void;
+						onstop?: () => void;
+						start() {
+							this.state = "recording";
+						}
+						stop() {
+							this.state = "inactive";
+							this.ondataavailable?.({ data: new Blob(["saved-audio-marker"]) });
+							this.onstop?.();
+						}
+					},
+				});
+			});
+			await page.locator("#input").fill("draft");
+			await page.locator("#voice-btn").click();
+			await page.locator("#voice-btn").click();
+			const retry = page.getByRole("button", { name: "Retry transcription" });
+			await retry.waitFor();
+			expect(bodies).toHaveLength(1);
+			await retry.click();
+			await expect
+				.poll(() => page.locator("#input").inputValue())
+				.toBe("draft recovered voice note");
+			expect(bodies).toHaveLength(2);
+			for (const body of bodies) expect(body.toString()).toContain("saved-audio-marker");
+			expect(await retry.count()).toBe(0);
+		} finally {
+			await page.close();
+		}
+	});
 	for (const viewport of [
 		{ width: 1280, height: 900 },
 		{ width: 390, height: 844 },
