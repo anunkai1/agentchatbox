@@ -928,7 +928,7 @@ let recordingStart = 0;
 /** A recording that has heard no speech this long after the button press is dropped. */
 const NO_SPEECH_TIMEOUT_MS = 7_000;
 /** After speech, this much silence ends the recording and it is transcribed as normal. */
-const END_OF_SPEECH_SILENCE_MS = 3_000;
+const END_OF_SPEECH_SILENCE_MS = 4_000;
 /**
  * Mic level (RMS, 0..1) that counts as speech. Deliberately low: if it is too
  * high a real recording is lost, if it is too low a noisy room just never times
