@@ -2006,6 +2006,8 @@ function formatAttachmentBytes(bytes: number): string {
 export function addFileUploadPreview(
 	filename: string,
 	size: number,
+	/** Position in the current batch, e.g. "3 of 5". */
+	position: string,
 	onCancel: () => void,
 ): FileUploadPreview {
 	const previews = document.getElementById("attachment-previews");
@@ -2019,7 +2021,10 @@ export function addFileUploadPreview(
 		};
 	}
 	const progress = el("progress", { max: Math.max(size, 1), value: 0 });
-	const stateText = el("span", { class: "attachment-file-state", text: "Uploading · 0%" });
+	const stateText = el("span", {
+		class: "attachment-file-state",
+		text: `Uploading ${position} · 0%`,
+	});
 	const detailText = el("span", {
 		class: "attachment-file-detail",
 		text: `0 B of ${formatAttachmentBytes(size)}`,
@@ -2081,7 +2086,7 @@ export function addFileUploadPreview(
 			progress.max = safeTotal;
 			progress.value = safeLoaded;
 			const percent = Math.floor((safeLoaded / safeTotal) * 100);
-			stateText.textContent = `Uploading · ${percent}%`;
+			stateText.textContent = `Uploading ${position} · ${percent}%`;
 			detailText.textContent = `${formatAttachmentBytes(safeLoaded)} of ${formatAttachmentBytes(safeTotal)}`;
 		},
 		complete: (onRemove) => {

@@ -784,7 +784,7 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 export async function attachFiles(files: File[]): Promise<void> {
 	if (files.length === 0) return;
 	const ta = $<HTMLTextAreaElement>("#input");
-	for (const file of files) {
+	for (const [index, file] of files.entries()) {
 		if (file.type.startsWith("image/") && file.size > MAX_PROMPT_IMAGE_BYTES) {
 			appendError(
 				`Cannot attach ${file.name}: image is ${formatFileSize(file.size)}, above the ${formatFileSize(MAX_PROMPT_IMAGE_BYTES)} per-image limit.`,
@@ -798,9 +798,14 @@ export async function attachFiles(files: File[]): Promise<void> {
 			continue;
 		}
 		const uploadController = new AbortController();
-		const uploadPreview = addFileUploadPreview(file.name, file.size, () => {
-			uploadController.abort();
-		});
+		const uploadPreview = addFileUploadPreview(
+			file.name,
+			file.size,
+			`${index + 1} of ${files.length}`,
+			() => {
+				uploadController.abort();
+			},
+		);
 		uploadCount++;
 		try {
 			const res = await uploadFile(
