@@ -196,39 +196,48 @@ body {
 /* Top pane (Projects) — fixed height, draggable via the splitter. */
 .sidebar-projects-pane {
 	flex: 0 0 auto;
+	background: rgba(255, 255, 255, 0.025);
 }
 /* Bottom pane (Global + Other) — fills whatever the splitter leaves. */
 .sidebar-sessions-pane {
 	flex: 1 1 auto;
 	min-height: 40px;
 }
-/* Drag handle between the two panes. */
+/* Drag handle between the two panes: a full-width rule with a grip. */
 .sidebar-splitter {
-	flex: 0 0 6px;
+	flex: 0 0 12px;
 	cursor: row-resize;
 	background: transparent;
 	position: relative;
 	margin: 0;
 }
+.sidebar-splitter::before,
 .sidebar-splitter::after {
 	content: "";
 	position: absolute;
-	left: 50%;
 	top: 50%;
-	transform: translate(-50%, -50%);
-	width: 36px;
-	height: 2px;
-	border-radius: 1px;
-	background: var(--border);
-	opacity: 0.55;
-	transition:
-		background 0.12s,
-		opacity 0.12s;
+	transition: background 0.12s;
 }
+.sidebar-splitter::before {
+	left: 0;
+	right: 0;
+	height: 1px;
+	transform: translateY(-50%);
+	background: var(--border-strong);
+}
+.sidebar-splitter::after {
+	left: 50%;
+	transform: translate(-50%, -50%);
+	width: 40px;
+	height: 4px;
+	border-radius: 2px;
+	background: #3a3a3a;
+}
+.sidebar-splitter:hover::before,
+.sidebar-splitter.dragging::before,
 .sidebar-splitter:hover::after,
 .sidebar-splitter.dragging::after {
 	background: var(--accent);
-	opacity: 1;
 }
 /* Search results take over the sidebar. With no user projects, retain the
    compact Projects/+ heading but remove its empty resizable region. */

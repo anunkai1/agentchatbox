@@ -3447,7 +3447,7 @@ function initSidebarSplitter(): void {
 	}
 	const resizeTo = (requested: number, persist = false) => {
 		const wrapH = wrap.getBoundingClientRect().height;
-		const max = Math.max(SIDEBAR_SPLIT_MIN, wrapH - SIDEBAR_SPLIT_MIN - 6);
+		const max = Math.max(SIDEBAR_SPLIT_MIN, wrapH - SIDEBAR_SPLIT_MIN - splitter.offsetHeight);
 		const next = Math.max(SIDEBAR_SPLIT_MIN, Math.min(max, requested));
 		projectsPane.style.height = `${next}px`;
 		splitter.setAttribute("aria-valuemin", String(SIDEBAR_SPLIT_MIN));
