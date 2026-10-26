@@ -89,6 +89,50 @@ function writeSession(
 	writeFileSync(join(root!, cwdDir, name), `${lines.join("\n")}\n`);
 }
 
+describe("findPiSessionFile", () => {
+	it("scans a directory once, not once for every session in a search sweep", async () => {
+		const count = 40;
+		for (let i = 0; i < count; i++) {
+			writeSession("--home-test-project--", `${i}.jsonl`, `id-${i}`, "2026-06-15T10:00:00Z", []);
+		}
+		const { findPiSessionFile } = await import("../src/server/session-list.js");
+		const parse = vi.spyOn(JSON, "parse");
+		try {
+			for (let i = 0; i < count; i++) {
+				expect(findPiSessionFile(cwd, `id-${i}`)).toBe(
+					join(root!, "--home-test-project--", `${i}.jsonl`),
+				);
+			}
+			// One directory scan plus at most one header validation per cached lookup.
+			expect(parse.mock.calls.length).toBeLessThanOrEqual(count * 2);
+		} finally {
+			parse.mockRestore();
+		}
+	});
+
+	it("discovers additions and relocations without trusting deleted cached paths", async () => {
+		const { findPiSessionFile } = await import("../src/server/session-list.js");
+		writeSession("--home-test-project--", "old.jsonl", "one", "2026-06-15T10:00:00Z", []);
+		expect(findPiSessionFile(cwd, "one")).toBe(join(root!, "--home-test-project--", "old.jsonl"));
+		writeSession("--home-test-project--", "added.jsonl", "two", "2026-06-15T10:00:00Z", []);
+		expect(findPiSessionFile(cwd, "two")).toBe(join(root!, "--home-test-project--", "added.jsonl"));
+		rmSync(join(root!, "--home-test-project--", "old.jsonl"));
+		writeSession("--home-test-project--", "moved.jsonl", "one", "2026-06-15T10:00:00Z", []);
+		expect(findPiSessionFile(cwd, "one")).toBe(join(root!, "--home-test-project--", "moved.jsonl"));
+		rmSync(join(root!, "--home-test-project--", "moved.jsonl"));
+		expect(findPiSessionFile(cwd, "one")).toBeNull();
+	});
+
+	it("revalidates cached headers when a file is replaced in place", async () => {
+		const { findPiSessionFile } = await import("../src/server/session-list.js");
+		writeSession("--home-test-project--", "same.jsonl", "old", "2026-06-15T10:00:00Z", []);
+		expect(findPiSessionFile(cwd, "old")).not.toBeNull();
+		writeSession("--home-test-project--", "same.jsonl", "new", "2026-06-15T10:00:00Z", []);
+		expect(findPiSessionFile(cwd, "old")).toBeNull();
+		expect(findPiSessionFile(cwd, "new")).toBe(join(root!, "--home-test-project--", "same.jsonl"));
+	});
+});
+
 describe("listPiSessions", () => {
 	it("returns an empty array when the cwd directory does not exist", async () => {
 		// Fresh root, no --<cwd>-- subdir at all.

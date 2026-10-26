@@ -665,26 +665,43 @@ export function findSessionCwd(sessionId: string, knownCwds: string[]): string |
 	return cwd || null;
 }
 
+/** Session ids are immutable, but external Pi edits can replace or move their files. */
+const sessionPathCache = new Map<string, Map<string, string>>();
+
+function sessionIdOfFile(file: string): string | null {
+	const firstLine = readFirstLine(file);
+	if (!firstLine) return null;
+	try {
+		const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+		return parsed?.type === "session" ? String(parsed.id) : null;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Find the JSONL file for a session id under the cwd's session dir.
- * Returns the absolute path, or null if no file's first line matches.
- * (Reuses the same first-line `session` header check as
- * readPiSessionMessages.) Public so session-rename can target the file.
+ * Index the directory once instead of scanning it for every conversation in a
+ * search sweep. Validate a cached hit's header so deletions/replacements cannot
+ * return the wrong session; rebuild on a miss to discover new or moved files.
  */
 export function findPiSessionFile(cwd: string, sessionId: string): string | null {
 	const dir = sessionsDirFor(resolve(cwd));
-	if (!existsSync(dir)) return null;
+	const cached = sessionPathCache.get(dir)?.get(sessionId);
+	if (cached && sessionIdOfFile(cached) === sessionId) return cached;
+	if (!existsSync(dir)) {
+		sessionPathCache.delete(dir);
+		return null;
+	}
+	const paths = new Map<string, string>();
 	for (const name of readdirSync(dir)) {
 		if (!name.endsWith(".jsonl")) continue;
 		const file = join(dir, name);
-		const firstLine = readFirstLine(file);
-		if (!firstLine) continue;
-		try {
-			const parsed = JSON.parse(firstLine) as Record<string, unknown>;
-			if (parsed?.type === "session" && String(parsed.id) === sessionId) return file;
-		} catch {}
+		const id = sessionIdOfFile(file);
+		if (id !== null && !paths.has(id)) paths.set(id, file);
 	}
-	return null;
+	sessionPathCache.set(dir, paths);
+	return paths.get(sessionId) ?? null;
 }
 
 /**

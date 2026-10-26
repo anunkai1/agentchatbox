@@ -68,6 +68,38 @@ it("reports sweep progress while indexing and clears it after", async () => {
 	expect(search.searchStatus().progress).toBeNull();
 });
 
+it("finishes a slow sweep without restarting from the first conversation", async () => {
+	const sessions = [{ id: "a" }, { id: "b" }, { id: "c" }];
+	// Stop a broken implementation on its second listing instead of hanging the test.
+	mocks.list.mockReturnValueOnce(sessions).mockReturnValue([]);
+	let now = 0;
+	const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+	mocks.index.mockImplementation(async () => {
+		now += 16_000; // Each conversation exceeds the former 15-second sweep budget.
+	});
+	try {
+		const search = await import("../src/server/search/index.js");
+		await search.refreshSearchIndex();
+		expect(mocks.index.mock.calls.map(([session]) => session.id)).toEqual(["a", "b", "c"]);
+		expect(mocks.list).toHaveBeenCalledTimes(1);
+		expect(search.searchStatus()).toEqual({ indexing: false, error: null, progress: null });
+	} finally {
+		clock.mockRestore();
+	}
+});
+
+it("coalesces refreshes during a sweep into one complete follow-up pass", async () => {
+	const search = await import("../src/server/search/index.js");
+	mocks.list.mockReturnValue([{ id: "a" }, { id: "b" }]);
+	mocks.index.mockImplementationOnce(async () => {
+		void search.refreshSearchIndex();
+		void search.refreshSearchIndex();
+	});
+	await search.refreshSearchIndex();
+	expect(mocks.index.mock.calls.map(([session]) => session.id)).toEqual(["a", "b", "a", "b"]);
+	expect(mocks.list).toHaveBeenCalledTimes(2);
+});
+
 it("reports per-session indexing failures rather than silently hiding them", async () => {
 	mocks.index.mockRejectedValueOnce(new Error("test failure"));
 	const search = await import("../src/server/search/index.js");

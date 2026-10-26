@@ -52,12 +52,6 @@ function ensureInit(): Promise<void> {
 	return initialisation;
 }
 
-/**
- * Longest a single sweep pass may run before yielding to the next pass, so the
- * cache and SQLite work that stays on the main thread comes in bounded slices.
- */
-export const SEARCH_SWEEP_BUDGET_MS = 15_000;
-
 /** Pruning more than this many conversations at once, and over half the index, is treated as suspect. */
 const MAX_SUSPECT_PRUNE = 20;
 
@@ -96,7 +90,6 @@ export function refreshSearchIndex(): Promise<void> {
 			// request in flight cannot read counters from the pass before it.
 			const pass = { done: 0, total: sessions.length };
 			progress = pass;
-			const startedAt = Date.now();
 			for (const session of sessions) {
 				try {
 					await ensureSessionIndexed(session);
@@ -108,12 +101,8 @@ export function refreshSearchIndex(): Promise<void> {
 					});
 				}
 				pass.done++;
-				// Yield between sessions so requests are served during a sweep,
-				// and hand the rest of the backlog to a follow-up pass.
-				if (Date.now() - startedAt >= SEARCH_SWEEP_BUDGET_MS) {
-					refreshRequested = true;
-					break;
-				}
+				// Yield without abandoning this pass. Restarting at a time budget
+				// can repeatedly check the same prefix and never reach older sessions.
 				await new Promise<void>((resolve) => setImmediate(resolve));
 			}
 			lastError = failed ? `${failed} conversations could not be indexed` : null;
