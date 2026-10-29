@@ -878,47 +878,6 @@ body.sidebar-resizing iframe {
 	display: none !important;
 }
 
-/* Claude Code (/cc) on/off toggle: a small pill that lights up while on. */
-.header-cc {
-	flex-shrink: 0;
-	background: transparent;
-	border: 1px solid var(--border-strong);
-	color: var(--text-secondary);
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 32px;
-	height: 32px;
-	padding: 0;
-	border-radius: 50%;
-	cursor: pointer;
-	line-height: 0;
-	transition:
-		background 0.12s,
-		color 0.12s,
-		border-color 0.12s;
-}
-.header-cc:hover {
-	background: var(--surface-hover);
-	color: var(--text);
-}
-.header-cc:not(.on) {
-	border-style: dashed;
-	opacity: 0.7;
-}
-.header-cc.on {
-	background: var(--brand-gradient);
-	border-color: transparent;
-	color: #fff;
-	opacity: 1;
-	box-shadow: 0 0 10px var(--brand-glow);
-}
-.header-cc.on:hover {
-	background: var(--brand-gradient);
-	color: #fff;
-	filter: brightness(1.12);
-}
-
 /* Voice mode on/off: a round button holding a "V". Off is a quiet outline; on
    takes the brand gradient, so the state reads at a glance. */
 .header-voice {
