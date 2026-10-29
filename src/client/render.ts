@@ -1964,23 +1964,44 @@ export function addImageAttachmentPreview(
 	previews.append(card);
 }
 
+/** Show a completed non-image attachment without inserting text into the draft. */
+function addFileAttachmentPreview(
+	url: string,
+	filename: string,
+	size: number,
+	onRemove: () => void,
+): void {
+	const previews = document.getElementById("attachment-previews");
+	if (
+		!previews ||
+		Array.from(previews.children).some((card) => card.getAttribute("data-url") === url)
+	)
+		return;
+	const preview = addFileUploadPreview(filename, size, "", () => {});
+	preview.complete(url, onRemove);
+}
+
 /**
- * Rebuild image previews after renderShell() replaces the composer DOM.
- * Uploaded image references live in state until the prompt is accepted, but the
- * old composer node (and its thumbnails) does not. Without this restoration,
- * a transcript refresh makes an attached image appear to vanish from the UI.
+ * Rebuild attachment previews after renderShell() replaces the composer DOM.
+ * Upload references live in state until the prompt is accepted, so a transcript
+ * refresh must restore both image thumbnails and completed file cards.
  */
-export function restoreImageAttachmentPreviews(): void {
+export function restoreAttachmentPreviews(): void {
 	for (const [url, attachment] of state.uploadedImages) {
 		addImageAttachmentPreview(url, attachment.filename, () => {
 			state.uploadedImages.delete(url);
+		});
+	}
+	for (const [url, attachment] of state.uploadedFiles) {
+		addFileAttachmentPreview(url, attachment.filename, attachment.size, () => {
+			state.uploadedFiles.delete(url);
 		});
 	}
 }
 
 export interface FileUploadPreview {
 	setProgress: (loaded: number, total: number) => void;
-	complete: (onRemove: () => void) => void;
+	complete: (url: string, onRemove: () => void) => void;
 	fail: (message: string) => void;
 	cancelled: () => void;
 	remove: () => void;
@@ -2089,7 +2110,8 @@ export function addFileUploadPreview(
 			stateText.textContent = `Uploading ${position} · ${percent}%`;
 			detailText.textContent = `${formatAttachmentBytes(safeLoaded)} of ${formatAttachmentBytes(safeTotal)}`;
 		},
-		complete: (onRemove) => {
+		complete: (url, onRemove) => {
+			card.dataset.url = url;
 			cancelButton.remove();
 			progress.value = progress.max;
 			card.classList.remove("attachment-uploading");
@@ -2837,7 +2859,7 @@ export function renderShell(): void {
 	if (window.innerWidth <= 720) toggleSidebar(true);
 
 	renderHistory();
-	restoreImageAttachmentPreviews();
+	restoreAttachmentPreviews();
 	refreshStatus();
 	// The header pill is built "off"; repaint it (and the mic) from state, since
 	// a rebuild after the session's prefs were applied would otherwise lose it.

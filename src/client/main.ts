@@ -237,17 +237,18 @@ function handleSend(): void {
 	}
 	const input = $<HTMLTextAreaElement>("#input");
 	const trimmed = input.value.trim();
-	// An image is now represented by its attachment preview, not Markdown in
-	// the textarea, so an image-only prompt is valid too.
-	if (!trimmed && state.uploadedImages.size === 0) return;
+	// Attachments live in their previews, not the textarea, so a prompt
+	// containing only files or images is valid too.
+	if (!trimmed && state.uploadedImages.size === 0 && state.uploadedFiles.size === 0) return;
 
 	// Known slash commands consume the composer immediately. Normal prompts
 	// stay in the input until the WebSocket accepts them, so a disconnected
 	// or not-yet-ready session never loses the user's draft.
 	if (trimmed.startsWith("/") && isKnownSlash(trimmed)) {
+		state.uploadedImages.clear();
+		state.uploadedFiles.clear();
 		clearComposerDraft();
 		handleSlash(trimmed.replace(/^\//, ""));
-		state.uploadedImages.clear();
 		return;
 	}
 
@@ -275,9 +276,9 @@ function showSendConnectionNotice(): void {
 
 /** Send a typed message as the user; agent workflows belong to pi extensions. */
 function sendAsUser(trimmed: string): boolean {
+	const messageText = withAttachmentMarkdown(trimmed);
+	if (!messageText) return false;
 	const images = collectUploadedImages();
-	if (!trimmed && images.length === 0) return false;
-	const messageText = withImageAttachmentMarkdown(trimmed);
 	if (!sendPromptHook(messageText, images.length > 0 ? images : undefined)) {
 		showSendConnectionNotice();
 		return false;
@@ -286,7 +287,9 @@ function sendAsUser(trimmed: string): boolean {
 	// Only clear the attachment references after the WebSocket accepted the
 	// prompt. If the connection is unavailable, the draft and attachments
 	// remain resubmittable.
+	const attachmentTitle = state.uploadedFiles.values().next().value?.filename ?? "Photo";
 	state.uploadedImages.clear();
+	state.uploadedFiles.clear();
 
 	// Push typed text to history only after acceptance; attachment Markdown
 	// is transport/display metadata and should not reappear in the composer.
@@ -306,7 +309,7 @@ function sendAsUser(trimmed: string): boolean {
 
 	// Auto-title from the first user message.
 	if (state.title === "New chat" || !state.title) {
-		state.title = trimmed.split(/[.\n!?]/)[0].slice(0, 50) || "Photo";
+		state.title = trimmed.split(/[.\n!?]/)[0].slice(0, 50) || attachmentTitle.slice(0, 50);
 		$<HTMLSpanElement>("#title").textContent = state.title;
 	}
 	return true;
@@ -410,14 +413,18 @@ function collectUploadedImages(): PromptImage[] {
 	return Array.from(state.uploadedImages.keys(), (url) => ({ url }));
 }
 
-/** Preserve the familiar image in the sent user bubble and a durable filename
- * label in pi's transcript without exposing the URL in the textarea itself. */
-function withImageAttachmentMarkdown(text: string): string {
-	const attachments = Array.from(
+/** Add attachment references only when sending, keeping the typed draft and
+ * history clean while preserving images and file links in the sent message. */
+function withAttachmentMarkdown(text: string): string {
+	const images = Array.from(
 		state.uploadedImages,
 		([url, image]) => `![image: ${image.filename}](${url})`,
 	);
-	return [...attachments, text].filter(Boolean).join("\n");
+	const files = Array.from(
+		state.uploadedFiles,
+		([url, file]) => `[file: ${file.filename}](${url})`,
+	);
+	return [...images, ...files, text].filter(Boolean).join("\n");
 }
 
 /**
@@ -473,15 +480,16 @@ function recoverStrandedSteer(): void {
  * course-correction, not a standalone prompt you'd recall with ↑/↓.
  */
 function sendSteer(trimmed: string): boolean {
+	const messageText = withAttachmentMarkdown(trimmed);
+	if (!messageText) return false;
 	const images = collectUploadedImages();
-	if (!trimmed && images.length === 0) return false;
-	const messageText = withImageAttachmentMarkdown(trimmed);
 	if (!steerHook(messageText, images.length > 0 ? images : undefined)) {
 		showSendConnectionNotice();
 		return false;
 	}
 	clearNotice("send-connection");
 	state.uploadedImages.clear();
+	state.uploadedFiles.clear();
 	const msg: PersistedMessage = { kind: "steer", text: messageText, delivered: false };
 	state.messages.push(msg);
 	appendNode(renderMessageNode(msg), { pin: true });
@@ -1602,8 +1610,14 @@ async function boot(): Promise<void> {
 		// replays the current ones right after `ready`, so drop any left
 		// over from a previously open chat (e.g. its /cc toggle).
 		state.extensionStatusLabels = {};
-		// Track the session id for export/display.
+		// Track the session id for export/display. Keep attachments on a
+		// same-session reconnect, but never carry them into a different chat.
 		if (info.sessionId) {
+			if (state.sessionId && state.sessionId !== info.sessionId) {
+				state.uploadedImages.clear();
+				state.uploadedFiles.clear();
+				clearAttachmentPreviews();
+			}
 			state.sessionId = info.sessionId;
 			setNoticeSession(info.sessionId);
 			applySessionPrefs();

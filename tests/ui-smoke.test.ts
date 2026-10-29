@@ -44,6 +44,9 @@ done
 n=0
 while IFS= read -r line; do
   type="$(echo "$line" | jq -r '.type // ""')"
+  if [[ "$type" == "prompt" || "$type" == "steer" ]]; then
+    printf '%s\\n' "$line" >> "$ACB_TEST_PROMPT_LOG"
+  fi
   case "$type" in
     "get_state")
       echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"$session\\",\\"messageCount\\":0}}"
@@ -153,6 +156,10 @@ async function send(page: Page, text: string): Promise<void> {
 
 const messages = (page: Page) => page.locator(".messages");
 
+function lastPrompt(): { type: string; message: string; images?: unknown[] } {
+	return JSON.parse(readFileSync(join(tmp, "prompts.jsonl"), "utf8").trim().split("\n").at(-1)!);
+}
+
 beforeAll(async () => {
 	tmp = mkdtempSync(join(tmpdir(), "acb-ui-"));
 	const piCwd = join(tmp, "cwd");
@@ -225,6 +232,7 @@ beforeAll(async () => {
 			HOST: "127.0.0.1",
 			PORT: String(port),
 			PI_BIN: fakePi,
+			ACB_TEST_PROMPT_LOG: join(tmp, "prompts.jsonl"),
 			PI_CWD: piCwd,
 			PI_CODING_AGENT_SESSION_DIR: sessions,
 			UPLOADS_DIR: join(tmp, "uploads"),
@@ -489,6 +497,168 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			}
 		});
 	}
+
+	it("keeps file and photo links out of the draft and sends both attachments once", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.locator("#input").fill("Please check these");
+			await page.locator("#file-input").setInputFiles([
+				{ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("attached notes") },
+				{ name: "photo.png", mimeType: "image/png", buffer: PNG_1X1 },
+			]);
+			const file = page.locator("#attachment-previews .attachment-uploaded");
+			await expect.poll(() => file.count()).toBe(1);
+			await expect.poll(() => page.locator("#attachment-previews img").count()).toBe(1);
+			expect(await page.locator("#input").inputValue()).toBe("Please check these");
+			const fileUrl = await file.getAttribute("data-url");
+			await page.locator("#send-btn").click();
+			await expect.poll(() => page.locator(".row-assistant").count()).toBe(2);
+			await expect.poll(() => page.locator("#stop-btn").isVisible()).toBe(false);
+			expect(await page.locator("#attachment-previews .attachment-preview").count()).toBe(0);
+			expect(await page.locator("#input").inputValue()).toBe("");
+			const prompt = lastPrompt();
+			expect(prompt.type).toBe("prompt");
+			expect(prompt.message).toContain(`[file: notes.txt](${join(tmp, fileUrl!)})`);
+			expect(prompt.message.match(/\[file: notes.txt\]/g)).toHaveLength(1);
+			expect(prompt.message).toContain("Please check these");
+			expect(prompt.images).toEqual([
+				{ type: "image", mimeType: "image/png", data: PNG_1X1.toString("base64") },
+			]);
+			expect(await messages(page).locator(".row-user").last().innerText()).toContain(
+				"file: notes.txt",
+			);
+			await page.locator("#input").press("ArrowUp");
+			expect(await page.locator("#input").inputValue()).toBe("Please check these");
+			await send(page, "No attachments this time");
+			await expect.poll(() => page.locator(".row-assistant").count()).toBe(3);
+			expect(lastPrompt().message).toBe("No attachments this time");
+			expect(lastPrompt().images).toBeUndefined();
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("removes file attachments without changing the draft and accepts a file-only prompt", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.locator("#input").fill("Leave this draft alone");
+			await page.locator("#file-input").setInputFiles({
+				name: "remove.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from("remove me"),
+			});
+			await page.getByRole("button", { name: "Remove remove.txt", exact: true }).click();
+			expect(await page.locator("#input").inputValue()).toBe("Leave this draft alone");
+			await send(page, "No file attached");
+			await expect.poll(() => page.locator(".row-assistant").count()).toBe(2);
+			await expect.poll(() => page.locator("#stop-btn").isVisible()).toBe(false);
+			expect(lastPrompt().message).toBe("No file attached");
+			await page.locator("#file-input").setInputFiles({
+				name: "only.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from("file-only message"),
+			});
+			await page.getByRole("button", { name: "Remove only.txt", exact: true }).waitFor();
+			expect(await page.locator("#input").inputValue()).toBe("");
+			await page.locator("#send-btn").click();
+			await expect.poll(() => page.locator(".row-assistant").count()).toBe(3);
+			expect(lastPrompt().message).toMatch(/^\[file: only\.txt\]\([^)]+\.txt\)$/);
+			expect(lastPrompt().images).toBeUndefined();
+			expect(await page.locator("#attachment-previews .attachment-preview").count()).toBe(0);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("queues a file-only attachment while the agent is running", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.locator("#file-input").setInputFiles({
+				name: "steer.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from("queued file"),
+			});
+			await page.getByRole("button", { name: "Remove steer.txt", exact: true }).waitFor();
+			sockets.at(-1)!.send(JSON.stringify({ type: "event", event: { type: "agent_start" } }));
+			await expect.poll(() => page.locator("#stop-btn").isVisible()).toBe(true);
+			await page.locator("#send-btn").click();
+			await expect.poll(() => lastPrompt().type).toBe("steer");
+			expect(lastPrompt().message).toContain("[file: steer.txt]");
+			expect(lastPrompt().images).toBeUndefined();
+			expect(await page.locator(".row-steer").innerText()).toContain("file: steer.txt");
+			expect(await page.locator("#attachment-previews .attachment-preview").count()).toBe(0);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("retains file attachments after a blocked send and restores their cards on reconnect", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.locator("#input").fill("Draft with a file");
+			await page.locator("#file-input").setInputFiles({
+				name: "reconnect.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from("retained file"),
+			});
+			await page.getByRole("button", { name: "Remove reconnect.txt", exact: true }).waitFor();
+			await page.clock.install();
+			await page.clock.pauseAt(new Date(Date.now() + 1000));
+			const before = sockets.length;
+			await sockets.at(-1)!.close({ code: 1001, reason: "test drop" });
+			await expect.poll(() => page.locator("#status-dynamic").innerText()).toContain("closed");
+			await page.locator("#send-btn").click();
+			await page.getByRole("button", { name: "Reconnect", exact: true }).click();
+			await expect.poll(() => sockets.length).toBeGreaterThan(before);
+			await expect.poll(() => page.locator(".composer-notice-warning").count()).toBe(0);
+			// Force the transcript-refresh path that replaces the composer DOM.
+			sockets
+				.at(-1)!
+				.send(JSON.stringify({ type: "transcript", sessionId: SEEDED_ID, messages: [] }));
+			await expect.poll(() => messages(page).innerText()).not.toContain("stored answer");
+			expect(await page.locator("#input").inputValue()).toBe("Draft with a file");
+			expect(await page.locator("#attachment-previews .attachment-uploaded").count()).toBe(1);
+			await page.locator("#send-btn").click();
+			await expect.poll(() => page.locator(".row-assistant").count()).toBe(1);
+			expect(lastPrompt().message).toContain("[file: reconnect.txt]");
+			expect(lastPrompt().message).toContain("Draft with a file");
+			expect(await page.locator("#attachment-previews .attachment-preview").count()).toBe(0);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("does not carry draft attachments into a new chat or past a composer slash command", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.locator("#file-input").setInputFiles({
+				name: "previous.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from("previous chat"),
+			});
+			await page.getByRole("button", { name: "Remove previous.txt", exact: true }).waitFor();
+			await page.locator(".new-chat-btn").click();
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/live-session-001");
+			expect(await page.locator("#attachment-previews .attachment-preview").count()).toBe(0);
+			await page.locator("#file-input").setInputFiles({
+				name: "discard.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from("discard with command"),
+			});
+			await page.getByRole("button", { name: "Remove discard.txt", exact: true }).waitFor();
+			await send(page, "/help");
+			expect(await page.locator("#attachment-previews .attachment-preview").count()).toBe(0);
+			await send(page, "A clean prompt");
+			await expect.poll(() => lastPrompt().message).toBe("A clean prompt");
+		} finally {
+			await page.close();
+		}
+	});
 
 	it("clears an upload blocker when the upload finishes without losing the draft", async () => {
 		const { page } = await openPage(`/s/${SEEDED_ID}`);

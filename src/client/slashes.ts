@@ -346,6 +346,8 @@ function resetChatState(): void {
 	state.messages = [];
 	state.history = [];
 	state.historyIdx = null;
+	state.uploadedImages.clear();
+	state.uploadedFiles.clear();
 	state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 	state.contextUsage = null;
 	state.contextWarned = false;

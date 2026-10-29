@@ -776,14 +776,13 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 /**
  * Shared core: take a list of File objects (from the file picker, a
  * paste, or a drag-and-drop) and upload each one, remembering its private
- * upload reference for multimodal models and showing a removable thumbnail
- * above the composer. Non-image files still get a Markdown link in the input.
+ * upload reference and showing a removable thumbnail or file card above the
+ * composer. Attachment links are added only when sending, never to the input.
  * The file picker resets its own .value; callers that don't come from an
  * <input type=file> simply pass an empty Event-less path.
  */
 export async function attachFiles(files: File[]): Promise<void> {
 	if (files.length === 0) return;
-	const ta = $<HTMLTextAreaElement>("#input");
 	for (const [index, file] of files.entries()) {
 		if (file.type.startsWith("image/") && file.size > MAX_PROMPT_IMAGE_BYTES) {
 			appendError(
@@ -836,11 +835,9 @@ export async function attachFiles(files: File[]): Promise<void> {
 					refreshNotices();
 				});
 			} else {
-				const insertion = `[file: ${res.filename}](${res.url})`;
-				ta.value = `${ta.value}\n${insertion}`.trim();
-				uploadPreview.complete(() => {
-					ta.value = ta.value.replace(`[file: ${res.filename}](${res.url})`, "").trim();
-					autoSize();
+				state.uploadedFiles.set(res.url, { filename: res.filename, size: res.size });
+				uploadPreview.complete(res.url, () => {
+					state.uploadedFiles.delete(res.url);
 				});
 			}
 			autoSize();

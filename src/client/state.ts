@@ -207,6 +207,8 @@ export interface AppState {
 	 * already-uploaded file into pi's image block.
 	 */
 	uploadedImages: Map<string, { mimeType: string; filename: string; size: number }>;
+	/** Non-image uploads attached to the composer, kept out of the typed draft. */
+	uploadedFiles: Map<string, { filename: string; size: number }>;
 	/**
 	 * Connection state reported by the WS client. "stalled" means the
 	 * socket reports OPEN but no messages (including heartbeats) have
@@ -376,6 +378,7 @@ export const state: AppState = {
 	voiceMode: false,
 	pendingModelSet: null,
 	uploadedImages: new Map(),
+	uploadedFiles: new Map(),
 	connectionStatus: "connecting",
 	ttsVoice: null,
 	ttsEngine: null,
