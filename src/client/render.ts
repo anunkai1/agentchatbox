@@ -1965,7 +1965,7 @@ export function addImageAttachmentPreview(
 }
 
 /** Show a completed non-image attachment without inserting text into the draft. */
-function addFileAttachmentPreview(
+export function addFileAttachmentPreview(
 	url: string,
 	filename: string,
 	size: number,

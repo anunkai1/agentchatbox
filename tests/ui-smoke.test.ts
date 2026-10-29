@@ -660,6 +660,50 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("shows the completed file card if the composer is rebuilt during its upload", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		let releaseUpload = () => {};
+		const uploadReady = new Promise<void>((resolve) => {
+			releaseUpload = resolve;
+		});
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.route("**/api/upload", async (route) => {
+				await uploadReady;
+				await route.fulfill({
+					json: {
+						url: "/uploads/refresh.txt",
+						filename: "refresh.txt",
+						mimeType: "text/plain",
+						size: 5,
+					},
+				});
+			});
+			await page.locator("#input").fill("Keep this draft");
+			await page
+				.locator("#file-input")
+				.setInputFiles({
+					name: "refresh.txt",
+					mimeType: "text/plain",
+					buffer: Buffer.from("notes"),
+				});
+			await expect.poll(() => page.locator(".attachment-uploading").count()).toBe(1);
+			sockets
+				.at(-1)!
+				.send(JSON.stringify({ type: "transcript", sessionId: SEEDED_ID, messages: [] }));
+			await expect.poll(() => messages(page).innerText()).not.toContain("stored answer");
+			releaseUpload();
+			await page.getByRole("button", { name: "Remove refresh.txt", exact: true }).waitFor();
+			expect(await page.locator("#input").inputValue()).toBe("Keep this draft");
+			await page.getByRole("button", { name: "Remove refresh.txt", exact: true }).click();
+			await page.locator("#send-btn").click();
+			await expect.poll(() => lastPrompt().message).toBe("Keep this draft");
+		} finally {
+			releaseUpload();
+			await page.close();
+		}
+	});
+
 	it("clears an upload blocker when the upload finishes without losing the draft", async () => {
 		const { page } = await openPage(`/s/${SEEDED_ID}`);
 		let releaseUpload = () => {};

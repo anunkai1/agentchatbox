@@ -23,6 +23,7 @@ import { MIC_ICON, REC_ICON, SPEAK_ICON, STOP_ICON } from "./icons.js";
 import { markdownToSpeechText } from "./markdown.js";
 import { clearNotice, refreshNotices, showNotice } from "./notices.js";
 import {
+	addFileAttachmentPreview,
 	addFileUploadPreview,
 	addImageAttachmentPreview,
 	appendError,
@@ -836,7 +837,8 @@ export async function attachFiles(files: File[]): Promise<void> {
 				});
 			} else {
 				state.uploadedFiles.set(res.url, { filename: res.filename, size: res.size });
-				uploadPreview.complete(res.url, () => {
+				uploadPreview.remove();
+				addFileAttachmentPreview(res.url, res.filename, res.size, () => {
 					state.uploadedFiles.delete(res.url);
 				});
 			}
