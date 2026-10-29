@@ -3445,8 +3445,7 @@ body.modal-open {
 	/* Real 30px boxes (not transform: scale, which leaves a 44px layout box
 	 * and wide gaps); the .header prefix beats the touch-target minimums. */
 	.header .header-voice,
-	.header .header-overflow,
-	.header .header-cc {
+	.header .header-overflow {
 		width: 30px;
 		min-width: 30px;
 		height: 30px;
@@ -3455,10 +3454,6 @@ body.modal-open {
 		justify-content: center;
 		border-radius: 50%;
 		flex-shrink: 0;
-	}
-	.header-cc-icon svg {
-		width: 16px;
-		height: 16px;
 	}
 	/* On mobile, hide the inline model and Fast pills — both remain reachable
 	 * through Settings. */
