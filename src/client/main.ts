@@ -499,24 +499,25 @@ function sendSteer(trimmed: string): boolean {
 }
 
 /**
- * Reconcile queued steering messages against a `queue_update` event.
- * The server reports the current steering queue contents; we mark the
- * oldest still-queued steer entries as delivered until the local
- * pending count matches the server's queue length.
+ * Reconcile against pi's complete pending queue. A transcript rebuild drops
+ * optimistic bubbles because undelivered instructions are not on disk yet;
+ * restore them from this snapshot, matching occurrences so repeated text is
+ * neither duplicated nor collapsed. This only paints state, never resends it.
  */
 function reconcileSteerQueue(serverSteering: unknown[]): void {
-	const queued = state.messages.filter((m) => m.kind === "steer" && !m.delivered);
-	const remaining = Math.max(0, Math.min(serverSteering.length, queued.length));
-	const toDeliver = queued.length - remaining;
-	let delivered = 0;
+	const pending = serverSteering.filter((text): text is string => typeof text === "string");
+	state.pendingSteerCount = pending.length;
 	for (const m of state.messages) {
-		if (delivered >= toDeliver) break;
-		if (m.kind === "steer" && !m.delivered) {
-			m.delivered = true;
-			delivered += 1;
-		}
+		if (m.kind !== "steer" || m.delivered) continue;
+		const index = pending.indexOf(m.text);
+		if (index >= 0) pending.splice(index, 1);
+		else m.delivered = true;
 	}
-	state.pendingSteerCount = serverSteering.length;
+	for (const text of pending) {
+		const msg: PersistedMessage = { kind: "steer", text, delivered: false };
+		state.messages.push(msg);
+		appendNode(renderMessageNode(msg));
+	}
 	syncSteerBadges();
 	refreshStatus();
 }

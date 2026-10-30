@@ -928,6 +928,80 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 		}
 	});
 
+	it.each([
+		"mid-turn",
+		"between-turns",
+	])("replays the latest pending queue once on a %s reconnect", async (phase) => {
+		writeFileSync(
+			fakePiPath!,
+			`#!${process.execPath}
+const { createInterface } = require('node:readline');
+const send = (event) => console.log(JSON.stringify(event));
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line);
+  if (command.type === 'get_state') {
+    send({ type: 'response', command: 'get_state', success: true, data: { sessionId: 'queue-replay-session', messageCount: 0 } });
+  } else if (command.type === 'prompt') {
+    send({ type: 'agent_start' });
+    send({ type: 'turn_start' });
+    send({ type: 'queue_update', steering: ['old queue'], followUp: [] });
+    if (command.message === 'between-turns') send({ type: 'turn_end' });
+    send({ type: 'queue_update', steering: ['keep this instruction', 'keep this instruction'], followUp: ['later'] });
+    send({ type: 'compaction_start', reason: 'threshold' });
+  } else if (command.type === 'steer') {
+    send({ type: 'queue_update', steering: [], followUp: [] });
+  }
+});
+`,
+		);
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const first = await connectClient();
+		let second: Awaited<ReturnType<typeof connectClient>> | undefined;
+		let third: Awaited<ReturnType<typeof connectClient>> | undefined;
+		const init = { type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" };
+		try {
+			first.ws.send(JSON.stringify(init));
+			expect(await waitForType(first.inbox, "ready", 1)).toHaveLength(1);
+			first.ws.send(JSON.stringify({ type: "prompt", text: phase }));
+			expect(await waitForEventOfType(first.inbox, "compaction_start", 0, 3000)).toHaveLength(1);
+			const closed = new Promise<void>((resolve) => first.ws.once("close", () => resolve()));
+			first.close();
+			await closed;
+
+			second = await connectClient();
+			second.ws.send(JSON.stringify({ ...init, sessionId: "queue-replay-session" }));
+			const replayed = await waitForEventOfType(second.inbox, "queue_update", 0, 1000);
+			expect(replayed.map((message) => message.event)).toEqual([
+				{
+					type: "queue_update",
+					steering: ["keep this instruction", "keep this instruction"],
+					followUp: ["later"],
+				},
+			]);
+
+			const beforeClear = second.inbox.all().length;
+			second.ws.send(JSON.stringify({ type: "steer", text: "clear test queue" }));
+			const updated = await waitForEventOfType(second.inbox, "queue_update", beforeClear, 3000);
+			expect(updated.map((message) => message.event)).toEqual([
+				{ type: "queue_update", steering: [], followUp: [] },
+			]);
+			const closedAgain = new Promise<void>((resolve) => second!.ws.once("close", () => resolve()));
+			second.close();
+			await closedAgain;
+			third = await connectClient();
+			third.ws.send(JSON.stringify({ ...init, sessionId: "queue-replay-session" }));
+			const cleared = await waitForEventOfType(third.inbox, "queue_update", 0, 1000);
+			expect(cleared.map((message) => message.event)).toEqual([
+				{ type: "queue_update", steering: [], followUp: [] },
+			]);
+		} finally {
+			first.close();
+			second?.close();
+			third?.close();
+		}
+	});
+
 	it("forwards setModel as a pi set_model command (no respawn)", async () => {
 		const { mountChatWs } = await import("../src/server/chat.js");
 		mountChatWs(server!);

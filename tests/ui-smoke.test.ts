@@ -609,6 +609,49 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("restores queued steering after a transcript rebuild without duplicating or resending it", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			const socket = sockets.at(-1)!;
+			socket.send(JSON.stringify({ type: "event", event: { type: "agent_start" } }));
+			await expect.poll(() => page.locator("#stop-btn").isVisible()).toBe(true);
+			await send(page, "queued course correction");
+			await expect.poll(() => lastPrompt().message).toBe("queued course correction");
+			expect(await page.locator(".row-steer").count()).toBe(1);
+			const submitted = readFileSync(join(tmp, "prompts.jsonl"), "utf8");
+
+			// A reconnect replaces the local optimistic steering bubble with the
+			// on-disk transcript, which cannot contain an undelivered instruction.
+			socket.send(JSON.stringify({ type: "transcript", sessionId: SEEDED_ID, messages: [] }));
+			await expect.poll(() => page.locator(".row-steer").count()).toBe(0);
+			const queue = (steering: string[]) =>
+				socket.send(
+					JSON.stringify({
+						type: "event",
+						event: { type: "queue_update", steering, followUp: [] },
+					}),
+				);
+			queue(["queued course correction", "second instruction", "second instruction"]);
+			await expect.poll(() => page.locator(".row-steer").count()).toBe(3);
+			expect(await page.locator(".row-steer").allTextContents()).toEqual([
+				expect.stringContaining("queued course correction"),
+				expect.stringContaining("second instruction"),
+				expect.stringContaining("second instruction"),
+			]);
+			queue(["queued course correction", "second instruction", "second instruction"]);
+			queue(["second instruction"]);
+			await expect.poll(() => page.locator(".steer-badge.delivered").count()).toBe(2);
+			expect(await page.locator(".row-steer").count()).toBe(3);
+			expect(await page.locator("#status-dynamic").innerText()).toContain("1 queued");
+			queue([]);
+			await expect.poll(() => page.locator(".steer-badge.delivered").count()).toBe(3);
+			expect(readFileSync(join(tmp, "prompts.jsonl"), "utf8")).toBe(submitted);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("retains file attachments after a blocked send and restores their cards on reconnect", async () => {
 		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
 		try {

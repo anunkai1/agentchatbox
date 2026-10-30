@@ -160,6 +160,9 @@ export interface LiveSession {
 	 * blocks; invalidate on every completed message rather than reparsing an
 	 * unchanged transcript for each transient socket. */
 	replayMessages: TranscriptPayload["messages"] | null;
+	/** Latest complete pending queue, including updates between turns. Queued
+	 * instructions are not in the JSONL until pi consumes them. */
+	queueFrame: Record<string, unknown> | null;
 	/** Latest extension setStatus frame per key. A status is published once, when
 	 * it changes, so a browser that attaches later (page refresh, reconnect)
 	 * would never learn it without a replay from here. */
@@ -441,6 +444,7 @@ class SessionRegistry {
 			currentTurn: [],
 			currentTurnBytes: 0,
 			replayMessages: null,
+			queueFrame: null,
 			statusFrames: new Map(),
 			pendingModel: null,
 			pendingThinking: null,
@@ -881,6 +885,14 @@ class SessionRegistry {
 		// is what makes this a transparent pipe rather than a silent dropper.
 		if (line.type === "response" && line.success !== false) return;
 
+		if (line.type === "queue_update") {
+			// Queue snapshots are state, not turn history. Keep only the latest,
+			// even during compaction, and never replay stale intermediate queues.
+			session.queueFrame = line;
+			deliver(session.ws, { type: "event", event: browserEvent(line) });
+			return;
+		}
+
 		if (
 			line.type === "message_end" ||
 			(line.type === "extension_ui_request" && line.statusKey === "claude-activity")
@@ -1047,6 +1059,9 @@ class SessionRegistry {
 			for (const ev of session.currentTurn) {
 				deliver(ws, { type: "event", event: browserEvent(ev as Record<string, unknown>) });
 			}
+		}
+		if (session.queueFrame) {
+			deliver(ws, { type: "event", event: browserEvent(session.queueFrame) });
 		}
 	}
 
