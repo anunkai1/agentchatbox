@@ -55,6 +55,7 @@ import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } fr
 import { formatAbsolute, formatRelative } from "./time.js";
 import { forkPath, sessionPath } from "./url.js";
 import { createVoiceBar } from "./voice-bar.js";
+import { VOICE_MODE_DESCRIPTIONS, VOICE_MODE_LABELS } from "./voice-mode.js";
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
@@ -384,27 +385,17 @@ export function syncDisplayPreferences(): void {
 		node.setAttribute("aria-hidden", String(thinkingHidden));
 	}
 	const voiceBtn = document.querySelector<HTMLElement>("#voice-btn");
-	voiceBtn?.classList.toggle("voice-mode-on", state.voiceMode);
-	voiceBtn?.setAttribute(
-		"title",
-		state.voiceMode
-			? "Voice mode on: sends when you stop talking, and replies are spoken"
-			: "Voice note (transcribes locally on server)",
-	);
+	const voiceEnabled = state.voiceMode !== "off";
+	const voiceDescription = VOICE_MODE_DESCRIPTIONS[state.voiceMode];
+	voiceBtn?.classList.toggle("voice-mode-on", voiceEnabled);
+	voiceBtn?.setAttribute("title", voiceDescription);
 	const headerVoice = document.querySelector<HTMLElement>("#header-voice");
 	if (headerVoice) {
-		headerVoice.classList.toggle("on", state.voiceMode);
-		headerVoice.setAttribute("aria-pressed", String(state.voiceMode));
-		headerVoice.setAttribute(
-			"aria-label",
-			state.voiceMode ? "Voice mode is on" : "Voice mode is off",
-		);
-		headerVoice.setAttribute(
-			"title",
-			state.voiceMode
-				? "Voice mode on: recordings send when you stop talking, replies are spoken"
-				: "Voice mode off — click to turn on",
-		);
+		headerVoice.classList.toggle("on", voiceEnabled);
+		headerVoice.setAttribute("aria-label", voiceDescription);
+		headerVoice.setAttribute("title", `${voiceDescription} — click to cycle Off → V → V+`);
+		const label = headerVoice.querySelector(".header-voice-v");
+		if (label) label.textContent = VOICE_MODE_LABELS[state.voiceMode];
 	}
 	const toolsHidden = !state.showToolCalls;
 	for (const node of document.querySelectorAll<HTMLElement>("#messages .row-tool")) {
@@ -2447,9 +2438,7 @@ export function renderShell(): void {
 			},
 			"",
 		),
-		// Voice mode on/off. Device-wide, like the Settings row it mirrors, so the
-		// pill keeps its state across sessions. The disc lights up when on, which is
-		// the fastest read of "is the mic armed?".
+		// Cycle Off → V → V+. Device-wide, like the Settings row it mirrors.
 		// Starting a new chat lives in the drawer behind the ☰ button.
 		el(
 			"button",
@@ -2457,19 +2446,11 @@ export function renderShell(): void {
 				class: "header-voice",
 				id: "header-voice",
 				type: "button",
-				title: "Voice mode off — click to turn on",
-				"aria-label": "Voice mode is off",
-				"aria-pressed": "false",
+				title: "Voice mode off — click to cycle Off → V → V+",
+				"aria-label": VOICE_MODE_DESCRIPTIONS.off,
 				onclick: () => shellHandlers?.toggleVoiceMode(),
 			},
-			// A vector "V", not a letter: centring a font glyph depends on the
-			// platform's line-box metrics, which put capitals off-centre by a
-			// different amount on Android than on Linux.
-			el("span", {
-				class: "header-voice-v",
-				"aria-hidden": "true",
-				html: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 5.5 12 18.5 18.5 5.5"/></svg>`,
-			}),
+			el("span", { class: "header-voice-v", "aria-hidden": "true" }, "Off"),
 		),
 		el(
 			"button",

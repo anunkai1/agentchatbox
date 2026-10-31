@@ -68,7 +68,7 @@ while IFS= read -r line; do
       echo "{\\"type\\":\\"message_update\\",\\"message\\":$reply}"
       echo "{\\"type\\":\\"message_end\\",\\"message\\":$reply}"
       echo "{\\"type\\":\\"turn_end\\",\\"message\\":$reply,\\"toolResults\\":[]}"
-      echo '{"type":"agent_end","messages":[],"willRetry":false}'
+      echo "{\\"type\\":\\"agent_end\\",\\"messages\\":[$reply],\\"willRetry\\":false}"
       ;;
     "") ;;
     *)
@@ -147,6 +147,39 @@ async function openPage(path: string): Promise<{ page: Page; sockets: WebSocketR
 	);
 	await page.goto(`${base}${path}`);
 	return { page, sockets };
+}
+
+async function mockMicrophone(page: Page): Promise<void> {
+	await page.evaluate(() => {
+		Object.defineProperty(navigator, "mediaDevices", {
+			configurable: true,
+			value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) },
+		});
+		Object.defineProperty(window, "AudioContext", {
+			configurable: true,
+			value: class {
+				constructor() {
+					throw new Error("no audio monitor in test");
+				}
+			},
+		});
+		Object.defineProperty(window, "MediaRecorder", {
+			configurable: true,
+			value: class {
+				state = "inactive";
+				ondataavailable?: (event: { data: Blob }) => void;
+				onstop?: () => void;
+				start() {
+					this.state = "recording";
+				}
+				stop() {
+					this.state = "inactive";
+					this.ondataavailable?.({ data: new Blob(["saved-audio-marker"]) });
+					this.onstop?.();
+				}
+			},
+		});
+	});
 }
 
 async function send(page: Page, text: string): Promise<void> {
@@ -298,6 +331,66 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("cycles voice mode in the header and Settings and preserves it on refresh", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			const toggle = page.locator("#header-voice");
+			expect(await toggle.innerText()).toBe("Off");
+			await toggle.click();
+			expect(await toggle.innerText()).toBe("V");
+			await page.reload();
+			await expect.poll(() => toggle.innerText()).toBe("V");
+			await page.getByRole("button", { name: "Open settings", exact: true }).click();
+			const settingsVoice = page.locator(".settings-row").filter({ hasText: "Voice mode" });
+			await settingsVoice.click();
+			expect(await settingsVoice.locator(".overflow-value").innerText()).toBe("V+");
+			expect(await toggle.innerText()).toBe("V+");
+			await settingsVoice.click();
+			expect(await toggle.innerText()).toBe("Off");
+		} finally {
+			await page.close();
+		}
+	});
+
+	it.each([
+		["Off", 0],
+		["V", 1],
+		["V+", 2],
+	] as const)("%s recording has the correct auto-submit and read-back behaviour", async (mode, clicks) => {
+		const { page } = await openPage("/");
+		try {
+			await page.waitForFunction(
+				() => !document.querySelector("#send-btn")?.hasAttribute("disabled"),
+			);
+			await mockMicrophone(page);
+			await page.route("**/api/transcribe", (route) =>
+				route.fulfill({
+					contentType: "application/json",
+					body: JSON.stringify({ text: `recorded in ${mode}` }),
+				}),
+			);
+			for (let i = 0; i < clicks; i++) await page.locator("#header-voice").click();
+			await page.locator("#voice-btn").click();
+			await page.locator("#voice-btn").click();
+			if (mode === "Off") {
+				await expect.poll(() => page.locator("#input").inputValue()).toBe("recorded in Off");
+				expect(await page.locator(".row-user").count()).toBe(0);
+			} else {
+				await expect.poll(() => messages(page).innerText()).toContain("reply 1");
+				expect(await page.locator("#input").inputValue()).toBe("");
+				await expect
+					.poll(() => lastPrompt().message)
+					.toBe(mode === "V+" ? "/voice-last long" : "recorded in V");
+				// A second reply means the fake Pi received the automatic voice request.
+				if (mode === "V+") await expect.poll(() => messages(page).innerText()).toContain("reply 2");
+				else expect(await messages(page).innerText()).not.toContain("reply 2");
+			}
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("retains a failed voice recording and retries the same audio on request", async () => {
 		const { page } = await openPage("/");
 		try {
@@ -312,38 +405,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					),
 				});
 			});
-			await page.evaluate(() => {
-				Object.defineProperty(navigator, "mediaDevices", {
-					configurable: true,
-					value: {
-						getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
-					},
-				});
-				Object.defineProperty(window, "AudioContext", {
-					configurable: true,
-					value: class {
-						constructor() {
-							throw new Error("no audio monitor in test");
-						}
-					},
-				});
-				Object.defineProperty(window, "MediaRecorder", {
-					configurable: true,
-					value: class {
-						state = "inactive";
-						ondataavailable?: (event: { data: Blob }) => void;
-						onstop?: () => void;
-						start() {
-							this.state = "recording";
-						}
-						stop() {
-							this.state = "inactive";
-							this.ondataavailable?.({ data: new Blob(["saved-audio-marker"]) });
-							this.onstop?.();
-						}
-					},
-				});
-			});
+			await mockMicrophone(page);
 			await page.locator("#input").fill("draft");
 			await page.locator("#voice-btn").click();
 			await page.locator("#voice-btn").click();

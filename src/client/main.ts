@@ -122,6 +122,7 @@ import {
 	stopAllVoice,
 	toggleSpeak,
 } from "./voice.js";
+import { nextVoiceMode, VOICE_MODE_DESCRIPTIONS } from "./voice-mode.js";
 import { isVoiceFailureNotice, pendingReplyText, voiceableReplyStamp } from "./voice-pending.js";
 import { createChatClient } from "./ws.js";
 
@@ -325,7 +326,7 @@ let lastAutoVoicedStamp: number | null = null;
  * listened to (their Long button still works).
  */
 function autoVoiceReply(stamp: number | null): void {
-	if (!state.voiceMode || state.compaction) return;
+	if (state.voiceMode !== "reply" || state.compaction) return;
 	if (document.visibilityState !== "visible") return;
 	if (stamp === null || stamp === lastAutoVoicedStamp) return;
 	lastAutoVoicedStamp = stamp;
@@ -1531,10 +1532,10 @@ async function boot(): Promise<void> {
 			chatClient.newSession();
 		},
 		toggleVoiceMode: () => {
-			state.voiceMode = !state.voiceMode;
+			state.voiceMode = nextVoiceMode(state.voiceMode);
 			saveSessionPrefs();
 			syncDisplayPreferences();
-			showToast(state.voiceMode ? "Voice mode on" : "Voice mode off");
+			showToast(VOICE_MODE_DESCRIPTIONS[state.voiceMode]);
 		},
 		newSessionInProject: (projectId) => {
 			if (confirm("Start a new chat in this project?")) {

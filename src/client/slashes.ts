@@ -35,6 +35,7 @@ import {
 	state,
 } from "./state.js";
 import { shareableSessionUrl } from "./url.js";
+import { nextVoiceMode, VOICE_MODE_LABELS } from "./voice-mode.js";
 
 /**
  * Small helper for the slash command's help/session/copy messages.
@@ -1586,6 +1587,19 @@ export function openOverflowMenu(): void {
 		);
 	}
 
+	const voiceModeRow = actionRow(
+		"Voice mode",
+		VOICE_MODE_LABELS[state.voiceMode],
+		() => {
+			state.voiceMode = nextVoiceMode(state.voiceMode);
+			saveSessionPrefs();
+			syncDisplayPreferences();
+			const value = voiceModeRow.querySelector(".overflow-value");
+			if (value) value.textContent = VOICE_MODE_LABELS[state.voiceMode];
+		},
+		"Cycle Off → V (auto-submit) → V+ (auto-submit and read replies aloud)",
+	);
+
 	// Image model state remains extension-owned; the displayed value is the
 	// best label pi has reported during this browser session.
 	box.append(
@@ -1597,15 +1611,7 @@ export function openOverflowMenu(): void {
 				closeThen(() => services.sendSlashCommand?.("/imagemodel")),
 				"Choose image-generation model",
 			),
-			displayToggleRow(
-				"Voice mode",
-				() => state.voiceMode,
-				(on) => {
-					state.voiceMode = on;
-				},
-				"Send voice recordings automatically and speak each reply",
-				["On", "Off"],
-			),
+			voiceModeRow,
 			actionRow(
 				"Voice",
 				state.ttsVoice ?? "Default",

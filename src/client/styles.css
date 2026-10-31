@@ -878,8 +878,7 @@ body.sidebar-resizing iframe {
 	display: none !important;
 }
 
-/* Voice mode on/off: a round button holding a "V". Off is a quiet outline; on
-   takes the brand gradient, so the state reads at a glance. */
+/* Voice mode cycles Off / V / V+. Active modes use the brand gradient. */
 .header-voice {
 	display: inline-flex;
 	align-items: center;
@@ -909,11 +908,9 @@ body.sidebar-resizing iframe {
 	box-shadow: 0 0 10px var(--brand-glow);
 }
 .header-voice-v {
-	display: inline-flex;
-}
-.header-voice-v svg {
-	width: 14px;
-	height: 14px;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1;
 }
 
 /* Settings: a round wrench button. */

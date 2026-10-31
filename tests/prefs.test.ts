@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applySessionPrefs, saveSessionPrefs } from "../src/client/prefs.js";
+import { applySessionPrefs, reloadVoiceMode, saveSessionPrefs } from "../src/client/prefs.js";
 import { state } from "../src/client/state.js";
+import { nextVoiceMode } from "../src/client/voice-mode.js";
 
 class MemoryStorage implements Storage {
 	private values = new Map<string, string>();
@@ -106,14 +107,39 @@ describe("chat display preferences", () => {
 describe("voice mode preference", () => {
 	it("is off by default and follows the device across sessions", () => {
 		applySessionPrefs();
-		expect(state.voiceMode).toBe(false);
+		expect(state.voiceMode).toBe("off");
 
-		state.voiceMode = true;
+		state.voiceMode = "send";
 		saveSessionPrefs();
 
 		state.sessionId = "another-session";
-		state.voiceMode = false;
+		state.voiceMode = "off";
 		applySessionPrefs();
-		expect(state.voiceMode).toBe(true);
+		expect(state.voiceMode).toBe("send");
+	});
+
+	it.each(["off", "send", "reply"] as const)("persists and reloads %s across tabs", (mode) => {
+		state.voiceMode = mode;
+		saveSessionPrefs();
+		state.voiceMode = nextVoiceMode(mode);
+		reloadVoiceMode();
+		expect(state.voiceMode).toBe(mode);
+	});
+
+	it.each([
+		[true, "reply"],
+		[false, "off"],
+		["unknown", "off"],
+		[null, "off"],
+	])("migrates or safely defaults stored value %s", (stored, expected) => {
+		storage.setItem("acb:prefs:display-defaults", JSON.stringify({ voiceMode: stored }));
+		applySessionPrefs();
+		expect(state.voiceMode).toBe(expected);
+	});
+
+	it("cycles Off → V → V+ → Off", () => {
+		expect(nextVoiceMode("off")).toBe("send");
+		expect(nextVoiceMode("send")).toBe("reply");
+		expect(nextVoiceMode("reply")).toBe("off");
 	});
 });

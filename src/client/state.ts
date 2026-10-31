@@ -12,6 +12,7 @@
  */
 
 import type { ContextUsage, PiCommand, ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
+import type { VoiceMode } from "./voice-mode.js";
 
 /**
  * The builtin Global project id — the workspace every brand-new chat
@@ -175,12 +176,8 @@ export interface AppState {
 	showThinking: boolean;
 	/** Whether tool-call cards and results are visible in the chat UI. */
 	showToolCalls: boolean;
-	/**
-	 * Voice mode (device-wide): a finished voice recording is sent without a
-	 * second press, and each finished reply is spoken (the Long variant) as soon
-	 * as its spoken text is generated.
-	 */
-	voiceMode: boolean;
+	/** Device-wide: off, auto-submit only (V), or auto-submit and speak replies (V+). */
+	voiceMode: VoiceMode;
 	/**
 	 * Human-readable label for the current image-generation model, shown
 	 * in the status overflow row. Updated by the pi-venice-image
@@ -375,7 +372,7 @@ export const state: AppState = {
 	currentThinking: "high",
 	showThinking: false,
 	showToolCalls: false,
-	voiceMode: false,
+	voiceMode: "off",
 	pendingModelSet: null,
 	uploadedImages: new Map(),
 	uploadedFiles: new Map(),

@@ -1040,7 +1040,7 @@ async function transcribeRecording(blob: Blob, secs: number, key: string): Promi
 			ta.focus();
 		}
 		autoSize();
-		if (state.voiceMode && text.trim()) {
+		if (state.voiceMode !== "off" && text.trim()) {
 			setStatusMessage(`transcribed (${text.length} chars), sending…`);
 			services.submitComposer?.();
 		} else {
@@ -1080,7 +1080,7 @@ export async function handleVoiceRecord(): Promise<void> {
 		return;
 	}
 	// Voice mode: a reply still playing would be picked up by the mic.
-	if (state.voiceMode) stopAllVoice();
+	if (state.voiceMode !== "off") stopAllVoice();
 	let stream: MediaStream | null = null;
 	try {
 		stream = await navigator.mediaDevices.getUserMedia({ audio: true });

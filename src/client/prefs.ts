@@ -27,6 +27,8 @@
  * are a nicety, never a correctness requirement.
  */
 
+import { parseVoiceMode, type VoiceMode } from "./voice-mode.js";
+
 const PREFIX = "acb:prefs:";
 /** Device-wide (per browser) prefs. Exported so the `storage` listener in
  * main.ts can recognise a change made by another tab. */
@@ -43,7 +45,7 @@ export interface SessionPrefs {
 interface DisplayPrefs {
 	showThinking?: boolean;
 	showToolCalls?: boolean;
-	voiceMode?: boolean;
+	voiceMode?: VoiceMode | boolean;
 }
 
 function key(sessionId: string): string {
@@ -123,7 +125,7 @@ export function applySessionPrefs(): void {
 	}
 
 	const display = loadDisplayDefaults();
-	state.voiceMode = display.voiceMode === true;
+	state.voiceMode = parseVoiceMode(display.voiceMode);
 	const hasLegacyDisplay =
 		typeof prefs.showThinking === "boolean" || typeof prefs.showToolCalls === "boolean";
 	if (typeof display.showThinking === "boolean") state.showThinking = display.showThinking;
@@ -158,9 +160,9 @@ export function saveSessionPrefs(): void {
 	});
 }
 
-/** Re-read the device-wide voice-mode flag. Voice mode is stored once per
+/** Re-read the device-wide voice mode. Voice mode is stored once per
  * browser, so another tab can flip it while this one is open; the `storage`
  * listener in main.ts calls this before repainting. */
 export function reloadVoiceMode(): void {
-	state.voiceMode = loadDisplayDefaults().voiceMode === true;
+	state.voiceMode = parseVoiceMode(loadDisplayDefaults().voiceMode);
 }
