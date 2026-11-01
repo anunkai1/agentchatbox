@@ -79,7 +79,6 @@ export const SKIP_FWD_ICON = svg(
 
 /** Badges and chips. */
 export const CLOCK_ICON = svg('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>');
-export const ZAP_ICON = svg('<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>');
 export const SHRINK_ICON = svg('<path d="m7 20 5-5 5 5M7 4l5 5 5-5"/>');
 
 /** Conversation and project actions. */

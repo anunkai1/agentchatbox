@@ -317,11 +317,13 @@ beforeEach((ctx) => {
 });
 
 describe("browser smoke", { timeout: 30_000 }, () => {
-	it("renders the header without a Claude Code enable button", async () => {
+	it("renders the header without Claude Code or GPT buttons", async () => {
 		const { page } = await openPage("/");
 		try {
 			await page.locator("#header-voice").waitFor();
-			expect(await page.locator("#cc-toggle, .header-cc").count()).toBe(0);
+			expect(await page.locator("#cc-toggle, .header-cc, #fast-mode, .header-fast").count()).toBe(
+				0,
+			);
 			expect(await page.locator("#model-picker").isVisible()).toBe(true);
 			expect(await page.getByRole("button", { name: "Open settings", exact: true }).isVisible()).toBe(
 				true,

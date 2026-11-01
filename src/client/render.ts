@@ -40,7 +40,6 @@ import {
 	STEER_ICON,
 	STOP_ICON,
 	TRASH_ICON,
-	ZAP_ICON,
 } from "./icons.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { mountNotices, type NoticeOptions, refreshNotices, showNotice } from "./notices.js";
@@ -1546,23 +1545,6 @@ function groupExtensionPackages(commands: PiCommand[]): Map<string, PiCommand[]>
 /** Update the capabilities badge in the header. */
 export function refreshCapabilitiesBadge(): void {
 	const caps = state.capabilities;
-	const fastButton = document.getElementById("fast-mode");
-	if (fastButton) {
-		const fastAvailable = caps?.some(
-			(command) => command.name === "fast" && command.source !== "skill",
-		);
-		fastButton.style.display = fastAvailable ? "" : "none";
-		if (fastAvailable) {
-			const status = state.extensionStatusLabels["codex-fast"];
-			const label =
-				status === "Enabled" ? "Fast" : status === "Standard" ? "Standard" : "Checking…";
-			// The button reads "GPT"; the bolt marks Fast, and the tooltip names the tier.
-			fastButton.replaceChildren(...(status === "Enabled" ? [iconEl(ZAP_ICON), " GPT"] : ["GPT"]));
-			fastButton.title = `OpenAI response speed: ${label} (/fast)`;
-			fastButton.setAttribute("aria-label", `Configure OpenAI response speed (currently ${label})`);
-		}
-	}
-
 	const badge = document.getElementById("caps-badge");
 	if (!badge) return;
 	if (!caps || caps.length === 0) {
@@ -2451,19 +2433,6 @@ export function renderShell(): void {
 				onclick: () => shellHandlers?.toggleVoiceMode(),
 			},
 			el("span", { class: "header-voice-v", "aria-hidden": "true" }, "Off"),
-		),
-		el(
-			"button",
-			{
-				class: "picker-btn header-fast",
-				id: "fast-mode",
-				type: "button",
-				title: "OpenAI response speed: checking… (/fast)",
-				"aria-label": "Configure OpenAI response speed (currently checking)",
-				onclick: () => shellHandlers?.handleSlash("fast menu"),
-				style: "display:none",
-			},
-			"GPT",
 		),
 		el(
 			"button",
