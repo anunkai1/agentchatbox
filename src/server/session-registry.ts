@@ -221,7 +221,9 @@ function hasClaudeRun(session: Pick<LiveSession, "statusFrames">): boolean {
 }
 
 /** Work that must never be reaped: a pi turn or run, or a detached /cc run. */
-function isWorking(session: Pick<LiveSession, "busy" | "streaming" | "statusFrames">): boolean {
+export function isWorking(
+	session: Pick<LiveSession, "busy" | "streaming" | "statusFrames">,
+): boolean {
 	return session.busy || session.streaming || hasClaudeRun(session);
 }
 

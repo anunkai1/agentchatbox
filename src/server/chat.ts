@@ -71,6 +71,7 @@ import {
 	deliver,
 	deliverError,
 	type InitMessage,
+	isWorking,
 	type LiveSession,
 	type PiSocket,
 	registry,
@@ -678,7 +679,7 @@ async function moveSessionToProject(
 		// Read-committed liveness probe: the session may be bound to a child
 		// (this tab, or another one), which must be stopped first.
 		const live = registry.liveFor(sessionId);
-		if (live && (live.busy || live.streaming)) {
+		if (live && isWorking(live)) {
 			deliverError(ws, "could not move conversation: it is still running — stop it first");
 			return;
 		}

@@ -1867,6 +1867,85 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
 	});
 
+	it("refuses to move a session while its detached /cc run is active", async () => {
+		fakePiPath = makeFakePi("claude-run");
+		process.env.PI_BIN = fakePiPath;
+		const markerDir = mkdtempSync(join(tmpdir(), "marker-"));
+		const marker = join(markerDir, "spawns");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		const { createProject } = await import("../src/server/projects.js");
+		const project = createProject({ name: "Move target" });
+		mountChatWs(server!);
+		const c1 = await connectClient();
+		try {
+			c1.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			await c1.inbox.waitFor(1);
+			c1.ws.send(JSON.stringify({ type: "prompt", text: "long cc task" }));
+
+			const deadline = Date.now() + 3000;
+			while (
+				Date.now() < deadline &&
+				!c1.inbox.all().some(
+					(m) =>
+						m.type === "event" &&
+						(m.event as { statusKey?: string }).statusKey === "claude-progress",
+					)
+			) {
+				await new Promise((r) => setTimeout(r, 20));
+			}
+			expect(
+				c1.inbox
+					.all()
+					.some(
+						(m) =>
+							m.type === "event" &&
+							(m.event as { statusKey?: string }).statusKey === "claude-progress",
+					),
+			).toBe(true);
+
+			c1.ws.send(
+				JSON.stringify({
+					type: "moveSession",
+					sessionId: "claude-run-session-001",
+					projectId: project.id,
+				}),
+			);
+			const deadlineForError = Date.now() + 3000;
+			while (
+				Date.now() < deadlineForError &&
+				!c1.inbox.all().some((m) => m.type === "error")
+			) {
+				await new Promise((r) => setTimeout(r, 20));
+			}
+			const error = c1.inbox.all().find((m) => m.type === "error");
+			expect((error?.message as string) ?? "").toContain("it is still running");
+			expect(spawnCount(marker)).toBe(1);
+			expect(isAlive(readPids(marker)[0]!)).toBe(true);
+		} finally {
+			c1.close();
+			for (const pid of readPids(marker)) {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			rmSync(project.cwd, { recursive: true, force: true });
+			rmSync(markerDir, { recursive: true, force: true });
+		}
+		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+	});
+
 	it("does not reap a detached agent during a between-turn gap", async () => {
 		fakePiPath = makeFakePi("between-turns");
 		process.env.PI_BIN = fakePiPath;
