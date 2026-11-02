@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { homedir, platform } from "node:os";
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { recordTransportStop } from "../../src/shared/transport-state.js";
 
 import {
 	buildClaudeSpawn,
@@ -958,11 +958,24 @@ export function registerClaudeDelegate(
 	): Promise<void> => {
 		stopEpoch += 1;
 		const own = live && (all || live.key === key) ? live : undefined;
+		const recordStop = (id: string) => {
+			if (!process.env.ACB_INTERNAL_URL) return;
+			try {
+				recordTransportStop(process.env.ACB_INTERNAL_URL, id);
+			} catch {
+				ctx.ui.notify(
+					"Could not persist cancellation; execution is still being stopped.",
+					"warning",
+				);
+			}
+		};
+		if (own) recordStop(own.key);
 		own?.abort.abort();
 		// Runs this process is not driving: another chat's pi, or an orphan.
 		const others = registry
 			.list()
 			.filter((run) => (all || run.chat === key) && !livePids.has(run.pid));
+		for (const run of others) recordStop(run.chat);
 		await Promise.all(others.map((run) => terminateRun(run.pid)));
 		for (const run of others) registry.remove(run.pid);
 		const count = (own ? 1 : 0) + others.length;

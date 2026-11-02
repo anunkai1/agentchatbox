@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { recordTransportStop } from "../src/shared/transport-state.js";
 
 // The registry owns every pi child; these tests check what the routes ask of it.
 const registry = vi.hoisted(() => ({
@@ -12,6 +13,7 @@ const registry = vi.hoisted(() => ({
 	waitUntilReady: vi.fn(),
 	kill: vi.fn(),
 	releaseUnattached: vi.fn(),
+	statusSnapshot: vi.fn(),
 }));
 const broadcastSessions = vi.hoisted(() => vi.fn());
 vi.mock("../src/server/session-registry.js", () => ({ registry }));
@@ -48,14 +50,17 @@ beforeAll(async () => {
 afterAll(async () => {
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 	delete process.env.PI_CODING_AGENT_SESSION_DIR;
+	vi.unstubAllEnvs();
 	rmSync(root, { recursive: true, force: true });
 	rmSync(folder, { recursive: true, force: true });
 });
 
 beforeEach(() => {
+	vi.stubEnv("ACB_TRANSPORT_STATE_DIR", mkdtempSync(join(root, "transport-")));
 	for (const fn of Object.values(registry)) fn.mockReset();
 	broadcastSessions.mockReset();
 	registry.waitUntilReady.mockResolvedValue(undefined);
+	registry.statusSnapshot.mockReturnValue([]);
 });
 
 function post(path: string, body: unknown, token = config.internalToken) {
@@ -125,8 +130,8 @@ describe("/api/internal", () => {
 	});
 
 	it("resumes a closed chat in its own folder with the given model before prompting it", async () => {
-		const resumed = liveSession();
-		registry.liveFor.mockReturnValue(null);
+		const resumed = liveSession({ sessionId: "closed-1" } as never);
+		registry.liveFor.mockReturnValueOnce(null).mockReturnValue(resumed);
 		registry.acquire.mockReturnValue(resumed);
 		const res = await post("/sessions/closed-1/prompt", { message: "report", ...MODEL });
 		expect(res.status).toBe(200);
@@ -134,6 +139,44 @@ describe("/api/internal", () => {
 		expect(registry.waitUntilReady).toHaveBeenCalledWith(resumed);
 		expect(resumed.pi.send).toHaveBeenCalledWith({ type: "prompt", message: "report" });
 		expect(registry.releaseUnattached).toHaveBeenCalledWith(resumed);
+	});
+
+	it("exposes the authenticated process incarnation and live sessions", async () => {
+		const response = await fetch(`${base}/api/internal/sessions`, { headers: { authorization: `Bearer ${config.internalToken}` } });
+		expect(await response.json()).toEqual({ bootId: config.bootId, sessions: [] });
+		expect((await fetch(`${base}/api/internal/sessions`)).status).toBe(404);
+	});
+
+	it("deduplicates a conditional continuation across repeated requests", async () => {
+		const resumed = liveSession({ sessionId: "closed-1" } as never);
+		registry.liveFor.mockReturnValueOnce(null).mockReturnValue(resumed);
+		registry.acquire.mockReturnValue(resumed);
+		const body = { message: "/delegate recover closed-1", ...MODEL, requestId: "recovery-route-1", onlyIfNotLive: true, notStoppedSince: Date.now() };
+		const first = await post("/sessions/closed-1/prompt", body);
+		expect(await first.json()).toMatchObject({ bootId: config.bootId, delivery: "submitted" });
+		const duplicate = await post("/sessions/closed-1/prompt", body);
+		expect(await duplicate.json()).toMatchObject({ delivery: "submitted" });
+		expect(resumed.pi.send).toHaveBeenCalledTimes(1);
+		expect(registry.acquire).toHaveBeenCalledTimes(1);
+	});
+
+	it("never queues an automatic continuation behind a live session", async () => {
+		const live = liveSession({ streaming: true }); registry.liveFor.mockReturnValue(live);
+		const response = await post("/sessions/live-1/prompt", { message: "continue", ...MODEL, requestId: "recovery-live-1", onlyIfNotLive: true });
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ error: "session already live" });
+		expect(live.pi.send).not.toHaveBeenCalled();
+	});
+
+	it("rechecks cancellation after session startup before forwarding the command", async () => {
+		const resumed = liveSession({ sessionId: "closed-1" } as never);
+		registry.liveFor.mockReturnValueOnce(null).mockReturnValue(resumed);
+		registry.acquire.mockReturnValue(resumed);
+		registry.waitUntilReady.mockImplementation(async () => { recordTransportStop(`http://127.0.0.1:${config.port}`, "closed-1"); });
+		const response = await post("/sessions/closed-1/prompt", { message: "continue", ...MODEL, requestId: "recovery-stop-1", onlyIfNotLive: true, notStoppedSince: Date.now() - 1000 });
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ error: "session explicitly stopped" });
+		expect(resumed.pi.send).not.toHaveBeenCalled();
 	});
 
 	it("reports an unknown chat instead of starting one", async () => {

@@ -1,6 +1,7 @@
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { durableState } from "../../src/shared/transport-state.js";
 
 export const DELEGATE_CLI_PATH = join(import.meta.dirname, "cli.mjs");
 
@@ -55,6 +56,14 @@ export interface Delegation {
 	updatedAt: string;
 	/** Bumped on every report; the parent delivers each number once. */
 	reportSeq: number;
+	/** Present only on new workers created with restart recovery enabled. */
+	recovery?: {
+		version: 1;
+		origin: string;
+		bootId: string;
+		startedAt: number;
+		waitingForInput?: boolean;
+	};
 }
 
 export function delegationsDir(): string {
@@ -74,11 +83,7 @@ export function readDelegation(id: string, dir = delegationsDir()): Delegation |
 
 /** One file per delegation: parent and worker are separate pi processes. */
 export function writeDelegation(record: Delegation, dir = delegationsDir()): void {
-	mkdirSync(dir, { recursive: true, mode: 0o700 });
-	const file = join(dir, `${record.id}.json`);
-	const temp = `${file}.${process.pid}.tmp`;
-	writeFileSync(temp, `${JSON.stringify(record, null, "\t")}\n`, { mode: 0o600 });
-	renameSync(temp, file);
+	durableState(join(dir, `${record.id}.json`), record);
 }
 
 export interface DelegationFilter {
@@ -219,6 +224,7 @@ export type DelegateArgs =
 	| { kind: "status" }
 	| { kind: "report"; id: string }
 	| { kind: "start"; id: string }
+	| { kind: "recover"; id: string }
 	/** `rest` is the task if `first` turns out to name a model. */
 	| { kind: "task"; task: string; first: string; rest: string }
 	| { kind: "usage" };
@@ -229,6 +235,8 @@ export function parseDelegateArgs(raw: string): DelegateArgs {
 	if (args === "status") return { kind: "status" };
 	const report = args.match(/^report\s+(\S+)$/);
 	if (report) return { kind: "report", id: report[1] };
+	const recover = args.match(/^recover\s+(\S+)$/);
+	if (recover) return { kind: "recover", id: recover[1] };
 	const start = args.match(/^start\s+(\S+)$/);
 	if (start) return { kind: "start", id: start[1] };
 	const [first, ...rest] = args.split(/\s+/);
@@ -403,6 +411,18 @@ export async function startWorker(
 		createdAt: now,
 		updatedAt: now,
 		reportSeq: 0,
+		...(process.env.ACB_INTERNAL_URL &&
+		process.env.ACB_BOOT_ID &&
+		process.env.ACB_DELEGATION_RECOVERY !== "0"
+			? {
+					recovery: {
+						version: 1 as const,
+						origin: process.env.ACB_INTERNAL_URL,
+						bootId: process.env.ACB_BOOT_ID,
+						startedAt: 0,
+					},
+				}
+			: {}),
 	};
 	if (!record.claude) delete record.claude;
 	writeDelegation(record);

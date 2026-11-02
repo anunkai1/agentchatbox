@@ -99,6 +99,49 @@ interruptions can leave stale records. A summary is the last recorded
 report and may predate the current turn. Do not infer detailed activity or results
 from a timestamp, status or absence of a new report.
 
+## Restart recovery (new workers only)
+
+The Server2 deployment starts `agentchatbox-recovery.service` after ACB becomes
+available. This bounded, Pi-owned startup pass uses ACB's authenticated transport;
+it does not run a model itself, and its failure cannot stop ACB. The existing
+health checker alerts if the recovery unit fails.
+
+New workers created with `ACB_BOOT_ID` and `ACB_INTERNAL_URL` are enrolled by
+default (`ACB_DELEGATION_RECOVERY=0` disables enrolment). Legacy records are never
+enrolled retroactively, and opening an old worker does not enrol it. A worker is
+eligible only after its first actual execution starts, while its saved status is
+`working`, on a different ACB boot, and when no live session owns it. This version
+is restart recovery, not a watchdog for crashed/stalled workers in the same boot
+or a dispatcher for never-started queued work.
+
+Recovery restores the **same session ID, transcript, folder and model**, sending
+`/delegate recover <worker id>`. Claude workers restore their Claude Code mode.
+The continuation requires checking the latest instructions, working tree and
+external state before repeating anything. Ambiguous irreversible actions require
+owner input. No saved terminal status, pending approval/input dialog or explicit
+Stop is automatically bypassed. UI Stop, retry cancellation, user-driven active
+session teardown and `/cc stop [all]` are recorded before forwarding cancellation.
+Service shutdown is not treated as an owner cancellation.
+
+Each worker has **one automatic recovery submission over its lifetime**, including
+later manual follow-ups to that same worker. A deterministic request ID and
+durable transport receipt prevent duplicate submission across concurrent startup
+passes, lost HTTP responses and further restarts. A second interruption, missing
+transcript or uncertain submission becomes `needs_input`, with a parent report
+and owner notification, rather than another automatic command. Capacity and
+startup failures are retried in six bounded passes; the independent unit also has
+a five-minute timeout. An unavailable transport is never evidence that a worker
+is dead.
+
+State remains in the existing private delegation records and Pi transcripts;
+generic cancellation/at-most-once submission receipts live in
+`~/.config/acb/transport/<port>/`. Writes use atomic rename and fsync. Do not delete
+these receipts to retry a worker: inspect it and continue manually instead. This
+is **at-most-once command submission**, not exactly-once shell execution or proof
+that Pi accepted or completed the command. Crashes in an uncertain window fail
+closed. Ordinary chats and ordinary prompt delivery are unchanged. Durable report
+outbox/retry and semantic progress monitoring are not part of this first version.
+
 ## Claude Code mode
 
 A main chat in Claude Code mode (`/cc on`) gets Claude Code workers on the same Claude model, unless the owner names another. The worker chat switches itself on with `/delegate start <id>`, so the owner's messages in it also go to Claude Code.

@@ -40,6 +40,7 @@ import type {
 	ServerMessage,
 	SessionSummary,
 } from "../shared/protocol.js";
+import { recordTransportStop } from "../shared/transport-state.js";
 import { config } from "./config.js";
 import { log } from "./logger.js";
 import { readModelThinking, saveModelThinking } from "./model-thinking.js";
@@ -359,7 +360,12 @@ async function onClientMessage(
 			break;
 		}
 		case "abort": {
-			pi.send({ type: "abort" });
+			try {
+				if (session.sessionId)
+					recordTransportStop(`http://127.0.0.1:${config.port}`, session.sessionId);
+			} finally {
+				pi.send({ type: "abort" }); // A full disk must never prevent stopping execution.
+			}
 			break;
 		}
 		case "compact": {
@@ -377,7 +383,12 @@ async function onClientMessage(
 			// Cancel an in-flight auto-retry backoff (the CLI's "interrupt to
 			// cancel" during a retry countdown). Mirrors pi rpc's
 			// `abort_retry` command — pure forwarding, no server logic.
-			pi.send({ type: "abort_retry" });
+			try {
+				if (session.sessionId)
+					recordTransportStop(`http://127.0.0.1:${config.port}`, session.sessionId);
+			} finally {
+				pi.send({ type: "abort_retry" });
+			}
 			break;
 		}
 		case "setModel": {

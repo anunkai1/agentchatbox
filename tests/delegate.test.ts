@@ -903,3 +903,68 @@ describe("reports to a main chat in Claude Code mode", () => {
 		expect(runs[0]).toContain("Worker id: worker-9");
 	});
 });
+
+
+describe("worker recovery lifecycle", () => {
+	const origin = "http://127.0.0.1:3500";
+	function recoverable(id = "worker-1") {
+		return saveWorker(id, { recovery: { version: 1, origin, bootId: "boot-1", startedAt: Date.now() - 1000 } });
+	}
+
+	it("enrols only new workers, then records the actual run start", async () => {
+		vi.stubEnv("ACB_INTERNAL_URL", origin);
+		vi.stubEnv("ACB_BOOT_ID", "boot-2");
+		const h = harness();
+		await h.tools.get("delegate")!.execute("call", { title: "T", task: "t", cwd: tmpdir() }, undefined, undefined, h.ctx("parent-1"));
+		expect(readDelegation("worker-1")?.recovery).toMatchObject({ version: 1, bootId: "boot-2", startedAt: 0 });
+		await h.events.get("message_end")!({ message: { role: "user" } }, h.ctx("worker-1"));
+		expect(readDelegation("worker-1")!.recovery!.startedAt).toBeGreaterThan(0);
+		saveWorker("legacy");
+		await h.events.get("message_end")!({ message: { role: "user" } }, h.ctx("legacy"));
+		expect(readDelegation("legacy")?.recovery).toBeUndefined();
+	});
+
+	it("recovery uses the existing conversation and requires checking external state", async () => {
+		recoverable();
+		const h = harness();
+		await h.commands.get("delegate")!("recover worker-1", h.ctx("worker-1"));
+		expect(h.acb.create).not.toHaveBeenCalled();
+		const instruction = h.pi.sendUserMessage.mock.calls[0][0];
+		expect(instruction).toContain("one automatic recovery attempt");
+		expect(instruction).toContain("Verify commits, pushes, deployments");
+		expect(instruction).toContain("latest instructions in this session");
+	});
+
+	it("does not revive completed or legacy workers through the recovery command", async () => {
+		saveWorker("legacy");
+		recoverable();
+		const record = readDelegation("worker-1")!;
+		writeDelegation({ ...record, status: "done" });
+		const h = harness();
+		await h.commands.get("delegate")!("recover legacy", h.ctx("legacy"));
+		await h.commands.get("delegate")!("recover worker-1", h.ctx("worker-1"));
+		expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("preserves unfinished Pi and Claude work on extension teardown", async () => {
+		recoverable();
+		const h = harness();
+		await h.events.get("session_shutdown")!({}, h.ctx("worker-1"));
+		await h.events.get("agent_settled")!({ aborted: true }, h.ctx("worker-1"));
+		expect(readDelegation("worker-1")?.status).toBe("working");
+		const cc = recoverable("cc-worker"); writeDelegation({ ...cc, claude: "opus" });
+		h.pi.events.emit("claude-delegate:run-end", { ctx: h.ctx("cc-worker"), cancelled: true });
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(readDelegation("cc-worker")?.status).toBe("working");
+		expect(h.acb.prompt).not.toHaveBeenCalled();
+	});
+
+	it("persists pending approval waits and does not clear them during teardown", async () => {
+		recoverable(); const h = harness(); const ctx = h.ctx("worker-1");
+		await h.events.get("ui_prompt_start")!({}, ctx);
+		expect(readDelegation("worker-1")?.recovery?.waitingForInput).toBe(true);
+		await h.events.get("session_shutdown")!({}, ctx);
+		await h.events.get("ui_prompt_end")!({}, ctx);
+		expect(readDelegation("worker-1")?.recovery?.waitingForInput).toBe(true);
+	});
+});

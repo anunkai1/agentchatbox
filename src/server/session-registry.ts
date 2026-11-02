@@ -44,6 +44,7 @@ import type {
 	ThinkingLevel,
 	TranscriptPayload,
 } from "../shared/protocol.js";
+import { recordTransportStop } from "../shared/transport-state.js";
 import { config, getServerApiKey } from "./config.js";
 import { log } from "./logger.js";
 import { readModelThinking } from "./model-thinking.js";
@@ -644,7 +645,16 @@ class SessionRegistry {
 	}
 
 	/** Force-kill a session and remove it from the registry. */
-	kill(session: LiveSession): void {
+	kill(session: LiveSession, shutdown = false): void {
+		// A user-driven teardown is distinct from service shutdown, even if Pi
+		// is killed before it can persist its aborted outcome.
+		if (!shutdown && session.sessionId && isWorking(session)) {
+			try {
+				recordTransportStop(`http://127.0.0.1:${config.port}`, session.sessionId);
+			} catch {
+				log.error("could not persist session cancellation", { sessionId: session.sessionId });
+			}
+		}
 		if (session.idleTimer) {
 			clearTimeout(session.idleTimer);
 			session.idleTimer = null;
@@ -686,9 +696,9 @@ class SessionRegistry {
 
 	/** SIGTERM every live child — used on server shutdown. */
 	killAll(): void {
-		for (const s of this.entries.values()) this.kill(s);
+		for (const s of this.entries.values()) this.kill(s, true);
 		// Snapshot pending: kill() mutates the set mid-iteration.
-		for (const s of [...this.pending]) this.kill(s);
+		for (const s of [...this.pending]) this.kill(s, true);
 	}
 
 	// -----------------------------------------------------------------------

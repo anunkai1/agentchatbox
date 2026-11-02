@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import Type from "typebox";
+import { transportStoppedSince } from "../../src/shared/transport-state.js";
 import {
 	AcbSessions,
 	BRIEF_GUIDANCE,
@@ -91,6 +92,20 @@ export default function registerDelegate(
 	let publishedThisRun = false;
 	/** auto-continue announced it is resuming a reply cut off at the output limit. */
 	let resuming = false;
+	let shuttingDown = false;
+	// Pi disposes extensions on EOF/SIGTERM before ending external /cc runs.
+	// Preserve unfinished work on teardown; explicit stops have durable transport markers.
+	const onTerminate = () => {
+		shuttingDown = true;
+	};
+	pi.on("session_start", () => {
+		shuttingDown = false;
+		process.prependListener("SIGTERM", onTerminate);
+	});
+	pi.on("session_shutdown", () => {
+		shuttingDown = true;
+		process.off("SIGTERM", onTerminate);
+	});
 
 	const sessionId = (ctx: ExtensionContext) => ctx.sessionManager.getSessionId();
 	const self = (ctx: ExtensionContext) => readDelegation(sessionId(ctx));
@@ -320,13 +335,31 @@ export default function registerDelegate(
 		};
 	});
 
+	function waitingForInput(ctx: ExtensionContext, waiting: boolean): void {
+		if (shuttingDown) return;
+		const record = self(ctx);
+		if (!record?.recovery) return;
+		record.recovery.waitingForInput = waiting;
+		writeDelegation(record);
+	}
+	pi.on("ui_prompt_start", (_event, ctx) => waitingForInput(ctx, true));
+	pi.on("ui_prompt_end", (_event, ctx) => waitingForInput(ctx, false));
+
 	/** A worker run started: show it as working. */
-	function markWorking(ctx: ExtensionContext): void {
+	function markWorking(ctx: ExtensionContext, claude = false): void {
 		const record = self(ctx);
 		if (!record) return;
 		publishedThisRun = true;
 		record.status = "working";
 		record.updatedAt = new Date().toISOString();
+		if (record.recovery) {
+			if (ctx.model) record.workerModel = currentModel(ctx);
+			if (claude) record.claude = claudeMode() ?? record.claude;
+			else delete record.claude;
+			record.recovery.bootId = process.env.ACB_BOOT_ID ?? record.recovery.bootId;
+			record.recovery.startedAt = Date.now();
+			delete record.recovery.waitingForInput;
+		}
 		writeDelegation(record);
 		if (!pi.getSessionName()) pi.setSessionName(record.title);
 		publish(ctx, record);
@@ -338,6 +371,17 @@ export default function registerDelegate(
 		record: Delegation,
 		outcome: { status: DelegationStatus; summary: string },
 	): Promise<void> {
+		if (shuttingDown) return;
+		// A stop acknowledged by transport wins even if a late callback says done.
+		if (
+			record.recovery &&
+			transportStoppedSince(record.recovery.origin, record.id, record.recovery.startedAt)
+		) {
+			outcome = {
+				status: "stopped",
+				summary: "Explicitly stopped; automatic recovery disabled for this run.",
+			};
+		}
 		record.status = outcome.status;
 		record.summary = outcome.summary;
 		record.updatedAt = new Date().toISOString();
@@ -413,7 +457,7 @@ export default function registerDelegate(
 
 	// Claude Code workers: the claude-delegate extension announces each run.
 	pi.events.on("claude-delegate:run-start", (data) => {
-		markWorking((data as ClaudeRunEvent).ctx);
+		markWorking((data as ClaudeRunEvent).ctx, true);
 	});
 	pi.events.on("claude-delegate:run-end", async (data) => {
 		const run = data as ClaudeRunEvent;
@@ -471,6 +515,43 @@ export default function registerDelegate(
 						},
 						{ triggerTurn: true, deliverAs: "followUp" },
 					);
+					return;
+				}
+				case "recover": {
+					const record = self(ctx);
+					if (!record?.recovery || record.id !== args.id || record.status !== "working") return;
+					if (
+						record.recovery.waitingForInput ||
+						record.recovery.bootId === process.env.ACB_BOOT_ID ||
+						transportStoppedSince(record.recovery.origin, record.id, record.recovery.startedAt)
+					)
+						return;
+					const instruction = [
+						"Your delegated execution was interrupted by a service restart. This is its one automatic recovery attempt, not a new owner request.",
+						"Continue only the existing approved task and the latest instructions in this session. First inspect the transcript, working tree, running processes and external state.",
+						"The last command may have completed without its result being saved. Verify commits, pushes, deployments and other external actions before repeating them. Do not blindly replay commands.",
+						"If an irreversible action has an uncertain outcome or approval is needed, stop and report needs_input. If already finished, verify and report the result without doing it again.",
+						buildBrief(record),
+					].join("\n\n");
+					if (record.claude) {
+						let accepted = false;
+						pi.events.emit("claude-delegate:start", {
+							ctx,
+							mode: record.claude,
+							task: instruction,
+							accept: () => {
+								accepted = true;
+							},
+						});
+						if (accepted) return;
+						await settle(ctx, record, {
+							status: "needs_input",
+							summary:
+								"Restart recovery could not restore Claude Code. Continue this worker manually.",
+						});
+						return;
+					}
+					pi.sendUserMessage(instruction);
 					return;
 				}
 				case "start": {

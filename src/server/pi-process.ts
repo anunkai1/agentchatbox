@@ -187,6 +187,7 @@ export class PiProcess extends EventEmitter {
 				// this server's /api/internal routes (internal-sessions.ts).
 				ACB_INTERNAL_URL: `http://127.0.0.1:${config.port}`,
 				ACB_INTERNAL_TOKEN: config.internalToken,
+				ACB_BOOT_ID: config.bootId,
 			},
 		});
 		this.child = child;

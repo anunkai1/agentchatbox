@@ -14,6 +14,7 @@ export default defineConfig({
 		// Never let an accidental import-time store use production uploads.
 		env: {
 			UPLOADS_DIR: mkdtempSync(join(tmpdir(), "acb-test-uploads-")),
+			ACB_TRANSPORT_STATE_DIR: mkdtempSync(join(tmpdir(), "acb-test-transport-")),
 			// Chat tests send setThinking, which saves into pi's settings file.
 			AGENTCHATBOX_PI_SETTINGS_FILE: join(
 				mkdtempSync(join(tmpdir(), "acb-test-pi-")),
