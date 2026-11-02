@@ -319,6 +319,7 @@ describe("delegated prompt", () => {
 		expect(prompt).not.toContain("Never read, copy, or transmit");
 		expect(prompt).toContain(`${join(ACB_ROOT, "uploads")}/`);
 		expect(prompt).toContain("never Anthropic's built-in browser/computer-use skills");
+		expect(prompt).toContain(`node ${join(ACB_ROOT, "extensions", "delegate", "cli.mjs")} help`);
 	});
 });
 

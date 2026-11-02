@@ -252,7 +252,7 @@ export function buildTaskPreamble(env: NodeJS.ProcessEnv = process.env): string 
 	const homeAgents = join(homedir(), "AGENTS.md");
 	const acbAgents = join(ACB_ROOT, "AGENTS.md");
 	const uploadsDir = env.ACB_UPLOADS_DIR?.trim() || join(ACB_ROOT, "uploads");
-	const delegateCli = join(ACB_ROOT, "extensions", "delegate", "cli.ts");
+	const delegateCli = join(ACB_ROOT, "extensions", "delegate", "cli.mjs");
 	const hostLabel = env.ACB_HOST_LABEL?.trim();
 	const hostClause = hostLabel ? ` on ${hostLabel}` : "";
 	return [

@@ -899,7 +899,7 @@ describe("reports to a main chat in Claude Code mode", () => {
 		expect(h.pi.sendMessage).not.toHaveBeenCalled();
 		expect(runs).toHaveLength(1);
 		expect(runs[0]).toContain("Fixed.");
-		expect(runs[0]).toContain("cli.ts message <worker id>");
+		expect(runs[0]).toContain("cli.mjs message <worker id>");
 		expect(runs[0]).toContain("Worker id: worker-9");
 	});
 });

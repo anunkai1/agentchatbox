@@ -2,7 +2,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSy
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-export const DELEGATE_CLI_PATH = join(import.meta.dirname, "cli.ts");
+export const DELEGATE_CLI_PATH = join(import.meta.dirname, "cli.mjs");
 
 export function cwdGuidance(env: NodeJS.ProcessEnv = process.env): string {
 	const registryDoc = env.ACB_PROJECT_REGISTRY_DOC?.trim();
@@ -335,8 +335,6 @@ export function writeDelivered(id: string, seq: number, dir = delegationsDir()):
 }
 
 /** Client for ACB's /api/internal session routes (src/server/internal-sessions.ts). */
-// No constructor parameter properties: cli.ts runs this file with Node's
-// built-in TypeScript stripping, which only removes erasable syntax.
 export class AcbSessions {
 	private readonly baseUrl = process.env.ACB_INTERNAL_URL;
 	private readonly token = process.env.ACB_INTERNAL_TOKEN;

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const CLI = join(import.meta.dirname, "../extensions/delegate/cli.ts");
+const CLI = join(import.meta.dirname, "../extensions/delegate/cli.mjs");
 const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
 let server: Server;
 let base = "";
@@ -36,8 +36,10 @@ function run(
 	return new Promise((resolve) => {
 		const child = execFile(
 			process.execPath,
-			[CLI, ...args],
+			["--no-experimental-strip-types", CLI, ...args],
 			{
+				// Claude Code starts outside the checkout; native TS support is optional.
+				cwd: tmpdir(),
 				env: {
 					...process.env,
 					ACB_INTERNAL_URL: base,
@@ -56,7 +58,7 @@ function run(
 	});
 }
 
-describe("delegate cli.ts (Claude Code's way to delegate)", () => {
+describe("delegate CLI (Claude Code's way to delegate)", () => {
 	it("starts a Claude Code worker for this chat", async () => {
 		const out = await run(["start", "--title", "Fix page", "--cwd", tmpdir()], "The brief");
 		expect(out.stdout).toContain("[Fix page](/s/w-1)");
@@ -91,7 +93,9 @@ describe("delegate cli.ts (Claude Code's way to delegate)", () => {
 	});
 
 	it("explains itself and fails clearly outside a chat", async () => {
-		expect((await run(["help"], "")).stdout).toContain("cli.ts start --title");
+		const help = await run(["help"], "");
+		expect(help.code, help.stderr).toBe(0);
+		expect(help.stdout).toContain(`node ${CLI} start --title`);
 		const out = await run(["message", "nope"], "x");
 		expect(out.code).not.toBe(0);
 		expect(out.stderr).toContain("no worker with id nope");

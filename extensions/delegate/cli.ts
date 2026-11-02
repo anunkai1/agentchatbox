@@ -4,7 +4,7 @@
  * ACB_CHAT_MODEL, ACB_CHAT_THINKING, ACB_CLAUDE_MODE) next to ACB's internal
  * token, so these commands act for the chat exactly like the pi tools do.
  *
- * Run with `node cli.ts …`: Node strips the types itself.
+ * Run with `node cli.mjs …`: the launcher loads TypeScript through local tsx.
  */
 import { readFileSync } from "node:fs";
 import {
