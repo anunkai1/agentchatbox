@@ -1912,6 +1912,7 @@ async function boot(): Promise<void> {
 		.then(([h, models]) => {
 			state.searchEnabled = h.search ?? false;
 			refreshSidebarSearchVisibility();
+			state.ttsAvailable = h.tts ?? false;
 			state.ttsEngine = h.ttsEngine ?? null;
 			state.ttsDefaultVoice = h.ttsVoice ?? null;
 			state.ttsSpeedParam = h.ttsSpeedParam ?? false;

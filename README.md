@@ -92,27 +92,35 @@ src/
     protocol.ts           # types shared by client and server
 extensions/
   auto-title/              # pi-owned first-turn session naming
-  acb-workflows/           # pi-owned environment/orientation workflow commands
-  codex-fast/              # pi-owned OpenAI fast-tier toggle (legacy store name)
+  auto-continue/           # pi-owned automatic continuation on max-token cutoff
+  acb-workflows/           # pi-owned environment/orientation & web workflow commands
+  codex-fast/              # pi-owned OpenAI/Codex fast-tier (/fast) toggle
+  delegate/                # pi-owned background worker chats (/delegate)
+  claude-delegate/         # optional Claude Code CLI passthrough (/cc)
+  venice-no-system-prompt/ # disables Venice's injected persona prompt
+  openai-models/           # optional filter keeping GPT-6+ only in OpenAI picker
 tests/                    # vitest, server-side + pure extension helpers + UI smoke
-scripts/                  # build + dev helpers
+scripts/                  # build + setup + dev helpers
+  setup.mjs               # one-time .env + ~/.pi/agent/settings.json setup
   build-client.mjs        # esbuild bundler for the client
 ```
 
 ## Run locally
 
-Requires Node 20+ and the `pi` CLI on your `$PATH`.
+Requires Node 22.19+ (Node 24 LTS recommended) and the [`pi` CLI](https://pi.dev) on your `$PATH`.
 
 ```bash
 git clone https://github.com/anunkai1/agentchatbox
 cd agentchatbox
 npm install
-cp .env.example .env
-pi auth login <provider>
+npm run setup              # creates .env and enables bundled Pi extensions
+pi auth login <provider>   # authenticate any LLM provider via pi
 npm run dev
 ```
 
 `npm run dev` runs the server and the client bundler in watch mode — changes to `src/` reload automatically. By default the server listens on `http://127.0.0.1:3000`; set `HOST`/`PORT` in `.env` to change it. The client is served by the server itself (no separate Vite dev server).
+
+> **Security note:** AgentChatBox gives your `pi` sessions shell and filesystem access as the OS user running the server. Bind to `127.0.0.1` (the default) for local use, or place an authenticated reverse proxy (e.g. Authelia / OAuth2 / Tailscale) in front before exposing it over a network.
 
 ## Production build
 
@@ -140,9 +148,11 @@ Non-secret server settings go through `.env`; chat-provider availability comes f
 | `PI_BIN`                       | `pi`                          | Path to the `pi` CLI binary (overridable for tests) |
 | `PI_CWD`                       | `process.cwd()`               | Working directory passed to `pi` as project root |
 | `AGENTCHATBOX_TRUSTED_EXTERNAL_PROJECTS` | (unset)             | Exact `id:/canonical/path` external repos; non-deletable by ACB |
-| `STT_PRIMARY_URL`              | `http://127.0.0.1:8182`       | STT daemon (Server2's pi-stt-server; on Lappy via lappy-stt-tunnel) |
+| `ACB_PUBLIC_URL`               | local server URL              | Base URL used in `/delegate` notifications      |
+| `STT_PRIMARY_URL`              | `http://127.0.0.1:8182`       | Optional `pi-stt-server` speech-to-text daemon  |
 | `STT_FALLBACK_URL`             | (unset)                       | Optional second STT daemon; unset or empty disables |
 | `STT_CLIENT_TIMEOUT_MS`        | `300000`                      | Per-daemon processing budget (5 min) |
+| `KOKORO_TTS_URL`               | `http://127.0.0.1:8181`       | Optional `pi-voice-server` (Kokoro) TTS daemon  |
 | `PI_CODING_AGENT_SESSION_DIR`  | `~/.pi/agent/sessions`        | Where pi stores JSONL session files             |
 | `AUTO_TITLE_MODEL`             | active session model          | Optional `provider/modelId` used for automatic first-turn session titles |
 | `*_API_KEY`                    | (unset)                       | Optional: env keys for non-chat tools (e.g. `VENICE_API_KEY` for pi-venice-image, `GEMINI_API_KEY` for YouTube transcripts). Chat auth itself is NOT configured here — see below. |
@@ -208,10 +218,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=architect
-WorkingDirectory=/home/architect/agentchatbox
-EnvironmentFile=/home/architect/agentchatbox/.env
-ExecStart=/usr/bin/node /home/architect/agentchatbox/dist/server/index.js
+User=youruser
+WorkingDirectory=/opt/agentchatbox
+EnvironmentFile=/opt/agentchatbox/.env
+ExecStart=/usr/bin/node /opt/agentchatbox/dist/server/index.js
 Restart=on-failure
 RestartSec=5
 

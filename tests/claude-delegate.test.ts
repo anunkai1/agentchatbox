@@ -7,7 +7,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -28,6 +28,7 @@ import {
 	usageSummary,
 } from "../extensions/claude-delegate/index.js";
 import {
+	ACB_ROOT,
 	buildClaudeSpawn,
 	buildPrompt,
 	DEFAULT_EFFORT,
@@ -73,7 +74,7 @@ describe("claude-delegate spawn plan", () => {
 		expect(plan.args).toContain("--replay-user-messages");
 		expect(plan.args.join(" ")).not.toContain("do a thing");
 		expect(plan.prompt).toContain("do a thing");
-		expect(plan.prompt).toContain("/home/lepton/AGENTS.md");
+		expect(plan.prompt).toContain(join(homedir(), "AGENTS.md"));
 		expect(plan.prompt).not.toContain("~/.secrets");
 	});
 
@@ -314,9 +315,9 @@ describe("delegated prompt", () => {
 	it("applies the ACB assistant's rules and adds only Claude Code facts", () => {
 		const prompt = buildPrompt("register an account");
 		expect(prompt).toContain("register an account");
-		expect(prompt).toContain("/home/lepton/agentchatbox/AGENTS.md");
+		expect(prompt).toContain(join(ACB_ROOT, "AGENTS.md"));
 		expect(prompt).not.toContain("Never read, copy, or transmit");
-		expect(prompt).toContain("/home/lepton/agentchatbox/uploads/");
+		expect(prompt).toContain(`${join(ACB_ROOT, "uploads")}/`);
 		expect(prompt).toContain("never Anthropic's built-in browser/computer-use skills");
 	});
 });
@@ -1313,7 +1314,7 @@ describe("conversation continuity", () => {
 		});
 		await h.cc("first", h.uiCtx);
 		await h.cc("second", h.uiCtx);
-		expect(prompts[0]).toContain("/home/lepton/AGENTS.md");
+		expect(prompts[0]).toContain(join(homedir(), "AGENTS.md"));
 		expect(prompts[1]).toBe("second");
 	});
 

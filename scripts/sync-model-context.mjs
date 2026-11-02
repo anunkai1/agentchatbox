@@ -22,17 +22,20 @@
  * warns about them. Other providers (minimax direct, ollama, zai/glm-5.2)
  * are reported as "not auto-synced" so you know to verify them manually.
  *
- * Keys are loaded from the same env files pi uses:
- *   /home/lepton/.secrets/llm/providers.env  (VENICE_API_KEY)
+ * Keys are resolved from VENICE_API_KEY in the environment / .env,
+ * ~/.pi/agent/auth.json, or ~/.secrets/llm/providers.env if present.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MODELS_JSON = join(homedir(), ".pi", "agent", "models.json");
+const AUTH_JSON = join(homedir(), ".pi", "agent", "auth.json");
 
-/** Load provider env files the same way the server does. */
+/** Load optional env files the same way the server does. */
 function loadEnv(path) {
 	try {
 		for (const line of readFileSync(path, "utf8").split("\n")) {
@@ -49,9 +52,23 @@ function loadEnv(path) {
 		/* file optional */
 	}
 }
-loadEnv("/home/lepton/.secrets/llm/providers.env");
+loadEnv(join(ROOT_DIR, ".env"));
+loadEnv(join(homedir(), ".secrets", "llm", "providers.env"));
 
-const VENICE_KEY = process.env.VENICE_API_KEY;
+function resolveVeniceKey() {
+	if (process.env.VENICE_API_KEY) return process.env.VENICE_API_KEY;
+	try {
+		const auth = JSON.parse(readFileSync(AUTH_JSON, "utf8"));
+		if (typeof auth?.venice?.key === "string" && auth.venice.key.trim()) {
+			return auth.venice.key.trim();
+		}
+	} catch {
+		/* auth.json optional */
+	}
+	return undefined;
+}
+
+const VENICE_KEY = resolveVeniceKey();
 
 /** Fetch + parse JSON with a timeout. */
 async function getJSON(url, headers = {}, timeoutMs = 15000) {

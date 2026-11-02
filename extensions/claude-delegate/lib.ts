@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
-export const DEFAULT_WORKSPACE = join(homedir(), ".config", "browser-harness", "agent-workspace");
+export const ACB_ROOT = resolve(import.meta.dirname, "../..");
+export const DEFAULT_WORKSPACE =
+	process.env.ACB_CLAUDE_WORKSPACE?.trim() ||
+	join(homedir(), ".config", "browser-harness", "agent-workspace");
 
 /**
  * Custom message carrying the prompt the owner sent to Claude Code. ACB draws
@@ -242,17 +245,27 @@ export class FileDelegationStore implements DelegationStore {
 
 /**
  * Owner context for Claude Code runs. It carries the same rules as ACB's pi
- * assistant (the two AGENTS.md files) plus the facts that differ for Claude
- * Code: which browser skill to use and how files reach the chat.
+ * assistant (the two AGENTS.md files, when present) plus the facts that differ
+ * for Claude Code: which browser skill to use and how files reach the chat.
  */
-export const TASK_PREAMBLE = [
-	"You are the owner's assistant, running from their AgentChatBox (ACB) chat on Server2.",
-	"Follow the same rules as ACB's own assistant: /home/lepton/AGENTS.md (already loaded) and /home/lepton/agentchatbox/AGENTS.md.",
-	"- For browser work, use the `browser-harness` project skill, never Anthropic's built-in browser/computer-use skills: only browser-harness drives the owner's logged-in Chrome.",
-	"- Save files the owner should see, such as screenshots, to /home/lepton/agentchatbox/uploads/<descriptive-name> and link them as /uploads/<descriptive-name>; images render in the chat.",
-	"- Images the owner attaches arrive as Markdown links to /uploads/<name>; open /home/lepton/agentchatbox/uploads/<name> with the Read tool.",
-	"- When the owner asks to delegate, or to check or message workers, use `node /home/lepton/agentchatbox/extensions/delegate/cli.ts help`.",
-].join("\n");
+export function buildTaskPreamble(env: NodeJS.ProcessEnv = process.env): string {
+	const homeAgents = join(homedir(), "AGENTS.md");
+	const acbAgents = join(ACB_ROOT, "AGENTS.md");
+	const uploadsDir = env.ACB_UPLOADS_DIR?.trim() || join(ACB_ROOT, "uploads");
+	const delegateCli = join(ACB_ROOT, "extensions", "delegate", "cli.ts");
+	const hostLabel = env.ACB_HOST_LABEL?.trim();
+	const hostClause = hostLabel ? ` on ${hostLabel}` : "";
+	return [
+		`You are the owner's assistant, running from their AgentChatBox (ACB) chat${hostClause}.`,
+		`Follow the same rules as ACB's own assistant: ${homeAgents} (if present) and ${acbAgents} (if present).`,
+		"- If the `browser-harness` project skill is installed, use it for browser work, never Anthropic's built-in browser/computer-use skills: only browser-harness drives the owner's logged-in Chrome.",
+		`- Save files the owner should see, such as screenshots, to ${uploadsDir}/<descriptive-name> and link them as /uploads/<descriptive-name>; images render in the chat.`,
+		`- Images the owner attaches arrive as Markdown links to /uploads/<name>; open ${uploadsDir}/<name> with the Read tool.`,
+		`- When the owner asks to delegate, or to check or message workers, use \`node ${delegateCli} help\`.`,
+	].join("\n");
+}
+
+export const TASK_PREAMBLE = buildTaskPreamble();
 
 /**
  * The first message of a conversation carries the owner context. A resumed
@@ -260,7 +273,7 @@ export const TASK_PREAMBLE = [
  */
 export function buildPrompt(task: string, resumed = false, catchUp?: string): string {
 	const body = catchUp ? `${catchUp}\n\nTask: ${task}` : resumed ? task : `Task: ${task}`;
-	return resumed ? body : `${TASK_PREAMBLE}\n\n${body}`;
+	return resumed ? body : `${buildTaskPreamble()}\n\n${body}`;
 }
 
 export interface ClaudeSpawnPlan {

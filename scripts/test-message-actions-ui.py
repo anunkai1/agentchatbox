@@ -5,7 +5,7 @@ from pathlib import Path
 import json
 import subprocess
 
-root = Path('/home/lepton/agentchatbox')
+root = Path.cwd()
 bundle = subprocess.check_output(['node', '--input-type=module', '-e', '''
 import { buildSync } from 'esbuild';
 const result = buildSync({stdin: {contents: `

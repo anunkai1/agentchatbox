@@ -10,6 +10,12 @@ export interface WorkflowCommand {
  * for a subset, but the prompts themselves belong here rather than in browser
  * code so terminal/RPC clients execute the same behavior.
  */
+export function buildInfraPrompt(env: NodeJS.ProcessEnv = process.env): string {
+	const docsDir = env.ACB_INFRA_DOCS_DIR?.trim();
+	const docsSuffix = docsDir ? ` (${docsDir})` : "";
+	return `Tell me about my infrastructure: the servers, hosted apps and backups, and where the operational documentation lives${docsSuffix}.`;
+}
+
 export const WORKFLOW_COMMANDS: readonly WorkflowCommand[] = [
 	{
 		name: "where",
@@ -26,8 +32,7 @@ export const WORKFLOW_COMMANDS: readonly WorkflowCommand[] = [
 	{
 		name: "infra",
 		description: "Describe the infrastructure: servers, hosted apps, backups and docs",
-		buildPrompt: () =>
-			"Tell me about my infrastructure: the servers, hosted apps and backups, and where the operational documentation lives (/home/lepton/infra/docs/).",
+		buildPrompt: () => buildInfraPrompt(),
 	},
 	{
 		name: "research",

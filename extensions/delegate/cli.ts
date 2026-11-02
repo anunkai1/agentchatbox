@@ -11,6 +11,8 @@ import {
 	AcbSessions,
 	BRIEF_GUIDANCE,
 	chatLink,
+	cwdGuidance,
+	DELEGATE_CLI_PATH,
 	DISPATCH_GUIDANCE,
 	formatStatusList,
 	listDelegations,
@@ -20,7 +22,7 @@ import {
 	workerLabel,
 } from "./lib.ts";
 
-const CLI = "node /home/lepton/agentchatbox/extensions/delegate/cli.ts";
+const CLI = `node ${DELEGATE_CLI_PATH}`;
 const CLAUDE_MODES = ["opus", "sonnet", "haiku"];
 
 const HELP = `Delegate work to worker chats (ordinary ACB chats that report back here).
@@ -30,8 +32,7 @@ const HELP = `Delegate work to worker chats (ordinary ACB chats that report back
   ${CLI} status [words]
 
 start: workers run in Claude Code with this chat's model unless --model names another.
---cwd is the folder of the repository the task belongs to (see /home/lepton/infra/apps/REGISTRY.md;
-host/server config is /home/lepton/infra); ask the owner if it is unclear.
+--${cwdGuidance()}
 After starting, give the owner the link and end your turn: the worker's report arrives in this chat.
 
 ${DISPATCH_GUIDANCE.join("\n").replaceAll("delegate_status", "status").replaceAll("delegate_message", "message")}

@@ -128,7 +128,7 @@ export interface HealthInfo {
 	whisperModel?: string;
 	/** Resolved image-generation model (unified picker), with provenance:
 	 * "override" = ~/.config/acb/image-model, "env" = VENICE_IMAGE_MODEL,
-	 * "default" = qwen-image-2.1-local. Display-only mirror of the extension's chain. */
+	 * "default" = DEFAULT_IMAGE_MODEL. Display-only mirror of the extension's chain. */
 	imageModel?: { model: string; source: "override" | "env" | "default" };
 	/** Whether the Gemini key is configured for pi-web-access (web search /
 	 * fetch / YouTube transcripts). The model itself is implicit in the

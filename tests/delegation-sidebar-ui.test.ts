@@ -23,7 +23,7 @@ const child: SessionSummary = {
 	...parent,
 	id: "child",
 	title: "Fix the API",
-	cwd: "/home/lepton/backend",
+	cwd: "/workspace/backend",
 	projectId: "backend",
 	delegation: { parentSessionId: "parent", status: "needs_input" },
 };
@@ -36,7 +36,7 @@ beforeAll(async () => {
 			import { state } from './src/client/state.ts';
 			state.projects = [
 				{ id: 'global', name: 'Global', cwd: '/repo/parent', icon: '' },
-				{ id: 'backend', name: 'Backend', cwd: '/home/lepton/backend', icon: '' }
+				{ id: 'backend', name: 'Backend', cwd: '/workspace/backend', icon: '' }
 			];
 			registerShellHandlers({handleSlash: (cmd) => { window.lastCommand = cmd; }});
 			window.render = (sessions, active = null) => {

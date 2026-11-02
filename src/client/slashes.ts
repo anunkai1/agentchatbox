@@ -1294,31 +1294,47 @@ export function openModelsPanel(): void {
 	// ── Media ─────────────────────────────────────────────────────
 	box.append(svcSection("Media generation & analysis"));
 
-	const img = state.imageModel;
-	const imgKind = img?.source === "override" ? "set" : img?.source === "env" ? "set" : "default";
-	const imgLabel =
-		img?.source === "default" ? "default" : img?.source === "env" ? "env" : "override";
-	// Derive provider from the (source-tagged) model id so the row tells the
-	// truth for local picks too. The unified /imagemodel picker writes
-	// `local/<id>` or `venice/<id>`; bare legacy ids default to venice.
-	const imgModelRaw = img?.model ?? "local/qwen-image-2.1-local";
-	const imgSlash = imgModelRaw.indexOf("/");
-	const imgProvider = imgSlash >= 0 ? imgModelRaw.slice(0, imgSlash) : "venice";
-	const imgId = imgSlash >= 0 ? imgModelRaw.slice(imgSlash + 1) : imgModelRaw;
-	box.append(
-		svcRow(
-			"Image generation",
-			"Local GPU (free), Venice/OpenRouter APIs, or OpenAI Codex OAuth. Routes via /imagemodel.",
-			modelLine(pill(imgLabel, imgKind), `${imgProvider} / ${imgId}`),
-			hint("switch → ", kbd("/imagemodel")),
-			() => {
-				overlay.remove();
-				// Lean send — like generic command forwarding: extension
-				// command, no agent run, must not set isStreaming.
-				services.sendSlashCommand?.("/imagemodel");
-			},
-		),
+	const hasImageModel = (state.capabilities ?? []).some(
+		(command) => command.name === "imagemodel" && command.source !== "skill",
 	);
+	const img = state.imageModel;
+	if (hasImageModel || img) {
+		const imgKind = img?.source === "override" ? "set" : img?.source === "env" ? "set" : "default";
+		const imgLabel =
+			img?.source === "override" ? "override" : img?.source === "env" ? "env" : "default";
+		// Derive provider from the (source-tagged) model id so the row tells the
+		// truth for local picks too. The unified /imagemodel picker writes
+		// `local/<id>` or `venice/<id>`; bare legacy ids default to venice.
+		const imgModelRaw = img?.model ?? state.currentImageModelLabel ?? "extension default";
+		const imgSlash = imgModelRaw.indexOf("/");
+		const imgDisplay =
+			imgSlash >= 0
+				? `${imgModelRaw.slice(0, imgSlash)} / ${imgModelRaw.slice(imgSlash + 1)}`
+				: imgModelRaw;
+		box.append(
+			svcRow(
+				"Image generation",
+				"Extension-routed image generation (/imagemodel).",
+				modelLine(pill(imgLabel, imgKind), imgDisplay),
+				hasImageModel ? hint("switch → ", kbd("/imagemodel")) : hint("read-only config"),
+				hasImageModel
+					? () => {
+							overlay.remove();
+							services.sendSlashCommand?.("/imagemodel");
+						}
+					: undefined,
+			),
+		);
+	} else {
+		box.append(
+			svcRow(
+				"Image generation",
+				"Optional image-generation Pi extension (/imagemodel).",
+				modelLine(pill("not loaded", "missing"), "unavailable"),
+				hint("install an image extension to enable"),
+			),
+		);
+	}
 
 	box.append(
 		svcRow(
@@ -1567,9 +1583,7 @@ export function openOverflowMenu(): void {
 	);
 
 	// Local AI lifecycle is extension-owned. This row is only a transport
-	// shortcut; the pi extension starts server4, waits for health, and selects
-	// the model. Keep it separate from the generic model picker because local
-	// Qwen shares the GPU with the image backend.
+	// shortcut when a /localai extension is loaded.
 	const hasLocalAi = (state.capabilities ?? []).some(
 		(command) => command.name === "localai" && command.source !== "skill",
 	);
@@ -1578,10 +1592,10 @@ export function openOverflowMenu(): void {
 			section(
 				"Local AI",
 				actionRow(
-					"Server4 GPU",
+					"Local AI",
 					state.extensionStatusLabels["local-ai"] ?? "Checking…",
 					closeThen(() => services.sendSlashCommand?.("/localai menu")),
-					"Start, stop, or select the server4 local AI model",
+					"Start, stop, or select the local AI model",
 				),
 			),
 		);
@@ -1600,18 +1614,25 @@ export function openOverflowMenu(): void {
 		"Cycle Off → V (auto-submit) → V+ (auto-submit and read replies aloud)",
 	);
 
-	// Image model state remains extension-owned; the displayed value is the
-	// best label pi has reported during this browser session.
-	box.append(
-		section(
-			"Media",
+	// Image model state remains extension-owned; only display the row when an
+	// extension actually registers `/imagemodel`.
+	const hasImageModel = (state.capabilities ?? []).some(
+		(command) => command.name === "imagemodel" && command.source !== "skill",
+	);
+	const mediaRows: HTMLElement[] = [];
+	if (hasImageModel) {
+		mediaRows.push(
 			actionRow(
 				"Image model",
 				state.currentImageModelLabel ?? "Default",
 				closeThen(() => services.sendSlashCommand?.("/imagemodel")),
 				"Choose image-generation model",
 			),
-			voiceModeRow,
+		);
+	}
+	mediaRows.push(voiceModeRow);
+	if (state.ttsAvailable !== false) {
+		mediaRows.push(
 			actionRow(
 				"Voice",
 				state.ttsVoice ?? "Default",
@@ -1624,8 +1645,9 @@ export function openOverflowMenu(): void {
 				closeThen(openSpeedPicker),
 				"Choose text-to-speech playback speed",
 			),
-		),
-	);
+		);
+	}
+	box.append(section("Media", ...mediaRows));
 
 	const advancedRows = el("div", { class: "settings-section-rows settings-advanced-rows" });
 	advancedRows.append(

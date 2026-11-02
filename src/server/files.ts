@@ -8,11 +8,10 @@
  * This is transport-layer only: it resolves the path, verifies it is a
  * regular file, and streams the bytes. No agent logic, no business rules.
  *
- * Scope: ANY regular file on the host. This is consistent with the
- * threat model documented in §XIX of the server2 overview — agentchatbox
- * is "effectively a remote shell" behind Authelia MFA, and pi's own
- * `read`/`bash` tools already have full filesystem access and can print
- * any file's contents into the chat. Restricting this endpoint to
+ * Scope: ANY regular file on the host. This matches ACB's single-user
+ * security model — ACB runs behind localhost or an authenticated reverse
+ * proxy (e.g. Authelia MFA), and pi's own `read`/`bash` tools already
+ * have full filesystem access and can print any file's contents into the chat. Restricting this endpoint to
  * `config.piCwd` was stricter than the agent's actual capabilities, so
  * it only broke the UX (download links appeared for files the endpoint
  * then refused to serve) without adding any real security. We still

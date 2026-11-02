@@ -1,6 +1,16 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+
+export const DELEGATE_CLI_PATH = join(import.meta.dirname, "cli.ts");
+
+export function cwdGuidance(env: NodeJS.ProcessEnv = process.env): string {
+	const registryDoc = env.ACB_PROJECT_REGISTRY_DOC?.trim();
+	const registryHint = registryDoc
+		? `: look it up in ${registryDoc} (host/server config is ${dirname(dirname(registryDoc))})`
+		: "";
+	return `cwd is the folder of the repository the task belongs to${registryHint}; for tasks that are not about code use this chat's folder. If it is unclear, ask the owner first.`;
+}
 
 export const STATUSES = ["working", "needs_input", "done", "failed", "stopped"] as const;
 export type DelegationStatus = (typeof STATUSES)[number];
@@ -181,7 +191,7 @@ export function buildBrief(
 /** How the reviewing chat sends a worker more work: a pi tool, or cli.ts for Claude Code. */
 const NEXT_STEP = {
 	pi: "continue the same topic with delegate_message",
-	cli: "continue the same topic with `node /home/lepton/agentchatbox/extensions/delegate/cli.ts message <worker id>` (message on stdin)",
+	cli: `continue the same topic with \`node ${DELEGATE_CLI_PATH} message <worker id>\` (message on stdin)`,
 };
 
 export function formatReport(record: Delegation, via: keyof typeof NEXT_STEP = "pi"): string {

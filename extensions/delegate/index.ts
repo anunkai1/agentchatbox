@@ -7,6 +7,7 @@ import {
 	BRIEF_GUIDANCE,
 	buildBrief,
 	chatLink,
+	cwdGuidance,
 	type Delegation,
 	type DelegationStatus,
 	DISPATCH_GUIDANCE,
@@ -33,7 +34,10 @@ import {
 	writeDelivered,
 } from "./lib.js";
 
-const PUBLIC_URL = process.env.ACB_PUBLIC_URL ?? "https://agent.mavali.top";
+const PUBLIC_URL =
+	process.env.ACB_PUBLIC_URL?.trim() ||
+	process.env.ACB_INTERNAL_URL?.trim() ||
+	"http://localhost:3000";
 const REPORT_TOOL = "delegation_report";
 const CLAUDE_MODES = ["opus", "sonnet", "haiku"];
 
@@ -123,7 +127,7 @@ export default function registerDelegate(
 		description: [
 			"Start a worker: a separate ACB chat that does a task in the background while this chat stays free.",
 			...DISPATCH_GUIDANCE,
-			"cwd is the folder of the repository the task belongs to: look it up in /home/lepton/infra/apps/REGISTRY.md (host/server config is /home/lepton/infra); for tasks that are not about code use this chat's folder. If it is unclear, ask the owner first.",
+			cwdGuidance(),
 			BRIEF_GUIDANCE,
 			"The worker's report arrives here as a new message. Omit model unless the owner specified one; workers inherit this chat's model and thinking level.",
 		].join(" "),

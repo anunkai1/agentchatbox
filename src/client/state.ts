@@ -213,6 +213,8 @@ export interface AppState {
 	 * The client will be actively reconnecting when this is set.
 	 */
 	connectionStatus: "connecting" | "open" | "closed" | "stalled";
+	/** Whether the server's TTS service is reachable (/api/health). null until probed. */
+	ttsAvailable: boolean | null;
 	/** Currently selected TTS voice id (user's pick; null = server default). */
 	ttsVoice: string | null;
 	/** TTS engine id from /api/health (always "kokoro" now — Piper was removed).
@@ -377,6 +379,7 @@ export const state: AppState = {
 	uploadedImages: new Map(),
 	uploadedFiles: new Map(),
 	connectionStatus: "connecting",
+	ttsAvailable: null,
 	ttsVoice: null,
 	ttsEngine: null,
 	ttsDefaultVoice: null,

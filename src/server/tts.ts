@@ -1,10 +1,9 @@
 /**
  * TTS endpoint.
  *
- * Proxies to the pi-voice-server systemd service at http://127.0.0.1:8181
+ * Proxies to an optional pi-voice-server service at http://127.0.0.1:8181
  * (Kokoro-82M ONNX, warm in memory, ~1.5s for a sentence on CPU). The server
- * is operated separately — see /home/lepton/pi-voice-server and the
- * `pi-voice-server.service` unit.
+ * is operated separately (https://github.com/anunkai1/pi-voice-server).
  *
  * (A legacy Piper engine path was removed 2026-07-24 — Kokoro had been the
  * sole configured engine in production for a long time; Piper was dead code.)

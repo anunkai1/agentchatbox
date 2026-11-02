@@ -48,6 +48,7 @@ public/experiments/
 
 # Pi agent data
 .pi-agent/
+/skills/
 
 # Throwaway debug
 .hermes/

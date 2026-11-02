@@ -130,9 +130,9 @@ app.get("/api/projects", (_req, res) => {
 /**
  * GET /api/agent-status
  *
- * Local read-only lifecycle snapshot for Mavali Shed. This is a transport
- * projection of pi children already owned by the session registry; it does
- * not interpret prompts or run agent logic.
+ * Local read-only lifecycle snapshot for status dashboards / observers.
+ * This is a transport projection of pi children already owned by the session
+ * registry; it does not interpret prompts or run agent logic.
  */
 app.get("/api/agent-status", (_req, res) => {
 	res.json({ generatedAt: new Date().toISOString(), sessions: registry.statusSnapshot() });
@@ -289,13 +289,13 @@ app.get("/api/changelog", (req, res) => {
 });
 
 /**
- * Display the unified image picker's default routing:
- * override file → VENICE_IMAGE_MODEL env → local Qwen-Image-2.1. Read-only —
+ * Display the unified image picker's configured routing:
+ * override file → VENICE_IMAGE_MODEL env → DEFAULT_IMAGE_MODEL env. Read-only —
  * ACB never writes the override (the extension's /imagemodel command does).
- * Used by /api/health so the Models & services panel can show the truth
- * before any extension notify lands.
+ * Returns undefined when no image model is configured, so fresh installs do not
+ * advertise a non-existent local image backend.
  */
-function readImageModel(): { model: string; source: "override" | "env" | "default" } {
+function readImageModel(): { model: string; source: "override" | "env" | "default" } | undefined {
 	const overrideFile = join(process.env.HOME ?? homedir(), ".config", "acb", "image-model");
 	try {
 		if (existsSync(overrideFile)) {
@@ -307,13 +307,14 @@ function readImageModel(): { model: string; source: "override" | "env" | "defaul
 	}
 	const envModel = process.env.VENICE_IMAGE_MODEL?.trim();
 	if (envModel) return { model: envModel, source: "env" };
-	return { model: "local/qwen-image-2.1-local", source: "default" };
+	const defaultModel = process.env.DEFAULT_IMAGE_MODEL?.trim();
+	if (defaultModel) return { model: defaultModel, source: "default" };
+	return undefined;
 }
 
 // Health check. Reports configured provider keys, speech-to-text, local TTS,
 // and the running commit hash (so an operator can verify the live process
-// is on the expected tree). Cross-check against
-// `git -C /home/lepton/agentchatbox rev-parse HEAD` on the host.
+// is on the expected tree via `git rev-parse HEAD`).
 app.get(
 	"/api/health",
 	asyncHandler(async (_req, res) => {
@@ -347,12 +348,8 @@ app.get(
 			// "provider/modelId" string; undefined when the rewrite falls back to
 			// the session model. Read from env — not a secret, just a model id.
 			voiceRewriteModel: process.env.VOICE_REWRITE_MODEL?.trim() || undefined,
-			// Resolved image-generation model (pi-local-image router). The
-			// extension resolves per call: explicit param → ~/.config/acb/image-model
-			// override → $VENICE_IMAGE_MODEL → local Qwen. We mirror that chain
-			// here for display so the panel shows what a default call would use
-			// before any extension notify lands. Read-only — the extension still
-			// owns the override file and persistence.
+			// Resolved image-generation model when configured via override file or env.
+			// Read-only — the extension owns the override file and persistence.
 			imageModel: readImageModel(),
 			// Whether the Gemini key is configured for pi-web-access (web search /
 			// fetch / YouTube transcripts). The model itself is implicit inside the

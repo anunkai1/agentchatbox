@@ -6,12 +6,11 @@
  * disk for every voice note). Engine selection (multilingual Qwen3-ASR by default)
  * lives inside the daemon; this router owns only which daemons to try:
  *
- *   STT_PRIMARY_URL   default http://127.0.0.1:8182 — Server2's pi-stt-server
- *                     (on Lappy, the same daemon via lappy-stt-tunnel)
+ *   STT_PRIMARY_URL   default http://127.0.0.1:8182 — primary pi-stt-server daemon
  *   STT_FALLBACK_URL  default unset — an optional second daemon
  *
  * Every daemon failing returns 502 to the browser, same visible behaviour as
- * the old helper failing. See /home/lepton/pi-stt-server for the daemon contract:
+ * the old helper failing. Daemon contract:
  *   POST /transcribe  raw audio bytes → { text, engine, model, ... }
  *   GET  /health      → capability/residency metadata
  *
