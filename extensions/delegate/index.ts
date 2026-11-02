@@ -56,9 +56,19 @@ function statusExcerpt(text: string): string {
 		: `${text.slice(0, 1_000)}… [truncated; read recordPath for full text]`;
 }
 
-function sendTelegram(text: string): void {
+export function sendTelegram(text: string, sessionId: string, model: ModelChoice): void {
 	try {
-		spawn("ai-telegram-send", [text], { stdio: "ignore", detached: true })
+		spawn("ai-telegram-send", [text], {
+			stdio: "ignore",
+			detached: true,
+			env: {
+				...process.env,
+				PI_SESSION_ID: sessionId,
+				PI_PROVIDER: model.provider,
+				PI_MODEL: model.modelId,
+				PI_REASONING_LEVEL: model.thinkingLevel,
+			},
+		})
 			.on("error", () => {})
 			.unref();
 	} catch {
@@ -75,7 +85,7 @@ function sendTelegram(text: string): void {
 export default function registerDelegate(
 	pi: ExtensionAPI,
 	acb = new AcbSessions(),
-	notifyOwner: (text: string) => void = sendTelegram,
+	notifyOwner?: (text: string) => void,
 ): void {
 	let pendingReport: { status: DelegationStatus; summary: string } | null = null;
 	let publishedThisRun = false;
@@ -335,7 +345,12 @@ export default function registerDelegate(
 		writeDelegation(record);
 		publish(ctx, record);
 		if (record.status === "stopped") return;
-		notifyOwner(telegramText(record, PUBLIC_URL));
+		// Owner decisions belong in the delegating chat, not a detached worker.
+		const notify = (text: string) =>
+			notifyOwner
+				? notifyOwner(text)
+				: sendTelegram(text, record.parentSessionId, record.parentModel);
+		notify(telegramText(record, PUBLIC_URL));
 		try {
 			await acb.prompt(record.parentSessionId, `/delegate report ${record.id}`, record.parentModel);
 		} catch (error) {
@@ -343,7 +358,7 @@ export default function registerDelegate(
 			// tell the owner directly.
 			const reason = error instanceof Error ? error.message : String(error);
 			ctx.ui.notify(`Could not reach the main chat: ${reason}`, "warning");
-			notifyOwner(
+			notify(
 				`⚠️ Worker "${record.title}" could not report to the main chat: ${reason}\n\n${PUBLIC_URL}/s/${record.id}`,
 			);
 		}

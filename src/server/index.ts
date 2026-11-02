@@ -25,6 +25,7 @@ import { asyncHandler } from "./async-handler.js";
 import { mountChatWs, shutdownChatWs } from "./chat.js";
 import { config, readPiAuth } from "./config.js";
 import { createFilesRouter } from "./files.js";
+import { publishInternalEndpoint } from "./internal-endpoint.js";
 import { createInternalSessionsRouter } from "./internal-sessions.js";
 import { jsonErrorHandler } from "./json-error.js";
 import { log } from "./logger.js";
@@ -478,6 +479,7 @@ if (existsSync(publicDir)) {
 app.use(jsonErrorHandler);
 
 const server = app.listen(config.port, config.host, () => {
+	publishInternalEndpoint(config.port, config.internalToken);
 	void sessionSearch.refreshSearchIndex();
 	const providers = [...readPiAuth().keys()];
 	const uploadUsage = uploadStore.usage();
