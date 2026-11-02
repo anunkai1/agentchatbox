@@ -24,5 +24,12 @@ export default defineConfig({
 		// Server tests boot an express listener on an ephemeral port. Keep
 		// the default 5s timeout — the smoke round-trip should be fast.
 		hookTimeout: 10_000,
+		// Vitest's 1s expect.poll default is too tight for Playwright UI
+		// assertions when all suites contend on a 4-vCPU CI runner.
+		expect: {
+			poll: {
+				timeout: 5_000,
+			},
+		},
 	},
 });

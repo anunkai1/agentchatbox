@@ -429,6 +429,12 @@ app.get(
 	}),
 );
 
+// Uploaded active content is never handled by express.static. The
+// dedicated route verifies a regular no-follow file descriptor, permits
+// inline display only for magic-validated raster images and sandboxed SVGs,
+// and forces every other format (HTML/PDF/etc.) to download as an octet-stream.
+app.use("/uploads", createUploadsServingRouter());
+
 // Static files (built client). Resolved against the project root so the
 // server works regardless of the process working directory.
 const publicDir = resolve(projectRoot, "public");
@@ -448,11 +454,6 @@ if (existsSync(publicDir)) {
 			},
 		}),
 	);
-	// Uploaded active content is never handled by express.static. The
-	// dedicated route verifies a regular no-follow file descriptor, permits
-	// inline display only for magic-validated raster images and sandboxed SVGs,
-	// and forces every other format (HTML/PDF/etc.) to download as an octet-stream.
-	app.use("/uploads", createUploadsServingRouter());
 	// SPA fallback: serve index.html for any non-API GET. Same no-store
 	// header as above so the fallback document is never cached either.
 	app.get(/^(?!\/api\/|\/uploads\/).*/, (_req, res) => {
