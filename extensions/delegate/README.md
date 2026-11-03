@@ -139,8 +139,10 @@ generic cancellation/at-most-once submission receipts live in
 these receipts to retry a worker: inspect it and continue manually instead. This
 is **at-most-once command submission**, not exactly-once shell execution or proof
 that Pi accepted or completed the command. Crashes in an uncertain window fail
-closed. Ordinary chats and ordinary prompt delivery are unchanged. Durable report
-outbox/retry and semantic progress monitoring are not part of this first version.
+closed. Normal chats use the separate [session-recovery](../session-recovery/README.md)
+policy in the same startup service: one attempt per owner request, not per worker
+lifetime. Ordinary prompt delivery is unchanged. Durable report outbox/retry and
+semantic progress monitoring are not part of this version.
 
 ## Claude Code mode
 

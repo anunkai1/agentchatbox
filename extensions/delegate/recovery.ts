@@ -11,7 +11,13 @@ import {
 
 export interface RecoverySnapshot {
 	bootId: string;
-	sessions: { sessionId: string }[];
+	sessions: {
+		sessionId: string;
+		busy?: boolean;
+		streaming?: boolean;
+		claude?: boolean;
+		compaction?: unknown;
+	}[];
 }
 export interface RecoverySubmission {
 	bootId: string;

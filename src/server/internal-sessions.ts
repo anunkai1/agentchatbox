@@ -27,7 +27,7 @@ import { config } from "./config.js";
 import { listProjects } from "./projects.js";
 import { PromptReceipts } from "./prompt-receipts.js";
 import { findSessionCwd } from "./session-list.js";
-import { registry } from "./session-registry.js";
+import { isWorking, registry } from "./session-registry.js";
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_MESSAGE_CHARS = 200_000;
@@ -107,6 +107,7 @@ export function createInternalSessionsRouter(): Router {
 				body.requestId === undefined ? undefined : text(body.requestId, "requestId", 128);
 			if (requestId && !ID_RE.test(requestId)) throw new BadRequest("invalid requestId");
 			const exclusive = body.onlyIfNotLive === true;
+			const idleOnly = body.onlyIfIdle === true;
 			const since = body.notStoppedSince;
 			if (
 				since !== undefined &&
@@ -117,6 +118,8 @@ export function createInternalSessionsRouter(): Router {
 			const prepare = async (): Promise<() => void> => {
 				let session = registry.liveFor(id);
 				if (exclusive && session) throw new Error("session already live");
+				if (idleOnly && session && (isWorking(session) || session.compaction))
+					throw new Error("session already active");
 				if (typeof since === "number" && transportStoppedSince(origin, id, since))
 					throw new Error("session explicitly stopped");
 				if (!session) {
@@ -134,6 +137,8 @@ export function createInternalSessionsRouter(): Router {
 				return () => {
 					if (exclusive && (ready.busy || ready.streaming || ready.ws))
 						throw new Error("session already live");
+					if (idleOnly && (isWorking(ready) || ready.compaction))
+						throw new Error("session already active");
 					if (ready.pi.killed || registry.liveFor(id) !== ready)
 						throw new Error("session exited before submission");
 					if (typeof since === "number" && transportStoppedSince(origin, id, since))
@@ -147,7 +152,7 @@ export function createInternalSessionsRouter(): Router {
 			};
 			// Ordinary prompts retain their original transport behaviour. Only callers
 			// supplying a requestId opt into durable, at-most-once submission.
-			if (!requestId && !exclusive && since === undefined) {
+			if (!requestId && !exclusive && !idleOnly && since === undefined) {
 				const send = await prepare();
 				send();
 				res.json({ ok: true });

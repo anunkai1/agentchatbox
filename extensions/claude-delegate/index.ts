@@ -757,6 +757,7 @@ export function registerClaudeDelegate(
 		mode: DelegationMode,
 		ctx: StatusContext & { ui: { notify(message: string, type?: string): void } },
 		key: string,
+		ownerRequest = true,
 	): Promise<void> => {
 		const label = statusText(mode);
 		// Worked out before this prompt joins the chat, which would otherwise
@@ -773,6 +774,7 @@ export function registerClaudeDelegate(
 			details: { target: "Claude Code", label },
 		});
 		if (live && live.key === key && live.mode === mode && live.channel.send(task)) {
+			pi.events?.emit("claude-delegate:follow-up", { ctx, mode, task, ownerRequest });
 			live.beat();
 			ctx.ui.notify(
 				"Added to the running Claude Code task; it picks this up at its next step.",
@@ -858,7 +860,7 @@ export function registerClaudeDelegate(
 			};
 			live = { key, mode, channel, beat, abort };
 			// The delegate extension turns these into a worker's status and report.
-			pi.events?.emit("claude-delegate:run-start", { ctx });
+			pi.events?.emit("claude-delegate:run-start", { ctx, mode, task, ownerRequest });
 			const heartbeat = setInterval(beat, HEARTBEAT_MS);
 			beat();
 			try {
@@ -1069,7 +1071,7 @@ export function registerClaudeDelegate(
 		};
 		if (!sticky) return;
 		run.accept();
-		void delegateDirect(run.task, sticky, run.ctx, sessionKey(run.ctx));
+		void delegateDirect(run.task, sticky, run.ctx, sessionKey(run.ctx), false);
 	});
 	pi.events?.on("claude-delegate:start", (data) => {
 		const start = data as {
@@ -1084,7 +1086,7 @@ export function registerClaudeDelegate(
 		sticky = mode;
 		pi.appendEntry(STICKY_ENTRY_TYPE, { mode });
 		restoreStatus(start.ctx);
-		void delegateDirect(start.task, mode, start.ctx, sessionKey(start.ctx));
+		void delegateDirect(start.task, mode, start.ctx, sessionKey(start.ctx), false);
 	});
 
 	pi.on("input", (event, ctx) => {

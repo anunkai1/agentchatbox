@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { type Delegation, telegramText } from "./lib.js";
+import type { SessionRecovery } from "../session-recovery/lib.js";
+import { recoverSessions, type SessionRecoveryClient } from "../session-recovery/recovery.js";
+import { type Delegation, type ModelChoice, telegramText } from "./lib.js";
 import {
 	type RecoveryClient,
 	type RecoverySnapshot,
@@ -49,33 +51,67 @@ const client: RecoveryClient = {
 	},
 };
 
-function notify(record: Delegation): void {
-	const child = spawn(
-		"ai-telegram-send",
-		[telegramText(record, process.env.ACB_PUBLIC_URL ?? origin)],
-		{
-			stdio: "ignore",
-			env: {
-				...process.env,
-				PI_SESSION_ID: record.parentSessionId,
-				PI_PROVIDER: record.parentModel.provider,
-				PI_MODEL: record.parentModel.modelId,
-				PI_REASONING_LEVEL: record.parentModel.thinkingLevel,
-			},
+const sessions: SessionRecoveryClient = {
+	snapshot: client.snapshot,
+	resume: async (record, requestId) =>
+		(await request(`/sessions/${encodeURIComponent(record.id)}/prompt`, {
+			message: `/recovery resume ${record.requestId}`,
+			...record.model,
+			requestId,
+			onlyIfIdle: true,
+			notStoppedSince: record.startedAt,
+		})) as RecoverySubmission,
+	notice: async (record, requestId) => {
+		await request(`/sessions/${encodeURIComponent(record.id)}/prompt`, {
+			message: `/recovery notice ${record.requestId}`,
+			...record.model,
+			requestId,
+			onlyIfIdle: true,
+		});
+	},
+};
+
+function telegram(text: string, sessionId: string, model: ModelChoice): void {
+	const child = spawn("ai-telegram-send", [text], {
+		stdio: "ignore",
+		env: {
+			...process.env,
+			PI_SESSION_ID: sessionId,
+			PI_PROVIDER: model.provider,
+			PI_MODEL: model.modelId,
+			PI_REASONING_LEVEL: model.thinkingLevel,
 		},
+	});
+	child.on("error", () => console.error("session recovery: owner notification failed"));
+}
+function notify(record: Delegation): void {
+	telegram(
+		telegramText(record, process.env.ACB_PUBLIC_URL ?? origin),
+		record.parentSessionId,
+		record.parentModel,
 	);
-	child.on("error", () => console.error("delegation recovery: owner notification failed"));
+}
+function notifySession(record: SessionRecovery): void {
+	if (record.model)
+		telegram(
+			`Chat needs input after restart\n${record.notice}\n${process.env.ACB_PUBLIC_URL ?? origin}/s/${record.id}`,
+			record.id,
+			record.model,
+		);
 }
 
 // A missing endpoint during cold startup isn't evidence of lost work. Retry it.
 // Six bounded passes also allow detached idle sessions to free existing capacity.
 for (let attempt = 0; attempt < 6; attempt++) {
 	try {
-		if ((await recoverWorkers(client, origin, notify, { final: attempt === 5 })) === 0) break;
+		const options = { final: attempt === 5 };
+		const workersPending = await recoverWorkers(client, origin, notify, options);
+		const sessionsPending = await recoverSessions(sessions, origin, notifySession, options);
+		if (workersPending + sessionsPending === 0) break;
 	} catch {
 		if (attempt === 5) {
 			console.error(
-				"delegation recovery: transport unavailable; no workers were assumed dead or restarted",
+				"session recovery: transport unavailable; no sessions were assumed dead or restarted",
 			);
 			process.exitCode = 1;
 		}

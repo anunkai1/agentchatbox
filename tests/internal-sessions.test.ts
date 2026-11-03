@@ -16,7 +16,14 @@ const registry = vi.hoisted(() => ({
 	statusSnapshot: vi.fn(),
 }));
 const broadcastSessions = vi.hoisted(() => vi.fn());
-vi.mock("../src/server/session-registry.js", () => ({ registry }));
+vi.mock("../src/server/session-registry.js", () => ({
+	registry,
+	isWorking: (session: {
+		busy?: boolean;
+		streaming?: boolean;
+		statusFrames?: Map<string, unknown>;
+	}) => session.busy || session.streaming || session.statusFrames?.has("claude-progress"),
+}));
 vi.mock("../src/server/chat.js", () => ({ broadcastSessions }));
 vi.mock("../src/server/projects.js", () => ({ listProjects: () => [] }));
 
@@ -142,7 +149,9 @@ describe("/api/internal", () => {
 	});
 
 	it("exposes the authenticated process incarnation and live sessions", async () => {
-		const response = await fetch(`${base}/api/internal/sessions`, { headers: { authorization: `Bearer ${config.internalToken}` } });
+		const response = await fetch(`${base}/api/internal/sessions`, {
+			headers: { authorization: `Bearer ${config.internalToken}` },
+		});
 		expect(await response.json()).toEqual({ bootId: config.bootId, sessions: [] });
 		expect((await fetch(`${base}/api/internal/sessions`)).status).toBe(404);
 	});
@@ -151,7 +160,13 @@ describe("/api/internal", () => {
 		const resumed = liveSession({ sessionId: "closed-1" } as never);
 		registry.liveFor.mockReturnValueOnce(null).mockReturnValue(resumed);
 		registry.acquire.mockReturnValue(resumed);
-		const body = { message: "/delegate recover closed-1", ...MODEL, requestId: "recovery-route-1", onlyIfNotLive: true, notStoppedSince: Date.now() };
+		const body = {
+			message: "/delegate recover closed-1",
+			...MODEL,
+			requestId: "recovery-route-1",
+			onlyIfNotLive: true,
+			notStoppedSince: Date.now(),
+		};
 		const first = await post("/sessions/closed-1/prompt", body);
 		expect(await first.json()).toMatchObject({ bootId: config.bootId, delivery: "submitted" });
 		const duplicate = await post("/sessions/closed-1/prompt", body);
@@ -161,10 +176,72 @@ describe("/api/internal", () => {
 	});
 
 	it("never queues an automatic continuation behind a live session", async () => {
-		const live = liveSession({ streaming: true }); registry.liveFor.mockReturnValue(live);
-		const response = await post("/sessions/live-1/prompt", { message: "continue", ...MODEL, requestId: "recovery-live-1", onlyIfNotLive: true });
+		const live = liveSession({ streaming: true });
+		registry.liveFor.mockReturnValue(live);
+		const response = await post("/sessions/live-1/prompt", {
+			message: "continue",
+			...MODEL,
+			requestId: "recovery-live-1",
+			onlyIfNotLive: true,
+		});
 		expect(response.status).toBe(503);
 		expect(await response.json()).toEqual({ error: "session already live" });
+		expect(live.pi.send).not.toHaveBeenCalled();
+	});
+
+	it("allows deduplicated idle-only recovery into a browser-reattached chat", async () => {
+		const idle = { ...liveSession(), ws: {} };
+		registry.liveFor.mockReturnValue(idle);
+		const body = {
+			message: "/recovery resume owner-1",
+			...MODEL,
+			requestId: "idle-recovery-1",
+			onlyIfIdle: true,
+		};
+		expect((await post("/sessions/live-1/prompt", body)).status).toBe(200);
+		expect((await post("/sessions/live-1/prompt", body)).status).toBe(200);
+		expect(idle.pi.send).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		{ busy: true },
+		{ streaming: true },
+		{ statusFrames: new Map([["claude-progress", {}]]) },
+		{ compaction: "manual" },
+	])("never queues idle-only recovery behind active work: %o", async (activity) => {
+		const live = { ...liveSession(), ...activity };
+		registry.liveFor.mockReturnValue(live);
+		const response = await post("/sessions/live-1/prompt", {
+			message: "continue",
+			...MODEL,
+			requestId: "idle-active-1",
+			onlyIfIdle: true,
+		});
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ error: "session already active" });
+		expect(live.pi.send).not.toHaveBeenCalled();
+	});
+
+	it("rechecks activity after idle-only startup and requires a durable request ID", async () => {
+		const live = liveSession();
+		registry.liveFor.mockReturnValue(live);
+		expect(
+			(await post("/sessions/live-1/prompt", { message: "continue", ...MODEL, onlyIfIdle: true }))
+				.status,
+		).toBe(400);
+		registry.waitUntilReady.mockImplementation(async () => {
+			live.busy = true;
+		});
+		expect(
+			(
+				await post("/sessions/live-1/prompt", {
+					message: "continue",
+					...MODEL,
+					onlyIfIdle: true,
+					requestId: "idle-race-1",
+				})
+			).status,
+		).toBe(503);
 		expect(live.pi.send).not.toHaveBeenCalled();
 	});
 
@@ -172,8 +249,16 @@ describe("/api/internal", () => {
 		const resumed = liveSession({ sessionId: "closed-1" } as never);
 		registry.liveFor.mockReturnValueOnce(null).mockReturnValue(resumed);
 		registry.acquire.mockReturnValue(resumed);
-		registry.waitUntilReady.mockImplementation(async () => { recordTransportStop(`http://127.0.0.1:${config.port}`, "closed-1"); });
-		const response = await post("/sessions/closed-1/prompt", { message: "continue", ...MODEL, requestId: "recovery-stop-1", onlyIfNotLive: true, notStoppedSince: Date.now() - 1000 });
+		registry.waitUntilReady.mockImplementation(async () => {
+			recordTransportStop(`http://127.0.0.1:${config.port}`, "closed-1");
+		});
+		const response = await post("/sessions/closed-1/prompt", {
+			message: "continue",
+			...MODEL,
+			requestId: "recovery-stop-1",
+			onlyIfNotLive: true,
+			notStoppedSince: Date.now() - 1000,
+		});
 		expect(response.status).toBe(503);
 		expect(await response.json()).toEqual({ error: "session explicitly stopped" });
 		expect(resumed.pi.send).not.toHaveBeenCalled();
