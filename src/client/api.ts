@@ -35,15 +35,37 @@ export function uploadFile(
 	return new Promise((resolve, reject) => {
 		const xhr = new XMLHttpRequest();
 		const abort = () => xhr.abort();
-		const cleanupAbortListener = () => signal?.removeEventListener("abort", abort);
+		// An absolute timeout penalises slow mobile links. Instead detect two
+		// minutes without progress while visible, giving a resumed tab a fresh
+		// grace period. Never auto-retry: the server may have saved the file.
+		let lastActivity = Date.now();
+		let stalled = false;
+		const touch = () => {
+			lastActivity = Date.now();
+		};
+		const watchdog = setInterval(() => {
+			if (document.visibilityState !== "visible") return;
+			if (Date.now() - lastActivity < 120_000) return;
+			stalled = true;
+			xhr.abort();
+		}, 5_000);
+		document.addEventListener("visibilitychange", touch);
+		const cleanupAbortListener = () => {
+			signal?.removeEventListener("abort", abort);
+			document.removeEventListener("visibilitychange", touch);
+			clearInterval(watchdog);
+		};
 		if (signal?.aborted) {
+			cleanupAbortListener();
 			reject(new Error("upload cancelled"));
 			return;
 		}
 		signal?.addEventListener("abort", abort, { once: true });
 		xhr.open("POST", `${BASE}/api/upload`);
 		xhr.responseType = "text";
+		xhr.upload.onload = touch;
 		xhr.upload.onprogress = (event) => {
+			touch();
 			if (event.lengthComputable) {
 				onProgress?.({ loaded: event.loaded, total: event.total });
 			} else {
@@ -56,7 +78,13 @@ export function uploadFile(
 		};
 		xhr.onabort = () => {
 			cleanupAbortListener();
-			reject(new Error("upload cancelled"));
+			reject(
+				new Error(
+					stalled
+						? "no upload progress or server response for two minutes; check your connection and retry"
+						: "upload cancelled",
+				),
+			);
 		};
 		xhr.onload = () => {
 			cleanupAbortListener();
@@ -85,7 +113,12 @@ export function uploadFile(
 				reject(new Error("upload failed: server returned an invalid response"));
 			}
 		};
-		xhr.send(form);
+		try {
+			xhr.send(form);
+		} catch (error) {
+			cleanupAbortListener();
+			reject(error);
+		}
 	});
 }
 

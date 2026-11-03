@@ -1893,6 +1893,7 @@ export function addImageAttachmentPreview(
 	url: string,
 	filename: string,
 	onRemove: () => void,
+	previewUrl = url,
 ): void {
 	const previews = document.getElementById("attachment-previews");
 	if (
@@ -1903,7 +1904,7 @@ export function addImageAttachmentPreview(
 	const card = el("div", { class: "attachment-preview" });
 	card.dataset.url = url;
 	card.append(
-		el("img", { src: url, alt: `Attached image: ${filename}` }),
+		el("img", { src: previewUrl, alt: `Attached image: ${filename}`, decoding: "async" }),
 		el(
 			"button",
 			{
@@ -1939,16 +1940,25 @@ export function addFileAttachmentPreview(
 	preview.complete(url, onRemove);
 }
 
+const pendingUploadCards = new Set<HTMLElement>();
+
 /**
  * Rebuild attachment previews after renderShell() replaces the composer DOM.
- * Upload references live in state until the prompt is accepted, so a transcript
- * refresh must restore both image thumbnails and completed file cards.
+ * Keep active card nodes so progress/cancel callbacks still reach the visible
+ * composer; completed attachments are rebuilt from their small state metadata.
  */
 export function restoreAttachmentPreviews(): void {
+	const previews = document.getElementById("attachment-previews");
+	for (const card of pendingUploadCards) previews?.append(card);
 	for (const [url, attachment] of state.uploadedImages) {
-		addImageAttachmentPreview(url, attachment.filename, () => {
-			state.uploadedImages.delete(url);
-		});
+		addImageAttachmentPreview(
+			url,
+			attachment.filename,
+			() => {
+				state.uploadedImages.delete(url);
+			},
+			attachment.previewUrl,
+		);
 	}
 	for (const [url, attachment] of state.uploadedFiles) {
 		addFileAttachmentPreview(url, attachment.filename, attachment.size, () => {
@@ -2002,11 +2012,11 @@ export function addFileUploadPreview(
 	const progress = el("progress", { max: Math.max(size, 1), value: 0 });
 	const stateText = el("span", {
 		class: "attachment-file-state",
-		text: `Uploading ${position} · 0%`,
+		text: `Queued ${position}`,
 	});
 	const detailText = el("span", {
 		class: "attachment-file-detail",
-		text: `0 B of ${formatAttachmentBytes(size)}`,
+		text: `${formatAttachmentBytes(size)} · Keep this tab open; Android may pause background uploads`,
 	});
 	const cancelButton = el(
 		"button",
@@ -2038,6 +2048,7 @@ export function addFileUploadPreview(
 		cancelButton,
 	);
 	previews.append(card);
+	pendingUploadCards.add(card);
 
 	const addRemoveButton = (onRemove: () => void, label: string) => {
 		card.append(
@@ -2065,10 +2076,12 @@ export function addFileUploadPreview(
 			progress.max = safeTotal;
 			progress.value = safeLoaded;
 			const percent = Math.floor((safeLoaded / safeTotal) * 100);
-			stateText.textContent = `Uploading ${position} · ${percent}%`;
+			stateText.textContent =
+				percent >= 100 ? "Uploaded · waiting for server…" : `Uploading ${position} · ${percent}%`;
 			detailText.textContent = `${formatAttachmentBytes(safeLoaded)} of ${formatAttachmentBytes(safeTotal)}`;
 		},
 		complete: (url, onRemove) => {
+			pendingUploadCards.delete(card);
 			card.dataset.url = url;
 			cancelButton.remove();
 			progress.value = progress.max;
@@ -2079,6 +2092,7 @@ export function addFileUploadPreview(
 			addRemoveButton(onRemove, `Remove ${filename}`);
 		},
 		fail: (message) => {
+			pendingUploadCards.delete(card);
 			cancelButton.remove();
 			card.classList.remove("attachment-uploading");
 			card.classList.add("attachment-upload-failed");
@@ -2087,6 +2101,7 @@ export function addFileUploadPreview(
 			addRemoveButton(() => {}, `Dismiss ${filename}`);
 		},
 		cancelled: () => {
+			pendingUploadCards.delete(card);
 			cancelButton.remove();
 			card.classList.remove("attachment-uploading");
 			card.classList.add("attachment-upload-cancelled");
@@ -2094,7 +2109,10 @@ export function addFileUploadPreview(
 			detailText.textContent = "This file was not attached";
 			addRemoveButton(() => {}, `Dismiss ${filename}`);
 		},
-		remove: () => card.remove(),
+		remove: () => {
+			pendingUploadCards.delete(card);
+			card.remove();
+		},
 	};
 }
 

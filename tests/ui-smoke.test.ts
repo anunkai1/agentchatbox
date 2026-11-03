@@ -825,6 +825,152 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("queues a seven-photo batch, stays interactive, restores progress and avoids downloading originals for thumbnails", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		let releaseUpload = () => {};
+		const ready = new Promise<void>((resolve) => {
+			releaseUpload = resolve;
+		});
+		let attempts = 0;
+		const downloads: string[] = [];
+		const photo = Buffer.concat([PNG_1X1, Buffer.alloc(5 * 1024 * 1024 - PNG_1X1.length)]);
+		try {
+			await page.setViewportSize({ width: 393, height: 851 });
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			page.on("request", (request) => {
+				if (new URL(request.url()).pathname.startsWith("/uploads/batch-"))
+					downloads.push(request.url());
+			});
+			await page.route("**/api/upload", async (route) => {
+				const index = ++attempts;
+				await ready;
+				await route.fulfill({
+					json: {
+						url: `/uploads/batch-${index}.png`,
+						filename: `batch-${index}.png`,
+						mimeType: "image/png",
+						size: photo.length,
+					},
+				});
+			});
+			await page.locator("#file-input").setInputFiles(
+				Array.from({ length: 7 }, (_, index) => ({
+					name: `photo-${index}.png`,
+					mimeType: "image/png",
+					buffer: photo,
+				})),
+			);
+			await expect.poll(() => attempts).toBe(2);
+			expect(await page.locator(".attachment-uploading").count()).toBe(7);
+			expect(await page.locator(".attachment-file-state", { hasText: "Queued" }).count()).toBe(5);
+			await page.getByRole("button", { name: "Cancel upload of photo-6.png", exact: true }).click();
+			await expect.poll(() => page.locator(".attachment-upload-cancelled").count()).toBe(1);
+			await page.locator("#input").fill("Typing while photos upload");
+			sockets
+				.at(-1)!
+				.send(JSON.stringify({ type: "transcript", sessionId: SEEDED_ID, messages: [] }));
+			await expect.poll(() => messages(page).innerText()).not.toContain("stored answer");
+			expect(await page.locator(".attachment-uploading").count()).toBe(6);
+			expect(await page.locator("#input").inputValue()).toBe("Typing while photos upload");
+			releaseUpload();
+			await expect
+				.poll(() => page.locator('#attachment-previews img[src^="data:image/png"]').count())
+				.toBe(6);
+			expect(attempts).toBe(6);
+			expect(downloads).toEqual([]);
+			expect(await page.locator(".attachment-uploading").count()).toBe(0);
+		} finally {
+			releaseUpload();
+			await page.close();
+		}
+	});
+
+	it("counts queued images towards the prompt limit before any upload finishes", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		let releaseUploads = () => {};
+		const ready = new Promise<void>((resolve) => {
+			releaseUploads = resolve;
+		});
+		let attempts = 0;
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.route("**/api/upload", async (route) => {
+				const index = ++attempts;
+				await ready;
+				await route.fulfill({
+					json: {
+						url: `/uploads/limit-${index}.png`,
+						filename: `limit-${index}.png`,
+						mimeType: "image/png",
+						size: PNG_1X1.length,
+					},
+				});
+			});
+			await page
+				.locator("#file-input")
+				.setInputFiles(
+					Array.from({ length: 21 }, (_, index) => ({
+						name: `photo-${index}.png`,
+						mimeType: "image/png",
+						buffer: PNG_1X1,
+					})),
+				);
+			await expect.poll(() => attempts).toBe(2);
+			expect(await page.locator(".attachment-uploading").count()).toBe(20);
+			await expect
+				.poll(() => page.locator(".composer-notice-error").innerText())
+				.toContain("at most 20 images");
+			releaseUploads();
+			await expect
+				.poll(() => page.locator('#attachment-previews img[src^="data:image/png"]').count())
+				.toBe(20);
+			expect(attempts).toBe(20);
+		} finally {
+			releaseUploads();
+			await page.close();
+		}
+	});
+
+	it("keeps prompt image order when the second photo finishes uploading first", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		let releaseFirst = () => {};
+		const ready = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		let attempts = 0;
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.route("**/api/upload", async (route) => {
+				const index = attempts++;
+				const response = await route.fetch();
+				if (index === 0) await ready;
+				await route.fulfill({ response });
+			});
+			await page.locator("#file-input").setInputFiles(
+				["first.png", "second.png"].map((name) => ({
+					name,
+					mimeType: "image/png",
+					buffer: PNG_1X1,
+				})),
+			);
+			await page.getByRole("button", { name: "Remove second.png", exact: true }).waitFor();
+			expect(
+				await page.getByRole("button", { name: "Remove first.png", exact: true }).count(),
+			).toBe(0);
+			releaseFirst();
+			await page.getByRole("button", { name: "Remove first.png", exact: true }).waitFor();
+			await send(page, "Compare these in selection order");
+			await expect.poll(() => lastPrompt().message).toContain("Compare these in selection order");
+			expect(lastPrompt().images).toHaveLength(2);
+			expect(lastPrompt().message.indexOf("first.png")).toBeLessThan(
+				lastPrompt().message.indexOf("second.png"),
+			);
+		} finally {
+			releaseFirst();
+			await page.close();
+		}
+	});
+
 	it("clears an upload blocker when the upload finishes without losing the draft", async () => {
 		const { page } = await openPage(`/s/${SEEDED_ID}`);
 		let releaseUpload = () => {};
@@ -981,7 +1127,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect.poll(() => page.locator(".composer-notice-error").count()).toBe(0);
 			await expect
 				.poll(() =>
-					page.locator(`#attachment-previews img[src="/uploads/${SEEDED_IMAGE}"]`).count(),
+					page.locator(`#attachment-previews [data-url="/uploads/${SEEDED_IMAGE}"] img`).count(),
 				)
 				.toBe(1);
 			expect(attempts).toBe(2);

@@ -44,6 +44,7 @@ import {
 	type Slot,
 } from "./tts-timeline.js";
 import { chunkStartTime, trimChunkSilence } from "./tts-trim.js";
+import { imageThumbnail, UploadQueue } from "./upload-queue.js";
 import { bindVoiceBar, updateVoiceBar } from "./voice-bar.js";
 
 /**
@@ -55,8 +56,11 @@ import { bindVoiceBar, updateVoiceBar } from "./voice-bar.js";
  */
 const TTS_MAX_CHARS = 29_000;
 
-/** Active transfers; the composer blocks sending a half-attached prompt. */
+/** Includes queued files; never allow sending a half-attached batch. */
 let uploadCount = 0;
+let pendingImages = 0;
+let attachmentOrder = 0;
+const uploadQueue = new UploadQueue(2);
 
 export function isUploadInProgress(): boolean {
 	return uploadCount > 0;
@@ -784,19 +788,21 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
  */
 export async function attachFiles(files: File[]): Promise<void> {
 	if (files.length === 0) return;
-	for (const [index, file] of files.entries()) {
+	const jobs = files.map(async (file, index) => {
+		const reservesImage = file.type.startsWith("image/");
 		if (file.type.startsWith("image/") && file.size > MAX_PROMPT_IMAGE_BYTES) {
 			appendError(
 				`Cannot attach ${file.name}: image is ${formatFileSize(file.size)}, above the ${formatFileSize(MAX_PROMPT_IMAGE_BYTES)} per-image limit.`,
 			);
-			continue;
+			return;
 		}
-		if (file.type.startsWith("image/") && state.uploadedImages.size >= MAX_PROMPT_IMAGES) {
+		if (reservesImage && state.uploadedImages.size + pendingImages >= MAX_PROMPT_IMAGES) {
 			appendError(
 				`Cannot attach ${file.name}: at most ${MAX_PROMPT_IMAGES} images can be attached.`,
 			);
-			continue;
+			return;
 		}
+		const order = attachmentOrder++;
 		const uploadController = new AbortController();
 		const uploadPreview = addFileUploadPreview(
 			file.name,
@@ -807,14 +813,19 @@ export async function attachFiles(files: File[]): Promise<void> {
 			},
 		);
 		uploadCount++;
+		if (reservesImage) pendingImages++;
 		try {
-			const res = await uploadFile(
-				file,
-				({ loaded, total }) => {
-					uploadPreview.setProgress(loaded, total);
-				},
-				uploadController.signal,
-			);
+			const { res, previewUrl } = await uploadQueue.run(async () => {
+				uploadPreview.setProgress(0, file.size);
+				const res = await uploadFile(
+					file,
+					({ loaded, total }) => uploadPreview.setProgress(loaded, total),
+					uploadController.signal,
+				);
+				const previewUrl = await imageThumbnail(file);
+				return { res, previewUrl };
+			}, uploadController.signal);
+			if (uploadController.signal.aborted) throw new Error("upload cancelled");
 			const isImage = res.mimeType.startsWith("image/") && res.size <= MAX_PROMPT_IMAGE_BYTES;
 			if (isImage) {
 				// Keep only the small upload reference. The server reads the file it
@@ -824,19 +835,28 @@ export async function attachFiles(files: File[]): Promise<void> {
 					mimeType: res.mimeType,
 					filename: res.filename,
 					size: res.size,
+					previewUrl,
+					order,
 				});
+				state.uploadedImages = orderedAttachments(state.uploadedImages);
 			}
 			if (isImage) {
 				// Keep image uploads out of the visible draft. The thumbnail is
 				// the attachment affordance; the URL is sent separately as a
 				// structured reference and resolved by the server.
 				uploadPreview.remove();
-				addImageAttachmentPreview(res.url, res.filename, () => {
-					state.uploadedImages.delete(res.url);
-					refreshNotices();
-				});
+				addImageAttachmentPreview(
+					res.url,
+					res.filename,
+					() => {
+						state.uploadedImages.delete(res.url);
+						refreshNotices();
+					},
+					previewUrl,
+				);
 			} else {
-				state.uploadedFiles.set(res.url, { filename: res.filename, size: res.size });
+				state.uploadedFiles.set(res.url, { filename: res.filename, size: res.size, order });
+				state.uploadedFiles = orderedAttachments(state.uploadedFiles);
 				uploadPreview.remove();
 				addFileAttachmentPreview(res.url, res.filename, res.size, () => {
 					state.uploadedFiles.delete(res.url);
@@ -864,9 +884,16 @@ export async function attachFiles(files: File[]): Promise<void> {
 			}
 		} finally {
 			uploadCount--;
+			if (reservesImage) pendingImages--;
 			refreshNotices();
 		}
-	}
+	});
+	await Promise.all(jobs);
+}
+
+/** Network completion order must not change the image numbering in the prompt. */
+function orderedAttachments<T extends { order?: number }>(items: Map<string, T>): Map<string, T> {
+	return new Map([...items].sort(([, a], [, b]) => (a.order ?? 0) - (b.order ?? 0)));
 }
 
 export function promptImageLimitError(): string | null {
@@ -889,8 +916,11 @@ export async function handleFileAttach(e: Event): Promise<void> {
 	const input = e.target as HTMLInputElement;
 	const files = input.files;
 	if (!files || files.length === 0) return;
-	await attachFiles(Array.from(files));
+	const selected = Array.from(files);
+	// Release the picker immediately so another selection cannot be cleared by
+	// an older batch finishing, and selecting the same file again still works.
 	input.value = "";
+	await attachFiles(selected);
 }
 
 /**
