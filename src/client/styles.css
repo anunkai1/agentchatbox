@@ -4344,6 +4344,46 @@ select:focus-visible,
 	}
 }
 
+.voice-test {
+	width: min(760px, calc(100vw - 32px));
+	max-height: calc(100dvh - 48px);
+	overflow-y: auto;
+}
+.voice-test p {
+	margin: 12px 0;
+}
+.voice-test-model,
+.voice-test-metrics {
+	font-size: 0.85rem;
+	overflow-wrap: anywhere;
+}
+.voice-test-status {
+	font-weight: 600;
+}
+.voice-test-controls,
+.voice-test-form {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin: 12px 0;
+}
+.voice-test-form input {
+	flex: 1;
+	min-width: 160px;
+}
+.voice-test button,
+.voice-test input {
+	padding: 8px 12px;
+}
+.voice-test-transcript {
+	min-height: 100px;
+	max-height: 35dvh;
+	overflow-y: auto;
+	overflow-wrap: anywhere;
+	border-block: 1px solid currentColor;
+	padding: 8px 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,

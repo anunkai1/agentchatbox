@@ -13,6 +13,7 @@ public/app.js.map
 public/app.css
 public/index.html
 public/styles.css
+public/voice-vad/
 public/*.png
 public/*.webp
 public/*.svg

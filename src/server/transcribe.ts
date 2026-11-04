@@ -71,6 +71,7 @@ export function sttChain(): SttAttempt[] {
 async function postToDaemon(
 	url: string,
 	audio: Buffer,
+	signal: AbortSignal,
 ): Promise<{ ok: true; body: SttDaemonResponse } | { ok: false; error: string; status?: number }> {
 	let response: globalThis.Response;
 	try {
@@ -78,7 +79,7 @@ async function postToDaemon(
 			method: "POST",
 			headers: { "Content-Type": "application/octet-stream" },
 			body: new Uint8Array(audio),
-			signal: AbortSignal.timeout(STT_TIMEOUT_MS),
+			signal: AbortSignal.any([signal, AbortSignal.timeout(STT_TIMEOUT_MS)]),
 		});
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
@@ -117,9 +118,13 @@ export function createTranscribeRouter(): Router {
 				return;
 			}
 
+			const clientGone = new AbortController();
+			res.on("close", () => clientGone.abort());
 			const failures: string[] = [];
 			for (const attempt of sttChain()) {
-				const result = await postToDaemon(attempt.url, file.buffer);
+				if (clientGone.signal.aborted) return;
+				const result = await postToDaemon(attempt.url, file.buffer, clientGone.signal);
+				if (clientGone.signal.aborted) return;
 				if (result.ok) {
 					const transcript: SttDaemonResponse = { text: result.body.text };
 					res.json(transcript);

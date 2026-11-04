@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTranscribeRouter, sttChain } from "../src/server/transcribe.js";
 
 const originalPrimary = process.env.STT_PRIMARY_URL;
@@ -134,6 +134,35 @@ describe("transcribe router", () => {
 		const body = (await resp.json()) as { error?: string };
 		expect(body.error).toBe("all stt daemons failed");
 		expect(JSON.stringify(body)).not.toContain(".test:");
+	});
+
+	it("aborts local transcription when the browser disconnects, without a fallback", async () => {
+		const real = globalThis.fetch.bind(globalThis);
+		let daemonSignal: AbortSignal | undefined;
+		const daemonUrls: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+			const url = String(input);
+			if (!url.includes(".test:")) return real(input, init);
+			daemonUrls.push(url);
+			daemonSignal = init?.signal ?? undefined;
+			return new Promise((_resolve, reject) => {
+				daemonSignal?.addEventListener("abort", () => reject(daemonSignal?.reason), { once: true });
+			});
+		});
+		base = await listen(app);
+		const controller = new AbortController();
+		const form = new FormData();
+		form.append("audio", new Blob(["speech"]), "voice.wav");
+		const response = fetch(`${base}/api/transcribe`, {
+			method: "POST",
+			body: form,
+			signal: controller.signal,
+		});
+		await vi.waitFor(() => expect(daemonSignal).toBeDefined());
+		controller.abort();
+		await expect(response).rejects.toThrow();
+		await vi.waitFor(() => expect(daemonSignal?.aborted).toBe(true));
+		expect(daemonUrls).toEqual(["http://primary.test:9991/transcribe"]);
 	});
 
 	it("400s without an audio field", async () => {

@@ -22,6 +22,8 @@ describe("HTTP and upload security", () => {
 		if (!address || typeof address === "string") throw new Error("missing test address");
 		const response = await fetch(`http://127.0.0.1:${address.port}/`);
 		expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+		expect(response.headers.get("content-security-policy")).toContain("'wasm-unsafe-eval'");
+		expect(response.headers.get("content-security-policy")).not.toContain("'unsafe-eval'");
 		expect(response.headers.get("x-content-type-options")).toBe("nosniff");
 		expect(response.headers.get("x-powered-by")).toBeNull();
 		expect(response.headers.get("access-control-allow-origin")).toBeNull();

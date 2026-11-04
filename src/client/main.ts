@@ -124,6 +124,7 @@ import {
 } from "./voice.js";
 import { nextVoiceMode, VOICE_MODE_DESCRIPTIONS } from "./voice-mode.js";
 import { isVoiceFailureNotice, pendingReplyText, voiceableReplyStamp } from "./voice-pending.js";
+import { isVoiceTestOpen } from "./voice-test.js";
 import { createChatClient } from "./ws.js";
 
 // ---------------------------------------------------------------------------
@@ -326,7 +327,7 @@ let lastAutoVoicedStamp: number | null = null;
  * listened to (their Long button still works).
  */
 function autoVoiceReply(stamp: number | null): void {
-	if (state.voiceMode !== "reply" || state.compaction) return;
+	if (state.voiceMode !== "reply" || state.compaction || isVoiceTestOpen()) return;
 	if (document.visibilityState !== "visible") return;
 	if (stamp === null || stamp === lastAutoVoicedStamp) return;
 	lastAutoVoicedStamp = stamp;
@@ -871,8 +872,10 @@ function onEvent(event: Record<string, unknown>): void {
 						state.pendingVoiceBtn = null;
 						// toggleSpeak drives the pressing button's label (spin → ⏹) so it
 						// stays stoppable; voice mode has no button.
-						if (btn) toggleSpeak(text, btn);
-						else speakText(text);
+						if (!isVoiceTestOpen()) {
+							if (btn) toggleSpeak(text, btn);
+							else speakText(text);
+						}
 					} else if (text) {
 						resetPendingVoice();
 					}
@@ -902,6 +905,13 @@ function onEvent(event: Record<string, unknown>): void {
 						const prompt = { kind: "user" as const, text: content, ts: promptMsg.timestamp, via };
 						state.messages.push(prompt);
 						appendNode(renderMessageNode(prompt));
+					}
+				} else if (e.message.customType === "acb-voice-test") {
+					const voice = e.message as { content?: unknown; timestamp?: number };
+					if (typeof voice.content === "string" && voice.content) {
+						const note = { kind: "note" as const, text: voice.content, ts: voice.timestamp };
+						state.messages.push(note);
+						appendNode(renderMessageNode(note));
 					}
 				} else if (e.message.customType === "note") {
 					// Extension-emitted display note (e.g. /imggen's model-free

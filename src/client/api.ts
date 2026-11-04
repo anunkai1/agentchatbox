@@ -122,12 +122,17 @@ export function uploadFile(
 	});
 }
 
-export async function transcribeAudio(blob: Blob, filename = "voice.webm"): Promise<string> {
+export async function transcribeAudio(
+	blob: Blob,
+	filename = "voice.webm",
+	signal?: AbortSignal,
+): Promise<string> {
 	const form = new FormData();
 	form.append("audio", blob, filename);
 	const res = await fetch(`${BASE}/api/transcribe`, {
 		method: "POST",
 		body: form,
+		signal,
 	});
 	if (!res.ok) {
 		const text = await res.text();

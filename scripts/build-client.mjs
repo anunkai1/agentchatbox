@@ -44,13 +44,29 @@ async function copyBrand() {
 	console.log(`client: copied ${copied} brand asset(s) (${(bytes / 1024).toFixed(1)} KB)`);
 }
 
+async function copyVoiceAssets() {
+	// Versioned, same-origin assets: no CDN, blob worker, or cross-origin isolation.
+	const vad = resolve(root, "public/voice-vad/vad-0.0.31");
+	const ort = resolve(root, "public/voice-vad/ort-1.31.1");
+	await mkdir(vad, { recursive: true });
+	await mkdir(ort, { recursive: true });
+	for (const file of ["silero_vad_v5.onnx", "vad.worklet.bundle.min.js"]) {
+		await copyFile(resolve(root, "node_modules/@ricky0123/vad-web/dist", file), join(vad, file));
+	}
+	for (const file of ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]) {
+		await copyFile(resolve(root, "node_modules/onnxruntime-web/dist", file), join(ort, file));
+	}
+	await copyFile(resolve(root, "assets/voice-vad-LICENSES.txt"), resolve(root, "public/voice-vad/LICENSES.txt"));
+}
+
 async function copyStatic() {
 	const clientCssSrc = resolve(root, "src/client/styles.css");
 	const clientCssDst = resolve(root, "public/styles.css");
 	await copyFile(clientCssSrc, clientCssDst);
 	await copyFile(htmlSrc, htmlDst);
 	await copyBrand();
-	console.log("client: copied styles.css + index.html");
+	await copyVoiceAssets();
+	console.log("client: copied styles.css + index.html + local voice VAD assets");
 }
 
 /**

@@ -14,7 +14,8 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
 			"frame-ancestors 'none'",
 			"form-action 'self'",
 			"object-src 'none'",
-			"script-src 'self'",
+			// Local Silero VAD needs WASM compilation, not JavaScript eval or a CDN.
+			"script-src 'self' 'wasm-unsafe-eval'",
 			"style-src 'self' 'unsafe-inline'",
 			"img-src 'self' data: blob: https:",
 			"media-src 'self' blob:",

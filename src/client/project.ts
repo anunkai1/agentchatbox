@@ -130,6 +130,11 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 				ts: promptMsg.timestamp,
 				via: promptMsg.details?.target ?? "Claude Code",
 			});
+		} else if (cm.customType === "acb-voice-test") {
+			const voice = m as { content?: unknown; timestamp?: number };
+			if (typeof voice.content === "string" && voice.content) {
+				out.push({ kind: "note", text: voice.content, ts: voice.timestamp });
+			}
 		} else if (cm.customType === "note" && isMirroredByAssistant(messages, i)) {
 			// The claude-delegate extension saves each Claude Code reply as an
 			// assistant message so pi persists the chat; that row already shows

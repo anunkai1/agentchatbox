@@ -25,11 +25,13 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.86.1",
+    "@ricky0123/vad-web": "0.0.31",
     "dompurify": "^3.4.13",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "marked": "^18.0.5",
     "multer": "^2.5.0",
+    "onnxruntime-web": "1.31.1",
     "tsx": "^4.19.2",
     "ws": "^8.18.0"
   },

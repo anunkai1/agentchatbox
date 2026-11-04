@@ -139,8 +139,31 @@ async function openPage(path: string): Promise<{ page: Page; sockets: WebSocketR
 			if (pathname === "/styles.css") {
 				return route.fulfill({ body: client.css, contentType: "text/css" });
 			}
+			if (pathname.startsWith("/voice-vad/")) {
+				const name = pathname.split("/").at(-1)!;
+				const allowed = [
+					"silero_vad_v5.onnx",
+					"vad.worklet.bundle.min.js",
+					"ort-wasm-simd-threaded.mjs",
+					"ort-wasm-simd-threaded.wasm",
+				];
+				if (!allowed.includes(name)) return route.fulfill({ status: 404, body: "" });
+				const pkg = name.startsWith("ort-") ? "onnxruntime-web" : "@ricky0123/vad-web";
+				return route.fulfill({
+					body: readFileSync(join(root, "node_modules", pkg, "dist", name)),
+					contentType: name.endsWith(".wasm")
+						? "application/wasm"
+						: name.endsWith(".onnx")
+							? "application/octet-stream"
+							: "text/javascript",
+				});
+			}
 			if (pathname === "/" || pathname.startsWith("/s/")) {
-				return route.fulfill({ body: client.html, contentType: "text/html" });
+				return route.fulfill({
+					body: client.html,
+					contentType: "text/html",
+					headers: { "Content-Security-Policy": "script-src 'self' 'wasm-unsafe-eval'" },
+				});
 			}
 			return route.fulfill({ status: 404, body: "" });
 		},
@@ -1260,6 +1283,129 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect
 				.poll(() => page.locator("#status-dynamic").innerText())
 				.not.toContain("Retrying");
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("runs the voice-test UI on an isolated socket and saves a summary", async () => {
+		const { page } = await openPage("/");
+		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
+		const voiceCommands: string[] = [];
+		await page.route("**/api/tts/stream", (route) =>
+			route.fulfill({
+				body: Buffer.from([0, 0, 0, 0, 0]),
+				contentType: "application/octet-stream",
+			}),
+		);
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			const event = (details: Record<string, unknown>) =>
+				ws.send(
+					JSON.stringify({
+						type: "event",
+						event: {
+							type: "message_end",
+							message: { role: "custom", customType: "acb-voice-test", details },
+						},
+					}),
+				);
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init") {
+					ws.send(JSON.stringify({ type: "ready", sessionId: "voice-session-001" }));
+					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "voicetest" }] }));
+				} else if (message.type === "prompt") {
+					voiceCommands.push(message.text);
+					if (message.text === "/voicetest start")
+						event({ kind: "ready", model: "venice/deepseek-v4-1-flash-1017" });
+					else if (message.text.startsWith("/voicetest say ")) {
+						const [, , turn, ...words] = message.text.split(" ");
+						event({ kind: "user", turn, text: words.join(" ") });
+						event({ kind: "sentence", turn, text: "Hello from the voice model.", firstTextMs: 42 });
+						event({ kind: "done", turn, interrupted: false, elapsedMs: 50 });
+					} else if (message.text === "/voicetest stop") {
+						event({ kind: "summary", text: "A short test conversation." });
+						event({ kind: "stopped" });
+					}
+				}
+			});
+		});
+		try {
+			await send(page, "/voicetest");
+			const dialog = page.getByRole("dialog", { name: "Browser voice test" });
+			await expect.poll(() => dialog.innerText()).toContain("Ready —");
+			expect(await dialog.innerText()).toContain("venice/deepseek-v4-1-flash-1017");
+			await dialog.getByRole("textbox", { name: "Voice test message" }).fill("Hello test");
+			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
+			await expect
+				.poll(() => dialog.getByRole("log").innerText())
+				.toContain("Hello from the voice model.");
+			expect(await dialog.getByRole("log").innerText()).toContain("You: Hello test");
+			expect(
+				await dialog.getByRole("link", { name: "Open saved transcript" }).getAttribute("href"),
+			).toBe("/s/voice-session-001");
+			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			// Real Silero/ONNX/AudioWorklet initialisation, with a synthetic silent
+			// microphone: tests must never open the machine's actual microphone.
+			await page.evaluate(() => {
+				const context = new AudioContext();
+				const destination = context.createMediaStreamDestination();
+				const source = context.createConstantSource();
+				source.offset.value = 0;
+				source.connect(destination);
+				source.start();
+				void context.resume();
+				(window as unknown as { __voiceTestStream: MediaStream }).__voiceTestStream = destination.stream;
+				Object.defineProperty(navigator, "mediaDevices", {
+					configurable: true,
+					value: { getUserMedia: async () => destination.stream },
+				});
+			});
+			await dialog.getByRole("button", { name: "Start microphone", exact: true }).click();
+			await expect
+				.poll(() => dialog.locator(".voice-test-status").innerText(), { timeout: 20_000 })
+				.toBe("Listening…");
+			await dialog.getByRole("button", { name: "Stop microphone", exact: true }).click();
+			expect(
+				await page.evaluate(() =>
+					(window as unknown as { __voiceTestStream: MediaStream }).__voiceTestStream
+						.getTracks()
+						.every((track: MediaStreamTrack) => track.readyState === "ended"),
+				),
+			).toBe(true);
+			await dialog.getByRole("button", { name: "End test & summarise" }).click();
+			await expect.poll(() => dialog.innerText()).toContain("Test ended; transcript saved");
+			expect(await dialog.getByRole("log").innerText()).toContain("A short test conversation.");
+			expect(voiceCommands).toContain("/voicetest interrupt");
+			await dialog.getByRole("button", { name: "Close Browser voice test" }).click();
+			await send(page, "normal chat still works");
+			await expect.poll(() => messages(page).innerText()).toContain("reply 1");
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("never sends a voice prompt if the Pi extension is absent", async () => {
+		const { page } = await openPage("/");
+		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
+		const prompts: string[] = [];
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init") {
+					ws.send(JSON.stringify({ type: "ready", sessionId: "not-a-voice-session" }));
+					ws.send(JSON.stringify({ type: "capabilities", commands: [] }));
+				} else if (message.type === "prompt") prompts.push(message.text);
+			});
+		});
+		try {
+			await send(page, "/voicetest");
+			const dialog = page.getByRole("dialog", { name: "Browser voice test" });
+			await expect.poll(() => dialog.innerText()).toContain("not installed");
+			expect(prompts).toEqual([]);
+			expect(await dialog.getByRole("button", { name: "Start microphone" }).isDisabled()).toBe(
+				true,
+			);
 		} finally {
 			await page.close();
 		}

@@ -773,6 +773,188 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 }
 
 // ---------------------------------------------------------------------------
+// Browser conversation test: isolated playback queue and speech capture.
+// Model selection/prompts stay in the Pi extension, never in this audio layer.
+// ---------------------------------------------------------------------------
+
+export class ConversationSpeaker {
+	private readonly context = new AudioContext();
+	private controller = new AbortController();
+	private nodes = new Set<AudioBufferSourceNode>();
+	private queue = Promise.resolve();
+	private nextAt = 0;
+	private started = false;
+	private pending = 0;
+
+	constructor(
+		private readonly onPlaying: () => void,
+		private readonly onIdle: () => void,
+		private readonly onError: (error: unknown) => void,
+	) {
+		declarePlaybackAudioSession();
+		void this.context.resume().catch(onError);
+	}
+
+	enqueue(text: string): void {
+		const controller = this.controller;
+		this.pending++;
+		this.queue = this.queue
+			.then(async () => {
+				if (controller.signal.aborted) return;
+				for await (const wav of streamSynthesizeSpeech(
+					text,
+					state.ttsVoice ?? undefined,
+					controller.signal,
+					1,
+				)) {
+					const buffer = await this.context.decodeAudioData(await wav.arrayBuffer());
+					if (controller.signal.aborted) return;
+					const { offset, duration } = trimChunkSilence(buffer);
+					const node = this.context.createBufferSource();
+					node.buffer = buffer;
+					node.connect(this.context.destination);
+					const at = Math.max(this.context.currentTime + 0.04, this.nextAt);
+					node.start(at, offset, duration);
+					this.nextAt = at + duration;
+					this.nodes.add(node);
+					if (!this.started) {
+						this.started = true;
+						this.onPlaying();
+					}
+					node.onended = () => {
+						this.nodes.delete(node);
+						node.disconnect();
+						this.checkIdle();
+					};
+				}
+			})
+			.catch((error: unknown) => {
+				if (!controller.signal.aborted) this.onError(error);
+			})
+			.finally(() => {
+				if (controller !== this.controller) return;
+				this.pending--;
+				this.checkIdle();
+			});
+	}
+
+	private checkIdle(): void {
+		if (!this.pending && !this.nodes.size) {
+			this.nextAt = 0;
+			this.onIdle();
+		}
+	}
+
+	stop(): void {
+		this.controller.abort();
+		this.controller = new AbortController();
+		this.queue = Promise.resolve();
+		this.pending = 0;
+		this.started = false;
+		for (const node of this.nodes) {
+			node.onended = null;
+			try {
+				node.stop();
+			} catch {
+				/* already ended */
+			}
+			node.disconnect();
+		}
+		this.nodes.clear();
+		this.nextAt = 0;
+	}
+
+	close(): void {
+		this.stop();
+		void this.context.close().catch(() => {});
+	}
+}
+
+/** Silero handles segmentation/pre-roll; only completed utterances leave tab memory. */
+export async function captureConversation(
+	onSpeech: () => void,
+	onUtterance: (audio: Blob, endedAt: number) => void,
+	onError: (error: unknown) => void,
+): Promise<() => void> {
+	const stream = await navigator.mediaDevices.getUserMedia({
+		audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+	});
+	let context: AudioContext | null = null;
+	let vad: import("@ricky0123/vad-web").MicVAD | null = null;
+	let speechTimer: ReturnType<typeof setTimeout> | null = null;
+	let closed = false;
+	const close = () => {
+		if (closed) return;
+		closed = true;
+		if (speechTimer) clearTimeout(speechTimer);
+		stream.getTracks().forEach((track) => {
+			track.stop();
+		});
+		void vad?.destroy().catch(() => {});
+		void context?.close().catch(() => {});
+	};
+	try {
+		context = new AudioContext();
+		await context.resume();
+		const { MicVAD, utils } = await import("@ricky0123/vad-web");
+		let lastSound = performance.now();
+		vad = await MicVAD.new({
+			model: "v5",
+			startOnLoad: false,
+			audioContext: context,
+			getStream: async () => stream,
+			baseAssetPath: "/voice-vad/vad-0.0.31/",
+			onnxWASMBasePath: "/voice-vad/ort-1.31.1/",
+			ortConfig: (ort) => {
+				ort.env.wasm.numThreads = 1;
+				ort.env.wasm.proxy = false;
+				ort.env.logLevel = "error";
+			},
+			positiveSpeechThreshold: 0.5,
+			negativeSpeechThreshold: 0.35,
+			redemptionMs: 600,
+			preSpeechPadMs: 320,
+			minSpeechMs: 128,
+			submitUserSpeechOnPause: false,
+			onFrameProcessed: (probabilities) => {
+				if (probabilities.isSpeech >= 0.35) lastSound = performance.now();
+			},
+			onSpeechRealStart: () => {
+				if (closed) return;
+				onSpeech();
+				if (speechTimer) clearTimeout(speechTimer);
+				speechTimer = setTimeout(() => {
+					close();
+					onError(new Error("Speech exceeded the 30-second test limit; restart the microphone."));
+				}, 30_000);
+			},
+			onSpeechEnd: (audio) => {
+				if (speechTimer) clearTimeout(speechTimer);
+				speechTimer = null;
+				if (!closed)
+					onUtterance(
+						new Blob([utils.encodeWAV(audio, 1, 16000, 1, 16)], { type: "audio/wav" }),
+						lastSound,
+					);
+			},
+		});
+		for (const track of stream.getTracks()) {
+			track.addEventListener("ended", () => {
+				if (!closed) {
+					close();
+					onError(new Error("Microphone disconnected"));
+				}
+			});
+		}
+		await vad.start();
+		return close;
+	} catch (error) {
+		close();
+		throw error;
+	}
+}
+
+// ---------------------------------------------------------------------------
 // File attach
 // ---------------------------------------------------------------------------
 
