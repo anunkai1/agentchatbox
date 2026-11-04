@@ -109,9 +109,11 @@ export class VoiceConversation {
 		const sentences = new SpokenSentences();
 		let spoken = "";
 		let firstTextMs = 0;
-		this.history.push({ role: "user", text });
-		this.emit({ kind: "user", turn, text });
 		try {
+			// Persist before calling the provider; persistence failures must also release
+			// the active turn so stop/interruption cannot hang forever.
+			this.emit({ kind: "user", turn, text });
+			this.history.push({ role: "user", text });
 			for await (const delta of this.generate(VOICE_PROMPT, this.history, controller.signal)) {
 				controller.signal.throwIfAborted();
 				if (!firstTextMs && delta.trim()) firstTextMs = Date.now() - started;
@@ -152,14 +154,14 @@ export class VoiceConversation {
 							? " [interrupted; generated text may not all have been heard]"
 							: ""),
 				});
+			this.active = null;
+			finish();
 			this.emit({
 				kind: "done",
 				turn,
 				interrupted: controller.signal.aborted,
 				elapsedMs: Date.now() - started,
 			});
-			this.active = null;
-			finish();
 		}
 	}
 

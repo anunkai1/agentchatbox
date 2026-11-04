@@ -15,15 +15,13 @@ export default function voiceTest(pi: ExtensionAPI): void {
 	let summaryTask: Promise<void> | null = null;
 	const emit = (event: VoiceTestEvent): void => {
 		const content =
-			event.kind === "user"
-				? `You: ${event.text}`
-				: event.kind === "sentence"
-					? `Assistant: ${event.text}`
-					: event.kind === "summary"
-						? `Summary: ${event.text}`
-						: event.kind === "error"
-							? `Voice test error: ${event.text}`
-							: "";
+			event.kind === "sentence"
+				? `Assistant: ${event.text}`
+				: event.kind === "summary"
+					? `Summary: ${event.text}`
+					: event.kind === "error"
+						? `Voice test error: ${event.text}`
+						: "";
 		pi.sendMessage(
 			{ customType: VOICE_TEST_MESSAGE, content, display: !!content, details: event },
 			{ triggerTurn: false },
@@ -74,7 +72,25 @@ export default function voiceTest(pi: ExtensionAPI): void {
 					// Do not silently turn a working coding chat into a tool-free voice test.
 					if (ctx.sessionManager.getBranch().some((entry) => entry.type === "message"))
 						throw new Error("Start voice testing in a new, empty session");
-					conversation = new VoiceConversation(generator(ctx), emit);
+					// Like the Claude mirror, use the real manager behind Pi's read-only view.
+					// Custom messages alone never flush a new session. A real user message
+					// saves each recognised input before generation, without a coding-agent turn.
+					const sink = ctx.sessionManager as unknown as {
+						appendMessage?: (message: unknown) => unknown;
+					};
+					const appendMessage = sink.appendMessage?.bind(sink);
+					if (!appendMessage)
+						throw new Error("Voice transcripts cannot be saved: Pi's session API changed");
+					conversation = new VoiceConversation(generator(ctx), (event) => {
+						if (event.kind === "user") {
+							appendMessage({
+								role: "user",
+								content: [{ type: "text", text: event.text }],
+								timestamp: Date.now(),
+							});
+						}
+						emit(event);
+					});
 					pi.setActiveTools([]);
 					pi.setSessionName("Voice test · DeepSeek V4.1 1017");
 					emit({ kind: "ready", model: `${VOICE_PROVIDER}/${VOICE_MODEL}` });

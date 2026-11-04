@@ -150,7 +150,9 @@ export function openVoiceTest(): void {
 		if (ready) {
 			command("/voicetest stop");
 			closeTimer = setTimeout(() => {
-				sayStatus("Summary timed out; transcript remains saved.");
+				sayStatus(
+					link.hidden ? "Summary timed out." : "Summary timed out; transcript remains saved.",
+				);
 				closeSocket();
 			}, 35_000);
 		} else closeSocket();
@@ -313,7 +315,6 @@ export function openVoiceTest(): void {
 			}
 			if (wire.sessionId) {
 				link.href = `/s/${encodeURIComponent(wire.sessionId)}`;
-				link.hidden = false;
 			}
 			transportReady = true;
 			socket.send(JSON.stringify({ type: "getCapabilities" }));
@@ -353,6 +354,7 @@ export function openVoiceTest(): void {
 			start.disabled = send.disabled = interrupt.disabled = finish.disabled = false;
 			sayStatus("Ready — start the microphone or send text");
 		} else if (event.kind === "user") {
+			link.hidden = !link.hasAttribute("href");
 			addText("You", event.text);
 		} else if (event.kind === "sentence") {
 			const row = rows.get(event.turn) ?? addText("Assistant", "");
@@ -369,7 +371,9 @@ export function openVoiceTest(): void {
 			addText("Error", event.text);
 			fail(new Error(event.text));
 		} else if (event.kind === "stopped") {
-			sayStatus("Test ended; transcript saved");
+			sayStatus(
+				link.hidden ? "Test ended; no conversation to save" : "Test ended; transcript saved",
+			);
 			closeSocket();
 		}
 	};

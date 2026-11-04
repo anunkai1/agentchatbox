@@ -1,4 +1,7 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import voiceTest from "../extensions/voice-test/index.js";
 import {
@@ -10,6 +13,11 @@ import {
 	voicePayload,
 } from "../extensions/voice-test/lib.js";
 import { projectTranscript } from "../src/client/project.js";
+import {
+	listPiSessions,
+	readPiSessionMessages,
+	sessionsDirFor,
+} from "../src/server/session-list.js";
 import type { VoiceTestEvent } from "../src/shared/voice-test.js";
 
 const generate: VoiceGenerate = async function* () {
@@ -99,7 +107,7 @@ describe("isolated voice conversation", () => {
 	});
 });
 
-function harness() {
+function harness(sessionManager = SessionManager.inMemory()) {
 	let handler!: (args: string, ctx: ExtensionContext) => Promise<void>;
 	const hooks = new Map<string, (...args: unknown[]) => unknown>();
 	const messages: Array<{ content: string; details: VoiceTestEvent }> = [];
@@ -119,6 +127,12 @@ function harness() {
 			hooks.set(name, fn);
 		},
 		sendMessage: (message: (typeof messages)[number]) => {
+			sessionManager.appendCustomMessageEntry(
+				"acb-voice-test",
+				message.content,
+				!!message.content,
+				message.details,
+			);
 			messages.push(message);
 		},
 		setActiveTools,
@@ -126,7 +140,7 @@ function harness() {
 	} as never);
 	const ctx = {
 		modelRegistry: { find: vi.fn(() => model), hasConfiguredAuth: () => true, streamSimple },
-		sessionManager: { getBranch: () => [] },
+		sessionManager,
 		ui: { notify: vi.fn() },
 	} as unknown as ExtensionContext;
 	return { handler, hooks, messages, setActiveTools, streamSimple, ctx };
@@ -144,6 +158,65 @@ describe("voice-test Pi extension", () => {
 		await h.handler("stop", h.ctx);
 		await vi.waitFor(() => expect(h.messages.at(-1)?.details.kind).toBe("stopped"));
 		expect(h.messages.some((message) => message.details.kind === "summary")).toBe(true);
+	});
+	it("flushes a real new Pi session and replays user, assistant and summary exactly once", async () => {
+		const root = mkdtempSync(join(tmpdir(), "voice-persistence-"));
+		const cwd = "/voice-test-regression";
+		vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", root);
+		try {
+			const manager = SessionManager.create(cwd, sessionsDirFor(cwd, root));
+			const file = manager.getSessionFile()!;
+			const h = harness(manager);
+			await h.handler("start", h.ctx);
+			// Ready/setup alone intentionally does not create an empty conversation.
+			expect(existsSync(file)).toBe(false);
+			await h.handler("say turn-1 hello", h.ctx);
+			// Input must already be on disk, even before the asynchronous reply finishes.
+			expect(readFileSync(file, "utf8")).toContain('"text":"hello"');
+			await vi.waitFor(() => expect(h.messages.at(-1)?.details.kind).toBe("done"));
+			await h.handler("stop", h.ctx);
+			await vi.waitFor(() => expect(h.messages.at(-1)?.details.kind).toBe("stopped"));
+			const rows = projectTranscript(readPiSessionMessages(cwd, manager.getSessionId()));
+			expect(rows).toMatchObject([
+				{ kind: "user", text: "hello" },
+				{ kind: "note", text: "Assistant: Hello." },
+				{ kind: "note", text: "Summary: Hello." },
+			]);
+			expect(listPiSessions(cwd)).toEqual([
+				expect.objectContaining({ id: manager.getSessionId(), title: "hello" }),
+			]);
+			// Opening the file via Pi also restores the persisted entries.
+			expect(SessionManager.open(file).getBranch()).toEqual(manager.getBranch());
+		} finally {
+			vi.unstubAllEnvs();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+	it("fails closed when Pi no longer exposes transcript persistence", async () => {
+		const h = harness();
+		(h.ctx.sessionManager as unknown as { appendMessage: unknown }).appendMessage = undefined;
+		await h.handler("start", h.ctx);
+		expect(h.messages[0]?.details).toMatchObject({
+			kind: "error",
+			text: expect.stringContaining("cannot be saved"),
+		});
+		expect(h.setActiveTools).not.toHaveBeenCalled();
+	});
+	it("does not call the model or hang stopping after a disk-write failure", async () => {
+		const h = harness();
+		const manager = h.ctx.sessionManager as unknown as SessionManager;
+		const append = manager.appendMessage.bind(manager);
+		vi.spyOn(manager, "appendMessage").mockImplementation((message) => {
+			if (message.role === "user") throw new Error("Disk write failed");
+			return append(message);
+		});
+		await h.handler("start", h.ctx);
+		await h.handler("say turn-1 hello", h.ctx);
+		await vi.waitFor(() => expect(h.messages.at(-1)?.details.kind).toBe("done"));
+		expect(h.streamSimple).not.toHaveBeenCalled();
+		expect(h.messages.some((message) => message.details.kind === "error")).toBe(true);
+		await h.handler("stop", h.ctx);
+		await vi.waitFor(() => expect(h.messages.at(-1)?.details.kind).toBe("stopped"));
 	});
 	it("does not convert an existing working chat into a voice session", async () => {
 		const h = harness();

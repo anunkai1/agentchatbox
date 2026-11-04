@@ -1336,6 +1336,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			const dialog = page.getByRole("dialog", { name: "Browser voice test" });
 			await expect.poll(() => dialog.innerText()).toContain("Ready —");
 			expect(await dialog.innerText()).toContain("venice/deepseek-v4-1-flash-1017");
+			expect(await dialog.getByRole("link", { name: "Open saved transcript" }).count()).toBe(0);
 			await dialog.getByRole("textbox", { name: "Voice test message" }).fill("Hello test");
 			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
 			await expect

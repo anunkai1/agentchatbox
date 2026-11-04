@@ -22,7 +22,8 @@ rather than sending an unknown slash command to a full-access coding agent.
 - **Send text** tests the response/speech path without opening a microphone.
 - **Stop microphone** releases capture and cancels the current turn.
 - **End test & summarise** stops capture/playback, requests a short model summary,
-  and leaves an **Open saved transcript** link. Closing the modal also ends it.
+  and leaves an **Open saved transcript** link after the first recognised/text
+  utterance. Closing the modal also ends it. An unused test creates no saved chat.
 - Hiding the tab pauses capture; restarting it requires a click. Disconnection,
   navigation or dismissal releases microphone tracks and cancels browser work.
   There is no automatic replay or reconnection of voice turns.
@@ -82,7 +83,12 @@ Only transcribed text/history is sent to Venice. Raw input/output audio stays in
 local services and tab memory; no test audio file is saved or uploaded to ACB's
 uploads directory. Text, summary and timing events are ordinary private Pi
 session records under `~/.pi/agent/sessions/`, retained until explicit session
-removal. They fall within existing home-directory restic coverage; old snapshots
+removal. Pi does not flush custom-only sessions: the extension appends each real
+user utterance through the session manager before requesting a model response;
+assistant chunks and the summary use custom messages. Like the existing Claude
+mirror, this relies on the actual manager behind Pi's read-only extension view.
+If that append capability disappears, startup fails closed; real-file regression
+tests cover saving, Pi reopening and ACB transcript replay. They fall within existing home-directory restic coverage; old snapshots
 can retain deleted transcripts. No claim of a completed backup is implied.
 
 `deploy-agentchatbox` installs the extension package into Pi settings and runs the
