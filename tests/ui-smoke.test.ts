@@ -1313,6 +1313,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				const message = JSON.parse(String(raw));
 				if (message.type === "init") {
 					ws.send(JSON.stringify({ type: "ready", sessionId: "voice-session-001" }));
+				} else if (message.type === "getCapabilities") {
 					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "voicetest" }] }));
 				} else if (message.type === "prompt") {
 					voiceCommands.push(message.text);
@@ -1394,6 +1395,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				const message = JSON.parse(String(raw));
 				if (message.type === "init") {
 					ws.send(JSON.stringify({ type: "ready", sessionId: "not-a-voice-session" }));
+				} else if (message.type === "getCapabilities") {
 					ws.send(JSON.stringify({ type: "capabilities", commands: [] }));
 				} else if (message.type === "prompt") prompts.push(message.text);
 			});

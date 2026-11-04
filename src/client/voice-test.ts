@@ -316,6 +316,7 @@ export function openVoiceTest(): void {
 				link.hidden = false;
 			}
 			transportReady = true;
+			socket.send(JSON.stringify({ type: "getCapabilities" }));
 			if (extensionAvailable && !startSent) {
 				startSent = true;
 				command("/voicetest start");
