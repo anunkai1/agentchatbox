@@ -1,7 +1,7 @@
 # Relay — one-job browser voice coordinator
 
-`/relay` opens a separate, resumable Pi conversation with speech input/output and
-one associated ACB worker. `/voicetest` remains the unchanged, tool-free prototype.
+The **R** header button beside **V** (or `/relay`) opens a separate, resumable Pi
+conversation with speech input/output and one associated ACB worker. `/voicetest` remains the unchanged, tool-free prototype.
 Neither supports telephone calls. This is not the multi-job/proactive coordinator.
 
 ## Use

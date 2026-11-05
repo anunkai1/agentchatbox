@@ -1448,7 +1448,15 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			});
 		});
 		try {
-			await send(page, "/relay");
+			await page.setViewportSize({ width: 390, height: 844 });
+			const relayButton = page.getByRole("button", { name: "Open Relay", exact: true });
+			expect(await relayButton.isVisible()).toBe(true);
+			expect(await relayButton.innerText()).toBe("R");
+			expect(await page.locator("#header-relay + #header-voice").count()).toBe(1);
+			const relayBounds = await relayButton.boundingBox();
+			const voiceBounds = await page.locator("#header-voice").boundingBox();
+			expect(relayBounds!.x + relayBounds!.width).toBeLessThanOrEqual(voiceBounds!.x);
+			await relayButton.click();
 			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			await expect.poll(() => dialog.innerText()).toContain("worker: openai/work-model (high)");
 			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Inspect the fixture");

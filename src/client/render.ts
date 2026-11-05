@@ -2438,6 +2438,19 @@ export function renderShell(): void {
 			},
 			"",
 		),
+		el(
+			"button",
+			{
+				class: "header-voice",
+				id: "header-relay",
+				type: "button",
+				title: "Relay (/relay)",
+				"aria-label": "Open Relay",
+				"aria-haspopup": "dialog",
+				onclick: () => shellHandlers?.handleSlash("relay"),
+			},
+			el("span", { class: "header-voice-v", "aria-hidden": "true" }, "R"),
+		),
 		// Cycle Off → V → V+. Device-wide, like the Settings row it mirrors.
 		// Starting a new chat lives in the drawer behind the ☰ button.
 		el(
