@@ -4,7 +4,8 @@
 	"type": "module",
 	"pi": {
 		"extensions": [
-			"./index.ts"
+			"./index.ts",
+			"./relay.ts"
 		]
 	}
 }

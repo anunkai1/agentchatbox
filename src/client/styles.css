@@ -4375,6 +4375,12 @@ select:focus-visible,
 .voice-test input {
 	padding: 8px 12px;
 }
+.relay-job {
+	overflow-wrap: anywhere;
+}
+.relay-job p {
+	white-space: pre-wrap;
+}
 .voice-test-transcript {
 	min-height: 100px;
 	max-height: 35dvh;

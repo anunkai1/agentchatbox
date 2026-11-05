@@ -20,7 +20,7 @@ import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { type NextFunction, type Request, type Response, Router } from "express";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.js";
-import { transportStoppedSince } from "../shared/transport-state.js";
+import { recordTransportStop, transportStoppedSince } from "../shared/transport-state.js";
 import { asyncHandler } from "./async-handler.js";
 import { broadcastSessions } from "./chat.js";
 import { config } from "./config.js";
@@ -161,6 +161,21 @@ export function createInternalSessionsRouter(): Router {
 			} else {
 				throw new BadRequest("conditional prompts require requestId");
 			}
+		}),
+	);
+
+	// The same cancellation marker used by browser Stop and restart recovery.
+	// Do not resume a closed session merely to stop it.
+	router.post(
+		"/sessions/:id/stop",
+		asyncHandler(async (req, res) => {
+			const id = req.params.id;
+			if (!ID_RE.test(id)) throw new BadRequest("invalid session id");
+			recordTransportStop(origin, id);
+			// Wait for the process group to exit, including external /cc runs.
+			// This also discards queued prompts instead of running them after abort.
+			const live = await registry.terminateById(id);
+			res.json({ ok: true, live: Boolean(live) });
 		}),
 	);
 

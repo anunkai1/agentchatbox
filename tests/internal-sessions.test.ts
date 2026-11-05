@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { recordTransportStop } from "../src/shared/transport-state.js";
+import { recordTransportStop, transportStoppedSince } from "../src/shared/transport-state.js";
 
 // The registry owns every pi child; these tests check what the routes ask of it.
 const registry = vi.hoisted(() => ({
@@ -14,6 +14,7 @@ const registry = vi.hoisted(() => ({
 	kill: vi.fn(),
 	releaseUnattached: vi.fn(),
 	statusSnapshot: vi.fn(),
+	terminateById: vi.fn(),
 }));
 const broadcastSessions = vi.hoisted(() => vi.fn());
 vi.mock("../src/server/session-registry.js", () => ({
@@ -262,6 +263,18 @@ describe("/api/internal", () => {
 		expect(response.status).toBe(503);
 		expect(await response.json()).toEqual({ error: "session explicitly stopped" });
 		expect(resumed.pi.send).not.toHaveBeenCalled();
+	});
+
+	it("stops a process group with a durable cancellation marker and never resumes it", async () => {
+		const since = Date.now() - 1000;
+		registry.terminateById.mockResolvedValue(liveSession());
+		expect((await post("/sessions/live-1/stop", {})).status).toBe(200);
+		expect(registry.terminateById).toHaveBeenCalledWith("live-1");
+		expect(transportStoppedSince(`http://127.0.0.1:${config.port}`, "live-1", since)).toBe(true);
+		registry.terminateById.mockResolvedValue(null);
+		expect(await (await post("/sessions/closed-1/stop", {})).json()).toEqual({ ok: true, live: false });
+		expect(registry.acquire).not.toHaveBeenCalled();
+		expect((await post("/sessions/live-1/stop", {}, "wrong")).status).toBe(404);
 	});
 
 	it("reports an unknown chat instead of starting one", async () => {

@@ -359,11 +359,37 @@ export class AcbSessions {
 		return data.sessionId;
 	}
 
-	async prompt(sessionId: string, message: string, model: ModelChoice): Promise<void> {
-		await this.post(`/api/internal/sessions/${encodeURIComponent(sessionId)}/prompt`, {
-			message,
-			...model,
+	async prompt(
+		sessionId: string,
+		message: string,
+		model: ModelChoice,
+		requestId?: string,
+	): Promise<void> {
+		const result = (await this.post(
+			`/api/internal/sessions/${encodeURIComponent(sessionId)}/prompt`,
+			{
+				message,
+				...model,
+				...(requestId ? { requestId } : {}),
+			},
+		)) as { delivery?: string };
+		if (requestId && result.delivery !== "submitted")
+			throw new Error("Prompt submission uncertain; inspect the worker before repeating it");
+	}
+
+	async stop(sessionId: string): Promise<void> {
+		await this.post(`/api/internal/sessions/${encodeURIComponent(sessionId)}/stop`, {});
+	}
+
+	async activity(sessionId: string): Promise<unknown> {
+		if (!this.available) throw new Error("delegation only works in ACB chats");
+		const response = await fetch(`${this.baseUrl}/api/internal/sessions`, {
+			headers: { authorization: `Bearer ${this.token}` },
+			signal: AbortSignal.timeout(5_000),
 		});
+		if (!response.ok) throw new Error(`ACB status: HTTP ${response.status}`);
+		const data = (await response.json()) as { sessions: Array<{ sessionId: string }> };
+		return data.sessions.find((session) => session.sessionId === sessionId) ?? null;
 	}
 
 	private async post(path: string, body: unknown): Promise<unknown> {

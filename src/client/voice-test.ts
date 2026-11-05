@@ -1,4 +1,6 @@
 /** Voice-test UI only. The dedicated Pi session owns the model, prompt and history. */
+import { RELAY_MESSAGE, type RelayEvent } from "../shared/relay.js";
+import { SpokenSentences } from "../shared/spoken-sentences.js";
 import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js";
 import { transcribeAudio } from "./api.js";
 import { el, mountModal, uuid } from "./dom.js";
@@ -16,16 +18,45 @@ export function isVoiceTestOpen(): boolean {
 	return opened;
 }
 
-export function openVoiceTest(): void {
+function messageText(message: { content?: unknown }): string {
+	if (typeof message.content === "string") return message.content;
+	if (!Array.isArray(message.content)) return "";
+	return message.content
+		.filter((b) => b?.type === "text")
+		.map((b) => b.text ?? "")
+		.join("");
+}
+
+const RELAY_SESSION_KEY = "acb-relay-session";
+
+export function openRelay(): void {
+	openVoiceTest(true);
+}
+
+export function openVoiceTest(relay = false): void {
 	if (opened) return;
+	const control = relay ? "/relay" : "/voicetest";
+	const startCommand =
+		relay && state.currentProvider && state.currentModelId
+			? `/relay start ${state.currentProvider}/${state.currentModelId} ${state.currentThinking}`
+			: `${control} start`;
+	let savedSession: string | null = null;
+	try {
+		if (relay) savedSession = localStorage.getItem(RELAY_SESSION_KEY);
+	} catch {
+		/* private mode */
+	}
+	let sessionId = savedSession;
 	opened = true;
 	cancelVoiceRecord();
 	stopAllVoice();
-	const heading = el("h2", {}, "Browser voice test");
+	const heading = el("h2", {}, relay ? "Relay" : "Browser voice test");
 	const intro = el(
 		"p",
 		{},
-		"Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
+		relay
+			? "Your voice-enabled ACB coordinator. One real work job, using normal ACB workers with owner-level tools. Closing voice does not cancel work. Text and necessary docs go to Venice; audio stays local and is not saved."
+			: "Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
 	const model = el("p", { class: "voice-test-model" });
@@ -37,11 +68,18 @@ export function openVoiceTest(): void {
 	});
 	const start = el("button", { type: "button", disabled: true }, "Start microphone");
 	const interrupt = el("button", { type: "button", disabled: true }, "Interrupt");
-	const finish = el("button", { type: "button", disabled: true }, "End test & summarise");
+	const finish = el(
+		"button",
+		{ type: "button", disabled: true },
+		relay ? "Close voice — keep work running" : "End test & summarise",
+	);
+	const job = el("div", { class: "relay-job", "aria-live": "polite" });
+	const cancelJob = el("button", { type: "button", disabled: true }, "Cancel work job");
+	const newRelay = el("button", { type: "button" }, "New Relay conversation");
 	const input = el("input", {
 		type: "text",
-		placeholder: "Or type a test message",
-		"aria-label": "Voice test message",
+		placeholder: relay ? "Or type a message to Relay" : "Or type a test message",
+		"aria-label": relay ? "Relay message" : "Voice test message",
 		maxLength: 4000,
 	});
 	const send = el("button", { type: "submit", disabled: true }, "Send text");
@@ -66,6 +104,7 @@ export function openVoiceTest(): void {
 		metrics,
 		el("div", { class: "voice-test-controls" }, start, interrupt, finish),
 		form,
+		...(relay ? [job, cancelJob, newRelay] : []),
 		transcript,
 		link,
 	);
@@ -78,6 +117,12 @@ export function openVoiceTest(): void {
 	let extensionAvailable = false;
 	let startSent = false;
 	let currentTurn = "";
+	let relaySentences = new SpokenSentences();
+	let relayMessage = "";
+	let restoredReply: HTMLElement | null = null;
+	let relayText = "";
+	let relayMuted = false;
+	let relayFirstText = 0;
 	let speechEpoch = 0;
 	let endedAt = 0;
 	let sttMs = 0;
@@ -119,7 +164,12 @@ export function openVoiceTest(): void {
 		sttController = null;
 		speaker.stop();
 		currentTurn = "";
-		if (ready && !ending) command("/voicetest interrupt");
+		if (ready && !ending) {
+			if (relay) {
+				relayMuted = true;
+				socket.send(JSON.stringify({ type: "abort" }));
+			} else command("/voicetest interrupt");
+		}
 	};
 	const addText = (label: string, text: string) => {
 		const row = el("p", {}, el("strong", {}, `${label}: `), text);
@@ -147,7 +197,10 @@ export function openVoiceTest(): void {
 		speaker.stop();
 		start.disabled = send.disabled = interrupt.disabled = finish.disabled = true;
 		sayStatus("Saving summary…");
-		if (ready) {
+		if (relay) {
+			sayStatus("Voice closed; work continues. Use /relay to reconnect.");
+			closeSocket();
+		} else if (ready) {
 			command("/voicetest stop");
 			closeTimer = setTimeout(() => {
 				sayStatus(
@@ -194,14 +247,21 @@ export function openVoiceTest(): void {
 	}, 5_000);
 	window.addEventListener("pagehide", unload);
 	document.addEventListener("visibilitychange", visibility);
-	mountModal(overlay, box, { onDismiss: dispose, initialFocus: input });
+	const modal = mountModal(overlay, box, { onDismiss: dispose, initialFocus: input });
 
 	function say(text: string): void {
 		if (!ready || ending || !text.trim()) return;
 		currentTurn = uuid();
 		firstTextMs = 0;
 		sayStatus("Waiting for DeepSeek…");
-		command(`/voicetest say ${currentTurn} ${text}`);
+		// Remember identity before submission, even if the tab closes before acknowledgement.
+		// An unsaved/missing session then fails closed; never auto-repeat the utterance.
+		try {
+			if (relay && sessionId) localStorage.setItem(RELAY_SESSION_KEY, sessionId);
+		} catch {
+			/* private mode */
+		}
+		command(`${control} say ${currentTurn} ${text}`);
 	}
 
 	start.onclick = async () => {
@@ -269,7 +329,23 @@ export function openVoiceTest(): void {
 		cancelAudio();
 		sayStatus(stopCapture ? "Listening…" : "Interrupted");
 	};
-	finish.onclick = end;
+	finish.onclick = () => {
+		if (relay) modal.dismiss();
+		else end();
+	};
+	cancelJob.onclick = () => {
+		command("/relay cancel");
+		sayStatus("Cancelling work job…");
+	};
+	newRelay.onclick = () => {
+		try {
+			localStorage.removeItem(RELAY_SESSION_KEY);
+		} catch {
+			/* private mode */
+		}
+		modal.dismiss();
+		openRelay();
+	};
 	form.onsubmit = (event) => {
 		event.preventDefault();
 		const text = input.value.trim();
@@ -287,7 +363,8 @@ export function openVoiceTest(): void {
 				type: "init",
 				provider: state.currentProvider,
 				modelId: state.currentModelId,
-				thinkingLevel: "off",
+				thinkingLevel: relay ? state.currentThinking : "off",
+				...(savedSession ? { sessionId: savedSession } : {}),
 			}),
 		);
 	socket.onmessage = (message) => {
@@ -295,7 +372,7 @@ export function openVoiceTest(): void {
 		const wire = JSON.parse(String(message.data));
 		if (wire.type === "capabilities") {
 			extensionAvailable = wire.commands.some(
-				(entry: { name?: string }) => entry.name === "voicetest",
+				(entry: { name?: string }) => entry.name === (relay ? "relay" : "voicetest"),
 			);
 			if (!extensionAvailable) {
 				fail(new Error("Voice-test Pi extension is not installed. No prompt has been sent."));
@@ -304,7 +381,7 @@ export function openVoiceTest(): void {
 			}
 			if (transportReady && !startSent && !ending) {
 				startSent = true;
-				command("/voicetest start");
+				command(startCommand);
 			}
 			return;
 		}
@@ -314,13 +391,14 @@ export function openVoiceTest(): void {
 				return;
 			}
 			if (wire.sessionId) {
+				sessionId = wire.sessionId;
 				link.href = `/s/${encodeURIComponent(wire.sessionId)}`;
 			}
 			transportReady = true;
 			socket.send(JSON.stringify({ type: "getCapabilities" }));
 			if (extensionAvailable && !startSent) {
 				startSent = true;
-				command("/voicetest start");
+				command(startCommand);
 			}
 			return;
 		}
@@ -329,7 +407,105 @@ export function openVoiceTest(): void {
 			releaseMic();
 			return;
 		}
+		if (relay && wire.type === "transcript") {
+			transcript.replaceChildren();
+			for (const message of wire.messages ?? []) {
+				if (message.role === "user" || message.role === "assistant") {
+					const text = messageText(message);
+					if (text) {
+						const row = addText(message.role === "user" ? "You" : "Relay", text);
+						restoredReply = message.role === "assistant" ? row : null;
+					}
+				}
+			}
+			if ((wire.messages ?? []).length) link.hidden = false;
+			return; // History is displayed, never spoken or resubmitted.
+		}
 		if (wire.type !== "event") return;
+		if (
+			relay &&
+			wire.event.type === "message_end" &&
+			wire.event.message?.customType === RELAY_MESSAGE
+		) {
+			const event = wire.event.message.details as RelayEvent;
+			if (event.kind === "ready") {
+				handleVoiceEvent({
+					kind: "ready",
+					model: `${event.model} · worker: ${event.workerModel.provider}/${event.workerModel.modelId} (${event.workerModel.thinkingLevel})`,
+				});
+			} else if (event.kind === "error") {
+				handleVoiceEvent(event);
+			} else if (event.kind === "job") {
+				job.replaceChildren();
+				cancelJob.disabled = !event.job || event.job.status === "stopped";
+				if (event.uncertain)
+					job.append(el("p", {}, "Submission uncertain. Inspect the worker; do not submit again."));
+				if (event.job) {
+					job.append(
+						el(
+							"a",
+							{ href: `/s/${encodeURIComponent(event.job.id)}`, target: "_blank", rel: "noopener" },
+							event.job.title,
+						),
+					);
+					job.append(
+						el(
+							"p",
+							{},
+							`Recorded: ${event.job.status} · ${new Date(event.job.updatedAt).toLocaleString("en-AU", { timeZone: "Australia/Brisbane" })} AEST. Not live progress.`,
+						),
+					);
+					if (event.job.summary) job.append(el("p", {}, event.job.summary));
+				}
+			}
+			return;
+		}
+		if (relay && ready) {
+			const event = wire.event;
+			if (event.type === "message_start" && event.message?.role === "assistant") {
+				relayMessage = uuid();
+				relayText = "";
+				relaySentences = new SpokenSentences();
+				relayFirstText = 0;
+				relayMuted = false;
+				currentTurn = relayMessage;
+			} else if (
+				event.type === "message_update" &&
+				event.assistantMessageEvent?.type === "text_delta" &&
+				relayMessage
+			) {
+				relayText += event.assistantMessageEvent.delta;
+				if (!relayFirstText) relayFirstText = endedAt ? performance.now() - endedAt : 0;
+				for (const text of relaySentences.push(event.assistantMessageEvent.delta))
+					relaySentence(text);
+			} else if (event.type === "message_end" && event.message?.role === "assistant") {
+				// Reattachment may miss an in-flight message_start. Complete its text
+				// silently rather than speaking an old reply again.
+				if (!relayMessage) {
+					const text = messageText(event.message);
+					if (restoredReply && text)
+						restoredReply.replaceChildren(el("strong", {}, "Relay: "), text);
+					else if (text) addText("Relay", text);
+					return;
+				}
+				if (!relayText) {
+					relayText = messageText(event.message);
+					for (const text of relaySentences.push(relayText)) relaySentence(text);
+				}
+				for (const text of relaySentences.push("", true)) relaySentence(text);
+				if (event.message.errorMessage)
+					handleVoiceEvent({ kind: "error", text: event.message.errorMessage });
+				relayMessage = "";
+			} else if (event.type === "message_end" && event.message?.role === "user") {
+				link.hidden = false;
+				try {
+					if (sessionId) localStorage.setItem(RELAY_SESSION_KEY, sessionId);
+				} catch {
+					/* private mode */
+				}
+				addText("You", messageText(event.message));
+			}
+		}
 		if (
 			wire.event.type === "extension_ui_request" &&
 			["select", "input", "confirm", "editor"].includes(wire.event.method)
@@ -346,7 +522,18 @@ export function openVoiceTest(): void {
 		}
 		if (wire.event.type !== "message_end" || wire.event.message?.customType !== VOICE_TEST_MESSAGE)
 			return;
-		const event = wire.event.message.details as VoiceTestEvent;
+		handleVoiceEvent(wire.event.message.details as VoiceTestEvent);
+	};
+	function relaySentence(text: string): void {
+		const row = rows.get(relayMessage) ?? addText("Relay", "");
+		rows.set(relayMessage, row);
+		row.append(`${row.childNodes.length > 1 ? " " : ""}${text}`);
+		if (!relayMuted && !ending && !dismissed) {
+			firstTextMs = relayFirstText;
+			speaker.enqueue(text);
+		}
+	}
+	function handleVoiceEvent(event: VoiceTestEvent): void {
 		if (event.kind === "ready") {
 			clearTimeout(startupTimer);
 			ready = true;
@@ -376,8 +563,8 @@ export function openVoiceTest(): void {
 			);
 			closeSocket();
 		}
-	};
-	socket.onerror = () => fail(new Error("Voice-test connection failed"));
+	}
+	socket.onerror = () => fail(new Error("Voice connection failed"));
 	socket.onclose = () => {
 		clearTimeout(startupTimer);
 		ready = false;

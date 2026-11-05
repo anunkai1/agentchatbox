@@ -1414,6 +1414,65 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("resumes Relay without replaying speech or work, and only explicitly cancels the job", async () => {
+		const { page } = await openPage("/");
+		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
+		const inits: Array<Record<string, unknown>> = [];
+		const prompts: string[] = [];
+		let cancelled = false;
+		await page.route("**/api/tts/stream", (route) => route.fulfill({ body: Buffer.from([0, 0, 0, 0, 0]), contentType: "application/octet-stream" }));
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			const native = (event: Record<string, unknown>) => ws.send(JSON.stringify({ type: "event", event }));
+			const custom = (details: Record<string, unknown>) => native({ type: "message_end", message: { role: "custom", customType: "acb-relay", details } });
+			const job = () => custom({ kind: "job", uncertain: false, job: { id: "relay-worker-1", title: "Read-only fixture", status: cancelled ? "stopped" : "needs_input", updatedAt: "2026-11-05T00:00:00Z", summary: cancelled ? "Cancelled" : "Which option?" } });
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init") {
+					inits.push(message);
+					ws.send(JSON.stringify({ type: "ready", sessionId: "relay-session-1" }));
+					if (message.sessionId) ws.send(JSON.stringify({ type: "transcript", messages: [{ role: "user", content: "Inspect the fixture" }, { role: "assistant", content: [{ type: "text", text: "Your saved answer." }] }] }));
+				} else if (message.type === "getCapabilities") ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
+				else if (message.type === "prompt") {
+					prompts.push(message.text);
+					if (message.text.startsWith("/relay start")) {
+						custom({ kind: "ready", model: "venice/deepseek-v4-1-flash-1017", workerModel: { provider: "openai", modelId: "work-model", thinkingLevel: "high" } });
+						if (message.sessionId || inits.length > 1) job();
+					} else if (message.text.startsWith("/relay say ")) {
+						native({ type: "message_end", message: { role: "user", content: message.text.split(" ").slice(3).join(" ") } });
+						native({ type: "message_start", message: { role: "assistant" } });
+						native({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "The worker needs your choice. " } });
+						native({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "The worker needs your choice." }] } });
+						job();
+					} else if (message.text === "/relay cancel") { cancelled = true; job(); }
+				}
+			});
+		});
+		try {
+			await send(page, "/relay");
+			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.innerText()).toContain("worker: openai/work-model (high)");
+			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Inspect the fixture");
+			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
+			await expect.poll(() => dialog.getByRole("log").innerText()).toContain("The worker needs your choice.");
+			expect(await dialog.locator(".relay-job").innerText()).toContain("Not live progress");
+			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
+			expect(cancelled).toBe(false);
+			await send(page, "/relay");
+			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.getByRole("log").innerText()).toContain("Your saved answer.");
+			expect(inits.at(-1)?.sessionId).toBe("relay-session-1");
+			expect(prompts.filter((p) => p.startsWith("/relay say "))).toHaveLength(1);
+			await dialog.getByRole("button", { name: "Cancel work job", exact: true }).click();
+			await expect.poll(() => dialog.locator(".relay-job").innerText()).toContain("Recorded: stopped");
+			expect(cancelled).toBe(true);
+			await dialog.getByRole("button", { name: "New Relay conversation" }).click();
+			await expect.poll(() => inits.length).toBe(3);
+			expect(inits.at(-1)?.sessionId).toBeUndefined();
+			await page.getByRole("button", { name: "Close Relay", exact: true }).click();
+		} finally { await page.close(); }
+	});
+
 	it("sends a message, keeps sending after the socket drops", async () => {
 		const { page, sockets } = await openPage("/");
 		await send(page, "first question");

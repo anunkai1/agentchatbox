@@ -36,7 +36,7 @@ import {
 } from "./state.js";
 import { shareableSessionUrl } from "./url.js";
 import { nextVoiceMode, VOICE_MODE_LABELS } from "./voice-mode.js";
-import { openVoiceTest } from "./voice-test.js";
+import { openRelay, openVoiceTest } from "./voice-test.js";
 
 /**
  * Small helper for the slash command's help/session/copy messages.
@@ -82,6 +82,7 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	websearch: "search the web and summarise: /websearch <query>",
 	project: "start a new chat in a project: /project <name|id>",
 	voicetest: "open the isolated browser voice-conversation test",
+	relay: "open Relay, the resumable voice coordinator with one ACB work job",
 };
 
 interface CommandPaletteEntry {
@@ -372,6 +373,9 @@ export function handleSlash(arg: string): void {
 		case "model":
 			openModelPicker();
 			break;
+		case "relay":
+			openRelay();
+			return;
 		case "voicetest":
 			// UI only: the separate Pi session owns all conversation/model behaviour.
 			openVoiceTest();

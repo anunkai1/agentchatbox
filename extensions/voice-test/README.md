@@ -1,5 +1,8 @@
 # ACB browser voice test
 
+This package also loads **[Relay](RELAY.md)** (`/relay`), the separate resumable
+one-worker coordinator. The prototype described below remains tool-free.
+
 Prototype only: local STT → **Venice `deepseek-v4-1-flash-1017`** → local Kokoro.
 No telephone dialling, bookings, payments or other action tools are implemented.
 The owner chose no blanket purchase/payment approval rule for future calling;
