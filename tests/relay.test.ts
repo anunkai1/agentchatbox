@@ -17,8 +17,10 @@ function harness(manager = SessionManager.create(tmpdir(), root)) {
 		modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
 		isIdle: () => true,
 	};
+	const allTools = ["read", "bash", "edit", "write", "delegate", "delegate_status", "delegate_message", "web_enable", "relay_job"].map((name) => ({ name }));
 	const pi = {
 		on: (name: string, fn: Handler) => hooks.set(name, fn),
+		getAllTools: vi.fn(() => allTools),
 		registerCommand: (name: string, options: { handler: Handler }) => commands.set(name, options.handler),
 		registerTool: (tool: { name: string; execute: Handler }) => tools.set(tool.name, tool),
 		appendEntry: (name: string, data: unknown) => manager.appendCustomEntry(name, structuredClone(data)),
@@ -53,11 +55,11 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
-describe("Relay one-job coordinator", () => {
+describe("Relay full-access agent and tracked worker", () => {
 	it("keeps ordinary chats unchanged and refuses to convert a working chat", async () => {
 		const h = harness();
 		expect(h.hooks.get("before_agent_start")!({}, h.ctx)).toBeUndefined();
-		expect(h.hooks.get("tool_call")!({ toolName: "bash" }, h.ctx)).toBeUndefined();
+		expect(h.hooks.has("tool_call")).toBe(false);
 		h.ctx.sessionManager.appendMessage({ role: "user", content: "Existing work", timestamp: 1 });
 		await h.command("start");
 		expect(h.pi.setModel).not.toHaveBeenCalled();
@@ -67,7 +69,7 @@ describe("Relay one-job coordinator", () => {
 		const h = harness();
 		await h.command("start");
 		expect(h.pi.setModel).toHaveBeenCalledWith({ provider: "venice", id: "deepseek-v4-1-flash-1017" });
-		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(["read", "relay_job"]);
+		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(h.pi.getAllTools().map((tool) => tool.name));
 		await h.command("say turn-1 Please do the read-only probe");
 		h.owner();
 		const result = await h.run(START);
@@ -90,6 +92,8 @@ describe("Relay one-job coordinator", () => {
 		expect(readFileSync(file, "utf8")).toContain(RELAY_STATE);
 		const resumed = harness(SessionManager.open(file));
 		await resumed.hooks.get("session_start")!({}, resumed.ctx);
+		expect(resumed.pi.setActiveTools).toHaveBeenLastCalledWith(resumed.pi.getAllTools().map((tool) => tool.name));
+		expect(resumed.hooks.has("tool_call")).toBe(false);
 		await resumed.command("start");
 		await resumed.command("say turn-1 Please inspect the fixture");
 		expect(resumed.pi.sendUserMessage).not.toHaveBeenCalled();
@@ -170,13 +174,31 @@ describe("Relay one-job coordinator", () => {
 		await expect(h.run({ action: "cancel" })).rejects.toThrow("stop unavailable");
 		expect(readDelegation("worker-1")?.status).toBe("working");
 	});
-	it("fails closed when voice auth is absent and blocks direct coding tools in Relay", async () => {
+	it("enables all registered tools without file gates, including tools loaded later", async () => {
+		const h = harness(); await h.command("start");
+		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(expect.arrayContaining(["read", "bash", "edit", "write", "delegate", "delegate_status", "delegate_message", "web_enable", "relay_job"]));
+		expect(h.hooks.has("tool_call")).toBe(false); // No Relay tool or path whitelist.
+		h.pi.getAllTools().push({ name: "web_search" });
+		const turn = h.owner();
+		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(expect.arrayContaining(["web_search", "bash", "write"]));
+		expect(turn.systemPrompt).toContain("normal owner-level ACB tools and filesystem/network access");
+		expect(turn.systemPrompt).toContain("unrelated work does not require a new conversation");
+		expect(turn.systemPrompt).toContain("normal delegation tools for additional workers");
+		expect(turn.systemPrompt).not.toContain("You cannot execute shell commands");
+		expect(turn.systemPrompt).not.toContain("Read only necessary documentation, never credentials");
+	});
+	it("preserves provider limits rather than truncating direct-work tool arguments at 1200 tokens", async () => {
+		const h = harness(); await h.command("start");
+		const hook = h.hooks.get("before_provider_request")!;
+		expect(hook({ payload: { max_tokens: 12000 } }, { model: { provider: "venice" } })).toMatchObject({ max_tokens: 12000, venice_parameters: { disable_thinking: true, include_venice_system_prompt: false } });
+		expect(hook({ payload: {} }, { model: { provider: "venice" } })).not.toHaveProperty("max_tokens");
+		expect(hook({ payload: {} }, { model: { provider: "openai" } })).toBeUndefined();
+	});
+	it("fails closed when Relay model auth is absent but allows full access after a successful retry", async () => {
 		const h = harness(); h.pi.setModel.mockResolvedValueOnce(false); await h.command("start");
 		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith([]);
 		await expect(h.run(START)).rejects.toThrow("not active");
 		await h.command("start");
-		expect(h.hooks.get("tool_call")!({ toolName: "bash" }, h.ctx)).toMatchObject({ block: true });
-		expect(h.hooks.get("tool_call")!({ toolName: "read", input: { path: join(process.cwd(), "package.json") } }, h.ctx)).toMatchObject({ block: true });
-		expect(h.hooks.get("before_provider_request")!({ payload: {} }, { model: { provider: "venice" } })).toMatchObject({ venice_parameters: { disable_thinking: true, include_venice_system_prompt: false } });
+		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(h.pi.getAllTools().map((tool) => tool.name));
 	});
 });

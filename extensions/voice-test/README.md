@@ -1,7 +1,8 @@
 # ACB browser voice test
 
 This package also loads **[Relay](RELAY.md)** (`/relay`), the separate resumable
-one-worker coordinator. The prototype described below remains tool-free.
+full-access voice agent with direct tools and delegation. The prototype described
+below remains tool-free.
 
 Prototype only: local STT → **Venice `deepseek-v4-1-flash-1017`** → local Kokoro.
 No telephone dialling, bookings, payments or other action tools are implemented.

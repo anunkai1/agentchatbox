@@ -1,14 +1,20 @@
-# Relay — one-job browser voice coordinator
+# Relay — full-access browser voice agent
 
 The **R** header button beside **V** (or `/relay`) opens a separate, resumable Pi
-conversation with speech input/output and one associated ACB worker. `/voicetest` remains the unchanged, tool-free prototype.
-Neither supports telephone calls. This is not the multi-job/proactive coordinator.
+conversation with speech input/output and normal owner-level ACB tools. Relay can
+inspect and act directly across repositories and hosts, or delegate work through
+existing ACB tools. The voice panel tracks one associated `relay_job` worker; this
+is not a limit on direct work or additional workers through normal delegation.
+`/voicetest` remains the unchanged, tool-free prototype. No dedicated telephone
+integration or standing proactive mandate is installed.
 
 ## Use
 
 1. Select the desired **work model and thinking level in the ordinary ACB chat**,
    then enter `/relay`. The original chat is not changed. Relay captures that
-   deliberate selection, rather than Global's default for newly opened chats.
+   deliberate selection for its tracked worker, rather than Global's default for
+   newly opened chats. Relay's own direct work runs on the conversation model;
+   additional workers use the normal delegation tools' model-selection behaviour.
 2. Verify the displayed conversation and worker models. Conversation remains
    `venice/deepseek-v4-1-flash-1017`; work uses the captured ACB selection. Workers
    use native Pi, not the originating chat's `/cc` mode. Antigravity automation
@@ -16,11 +22,13 @@ Neither supports telephone calls. This is not the multi-job/proactive coordinato
    different work model before starting a new Relay conversation.
 3. Use **Send text** first, or headphones and **Start microphone**. A clear work
    request authorises dispatch; discussion is not approval. Relay can inspect
-   infrastructure documentation to choose the owning repository, and must ask
-   when scope or destination is genuinely unclear.
+   files and live state directly to choose the owning repository and resolve
+   missing facts, and must ask only when scope or destination is genuinely unclear.
 4. Talk while the worker runs. Ask for status or send further instructions.
    Worker reports wake Relay; needs-input questions come back to this chat.
-5. **Interrupt** stops the coordinator's current reply/audio, not the worker.
+5. **Interrupt** stops the coordinator's current turn/audio, including in-flight
+   direct tools, but not delegated workers. Stopping the microphone, starting a
+   new utterance or hiding the tab also interrupts that current direct turn.
    Closing the dialog/tab also leaves work running. Hidden tabs stop microphone
    capture. Microphone capture never restarts automatically.
 6. Reopen `/relay` to resume the saved conversation and associated job. The
@@ -33,7 +41,8 @@ Neither supports telephone calls. This is not the multi-job/proactive coordinato
    restart recovery for that execution. It cannot undo completed external effects.
 8. **New Relay conversation** creates a fresh coordinator and captures the current
    normal-chat work model. It does not cancel the previous worker. Use this for
-   unrelated work; the one existing worker handles follow-ups to its own topic.
+   a clean conversation or a new tracked worker. It is not required for unrelated
+   direct work or additional normal delegations; keep follow-ups with their worker.
 
 ## Ownership and persistence
 
@@ -52,7 +61,7 @@ Neither supports telephone calls. This is not the multi-job/proactive coordinato
   `~/.config/acb/delegations/`, delivers reports/owner notifications, and supplies
   existing bounded worker restart recovery. Normal-chat recovery applies to
   eligible interrupted coordinator turns. Neither is an unlimited retry/watchdog.
-- Native session restoration re-establishes Relay's model/tool restrictions before
+- Native session restoration re-establishes Relay's model and full tool access before
   owner input or a worker report. Each run receives the current associated
   record/report, so compaction need not remember a stale status. Rewinding/forking
   a Relay conversation is disabled to avoid duplicating ownership/submission.
@@ -65,11 +74,20 @@ Neither supports telephone calls. This is not the multi-job/proactive coordinato
 
 ## Boundaries and failure behaviour
 
-Relay only exposes `relay_job` (start/status/message/cancel) and documentation
-reads. Its read gate permits the infrastructure docs, app registry, home AGENTS,
-and its own folder's README/AGENTS, not arbitrary files or credentials. Workers
-have normal **owner-level ACB tools**, not a sandbox. Existing instruction,
+Relay activates all registered Pi tools, including normal file read/write/edit,
+shell, browser/web/app integrations and delegation tools, plus `relay_job`
+(start/status/message/cancel). There is no Relay tool allowlist, path whitelist or
+extra 1,200-token output cap. Late-loaded tools are included on subsequent turns;
+Pi's normal tool exposure and loader behaviour still apply. Restoring an older
+Relay session grants the same access; no new conversation is required.
+
+Relay and its workers have normal **owner-level ACB access**, not a sandbox or an
+OS-permission bypass. That includes the owner's existing SSH/sudo and application
+workflows where configured. Untrusted page/file/report content can reach a
+full-access agent, just as in an ordinary ACB chat. Existing instruction,
 credential, personal-detail confirmation and change/deployment rules still apply.
+The voice panel's Cancel work job control only cancels its tracked worker; other
+workers remain ordinary ACB chats and use existing stop controls.
 
 Worker reports are evidence, not owner authority. Report-triggered runs may read
 status/docs, but cannot authorise new mutating job actions. A queued report also
@@ -82,15 +100,17 @@ existing worker if appropriate. Do not create another worker to bypass uncertain
 The server's durable transport receipts deliberately distinguish submitted from
 uncertain; an ambiguous receipt is not a success acknowledgement.
 
-There is no autonomous job polling, standing proactive mandate, phone access,
-new monitoring timer, credential store, vector memory or duplicated knowledge base.
+There is no autonomous job polling, standing proactive mandate, dedicated telephone
+integration, new monitoring timer, credential store, vector memory or duplicated knowledge base.
 Existing docs are the map; live checks establish present facts.
 
 ## Audio and retention
 
 Shares `/voicetest`'s local STT, Silero VAD, sentence-streamed Kokoro, microphone
-release and latency display. Text and necessary documentation go to Venice; work
-context also goes to the selected worker provider. No raw audio archive is saved.
+release and latency display. Conversation and direct tool context go to Venice;
+delegated work context also goes to the selected worker provider. Full access
+widens which files and tool results may enter model context; credentials must
+still be loaded without printing them or putting them into transcripts. No raw audio archive is saved.
 Normal Pi transcripts, compaction checkpoints and worker reports retain text.
 Generated text does not prove every word was played/heard. Pausing/closing Relay
 is not a final conversation-summary request.
@@ -99,7 +119,7 @@ is not a final conversation-summary request.
 
 - `tests/relay.test.ts`: native-file persistence/restoration, work model selection,
   one-job identity, uncertain starts/follow-ups, duplicate turns, report authority,
-  documentation/tool restrictions and explicit cancellation.
+  full tool access/restoration, late-loaded tools, provider output limits and explicit cancellation.
 - `tests/internal-sessions.test.ts`: authenticated stop transport, durable stop
   markers and no revival of a closed worker; existing registry/recovery tests
   cover process groups and conservative restart handling.

@@ -55,7 +55,7 @@ export function openVoiceTest(relay = false): void {
 		"p",
 		{},
 		relay
-			? "Your voice-enabled ACB coordinator. One real work job, using normal ACB workers with owner-level tools. Closing voice does not cancel work. Text and necessary docs go to Venice; audio stays local and is not saved."
+			? "Your voice-enabled ACB super-agent with normal owner-level tools, direct file/shell/web access and delegation. Closing voice leaves work running; Interrupt can stop Relay's direct tools, not its workers. Text and tool context go to Venice; audio stays local and is not saved."
 			: "Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
