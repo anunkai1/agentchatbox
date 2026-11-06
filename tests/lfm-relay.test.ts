@@ -180,7 +180,7 @@ describe("local LFM hand-off inside Pi Relay", () => {
 	it("keeps legacy idle output unchanged and provides a bounded Pi-owned no-argument tool config", () => {
 		const h = harness();
 		const config = h.voice.config(h.ctx as never);
-		expect(config.tools.map((tool) => tool.name)).toEqual(["relay_request", "local_chat"]);
+		expect(config.tools.map((tool) => tool.name)).toEqual(["relay_request"]);
 		expect(config.tools.every((tool) => Object.keys(tool.parameters.properties).length === 0)).toBe(
 			true,
 		);

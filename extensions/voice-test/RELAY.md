@@ -127,12 +127,11 @@ Existing docs are the map; live checks establish present facts.
 
 **Default:** LFM3-Audio-2B speech understanding/generation and CPU Whisper small.en
 run on Server4. Whisper separately recognises owner input for Pi and aligns actual
-output audio for approximate played-prefix history. Native `local_chat` is an
-empty, no-action continuation: ordinary conversation can stay on Server4 while
-Pi works. `relay_request` hands work/current facts/follow-ups/approvals/cancellation
-back to Pi. Both functions have no arguments; unknown calls or model-written
-instructions are rejected. Routing/recognition are model judgements, not perfect
-intent or maths guarantees. The Server4 transport has no work credentials or tools.
+output audio for approximate played-prefix history. Every owner utterance routes
+through `relay_request` to Pi (`local_chat` is disabled so LFM never guesses
+capabilities or facts on its own). `relay_request` takes no arguments; unknown
+calls or model-written instructions are rejected. The Server4 transport has no
+work credentials or tools.
 
 Pi supplies policy/configuration over existing `/api/chat`. A same-origin,
 source-window-checked iframe carries audio through the existing authenticated

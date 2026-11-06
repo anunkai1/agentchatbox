@@ -12,7 +12,7 @@ export interface RelayVoiceConfig {
 	instructions: string;
 	tools: {
 		type: "function";
-		name: "relay_request" | "local_chat";
+		name: "relay_request";
 		description: string;
 		parameters: {
 			type: "object";
