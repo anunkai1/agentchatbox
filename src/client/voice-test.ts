@@ -4,6 +4,7 @@ import { SpokenSentences } from "../shared/spoken-sentences.js";
 import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js";
 import { transcribeAudio } from "./api.js";
 import { el, mountModal, uuid } from "./dom.js";
+import { encodeRelayVoice, RelayVoiceFrame } from "./relay-voice.js";
 import { state } from "./state.js";
 import {
 	ConversationSpeaker,
@@ -30,10 +31,16 @@ function messageText(message: { content?: unknown }): string {
 const RELAY_SESSION_KEY = "acb-relay-session";
 
 export function openRelay(): void {
-	openVoiceTest(true);
+	let localVoice = true;
+	try {
+		localVoice = localStorage.getItem("acb-relay-voice-engine") !== "legacy";
+	} catch {
+		/* private mode */
+	}
+	openVoiceTest(true, localVoice);
 }
 
-export function openVoiceTest(relay = false): void {
+export function openVoiceTest(relay = false, localVoice = relay): void {
 	if (opened) return;
 	const control = relay ? "/relay" : "/voicetest";
 	const startCommand =
@@ -55,7 +62,9 @@ export function openVoiceTest(relay = false): void {
 		"p",
 		{},
 		relay
-			? "Your voice-enabled ACB super-agent with normal owner-level tools, direct file/shell/web access and delegation. Closing voice leaves work running; Interrupt can stop Relay's direct tools, not its workers. Text and tool context go to Venice; audio stays local and is not saved."
+			? localVoice
+				? "Server4 speech + full-access Pi Relay. Interrupt stops voice, not work. Recognised text and approximate played speech are saved; text context goes to Venice/the selected worker provider. No raw audio archive. Voice reserves Server4's GPU."
+				: "Legacy STT/Kokoro Relay with normal owner-level tools and delegation. Closing voice leaves work running; Interrupt can stop direct tools, not workers. Text/tool context go to Venice; raw audio is not saved."
 			: "Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
@@ -68,6 +77,17 @@ export function openVoiceTest(relay = false): void {
 	});
 	const start = el("button", { type: "button", disabled: true }, "Start microphone");
 	const interrupt = el("button", { type: "button", disabled: true }, "Interrupt");
+	const stopPi = el(
+		"button",
+		{
+			type: "button",
+			hidden: !localVoice,
+			disabled: true,
+			title:
+				"Stops the current Pi turn only; queued requests and workers may continue. Completed effects remain.",
+		},
+		"Stop current Pi turn",
+	);
 	const finish = el(
 		"button",
 		{ type: "button", disabled: true },
@@ -76,6 +96,12 @@ export function openVoiceTest(relay = false): void {
 	const job = el("div", { class: "relay-job", "aria-live": "polite" });
 	const cancelJob = el("button", { type: "button", disabled: true }, "Cancel work job");
 	const newRelay = el("button", { type: "button" }, "New Relay conversation");
+	const changeVoice = el(
+		"button",
+		{ type: "button" },
+		localVoice ? "Use legacy STT/Kokoro" : "Use Server4 LFM voice",
+	);
+	let localFrame: RelayVoiceFrame | null = null;
 	const input = el("input", {
 		type: "text",
 		placeholder: relay ? "Or type a message to Relay" : "Or type a test message",
@@ -102,9 +128,9 @@ export function openVoiceTest(relay = false): void {
 		model,
 		status,
 		metrics,
-		el("div", { class: "voice-test-controls" }, start, interrupt, finish),
+		el("div", { class: "voice-test-controls" }, start, interrupt, stopPi, finish),
 		form,
-		...(relay ? [job, cancelJob, newRelay] : []),
+		...(relay ? [job, cancelJob, newRelay, changeVoice] : []),
 		transcript,
 		link,
 	);
@@ -159,6 +185,10 @@ export function openVoiceTest(relay = false): void {
 		if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "prompt", text }));
 	};
 	const cancelAudio = () => {
+		if (relay && localVoice) {
+			localFrame?.interrupt();
+			return;
+		}
 		speechEpoch++;
 		sttController?.abort();
 		sttController = null;
@@ -195,9 +225,10 @@ export function openVoiceTest(relay = false): void {
 		ending = true;
 		releaseMic();
 		speaker.stop();
-		start.disabled = send.disabled = interrupt.disabled = finish.disabled = true;
+		start.disabled = send.disabled = interrupt.disabled = stopPi.disabled = finish.disabled = true;
 		sayStatus("Saving summary…");
 		if (relay) {
+			localFrame?.stop();
 			sayStatus("Voice closed; work continues. Use /relay to reconnect.");
 			closeSocket();
 		} else if (ready) {
@@ -216,6 +247,7 @@ export function openVoiceTest(relay = false): void {
 		opened = false;
 		end();
 		speaker.close();
+		localFrame?.dispose();
 		clearInterval(watchdog);
 		window.removeEventListener("pagehide", unload);
 		document.removeEventListener("visibilitychange", visibility);
@@ -228,7 +260,8 @@ export function openVoiceTest(relay = false): void {
 		// Never leave a hidden tab listening; resuming the mic needs another click.
 		if (document.visibilityState === "hidden") {
 			releaseMic();
-			cancelAudio();
+			if (localVoice) localFrame?.stop();
+			else cancelAudio();
 			start.textContent = "Start microphone";
 			if (!ending) sayStatus("Microphone paused while tab is hidden");
 		}
@@ -247,7 +280,23 @@ export function openVoiceTest(relay = false): void {
 	}, 5_000);
 	window.addEventListener("pagehide", unload);
 	document.addEventListener("visibilitychange", visibility);
-	const modal = mountModal(overlay, box, { onDismiss: dispose, initialFocus: input });
+	const modal = mountModal(overlay, box, {
+		onDismiss: dispose,
+		initialFocus: localVoice ? box : input,
+	});
+	if (relay && localVoice) {
+		localFrame = new RelayVoiceFrame((action, id, payload) => {
+			if (!ready || ending || dismissed) return;
+			try {
+				if (sessionId) localStorage.setItem(RELAY_SESSION_KEY, sessionId);
+			} catch {
+				/* private mode */
+			}
+			command(`/relay ${action} ${id} ${encodeRelayVoice(payload)}`);
+		}, sayStatus);
+		box.insertBefore(localFrame.element, metrics);
+		start.hidden = true;
+	}
 
 	function say(text: string): void {
 		if (!ready || ending || !text.trim()) return;
@@ -261,7 +310,10 @@ export function openVoiceTest(relay = false): void {
 		} catch {
 			/* private mode */
 		}
-		command(`${control} say ${currentTurn} ${text}`);
+		if (relay && localVoice) {
+			command(`/relay voice-context ${currentTurn} ${encodeRelayVoice({ text })}`);
+			command(`/relay voice-request ${currentTurn} ${encodeRelayVoice({})}`);
+		} else command(`${control} say ${currentTurn} ${text}`);
 	}
 
 	start.onclick = async () => {
@@ -329,6 +381,13 @@ export function openVoiceTest(relay = false): void {
 		cancelAudio();
 		sayStatus(stopCapture ? "Listening…" : "Interrupted");
 	};
+	stopPi.onclick = () => {
+		if (!ready || socket.readyState !== WebSocket.OPEN) return;
+		socket.send(JSON.stringify({ type: "abort" }));
+		sayStatus(
+			"Explicit stop requested for the current Pi turn. Workers/queued requests may continue; completed effects remain.",
+		);
+	};
 	finish.onclick = () => {
 		if (relay) modal.dismiss();
 		else end();
@@ -344,7 +403,16 @@ export function openVoiceTest(relay = false): void {
 			/* private mode */
 		}
 		modal.dismiss();
-		openRelay();
+		openVoiceTest(true, localVoice);
+	};
+	changeVoice.onclick = () => {
+		try {
+			localStorage.setItem("acb-relay-voice-engine", localVoice ? "legacy" : "server4");
+		} catch {
+			/* private mode */
+		}
+		modal.dismiss();
+		openVoiceTest(true, !localVoice);
 	};
 	form.onsubmit = (event) => {
 		event.preventDefault();
@@ -409,7 +477,14 @@ export function openVoiceTest(relay = false): void {
 		}
 		if (relay && wire.type === "transcript") {
 			transcript.replaceChildren();
+			rows.clear();
 			for (const message of wire.messages ?? []) {
+				if (
+					localVoice &&
+					message.customType === RELAY_MESSAGE &&
+					message.details?.kind === "voice_context"
+				)
+					showVoiceContext(message.details);
 				if (message.role === "user" || message.role === "assistant") {
 					const text = messageText(message);
 					if (text) {
@@ -429,10 +504,37 @@ export function openVoiceTest(relay = false): void {
 		) {
 			const event = wire.event.message.details as RelayEvent;
 			if (event.kind === "ready") {
+				if (localVoice && event.voice) {
+					localFrame?.configure(event.voice);
+					command(`/relay voice-open ${uuid()} ${encodeRelayVoice({})}`);
+				} else if (localVoice) {
+					fail(
+						new Error(
+							"Pi Relay lacks the local voice bridge. Deploy it or explicitly choose legacy voice.",
+						),
+					);
+					return;
+				}
 				handleVoiceEvent({
 					kind: "ready",
-					model: `${event.model} · worker: ${event.workerModel.provider}/${event.workerModel.modelId} (${event.workerModel.thinkingLevel})`,
+					model: `${localVoice ? "Voice: Server4 LFM · tools: " : ""}${event.model} · worker: ${event.workerModel.provider}/${event.workerModel.modelId} (${event.workerModel.thinkingLevel})`,
 				});
+			} else if (event.kind === "voice_config") {
+				if (localVoice) localFrame?.configure(event.config);
+			} else if (event.kind === "voice_context") {
+				if (localVoice) showVoiceContext(event);
+			} else if (event.kind === "voice_result") {
+				if (localVoice) {
+					localFrame?.result(event);
+					sayStatus(
+						event.error
+							? event.text
+							: "Relay replied. Local voice will speak when idle; the full text is in the saved chat.",
+					);
+				}
+			} else if (event.kind === "voice_pending") {
+				if (localVoice)
+					sayStatus("Pi Relay request accepted/queued; speech interruption does not cancel it.");
 			} else if (event.kind === "error") {
 				handleVoiceEvent(event);
 			} else if (event.kind === "job") {
@@ -524,11 +626,25 @@ export function openVoiceTest(relay = false): void {
 			return;
 		handleVoiceEvent(wire.event.message.details as VoiceTestEvent);
 	};
+	function showVoiceContext(event: { id: string; user?: string; heard?: string }): void {
+		link.hidden = !link.hasAttribute("href");
+		for (const [field, label] of [
+			["user", "You (voice/text)"],
+			["heard", "LFM (approximately played)"],
+		] as const) {
+			const text = event[field];
+			if (text === undefined) continue;
+			const key = `voice-${field}-${event.id}`;
+			const row = rows.get(key) ?? addText(label, "");
+			rows.set(key, row);
+			row.replaceChildren(el("strong", {}, `${label}: `), text);
+		}
+	}
 	function relaySentence(text: string): void {
 		const row = rows.get(relayMessage) ?? addText("Relay", "");
 		rows.set(relayMessage, row);
 		row.append(`${row.childNodes.length > 1 ? " " : ""}${text}`);
-		if (!relayMuted && !ending && !dismissed) {
+		if (!localVoice && !relayMuted && !ending && !dismissed) {
 			firstTextMs = relayFirstText;
 			speaker.enqueue(text);
 		}
@@ -538,7 +654,12 @@ export function openVoiceTest(relay = false): void {
 			clearTimeout(startupTimer);
 			ready = true;
 			model.textContent = event.model;
-			start.disabled = send.disabled = interrupt.disabled = finish.disabled = false;
+			start.disabled =
+				send.disabled =
+				interrupt.disabled =
+				stopPi.disabled =
+				finish.disabled =
+					false;
 			sayStatus("Ready — start the microphone or send text");
 		} else if (event.kind === "user") {
 			link.hidden = !link.hasAttribute("href");
@@ -570,7 +691,8 @@ export function openVoiceTest(relay = false): void {
 		ready = false;
 		releaseMic();
 		speaker.stop();
-		start.disabled = send.disabled = interrupt.disabled = finish.disabled = true;
+		localFrame?.stop();
+		start.disabled = send.disabled = interrupt.disabled = stopPi.disabled = finish.disabled = true;
 		if (!ending && !failed)
 			sayStatus("Connection closed; microphone stopped. Reopen the test to continue.");
 		clearInterval(watchdog);

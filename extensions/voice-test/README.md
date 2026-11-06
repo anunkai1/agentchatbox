@@ -1,8 +1,11 @@
 # ACB browser voice test
 
 This package also loads **[Relay](RELAY.md)** (`/relay`), the separate resumable
-full-access voice agent with direct tools and delegation. The prototype described
-below remains tool-free.
+full-access voice agent with direct tools and delegation. Relay now defaults to
+Server4 LFM speech with approximate played-prefix interruption history; Pi keeps
+work ownership, and speech interruption does not abort tools/workers. Legacy
+STT/Kokoro remains explicitly selectable. The prototype below remains unchanged
+and tool-free; its speech/cancellation description does not describe default Relay.
 
 Prototype only: local STT → **Venice `deepseek-v4-1-flash-1017`** → local Kokoro.
 No telephone dialling, bookings, payments or other action tools are implemented.

@@ -4349,6 +4349,13 @@ select:focus-visible,
 	max-height: calc(100dvh - 48px);
 	overflow-y: auto;
 }
+.relay-local-voice {
+	width: 100%;
+	min-height: 540px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	margin: 8px 0;
+}
 .voice-test p {
 	margin: 12px 0;
 }

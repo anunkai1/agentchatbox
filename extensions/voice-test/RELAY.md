@@ -20,17 +20,29 @@ integration or standing proactive mandate is installed.
    use native Pi, not the originating chat's `/cc` mode. Antigravity automation
    is deliberately unavailable under the current provider mandate: choose a
    different work model before starting a new Relay conversation.
-3. Use **Send text** first, or headphones and **Start microphone**. A clear work
+3. The default is **Server4 LFM voice**. Start conversation in the embedded voice
+   panel, allow the microphone and wait for Listening; headphones help. Server4
+   must be awake with its GPU free. **Use legacy STT/Kokoro** explicitly selects
+   the older speech path without that GPU dependency; this device remembers the
+   choice. There is no silent fallback. **Send text** reaches Pi without a mic;
+   local speech speaks its reply only if voice is connected. A clear work
    request authorises dispatch; discussion is not approval. Relay can inspect
    files and live state directly to choose the owning repository and resolve
    missing facts, and must ask only when scope or destination is genuinely unclear.
 4. Talk while the worker runs. Ask for status or send further instructions.
    Worker reports wake Relay; needs-input questions come back to this chat.
-5. **Interrupt** stops the coordinator's current turn/audio, including in-flight
-   direct tools, but not delegated workers. Stopping the microphone, starting a
-   new utterance or hiding the tab also interrupts that current direct turn.
-   Closing the dialog/tab also leaves work running. Hidden tabs stop microphone
-   capture. Microphone capture never restarts automatically.
+5. In **Server4 mode**, speaking over a reply or **Interrupt** stops speech only:
+   **Pi direct tools and workers continue**. Approximately played words are kept;
+   correction audio waits for verified native repair, never a silent whole-answer
+   reset. Use **Stop current Pi turn** to explicitly abort the active Pi
+   coordinator turn; queued voice requests and delegated workers may continue, and
+   completed external effects remain. End/hide/close releases microphone and
+   Server4, not Pi work. Microphone capture never restarts automatically. Wait a
+   few seconds for the old children to exit before immediately restarting voice;
+   GPU contention fails explicitly.
+   **Legacy mode differs:** its Interrupt, new speech or hidden tab can abort the
+   current Pi direct turn, though delegated workers survive. Closing either
+   panel leaves work running.
 6. Reopen `/relay` to resume the saved conversation and associated job. The
    browser remembers the session ID on this device; it never replays utterances,
    work submissions or old speech. The saved transcript and worker chat are also
@@ -46,13 +58,20 @@ integration or standing proactive mandate is installed.
 
 ## Ownership and persistence
 
-- `relay.ts` owns model selection, prompt, tools and lifecycle in Pi. It uses the
+- `relay.ts` and `lfm.ts` own model selection, voice policy, tools and lifecycle in Pi. It uses the
   **native Pi agent loop**, normal user/assistant/tool messages and compaction,
   not a second conversation/task framework.
 - `acb-relay-state` custom entries in that same Pi session hold the captured work
   model, associated worker ID and uncertain-submission flags. Turn/action entries
   prevent repeated accepted commands. Before network side effects, checkpoints
   flush the existing session journal and its directory; there is no new database.
+- LFM recognised/typed input and approximate played speech are custom entries in
+  the same Pi session. The first actual utterance materialises it through the
+  guarded session-manager API without launching Pi work. Each no-argument
+  `relay_request` forwards only its separately recognised owner text, journalled
+  and fsynced before dispatch. A queue holds up to eight requests while Pi is busy;
+  completed duplicates return the stored result, pending duplicates do not repeat
+  work, and unfinished journals restored after restart remain uncertain.
 - Actual user messages trigger Pi's ordinary session persistence. An untouched
   empty dialog is not claimed as a saved transcript. The browser remembers an ID
   before first submission to avoid losing identity if closed before acknowledgement;
@@ -106,17 +125,44 @@ Existing docs are the map; live checks establish present facts.
 
 ## Audio and retention
 
-Shares `/voicetest`'s local STT, Silero VAD, sentence-streamed Kokoro, microphone
-release and latency display. Conversation and direct tool context go to Venice;
-delegated work context also goes to the selected worker provider. Full access
-widens which files and tool results may enter model context; credentials must
-still be loaded without printing them or putting them into transcripts. No raw audio archive is saved.
-Normal Pi transcripts, compaction checkpoints and worker reports retain text.
-Generated text does not prove every word was played/heard. Pausing/closing Relay
-is not a final conversation-summary request.
+**Default:** LFM3-Audio-2B speech understanding/generation and CPU Whisper small.en
+run on Server4. Whisper separately recognises owner input for Pi and aligns actual
+output audio for approximate played-prefix history. Native `local_chat` is an
+empty, no-action continuation: ordinary conversation can stay on Server4 while
+Pi works. `relay_request` hands work/current facts/follow-ups/approvals/cancellation
+back to Pi. Both functions have no arguments; unknown calls or model-written
+instructions are rejected. Routing/recognition are model judgements, not perfect
+intent or maths guarantees. The Server4 transport has no work credentials or tools.
+
+Pi supplies policy/configuration over existing `/api/chat`. A same-origin,
+source-window-checked iframe carries audio through the existing authenticated
+`/experiments/lfm-voice/` transport; no new ACB listener/model endpoint. Pi results
+and worker reports return as native tool output, with further tools disabled for
+narration. Reports queue behind owner speech; they cannot authorise work. Long Pi
+answers are referred to the full saved chat rather than silently clipped for speech.
+
+Every Start refreshes bounded recent recognised/acknowledged played context and
+Pi work evidence. Reopening does not replay audio or work, reconstruct every
+native audio turn, or guarantee the last unacknowledged words were saved. The
+voice connection has 30-second input/30-turn/10-minute limits; ending it does not
+end Pi work. It reserves Server4's GPU: Qwen/local image work cannot coexist.
+Choose cloud work or end voice/use legacy before work needing that GPU.
+
+**Legacy** shares `/voicetest`'s STT, Silero VAD and sentence-streamed Kokoro.
+`/voicetest` itself is unchanged. Text context/direct tools go to Venice and
+delegated context to the selected worker provider; even local voice history may
+be included in a later work turn. Existing credential/PII confirmation rules
+still apply. Raw audio is not archived. Recognised text, approximate played text,
+normal Pi transcripts, checkpoints and worker reports persist in ordinary private
+sessions, with no automatic expiry; backups may retain deleted sessions. Generated
+text is not proof of playback or acoustic hearing. Closing is not a summary request.
+The standalone LFM page remains tool-free and does not save conversations.
 
 ## Checks
 
+- `tests/lfm-relay.test.ts`: voice-only saving without work, current configuration,
+  no-argument policy, request journalling/deduplication/queues, uncertain restart,
+  report/abort handling and explicit long-answer deferral.
 - `tests/relay.test.ts`: native-file persistence/restoration, work model selection,
   one-job identity, uncertain starts/follow-ups, duplicate turns, report authority,
   full tool access/restoration, late-loaded tools, provider output limits and explicit cancellation.
@@ -125,7 +171,9 @@ is not a final conversation-summary request.
   cover process groups and conservative restart handling.
 - `tests/ui-smoke.test.ts`: real browser bundle with fixture wire events, separate
   socket, native streamed replies, saved history without speech/work replay,
-  resume/new conversation and explicit cancellation. Shared voice tests initialise
+  resume/new conversation, explicit cancellation, local/legacy selection,
+  fresh voice configuration, source-window checks and no Pi abort/Kokoro request
+  from local Interrupt (while explicit Stop current Pi turn sends a single abort). Shared voice tests initialise
   actual local Silero assets with synthetic audio, never the real microphone.
 - Live functional checks should use an isolated loopback server/session/record
   store and harmless temporary fixtures; suppress test Telegram delivery. Verify

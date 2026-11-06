@@ -348,9 +348,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				0,
 			);
 			expect(await page.locator("#model-picker").isVisible()).toBe(true);
-			expect(await page.getByRole("button", { name: "Open settings", exact: true }).isVisible()).toBe(
-				true,
-			);
+			expect(
+				await page.getByRole("button", { name: "Open settings", exact: true }).isVisible(),
+			).toBe(true);
 		} finally {
 			await page.close();
 		}
@@ -824,13 +824,11 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				});
 			});
 			await page.locator("#input").fill("Keep this draft");
-			await page
-				.locator("#file-input")
-				.setInputFiles({
-					name: "refresh.txt",
-					mimeType: "text/plain",
-					buffer: Buffer.from("notes"),
-				});
+			await page.locator("#file-input").setInputFiles({
+				name: "refresh.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from("notes"),
+			});
 			await expect.poll(() => page.locator(".attachment-uploading").count()).toBe(1);
 			sockets
 				.at(-1)!
@@ -929,15 +927,13 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					},
 				});
 			});
-			await page
-				.locator("#file-input")
-				.setInputFiles(
-					Array.from({ length: 21 }, (_, index) => ({
-						name: `photo-${index}.png`,
-						mimeType: "image/png",
-						buffer: PNG_1X1,
-					})),
-				);
+			await page.locator("#file-input").setInputFiles(
+				Array.from({ length: 21 }, (_, index) => ({
+					name: `photo-${index}.png`,
+					mimeType: "image/png",
+					buffer: PNG_1X1,
+				})),
+			);
 			await expect.poll(() => attempts).toBe(2);
 			expect(await page.locator(".attachment-uploading").count()).toBe(20);
 			await expect
@@ -1357,7 +1353,8 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				source.connect(destination);
 				source.start();
 				void context.resume();
-				(window as unknown as { __voiceTestStream: MediaStream }).__voiceTestStream = destination.stream;
+				(window as unknown as { __voiceTestStream: MediaStream }).__voiceTestStream =
+					destination.stream;
 				Object.defineProperty(navigator, "mediaDevices", {
 					configurable: true,
 					value: { getUserMedia: async () => destination.stream },
@@ -1414,36 +1411,90 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("resumes Relay without replaying speech or work, and only explicitly cancels the job", async () => {
+	it("resumes legacy Relay without replaying speech or work, and only explicitly cancels the job", async () => {
 		const { page } = await openPage("/");
+		await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "legacy"));
 		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
 		const inits: Array<Record<string, unknown>> = [];
 		const prompts: string[] = [];
 		let cancelled = false;
-		await page.route("**/api/tts/stream", (route) => route.fulfill({ body: Buffer.from([0, 0, 0, 0, 0]), contentType: "application/octet-stream" }));
+		await page.route("**/api/tts/stream", (route) =>
+			route.fulfill({
+				body: Buffer.from([0, 0, 0, 0, 0]),
+				contentType: "application/octet-stream",
+			}),
+		);
 		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
-			const native = (event: Record<string, unknown>) => ws.send(JSON.stringify({ type: "event", event }));
-			const custom = (details: Record<string, unknown>) => native({ type: "message_end", message: { role: "custom", customType: "acb-relay", details } });
-			const job = () => custom({ kind: "job", uncertain: false, job: { id: "relay-worker-1", title: "Read-only fixture", status: cancelled ? "stopped" : "needs_input", updatedAt: "2026-11-05T00:00:00Z", summary: cancelled ? "Cancelled" : "Which option?" } });
+			const native = (event: Record<string, unknown>) =>
+				ws.send(JSON.stringify({ type: "event", event }));
+			const custom = (details: Record<string, unknown>) =>
+				native({
+					type: "message_end",
+					message: { role: "custom", customType: "acb-relay", details },
+				});
+			const job = () =>
+				custom({
+					kind: "job",
+					uncertain: false,
+					job: {
+						id: "relay-worker-1",
+						title: "Read-only fixture",
+						status: cancelled ? "stopped" : "needs_input",
+						updatedAt: "2026-11-05T00:00:00Z",
+						summary: cancelled ? "Cancelled" : "Which option?",
+					},
+				});
 			ws.onMessage((raw) => {
 				const message = JSON.parse(String(raw));
 				if (message.type === "init") {
 					inits.push(message);
 					ws.send(JSON.stringify({ type: "ready", sessionId: "relay-session-1" }));
-					if (message.sessionId) ws.send(JSON.stringify({ type: "transcript", messages: [{ role: "user", content: "Inspect the fixture" }, { role: "assistant", content: [{ type: "text", text: "Your saved answer." }] }] }));
-				} else if (message.type === "getCapabilities") ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
+					if (message.sessionId)
+						ws.send(
+							JSON.stringify({
+								type: "transcript",
+								messages: [
+									{ role: "user", content: "Inspect the fixture" },
+									{ role: "assistant", content: [{ type: "text", text: "Your saved answer." }] },
+								],
+							}),
+						);
+				} else if (message.type === "getCapabilities")
+					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
 				else if (message.type === "prompt") {
 					prompts.push(message.text);
 					if (message.text.startsWith("/relay start")) {
-						custom({ kind: "ready", model: "venice/deepseek-v4-1-flash-1017", workerModel: { provider: "openai", modelId: "work-model", thinkingLevel: "high" } });
+						custom({
+							kind: "ready",
+							model: "venice/deepseek-v4-1-flash-1017",
+							workerModel: { provider: "openai", modelId: "work-model", thinkingLevel: "high" },
+						});
 						if (message.sessionId || inits.length > 1) job();
 					} else if (message.text.startsWith("/relay say ")) {
-						native({ type: "message_end", message: { role: "user", content: message.text.split(" ").slice(3).join(" ") } });
+						native({
+							type: "message_end",
+							message: { role: "user", content: message.text.split(" ").slice(3).join(" ") },
+						});
 						native({ type: "message_start", message: { role: "assistant" } });
-						native({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "The worker needs your choice. " } });
-						native({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "The worker needs your choice." }] } });
+						native({
+							type: "message_update",
+							assistantMessageEvent: {
+								type: "text_delta",
+								delta: "The worker needs your choice. ",
+							},
+						});
+						native({
+							type: "message_end",
+							message: {
+								role: "assistant",
+								content: [{ type: "text", text: "The worker needs your choice." }],
+							},
+						});
 						job();
-					} else if (message.text === "/relay cancel") { cancelled = true; job(); }
+					} else if (message.text === "/relay cancel") {
+						cancelled = true;
+						job();
+					}
 				}
 			});
 		});
@@ -1461,7 +1512,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect.poll(() => dialog.innerText()).toContain("worker: openai/work-model (high)");
 			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Inspect the fixture");
 			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
-			await expect.poll(() => dialog.getByRole("log").innerText()).toContain("The worker needs your choice.");
+			await expect
+				.poll(() => dialog.getByRole("log").innerText())
+				.toContain("The worker needs your choice.");
 			expect(await dialog.locator(".relay-job").innerText()).toContain("Not live progress");
 			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
 			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
@@ -1472,13 +1525,169 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(inits.at(-1)?.sessionId).toBe("relay-session-1");
 			expect(prompts.filter((p) => p.startsWith("/relay say "))).toHaveLength(1);
 			await dialog.getByRole("button", { name: "Cancel work job", exact: true }).click();
-			await expect.poll(() => dialog.locator(".relay-job").innerText()).toContain("Recorded: stopped");
+			await expect
+				.poll(() => dialog.locator(".relay-job").innerText())
+				.toContain("Recorded: stopped");
 			expect(cancelled).toBe(true);
 			await dialog.getByRole("button", { name: "New Relay conversation" }).click();
 			await expect.poll(() => inits.length).toBe(3);
 			expect(inits.at(-1)?.sessionId).toBeUndefined();
 			await page.getByRole("button", { name: "Close Relay", exact: true }).click();
-		} finally { await page.close(); }
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("connects Server4 voice to Relay without aborting work or trusting other windows", async () => {
+		const { page } = await openPage("/");
+		const prompts: string[] = [],
+			controls: string[] = [],
+			inits: Record<string, unknown>[] = [];
+		let ttsCalls = 0;
+		await page.route("**/api/tts/**", (route) => {
+			ttsCalls++;
+			return route.abort();
+		});
+		await page.route("**/experiments/lfm-voice/**", (route) =>
+			route.fulfill({
+				contentType: "text/html",
+				body: `<!doctype html><body>Local voice fixture<script>
+		window.received=[];window.addEventListener('message',e=>{if(e.source!==parent||e.origin!==location.origin)return;received.push(e.data);if(e.data.type==='configure')document.body.dataset.ready='yes';});
+		parent.postMessage({source:'lfm-relay',type:'loaded'},location.origin);
+		</script>`,
+			}),
+		);
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			const native = (event: object) => ws.send(JSON.stringify({ type: "event", event }));
+			const custom = (details: object) =>
+				native({
+					type: "message_end",
+					message: { role: "custom", customType: "acb-relay", details },
+				});
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init") {
+					inits.push(message);
+					ws.send(JSON.stringify({ type: "ready", sessionId: "local-relay-session" }));
+				} else if (message.type === "getCapabilities")
+					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
+				else if (message.type === "prompt") {
+					prompts.push(message.text);
+					if (message.text.startsWith("/relay start"))
+						custom({
+							kind: "ready",
+							model: "venice/deepseek-v4-1-flash-1017",
+							workerModel: { provider: "openai", modelId: "fixture", thinkingLevel: "high" },
+							voice: { protocol: 1, instructions: "Fixture", tools: [] },
+						});
+					if (message.text.startsWith("/relay voice-config "))
+						custom({
+							kind: "voice_config",
+							config: { protocol: 1, instructions: "Refreshed", tools: [] },
+						});
+					if (message.text.startsWith("/relay voice-context "))
+						custom({ kind: "voice_context", id: "voice-one", user: "Inspect the fixture." });
+					if (message.text.startsWith("/relay voice-request ")) {
+						native({ type: "message_start", message: { role: "assistant" } });
+						native({
+							type: "message_update",
+							assistantMessageEvent: { type: "text_delta", delta: "The fixture says amber." },
+						});
+						native({
+							type: "message_end",
+							message: { role: "assistant", content: "The fixture says amber." },
+						});
+						custom({ kind: "voice_result", id: "voice-one", text: "The fixture says amber." });
+					}
+				} else controls.push(message.type);
+			});
+		});
+		try {
+			await page.setViewportSize({ width: 390, height: 844 });
+			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
+			const dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			const frame = page.frameLocator('iframe[title="Server4 Relay voice"]');
+			await expect.poll(() => frame.locator("body").getAttribute("data-ready")).toBe("yes");
+			expect(await dialog.evaluate((node) => document.activeElement === node)).toBe(true);
+			await frame
+				.locator("body")
+				.evaluate(() =>
+					parent.postMessage({ source: "lfm-relay", type: "refresh" }, location.origin),
+				);
+			await expect
+				.poll(() =>
+					frame
+						.locator("body")
+						.evaluate(() => (window as any).received.at(-1)?.config?.instructions),
+				)
+				.toBe("Refreshed");
+			await page.evaluate(() =>
+				window.postMessage(
+					{ source: "lfm-relay", type: "relay_request", id: "forged" },
+					location.origin,
+				),
+			);
+			await frame.locator("body").evaluate(() => {
+				parent.postMessage(
+					{
+						source: "lfm-relay",
+						type: "relay_context",
+						id: "voice-one",
+						text: "Inspect the fixture.",
+					},
+					location.origin,
+				);
+				parent.postMessage(
+					{ source: "lfm-relay", type: "relay_request", id: "voice-one" },
+					location.origin,
+				);
+			});
+			await expect
+				.poll(() => dialog.getByRole("log").innerText())
+				.toContain("The fixture says amber");
+			await expect
+				.poll(() =>
+					frame
+						.locator("body")
+						.evaluate(
+							() => (window as any).received.filter((m: any) => m.type === "result").length,
+						),
+				)
+				.toBe(1);
+			expect(prompts.some((p) => p.includes("forged"))).toBe(false);
+			expect(prompts.filter((p) => p.startsWith("/relay voice-request "))).toHaveLength(1);
+			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			await expect
+				.poll(() =>
+					frame
+						.locator("body")
+						.evaluate(() => (window as any).received.some((m: any) => m.type === "interrupt")),
+				)
+				.toBe(true);
+			expect(controls).not.toContain("abort");
+			expect(ttsCalls).toBe(0);
+			await dialog.getByRole("button", { name: "Stop current Pi turn", exact: true }).click();
+			await expect.poll(() => controls).toEqual(["abort"]);
+			expect(await dialog.locator(".voice-test-status").innerText()).toContain(
+				"Explicit stop requested for the current Pi turn",
+			);
+			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
+			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
+			await expect.poll(() => inits.length).toBe(2);
+			expect(inits[1].sessionId).toBe("local-relay-session");
+			expect(prompts.filter((p) => p.startsWith("/relay voice-request "))).toHaveLength(1);
+			await page.getByRole("button", { name: "Use legacy STT/Kokoro", exact: true }).click();
+			await expect.poll(() => inits.length).toBe(3);
+			expect(await page.locator(".relay-local-voice").count()).toBe(0);
+			expect(await page.getByRole("button", { name: "Stop current Pi turn" }).count()).toBe(0);
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
+				"legacy",
+			);
+			expect(prompts).not.toContain("/relay cancel");
+			await page.getByRole("button", { name: "Close Relay", exact: true }).click();
+		} finally {
+			await page.close();
+		}
 	});
 
 	it("sends a message, keeps sending after the socket drops", async () => {
