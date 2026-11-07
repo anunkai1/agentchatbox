@@ -82,6 +82,7 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	websearch: "search the web and summarise: /websearch <query>",
 	project: "start a new chat in a project: /project <name|id>",
 	voicetest: "open the isolated browser voice-conversation test",
+	relaytrial: "trial A: streaming Pi/Kokoro with speech-only interruption and a separate session",
 	relay: "open Relay, the resumable voice coordinator with one ACB work job",
 };
 
@@ -375,6 +376,9 @@ export function handleSlash(arg: string): void {
 			break;
 		case "relay":
 			openRelay();
+			return;
+		case "relaytrial":
+			openVoiceTest(true, false, true);
 			return;
 		case "voicetest":
 			// UI only: the separate Pi session owns all conversation/model behaviour.

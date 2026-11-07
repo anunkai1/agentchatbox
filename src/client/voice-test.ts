@@ -40,8 +40,10 @@ export function openRelay(): void {
 	openVoiceTest(true, localVoice);
 }
 
-export function openVoiceTest(relay = false, localVoice = relay): void {
+export function openVoiceTest(relay = false, localVoice = relay, streamTrial = false): void {
 	if (opened) return;
+	streamTrial = relay && !localVoice && streamTrial;
+	const sessionKey = streamTrial ? "acb-relay-trial-stream-session" : RELAY_SESSION_KEY;
 	const control = relay ? "/relay" : "/voicetest";
 	const startCommand =
 		relay && state.currentProvider && state.currentModelId
@@ -49,7 +51,7 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 			: `${control} start`;
 	let savedSession: string | null = null;
 	try {
-		if (relay) savedSession = localStorage.getItem(RELAY_SESSION_KEY);
+		if (relay) savedSession = localStorage.getItem(sessionKey);
 	} catch {
 		/* private mode */
 	}
@@ -57,14 +59,20 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 	opened = true;
 	cancelVoiceRecord();
 	stopAllVoice();
-	const heading = el("h2", {}, relay ? "Relay" : "Browser voice test");
+	const heading = el(
+		"h2",
+		{},
+		streamTrial ? "Trial A — streaming Pi voice" : relay ? "Relay" : "Browser voice test",
+	);
 	const intro = el(
 		"p",
 		{},
 		relay
-			? localVoice
-				? "Server4 speech + full-access Pi Relay. Interrupt stops voice, not work. Recognised text and approximate played speech are saved; text context goes to Venice/the selected worker provider. No raw audio archive. Voice reserves Server4's GPU."
-				: "Legacy STT/Kokoro Relay with normal owner-level tools and delegation. Closing voice leaves work running; Interrupt can stop direct tools, not workers. Text/tool context go to Venice; raw audio is not saved."
+			? streamTrial
+				? "Isolated trial: local STT → full-access Pi/DeepSeek → sentence-streamed Kokoro, without LFM rewriting the answer. Interrupt stops speech only; work continues. Text goes to Venice/the worker provider; no audio archive. Playback records completed speech segments; the interrupted segment's word boundary is unknown."
+				: localVoice
+					? "Server4 speech + full-access Pi Relay. Interrupt stops voice, not work. Recognised text and approximate played speech are saved; text context goes to Venice/the selected worker provider. No raw audio archive. Voice reserves Server4's GPU."
+					: "Legacy STT/Kokoro Relay with normal owner-level tools and delegation. Closing voice leaves work running; Interrupt can stop direct tools, not workers. Text/tool context go to Venice; raw audio is not saved."
 			: "Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
@@ -81,7 +89,7 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 		"button",
 		{
 			type: "button",
-			hidden: !localVoice,
+			hidden: !localVoice && !streamTrial,
 			disabled: true,
 			title:
 				"Stops the current Pi turn only; queued requests and workers may continue. Completed effects remain.",
@@ -130,7 +138,7 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 		metrics,
 		el("div", { class: "voice-test-controls" }, start, interrupt, stopPi, finish),
 		form,
-		...(relay ? [job, cancelJob, newRelay, changeVoice] : []),
+		...(relay ? [job, cancelJob, newRelay, ...(streamTrial ? [] : [changeVoice])] : []),
 		transcript,
 		link,
 	);
@@ -197,7 +205,7 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 		if (ready && !ending) {
 			if (relay) {
 				relayMuted = true;
-				socket.send(JSON.stringify({ type: "abort" }));
+				if (!streamTrial) socket.send(JSON.stringify({ type: "abort" }));
 			} else command("/voicetest interrupt");
 		}
 	};
@@ -229,7 +237,9 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 		sayStatus("Saving summary…");
 		if (relay) {
 			localFrame?.stop();
-			sayStatus("Voice closed; work continues. Use /relay to reconnect.");
+			sayStatus(
+				`Voice closed; work continues. Use ${streamTrial ? "/relaytrial" : "/relay"} to reconnect.`,
+			);
 			closeSocket();
 		} else if (ready) {
 			command("/voicetest stop");
@@ -282,13 +292,13 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 	document.addEventListener("visibilitychange", visibility);
 	const modal = mountModal(overlay, box, {
 		onDismiss: dispose,
-		initialFocus: localVoice ? box : input,
+		initialFocus: localVoice || streamTrial ? box : input,
 	});
 	if (relay && localVoice) {
 		localFrame = new RelayVoiceFrame((action, id, payload) => {
 			if (!ready || ending || dismissed) return;
 			try {
-				if (sessionId) localStorage.setItem(RELAY_SESSION_KEY, sessionId);
+				if (sessionId) localStorage.setItem(sessionKey, sessionId);
 			} catch {
 				/* private mode */
 			}
@@ -306,11 +316,11 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 		// Remember identity before submission, even if the tab closes before acknowledgement.
 		// An unsaved/missing session then fails closed; never auto-repeat the utterance.
 		try {
-			if (relay && sessionId) localStorage.setItem(RELAY_SESSION_KEY, sessionId);
+			if (relay && sessionId) localStorage.setItem(sessionKey, sessionId);
 		} catch {
 			/* private mode */
 		}
-		if (relay && localVoice) {
+		if (relay && (localVoice || streamTrial)) {
 			command(`/relay voice-context ${currentTurn} ${encodeRelayVoice({ text })}`);
 			command(`/relay voice-request ${currentTurn} ${encodeRelayVoice({})}`);
 		} else command(`${control} say ${currentTurn} ${text}`);
@@ -398,12 +408,12 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 	};
 	newRelay.onclick = () => {
 		try {
-			localStorage.removeItem(RELAY_SESSION_KEY);
+			localStorage.removeItem(sessionKey);
 		} catch {
 			/* private mode */
 		}
 		modal.dismiss();
-		openVoiceTest(true, localVoice);
+		openVoiceTest(true, localVoice, streamTrial);
 	};
 	changeVoice.onclick = () => {
 		try {
@@ -480,7 +490,7 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 			rows.clear();
 			for (const message of wire.messages ?? []) {
 				if (
-					localVoice &&
+					(localVoice || streamTrial) &&
 					message.customType === RELAY_MESSAGE &&
 					message.details?.kind === "voice_context"
 				)
@@ -522,8 +532,9 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 			} else if (event.kind === "voice_config") {
 				if (localVoice) localFrame?.configure(event.config);
 			} else if (event.kind === "voice_context") {
-				if (localVoice) showVoiceContext(event);
+				if (localVoice || streamTrial) showVoiceContext(event);
 			} else if (event.kind === "voice_result") {
+				if (streamTrial && event.error) sayStatus(event.text);
 				if (localVoice) {
 					localFrame?.result(event);
 					sayStatus(
@@ -533,7 +544,7 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 					);
 				}
 			} else if (event.kind === "voice_pending") {
-				if (localVoice)
+				if (localVoice || streamTrial)
 					sayStatus("Pi Relay request accepted/queued; speech interruption does not cancel it.");
 			} else if (event.kind === "error") {
 				handleVoiceEvent(event);
@@ -569,7 +580,7 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 				relayText = "";
 				relaySentences = new SpokenSentences();
 				relayFirstText = 0;
-				relayMuted = false;
+				if (!streamTrial) relayMuted = false;
 				currentTurn = relayMessage;
 			} else if (
 				event.type === "message_update" &&
@@ -599,9 +610,10 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 					handleVoiceEvent({ kind: "error", text: event.message.errorMessage });
 				relayMessage = "";
 			} else if (event.type === "message_end" && event.message?.role === "user") {
+				if (streamTrial) relayMuted = false;
 				link.hidden = false;
 				try {
-					if (sessionId) localStorage.setItem(RELAY_SESSION_KEY, sessionId);
+					if (sessionId) localStorage.setItem(sessionKey, sessionId);
 				} catch {
 					/* private mode */
 				}
@@ -630,7 +642,7 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 		link.hidden = !link.hasAttribute("href");
 		for (const [field, label] of [
 			["user", "You (voice/text)"],
-			["heard", "LFM (approximately played)"],
+			["heard", streamTrial ? "Voice (playback evidence)" : "LFM (approximately played)"],
 		] as const) {
 			const text = event[field];
 			if (text === undefined) continue;
@@ -646,8 +658,37 @@ export function openVoiceTest(relay = false, localVoice = relay): void {
 		row.append(`${row.childNodes.length > 1 ? " " : ""}${text}`);
 		if (!localVoice && !relayMuted && !ending && !dismissed) {
 			firstTextMs = relayFirstText;
-			speaker.enqueue(text);
+			const messageId = relayMessage;
+			speaker.enqueue(
+				text,
+				streamTrial ? (complete) => recordPlayback(messageId, text, complete) : undefined,
+			);
 		}
+	}
+	const playedSegments = new Map<string, string[]>();
+	function recordPlayback(id: string, text: string, complete: boolean): void {
+		if (!ready || socket.readyState !== WebSocket.OPEN) return;
+		const played = playedSegments.get(id) ?? [];
+		if (complete) played.push(text);
+		playedSegments.set(id, played);
+		while (playedSegments.size > 20) playedSegments.delete(playedSegments.keys().next().value!);
+		let prefix = played.join(" ") || "none";
+		const uncertainty = complete
+			? ""
+			: " Interrupted during the next segment: partial playback, exact words unknown. Do not assume the remaining answer was heard.";
+		const format = (omitted = false) =>
+			`Trial A estimated completed playback segments: ${omitted ? "[Earlier completed segments omitted] " : ""}${prefix}.${uncertainty}`;
+		let history = format();
+		// Bound the encoded bridge payload, not UTF-16 characters; retain the
+		// uncertainty label even for long multilingual/control-character text.
+		while (
+			history.length > 16_000 ||
+			new TextEncoder().encode(JSON.stringify({ text: history })).length > 17_000
+		) {
+			prefix = prefix.slice(1024);
+			history = format(true);
+		}
+		command(`/relay voice-heard ${id} ${encodeRelayVoice({ text: history })}`);
 	}
 	function handleVoiceEvent(event: VoiceTestEvent): void {
 		if (event.kind === "ready") {

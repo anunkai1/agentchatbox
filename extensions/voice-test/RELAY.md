@@ -56,6 +56,27 @@ integration or standing proactive mandate is installed.
    a clean conversation or a new tracked worker. It is not required for unrelated
    direct work or additional normal delegations; keep follow-ups with their worker.
 
+## Isolated streaming trial
+
+`/relaytrial` opens **Trial A — streaming Pi voice**: local STT → the same
+full-access Pi/DeepSeek Relay → sentence-streamed Kokoro. It starts speech while
+Pi is still generating, without LFM interpreting the completed answer. It has
+its own saved session (`acb-relay-trial-stream-session`) and does not change the
+normal Relay session or remembered voice engine.
+
+Interrupt, barge-in and hiding the tab stop speech, not Pi work. **Stop current
+Pi turn** is the explicit coordinator abort; **Cancel work job** remains separate.
+After an interruption, further output from that ongoing turn stays muted until
+a new owner turn. Restored history is never replayed as speech.
+
+Playback evidence records segments whose scheduled audio finished. A cut segment
+is explicitly uncertain; there is no word alignment or exact-hearing claim.
+The full generated answer remains in the ordinary Pi chat. This trial does not
+add semantic turn detection, eliminate STT mistakes or guarantee that Pi delegates
+instead of blocking on a direct tool. Test those behaviours rather than assuming
+streaming solves them. Like legacy voice, this uses the existing STT/Kokoro
+services rather than reserving Server4's LFM GPU.
+
 ## Ownership and persistence
 
 - `relay.ts` and `lfm.ts` own model selection, voice policy, tools and lifecycle in Pi. It uses the

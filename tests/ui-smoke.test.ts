@@ -1538,6 +1538,149 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("trials streaming Pi speech before turn completion without cancelling work or changing production Relay", async () => {
+		const { page } = await openPage("/");
+		const prompts: string[] = [],
+			controls: string[] = [],
+			tts: string[] = [];
+		const inits: Record<string, unknown>[] = [];
+		const contexts = new Map<string, string>();
+		let native: (event: object) => void = () => {};
+		// Real Web Audio decoding/playback, synthetic tone only; never a microphone.
+		const wav = Buffer.alloc(44 + 24000 * 2 * 2);
+		wav.write("RIFF");
+		wav.writeUInt32LE(wav.length - 8, 4);
+		wav.write("WAVEfmt ", 8);
+		wav.writeUInt32LE(16, 16);
+		wav.writeUInt16LE(1, 20);
+		wav.writeUInt16LE(1, 22);
+		wav.writeUInt32LE(24000, 24);
+		wav.writeUInt32LE(48000, 28);
+		wav.writeUInt16LE(2, 32);
+		wav.writeUInt16LE(16, 34);
+		wav.write("data", 36);
+		wav.writeUInt32LE(wav.length - 44, 40);
+		for (let i = 0; i < 48000; i++)
+			wav.writeInt16LE(Math.round(8000 * Math.sin(i * 0.1)), 44 + i * 2);
+		const frame = Buffer.alloc(5);
+		frame[0] = 1;
+		frame.writeUInt32LE(wav.length, 1);
+		await page.route("**/api/tts/stream", async (route) => {
+			tts.push(route.request().postDataJSON().text);
+			await route.fulfill({
+				body: Buffer.concat([frame, wav, Buffer.alloc(5)]),
+				contentType: "application/octet-stream",
+			});
+		});
+		await page.evaluate(() => {
+			localStorage.setItem("acb-relay-session", "keep-production-session");
+			localStorage.setItem("acb-relay-voice-engine", "server4");
+		});
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			native = (event) => ws.send(JSON.stringify({ type: "event", event }));
+			const custom = (details: object) =>
+				native({
+					type: "message_end",
+					message: { role: "custom", customType: "acb-relay", details },
+				});
+			ws.onMessage((raw) => {
+				const m = JSON.parse(String(raw));
+				if (m.type === "init") {
+					inits.push(m);
+					ws.send(JSON.stringify({ type: "ready", sessionId: "stream-trial-session" }));
+					if (m.sessionId)
+						ws.send(
+							JSON.stringify({
+								type: "transcript",
+								messages: [{ role: "assistant", content: "Saved, not replayed." }],
+							}),
+						);
+				} else if (m.type === "getCapabilities")
+					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
+				else if (m.type === "prompt") {
+					prompts.push(m.text);
+					if (m.text.startsWith("/relay start"))
+						custom({
+							kind: "ready",
+							model: "venice/deepseek-v4-1-flash-1017",
+							workerModel: { provider: "venice", modelId: "fixture", thinkingLevel: "off" },
+						});
+					const [, action, id, encoded] = m.text.split(" ");
+					if (action === "voice-context")
+						contexts.set(id, JSON.parse(Buffer.from(encoded, "base64url").toString()).text);
+					if (action === "voice-request") {
+						native({ type: "message_end", message: { role: "user", content: contexts.get(id) } });
+						native({ type: "message_start", message: { role: "assistant" } });
+						native({
+							type: "message_update",
+							assistantMessageEvent: {
+								type: "text_delta",
+								delta: "The first streamed sentence is ready. ",
+							},
+						});
+					}
+				} else controls.push(m.type);
+			});
+		});
+		try {
+			await send(page, "/relaytrial");
+			let dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
+			await expect.poll(() => dialog.innerText()).toContain("Ready —");
+			expect(inits[0].sessionId).toBeUndefined();
+			expect(await dialog.locator("iframe").count()).toBe(0);
+			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Read a harmless fixture");
+			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
+			await expect.poll(() => tts.length).toBe(1); // No message_end or agent_settled was sent.
+			await expect
+				.poll(() => dialog.locator(".voice-test-status").innerText())
+				.toContain("Speaking");
+			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			await expect.poll(() => prompts.some((p) => p.startsWith("/relay voice-heard "))).toBe(true);
+			const heard = prompts.find((p) => p.startsWith("/relay voice-heard "))!;
+			expect(JSON.parse(Buffer.from(heard.split(" ")[3], "base64url").toString()).text).toContain(
+				"exact words unknown",
+			);
+			native({ type: "message_start", message: { role: "assistant" } });
+			native({
+				type: "message_update",
+				assistantMessageEvent: {
+					type: "text_delta",
+					delta: "This old tool reply must remain silent. ",
+				},
+			});
+			native({
+				type: "message_end",
+				message: { role: "assistant", content: "This old tool reply must remain silent." },
+			});
+			expect(controls).not.toContain("abort");
+			await dialog.getByRole("button", { name: "Stop current Pi turn", exact: true }).click();
+			await expect.poll(() => controls.filter((c) => c === "abort").length).toBe(1);
+			await dialog
+				.getByRole("button", { name: "Close Trial A — streaming Pi voice", exact: true })
+				.click();
+			expect(tts).toEqual(["The first streamed sentence is ready."]);
+			expect(prompts).not.toContain("/relay cancel");
+			await send(page, "/relaytrial");
+			dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
+			await expect
+				.poll(() => dialog.getByRole("log").innerText())
+				.toContain("Saved, not replayed.");
+			expect(inits.at(-1)?.sessionId).toBe("stream-trial-session");
+			expect(tts).toHaveLength(1);
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-session"))).toBe(
+				"keep-production-session",
+			);
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
+				"server4",
+			);
+			await dialog
+				.getByRole("button", { name: "Close Trial A — streaming Pi voice", exact: true })
+				.click();
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("connects Server4 voice to Relay without aborting work or trusting other windows", async () => {
 		const { page } = await openPage("/");
 		const prompts: string[] = [],

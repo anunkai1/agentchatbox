@@ -785,6 +785,14 @@ export class ConversationSpeaker {
 	private nextAt = 0;
 	private started = false;
 	private pending = 0;
+	private playback = new Set<{
+		startedAt?: number;
+		nodes: number;
+		ended: boolean;
+		audio: boolean;
+		failed: boolean;
+		report?: (complete: boolean) => void;
+	}>();
 
 	constructor(
 		private readonly onPlaying: () => void,
@@ -795,8 +803,22 @@ export class ConversationSpeaker {
 		void this.context.resume().catch(onError);
 	}
 
-	enqueue(text: string): void {
+	enqueue(text: string, report?: (complete: boolean) => void): void {
 		const controller = this.controller;
+		const item = {
+			nodes: 0,
+			ended: false,
+			audio: false,
+			failed: false,
+			report,
+			startedAt: undefined as number | undefined,
+		};
+		this.playback.add(item);
+		const completed = () => {
+			if (controller.signal.aborted || !item.ended || item.nodes) return;
+			this.playback.delete(item);
+			if (item.audio) item.report?.(!item.failed);
+		};
 		this.pending++;
 		this.queue = this.queue
 			.then(async () => {
@@ -816,6 +838,9 @@ export class ConversationSpeaker {
 					const at = Math.max(this.context.currentTime + 0.04, this.nextAt);
 					node.start(at, offset, duration);
 					this.nextAt = at + duration;
+					item.startedAt ??= at;
+					item.audio = true;
+					item.nodes++;
 					this.nodes.add(node);
 					if (!this.started) {
 						this.started = true;
@@ -824,15 +849,20 @@ export class ConversationSpeaker {
 					node.onended = () => {
 						this.nodes.delete(node);
 						node.disconnect();
+						item.nodes--;
+						completed();
 						this.checkIdle();
 					};
 				}
 			})
 			.catch((error: unknown) => {
+				item.failed = true;
 				if (!controller.signal.aborted) this.onError(error);
 			})
 			.finally(() => {
 				if (controller !== this.controller) return;
+				item.ended = true;
+				completed();
 				this.pending--;
 				this.checkIdle();
 			});
@@ -846,6 +876,13 @@ export class ConversationSpeaker {
 	}
 
 	stop(): void {
+		// A partial chunk has no word alignment. Report uncertainty, never mark
+		// its whole text heard or invent a word boundary from character counts.
+		for (const item of this.playback) {
+			if (item.startedAt !== undefined && this.context.currentTime > item.startedAt)
+				item.report?.(false);
+		}
+		this.playback.clear();
 		this.controller.abort();
 		this.controller = new AbortController();
 		this.queue = Promise.resolve();
