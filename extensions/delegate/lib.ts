@@ -146,7 +146,7 @@ export const DISPATCH_GUIDANCE = [
 ];
 
 export const REPORT_GUIDANCE =
-	"Report result first, then evidence (changes and checks actually run), then open questions; be concise, normally under 300 words. For needs_input, state the exact decision/question, relevant findings and options or a recommendation. For failed, state the blocker, partial work/checks and the next useful step. Never claim unperformed checks or guess results.";
+	"Report result first, then evidence (changes and checks actually run), then open questions; be concise, normally under 300 words. For needs_input, state the exact decision/question, relevant findings and options or a recommendation. For failed, state the blocker, partial work/checks and the next useful step. When the owner cancels or drops the work, report stopped with what exists so far; failed is only for something that actually broke. Never claim unperformed checks or guess results.";
 
 export function formatStatusList(records: Delegation[], now = Date.now()): string {
 	if (records.length === 0) return "No delegations yet.";
@@ -169,12 +169,14 @@ export function buildBrief(
 				"- `Status: done` when finished: what changed, which checks passed, anything still open;",
 				"- `Status: needs_input` when you need the owner's decision, with the question;",
 				"- `Status: failed` when you cannot finish, with the reason.",
+				"- `Status: stopped` when the owner cancels, with what exists so far.",
 			]
 		: [
 				"Do the task, then call delegation_report:",
 				"- `done` when finished: what changed, which checks passed, anything still open;",
 				"- `needs_input` when you need the owner's decision, with the question;",
 				"- `failed` when you cannot finish, with the reason.",
+				"- `stopped` when the owner cancels, with what exists so far.",
 			];
 	return [
 		`Delegated from ${chatLink("main chat", record.parentSessionId)}.`,
@@ -313,17 +315,21 @@ export function lastAssistant(entries: readonly unknown[]): {
 	return { text: "" };
 }
 
-const STATUS_LINE = /^\W*status\W*[:-][\s*_`]*(done|needs[_ ]input|failed)\b.*$/gim;
+const STATUS_LINE = /^\W*status\W*[:-][\s*_`]*(done|needs[_ ]input|failed|stopped)\b.*$/gim;
 
 /** A worker's explicit closing `Status: …` line, and its reply without it. */
 export function parseStatusLine(text: string): {
-	status?: Exclude<DelegationStatus, "working" | "stopped">;
+	status?: Exclude<DelegationStatus, "working">;
 	summary: string;
 } {
 	const matches = [...text.matchAll(STATUS_LINE)];
 	const last = matches.at(-1);
 	if (!last || last.index === undefined) return { summary: text.trim() };
-	const word = last[1].toLowerCase().replace(" ", "_") as "done" | "needs_input" | "failed";
+	const word = last[1].toLowerCase().replace(" ", "_") as
+		| "done"
+		| "needs_input"
+		| "failed"
+		| "stopped";
 	const summary = `${text.slice(0, last.index)}${text.slice(last.index + last[0].length)}`.trim();
 	return { status: word, summary };
 }

@@ -294,11 +294,12 @@ export default function registerDelegate(
 	pi.registerTool({
 		name: REPORT_TOOL,
 		label: "Report to main chat",
-		description: `Worker chats only: report to the chat that delegated this task, then end your turn. done = finished; needs_input = you need the owner's decision; failed = cannot finish. ${REPORT_GUIDANCE}`,
+		description: `Worker chats only: report to the chat that delegated this task, then end your turn. done = finished; needs_input = you need the owner's decision; stopped = the owner cancelled the work; failed = cannot finish. ${REPORT_GUIDANCE}`,
 		parameters: Type.Object({
 			status: Type.Union([
 				Type.Literal("done"),
 				Type.Literal("needs_input"),
+				Type.Literal("stopped"),
 				Type.Literal("failed"),
 			]),
 			summary: Type.String({ description: REPORT_GUIDANCE }),
@@ -328,7 +329,7 @@ export default function registerDelegate(
 			message: {
 				customType: "delegation-report-reminder",
 				content:
-					"This is a delegated worker chat. Before ending this turn, call delegation_report: done when finished, needs_input only for an actual owner decision, or failed when blocked. If the tool is unavailable, end with Status: done, Status: needs_input or Status: failed. " +
+					"This is a delegated worker chat. Before ending this turn, call delegation_report: done when finished, needs_input only for an actual owner decision, stopped when the owner cancelled the work, or failed when blocked. If the tool is unavailable, end with Status: done, Status: needs_input, Status: stopped or Status: failed. " +
 					REPORT_GUIDANCE,
 				display: false,
 			},

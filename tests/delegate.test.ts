@@ -864,6 +864,10 @@ describe("Claude Code workers", () => {
 			status: "failed",
 			summary: "",
 		});
+		expect(parseStatusLine("Cancelled by owner.\nStatus: stopped")).toEqual({
+			status: "stopped",
+			summary: "Cancelled by owner.",
+		});
 		expect(parseStatusLine("No status here")).toEqual({ summary: "No status here" });
 	});
 });
