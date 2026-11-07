@@ -64,6 +64,13 @@ Pi is still generating, without LFM interpreting the completed answer. It has
 its own saved session (`acb-relay-trial-stream-session`) and does not change the
 normal Relay session or remembered voice engine.
 
+The speech path renders Markdown before sentence splitting, so headings, list
+markers, emphasis and link destinations are not read as formatting characters.
+Incomplete formatting is buffered; large code blocks use the existing spoken
+cue. Playback evidence records the cleaned spoken segments, while the saved Pi
+answer keeps its original formatting. If later Markdown revises already-emitted
+text, speech stops explicitly rather than replaying it; Pi work continues.
+
 Interrupt, barge-in and hiding the tab stop speech, not Pi work. **Stop current
 Pi turn** is the explicit coordinator abort; **Cancel work job** remains separate.
 After an interruption, further output from that ongoing turn stays muted until

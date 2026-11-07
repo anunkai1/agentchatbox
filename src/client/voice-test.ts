@@ -5,6 +5,7 @@ import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js
 import { transcribeAudio } from "./api.js";
 import { el, mountModal, uuid } from "./dom.js";
 import { encodeRelayVoice, RelayVoiceFrame } from "./relay-voice.js";
+import { SpokenMarkdown } from "./spoken-markdown.js";
 import { state } from "./state.js";
 import {
 	ConversationSpeaker,
@@ -152,6 +153,7 @@ export function openVoiceTest(relay = false, localVoice = relay, streamTrial = f
 	let startSent = false;
 	let currentTurn = "";
 	let relaySentences = new SpokenSentences();
+	let relaySpeech = new SpokenMarkdown();
 	let relayMessage = "";
 	let restoredReply: HTMLElement | null = null;
 	let relayText = "";
@@ -579,6 +581,7 @@ export function openVoiceTest(relay = false, localVoice = relay, streamTrial = f
 				relayMessage = uuid();
 				relayText = "";
 				relaySentences = new SpokenSentences();
+				relaySpeech = new SpokenMarkdown();
 				relayFirstText = 0;
 				if (!streamTrial) relayMuted = false;
 				currentTurn = relayMessage;
@@ -591,6 +594,7 @@ export function openVoiceTest(relay = false, localVoice = relay, streamTrial = f
 				if (!relayFirstText) relayFirstText = endedAt ? performance.now() - endedAt : 0;
 				for (const text of relaySentences.push(event.assistantMessageEvent.delta))
 					relaySentence(text);
+				if (streamTrial) streamSpeech(event.assistantMessageEvent.delta);
 			} else if (event.type === "message_end" && event.message?.role === "assistant") {
 				// Reattachment may miss an in-flight message_start. Complete its text
 				// silently rather than speaking an old reply again.
@@ -604,8 +608,10 @@ export function openVoiceTest(relay = false, localVoice = relay, streamTrial = f
 				if (!relayText) {
 					relayText = messageText(event.message);
 					for (const text of relaySentences.push(relayText)) relaySentence(text);
+					if (streamTrial) streamSpeech(relayText);
 				}
 				for (const text of relaySentences.push("", true)) relaySentence(text);
+				if (streamTrial) streamSpeech("", true);
 				if (event.message.errorMessage)
 					handleVoiceEvent({ kind: "error", text: event.message.errorMessage });
 				relayMessage = "";
@@ -656,6 +662,19 @@ export function openVoiceTest(relay = false, localVoice = relay, streamTrial = f
 		const row = rows.get(relayMessage) ?? addText("Relay", "");
 		rows.set(relayMessage, row);
 		row.append(`${row.childNodes.length > 1 ? " " : ""}${text}`);
+		if (!streamTrial) speakRelay(text);
+	}
+	function streamSpeech(delta: string, final = false): void {
+		if (relayMuted || ending || dismissed) return;
+		try {
+			for (const text of relaySpeech.push(delta, final)) speakRelay(text);
+		} catch (error) {
+			relayMuted = true;
+			speaker.stop();
+			addText("Speech stopped", error instanceof Error ? error.message : "Read the saved answer.");
+		}
+	}
+	function speakRelay(text: string): void {
 		if (!localVoice && !relayMuted && !ending && !dismissed) {
 			firstTextMs = relayFirstText;
 			const messageId = relayMessage;

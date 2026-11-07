@@ -1538,6 +1538,58 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("cleans streamed Markdown before splitting speech, including split formatting and list markers", async () => {
+		const { page } = await openPage("/");
+		try {
+			const bundle = await build({
+				stdin: {
+					contents:
+						'import { SpokenMarkdown } from "./src/client/spoken-markdown.ts"; globalThis.TestSpokenMarkdown = SpokenMarkdown;',
+					resolveDir: root,
+				},
+				bundle: true,
+				write: false,
+				format: "iife",
+				platform: "browser",
+			});
+			await page.route("**/__test-spoken-markdown.js", (route) =>
+				route.fulfill({
+					contentType: "text/javascript",
+					body: bundle.outputFiles[0].text,
+				}),
+			);
+			await page.addScriptTag({ url: "/__test-spoken-markdown.js" });
+			const render = (source: string) =>
+				page.evaluate(`(() => {
+				const speech = new TestSpokenMarkdown(), chunks = [];
+				for (const character of ${JSON.stringify(source)}) chunks.push(...speech.push(character));
+				chunks.push(...speech.push("", true));
+				return chunks;
+			})()`);
+			expect(await render("**Hello. World.** ")).toEqual(["Hello.", "World."]);
+			expect(
+				await render(
+					"# Status\n\n1. **Ready.**\n2. [Read the guide](https://example.com/private). ",
+				),
+			).toEqual(["Status Ready.", "Read the guide."]);
+			expect(await render("- First.\n- Second. ")).toEqual(["First.", "Second."]);
+			expect(await render("```text\n" + "not spoken.\n".repeat(10) + "```\nDone. ")).toEqual([
+				"[code block] Done.",
+			]);
+			expect(await render("Use `sensor_home` and compute 5 * 3 = 15. ")).toEqual([
+				"Use sensor_home and compute 5 * 3 = 15.",
+			]);
+			expect(
+				await render("Read [the guide][ref].\n\n[ref]: https://example.com/private\n"),
+			).toEqual(["Read the guide."]);
+			expect(await render("---\n\n![A diagram](https://example.com/image.png) ")).toEqual([
+				"A diagram",
+			]);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("trials streaming Pi speech before turn completion without cancelling work or changing production Relay", async () => {
 		const { page } = await openPage("/");
 		const prompts: string[] = [],
@@ -1615,7 +1667,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 							type: "message_update",
 							assistantMessageEvent: {
 								type: "text_delta",
-								delta: "The first streamed sentence is ready. ",
+								delta: "### Greeting\n\n**The first streamed sentence is ready.** ",
 							},
 						});
 					}
@@ -1655,10 +1707,28 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(controls).not.toContain("abort");
 			await dialog.getByRole("button", { name: "Stop current Pi turn", exact: true }).click();
 			await expect.poll(() => controls.filter((c) => c === "abort").length).toBe(1);
+			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Another harmless fixture");
+			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
+			await expect
+				.poll(() =>
+					prompts.some((p) => {
+						if (!p.startsWith("/relay voice-heard ")) return false;
+						const text = JSON.parse(Buffer.from(p.split(" ")[3], "base64url").toString()).text;
+						return (
+							text.includes("Greeting The first streamed sentence is ready.") &&
+							!text.includes("**") &&
+							!text.includes("exact words unknown")
+						);
+					}),
+				)
+				.toBe(true);
 			await dialog
 				.getByRole("button", { name: "Close Trial A — streaming Pi voice", exact: true })
 				.click();
-			expect(tts).toEqual(["The first streamed sentence is ready."]);
+			expect(tts).toEqual([
+				"Greeting The first streamed sentence is ready.",
+				"Greeting The first streamed sentence is ready.",
+			]);
 			expect(prompts).not.toContain("/relay cancel");
 			await send(page, "/relaytrial");
 			dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
@@ -1666,7 +1736,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.poll(() => dialog.getByRole("log").innerText())
 				.toContain("Saved, not replayed.");
 			expect(inits.at(-1)?.sessionId).toBe("stream-trial-session");
-			expect(tts).toHaveLength(1);
+			expect(tts).toHaveLength(2);
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-session"))).toBe(
 				"keep-production-session",
 			);
