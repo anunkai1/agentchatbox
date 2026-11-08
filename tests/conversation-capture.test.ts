@@ -31,8 +31,8 @@ let speech: ReturnType<typeof vi.fn>;
 let error: ReturnType<typeof vi.fn>;
 let stop: ReturnType<typeof vi.fn>;
 
-async function begin() {
-	capture = await captureConversation(speech, (turn) => turns.push(turn), error);
+async function begin(maxInputSeconds: 30 | 120 = 30) {
+	capture = await captureConversation(speech, (turn) => turns.push(turn), error, maxInputSeconds);
 	return capture;
 }
 function start(real = true) {
@@ -180,7 +180,49 @@ describe("conversation input drafts", () => {
 		expect(stop).toHaveBeenCalledOnce();
 	});
 
-	it("still stops continuous speech at the existing hard limit", async () => {
+	it("keeps Relay listening past 30 seconds and resets the budget after an accepted turn", async () => {
+		await begin(120);
+		for (let i = 0; i < 2; i++) {
+			start();
+			await vi.advanceTimersByTimeAsync(31_000);
+			expect(error).not.toHaveBeenCalled();
+			expect(stop).not.toHaveBeenCalled();
+			mock.options.onSpeechEnd(new Float32Array(16_000 * 31));
+			expect(turns[i].accept()).toBe(true);
+			expect(mock.encoded.at(-1)).toHaveLength(16_000 * 31);
+		}
+	});
+
+	it("bounds Relay continuous input at two minutes without submitting a partial request", async () => {
+		await begin(120);
+		start();
+		await vi.advanceTimersByTimeAsync(119_999);
+		expect(error).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(error).toHaveBeenCalledWith(
+			expect.objectContaining({ message: expect.stringContaining("120-second") }),
+		);
+		expect(stop).toHaveBeenCalledOnce();
+		mock.options.onSpeechEnd(new Float32Array(16_000));
+		expect(turns).toHaveLength(0);
+	});
+
+	it("bounds all retained Relay segments to two minutes, including pending recognition", async () => {
+		await begin(120);
+		start();
+		mock.options.onSpeechEnd(new Float32Array(16_000 * 80));
+		expect(turns).toHaveLength(1);
+		start();
+		mock.options.onSpeechEnd(new Float32Array(16_000 * 41));
+		expect(turns).toHaveLength(1);
+		expect(turns[0].accept()).toBe(false);
+		expect(error).toHaveBeenCalledWith(
+			expect.objectContaining({ message: expect.stringContaining("120 seconds") }),
+		);
+		expect(stop).toHaveBeenCalledOnce();
+	});
+
+	it("still stops continuous speech at the existing prototype hard limit", async () => {
 		await begin();
 		start();
 		await vi.advanceTimersByTimeAsync(30_000);

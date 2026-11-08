@@ -34,7 +34,11 @@ integration or standing proactive mandate is installed.
    Browser STT modes allow about 1.4 seconds of quiet before recognition. If you
    resume during recognition, earlier unsubmitted audio is kept and joined with
    the next segment; stale partial transcripts cannot dispatch work. This is
-   bounded to 30 seconds of unsent audio, not an unlimited dictation buffer.
+   bounded to **two minutes of unsent audio** (including continuous speech),
+   not an unlimited dictation buffer. Accepted turns reset this budget; the mic
+   stays open across turns. Hitting the limit stops capture explicitly without
+   submitting a partial instruction. The separate `/voicetest` prototype keeps
+   its 30-second test limit.
    **Interrupt** stops output without discarding that input. Stopping/hiding/closing
    the mic clears unsent input; typed submission explicitly replaces it.
    **Send text** reaches Pi without a mic. A clear work request authorises
@@ -198,7 +202,8 @@ answers are referred to the full saved chat rather than silently clipped for spe
 Every Start refreshes bounded recent recognised/acknowledged played context and
 Pi work evidence. Reopening does not replay audio or work, reconstruct every
 native audio turn, or guarantee the last unacknowledged words were saved. The
-voice connection has 30-second input/30-turn/10-minute limits; ending it does not
+original Server4 conversational voice connection has 30-second input/30-turn/10-minute
+limits (separate from browser-STT Relay's two-minute input bound); ending it does not
 end Pi work. It reserves Server4's GPU: Qwen/local image work cannot coexist.
 Choose cloud work or end voice/use legacy before work needing that GPU.
 

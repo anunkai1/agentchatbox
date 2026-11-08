@@ -2587,8 +2587,13 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					},
 				}),
 			);
+			await page.clock.install();
 			await dialog.getByRole("button", { name: "Start microphone", exact: true }).click();
 			await onset();
+			await page.clock.fastForward(31_000);
+			expect(await dialog.getByRole("button", { name: "Stop microphone", exact: true }).isVisible()).toBe(
+				true,
+			);
 			await end([0.125, 0.25]);
 			await expect.poll(() => requests.length).toBe(1);
 			await onset(); // resumed before recognition of the beginning finishes

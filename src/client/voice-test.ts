@@ -534,6 +534,7 @@ export function openVoiceTest(
 					start.textContent = "Start microphone";
 					fail(error);
 				},
+				relay ? 120 : 30,
 			);
 			if (ending || dismissed || document.visibilityState === "hidden") stop.close();
 			else {

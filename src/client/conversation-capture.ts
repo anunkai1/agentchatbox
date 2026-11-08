@@ -13,12 +13,12 @@ export interface ConversationCapture {
 }
 
 const INPUT_RATE = 16_000;
-const MAX_INPUT_SAMPLES = INPUT_RATE * 30;
 
 export async function captureConversation(
 	onSpeech: () => void,
 	onUtterance: (turn: CapturedUtterance) => void,
 	onError: (error: unknown) => void,
+	maxInputSeconds: 30 | 120 = 30,
 ): Promise<ConversationCapture> {
 	const stream = await navigator.mediaDevices.getUserMedia({
 		audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -110,8 +110,12 @@ export async function captureConversation(
 				if (speechTimer) clearTimeout(speechTimer);
 				speechTimer = setTimeout(() => {
 					close();
-					onError(new Error("Speech exceeded the 30-second test limit; restart the microphone."));
-				}, 30_000);
+					onError(
+						new Error(
+							`Speech exceeded the ${maxInputSeconds}-second limit; restart the microphone.`,
+						),
+					);
+				}, maxInputSeconds * 1000);
 			},
 			onSpeechEnd: (audio) => {
 				if (speechTimer) clearTimeout(speechTimer);
@@ -122,11 +126,11 @@ export async function captureConversation(
 					dropSegment = false;
 					return;
 				}
-				if (samples + audio.length > MAX_INPUT_SAMPLES) {
+				if (samples + audio.length > INPUT_RATE * maxInputSeconds) {
 					close();
 					onError(
 						new Error(
-							"Unsent speech exceeded 30 seconds; restart the microphone. Nothing was submitted.",
+							`Unsent speech exceeded ${maxInputSeconds} seconds; restart the microphone. Nothing was submitted.`,
 						),
 					);
 					return;
