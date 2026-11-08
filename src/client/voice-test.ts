@@ -1,6 +1,5 @@
 /** Voice-test UI only. The dedicated Pi session owns the model, prompt and history. */
 import { RELAY_MESSAGE, type RelayEvent } from "../shared/relay.js";
-import { SpokenSentences } from "../shared/spoken-sentences.js";
 import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js";
 import { transcribeAudio } from "./api.js";
 import { el, mountModal, uuid } from "./dom.js";
@@ -221,7 +220,6 @@ export function openVoiceTest(
 	let extensionAvailable = false;
 	let startSent = false;
 	let currentTurn = "";
-	let relaySentences = new SpokenSentences();
 	let relaySpeech = new SpokenMarkdown();
 	let relayMessage = "";
 	let lfmStartedUtterance = "";
@@ -654,7 +652,7 @@ export function openVoiceTest(
 					const text = messageText(message);
 					if (text) {
 						const row =
-							message.role === "assistant" && isStreamingPi
+							message.role === "assistant"
 								? addMarkdown("Relay", text)
 								: addText(message.role === "user" ? "You" : "Relay", text);
 						restoredReply = message.role === "assistant" ? row : null;
@@ -741,7 +739,6 @@ export function openVoiceTest(
 			if (event.type === "message_start" && event.message?.role === "assistant") {
 				relayMessage = uuid();
 				relayText = "";
-				relaySentences = new SpokenSentences();
 				relaySpeech = new SpokenMarkdown();
 				relayFirstText = 0;
 				lfmStartedUtterance = "";
@@ -758,58 +755,41 @@ export function openVoiceTest(
 					relayFirstText = endedAt ? performance.now() - endedAt : 0;
 					firstTextMs = relayFirstText;
 				}
-				if (isStreamingPi) {
-					const row = rows.get(relayMessage) ?? addMarkdown("Relay", "");
-					rows.set(relayMessage, row);
-					setMarkdownRow(row, "Relay", relayText);
-					streamSpeech(delta);
-				} else {
-					for (const text of relaySentences.push(delta)) relaySentence(text);
-				}
+				const row = rows.get(relayMessage) ?? addMarkdown("Relay", "");
+				rows.set(relayMessage, row);
+				setMarkdownRow(row, "Relay", relayText);
+				streamSpeech(delta);
 			} else if (event.type === "message_end" && event.message?.role === "assistant") {
 				// Reattachment may miss an in-flight message_start. Complete its text
 				// silently rather than speaking an old reply again.
 				if (!relayMessage) {
 					const text = messageText(event.message);
-					if (restoredReply && text) {
-						if (isStreamingPi) setMarkdownRow(restoredReply, "Relay", text);
-						else restoredReply.replaceChildren(el("strong", {}, "Relay: "), text);
-					} else if (text) {
-						if (isStreamingPi) addMarkdown("Relay", text);
-						else addText("Relay", text);
-					}
+					if (restoredReply && text) setMarkdownRow(restoredReply, "Relay", text);
+					else if (text) addMarkdown("Relay", text);
 					return;
 				}
 				if (!relayText) {
 					relayText = messageText(event.message);
-					if (isStreamingPi) {
-						if (relayText) {
-							const row = rows.get(relayMessage) ?? addMarkdown("Relay", "");
-							rows.set(relayMessage, row);
-							setMarkdownRow(row, "Relay", relayText);
-						}
-						streamSpeech(relayText);
-					} else {
-						for (const text of relaySentences.push(relayText)) relaySentence(text);
+					if (relayText) {
+						const row = rows.get(relayMessage) ?? addMarkdown("Relay", "");
+						rows.set(relayMessage, row);
+						setMarkdownRow(row, "Relay", relayText);
 					}
+					streamSpeech(relayText);
 				}
-				if (isStreamingPi) {
-					streamSpeech("", true);
-					if (useLfmTts) {
-						if (lfmStartedUtterance === relayMessage) {
-							lfmSpeaker?.finishUtterance();
-						} else if (relayMuted && relayText.trim() && !lfmReportedIds.has(relayMessage)) {
-							recordLfmPlayback({
-								utterance: relayMessage,
-								playedMs: 0,
-								text: "",
-								complete: false,
-								uncertain: false,
-							});
-						}
+				streamSpeech("", true);
+				if (useLfmTts) {
+					if (lfmStartedUtterance === relayMessage) {
+						lfmSpeaker?.finishUtterance();
+					} else if (relayMuted && relayText.trim() && !lfmReportedIds.has(relayMessage)) {
+						recordLfmPlayback({
+							utterance: relayMessage,
+							playedMs: 0,
+							text: "",
+							complete: false,
+							uncertain: false,
+						});
 					}
-				} else {
-					for (const text of relaySentences.push("", true)) relaySentence(text);
 				}
 				if (event.message.errorMessage)
 					handleVoiceEvent({ kind: "error", text: event.message.errorMessage });
@@ -862,14 +842,8 @@ export function openVoiceTest(
 			row.replaceChildren(el("strong", {}, `${label}: `), text);
 		}
 	}
-	function relaySentence(text: string): void {
-		const row = rows.get(relayMessage) ?? addText("Relay", "");
-		rows.set(relayMessage, row);
-		row.append(`${row.childNodes.length > 1 ? " " : ""}${text}`);
-		if (!isStreamingPi) speakRelay(text);
-	}
 	function streamSpeech(delta: string, final = false): void {
-		if (relayMuted || ending || dismissed) return;
+		if (localVoice || relayMuted || ending || dismissed) return;
 		try {
 			for (const text of relaySpeech.push(delta, final)) speakRelay(text);
 		} catch (error) {

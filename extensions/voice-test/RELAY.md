@@ -71,6 +71,17 @@ integration or standing proactive mandate is installed.
    a clean conversation or a new tracked worker. It is not required for unrelated
    direct work or additional normal delegations; keep follow-ups with their worker.
 
+## Formatted replies and speech
+
+Normal Relay's legacy Kokoro and Pi + LFM TTS routes both render Markdown before
+sentence splitting. Headings, emphasis, lists and links stay formatted in the
+panel, while synthesis receives readable prose rather than literal Markdown
+markers or link destinations. Split/incomplete formatting is buffered. A later
+revision to already-emitted speech stops remaining audio rather than replaying
+or guessing. Restored replies render silently; saved Pi answers are unchanged.
+This formatting behaviour does not change the legacy cancellation differences
+above or select a different voice/engine.
+
 ## Isolated streaming trial
 
 `/relaytrial` opens **Trial A — streaming Pi voice**: local STT → the same

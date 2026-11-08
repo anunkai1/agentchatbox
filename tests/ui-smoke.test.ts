@@ -1548,6 +1548,100 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("renders legacy Kokoro Relay Markdown before speaking and never replays restored answers", async () => {
+		const { page } = await openPage("/");
+		const tts: string[] = [];
+		let native: (event: object) => void = () => {};
+		const first = "### Status\n\n**The first sentence is ready. More";
+		const rest =
+			" detail.**\n\n1. Read [the guide](https://example.com/private).\n2. Keep `sensor_home`.\n";
+		const markdown = first + rest;
+		await page.evaluate(() => {
+			localStorage.setItem("acb-relay-voice-engine", "legacy");
+			localStorage.removeItem("acb-relay-session");
+		});
+		await page.route("**/api/tts/stream", (route) => {
+			tts.push(route.request().postDataJSON().text);
+			return route.fulfill({
+				body: Buffer.alloc(5),
+				contentType: "application/octet-stream",
+			});
+		});
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			native = (event) => ws.send(JSON.stringify({ type: "event", event }));
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init") {
+					ws.send(JSON.stringify({ type: "ready", sessionId: "legacy-markdown-session" }));
+					if (message.sessionId)
+						ws.send(
+							JSON.stringify({
+								type: "transcript",
+								messages: [{ role: "assistant", content: markdown }],
+							}),
+						);
+				} else if (message.type === "getCapabilities")
+					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
+				else if (message.type === "prompt" && message.text.startsWith("/relay start"))
+					native({
+						type: "message_end",
+						message: {
+							role: "custom",
+							customType: "acb-relay",
+							details: {
+								kind: "ready",
+								model: "venice/deepseek-v4-1-flash-1017",
+								workerModel: { provider: "venice", modelId: "fixture", thinkingLevel: "off" },
+							},
+						},
+					});
+				else if (message.type === "prompt" && message.text.startsWith("/relay say ")) {
+					native({ type: "message_start", message: { role: "assistant" } });
+					native({
+						type: "message_update",
+						assistantMessageEvent: { type: "text_delta", delta: first },
+					});
+				}
+			});
+		});
+		try {
+			await send(page, "/relay legacy");
+			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.innerText()).toContain("Ready —");
+			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Read the fixture");
+			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
+			await expect
+				.poll(() => dialog.getByRole("log").innerText())
+				.toContain("The first sentence is ready.");
+			expect(tts).toEqual([]); // Unclosed bold must not leak markers to TTS.
+			native({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", delta: rest },
+			});
+			await expect.poll(() => tts.length).toBe(4); // Before message_end.
+			expect(tts).toEqual([
+				"Status The first sentence is ready.",
+				"More detail.",
+				"Read the guide.",
+				"Keep sensor_home.",
+			]);
+			expect(await dialog.locator(".markdown h3").innerText()).toBe("Status");
+			expect(await dialog.locator(".markdown strong").innerText()).toBe(
+				"The first sentence is ready. More detail.",
+			);
+			expect(await dialog.locator(".markdown ol li").count()).toBe(2);
+			native({ type: "message_end", message: { role: "assistant", content: markdown } });
+			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
+			await send(page, "/relay legacy");
+			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.locator(".markdown h3").innerText()).toBe("Status");
+			expect(tts).toHaveLength(4);
+			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("cleans streamed Markdown before splitting speech, including split formatting and list markers", async () => {
 		const { page } = await openPage("/");
 		try {
