@@ -15,7 +15,9 @@ integration or standing proactive mandate is installed.
    deliberate selection for its tracked worker, rather than Global's default for
    newly opened chats. Relay's own direct work runs on the conversation model;
    additional workers use the normal delegation tools' model-selection behaviour.
-2. Verify the displayed conversation and worker models. Conversation remains
+2. The panel shows **Answers & tools: DeepSeek Flash · thinking off** (or **Pi
+   work** for the original conversational LFM engine) and a separate **Delegated
+   work** model/thinking line. Conversation remains
    `venice/deepseek-v4-1-flash-1017`; work uses the captured ACB selection. Workers
    use native Pi, not the originating chat's `/cc` mode. Antigravity automation
    is deliberately unavailable under the current provider mandate: choose a
@@ -31,6 +33,17 @@ integration or standing proactive mandate is installed.
    **Use legacy STT/Kokoro** (`"legacy"`, or `/relay legacy`) explicitly selects
    the older speech path without Server4 GPU dependency. This device remembers
    the explicit choice without silently migrating saved sessions or falling back.
+   **Voice settings & details** expands the engine choices, technical/privacy
+   information, timing metrics and **New Relay conversation** control. Opening
+   these details does not change settings or start work. Engine changes remain
+   explicit and preserve the saved session. The mic button shows its startup
+   state and whether the microphone is on; it is disabled during startup to avoid
+   duplicate permission requests. Streaming/Server4 modes label speech interruption
+   **Stop speaking**, separate from **Stop current Pi turn** and the tracked job's
+   **Cancel work job** (only shown when a tracked job exists). **Close voice** stays
+   usable even if connection setup fails. Legacy **Interrupt** retains its existing
+   direct-turn abort behaviour. The log follows new replies only while already near
+   the bottom, so reading earlier messages does not pull the page away.
    Browser STT modes allow about 1.4 seconds of quiet before recognition. If you
    resume during recognition, earlier unsubmitted audio is kept and joined with
    the next segment; stale partial transcripts cannot dispatch work. This is

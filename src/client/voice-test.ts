@@ -101,7 +101,7 @@ export function openVoiceTest(
 	stopAllVoice();
 	const heading = el(
 		"h2",
-		{},
+		{ class: "voice-test-heading" },
 		streamTrial ? "Trial A — streaming Pi voice" : relay ? "Relay" : "Browser voice test",
 	);
 	const intro = el(
@@ -119,14 +119,28 @@ export function openVoiceTest(
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
 	const model = el("p", { class: "voice-test-model" });
+	const workerModel = el("p", { class: "voice-test-model", hidden: !relay });
+	const micState = el(
+		"span",
+		{ class: "voice-test-mic-state", hidden: localVoice, "data-active": "false" },
+		"Microphone off",
+	);
 	const metrics = el("p", { class: "voice-test-metrics", "aria-live": "polite" });
 	const transcript = el("div", {
 		class: "voice-test-transcript",
 		role: "log",
-		"aria-label": "Voice test transcript",
+		"aria-label": relay ? "Relay conversation" : "Voice test transcript",
 	});
-	const start = el("button", { type: "button", disabled: true }, "Start microphone");
-	const interrupt = el("button", { type: "button", disabled: true }, "Interrupt");
+	const start = el(
+		"button",
+		{ type: "button", class: "voice-test-primary", disabled: true, "aria-pressed": "false" },
+		"Start microphone",
+	);
+	const interrupt = el(
+		"button",
+		{ type: "button", disabled: true },
+		relay && (localVoice || isStreamingPi) ? "Stop speaking" : "Interrupt",
+	);
 	const stopPi = el(
 		"button",
 		{
@@ -140,11 +154,15 @@ export function openVoiceTest(
 	);
 	const finish = el(
 		"button",
-		{ type: "button", disabled: true },
-		relay ? "Close voice — keep work running" : "End test & summarise",
+		{ type: "button", disabled: !relay },
+		relay ? "Close voice" : "End test & summarise",
 	);
 	const job = el("div", { class: "relay-job", "aria-live": "polite" });
-	const cancelJob = el("button", { type: "button", disabled: true }, "Cancel work job");
+	const cancelJob = el(
+		"button",
+		{ type: "button", disabled: true, hidden: true },
+		"Cancel work job",
+	);
 	const newRelay = el("button", { type: "button" }, "New Relay conversation");
 	const voiceButtons: HTMLButtonElement[] = [];
 	if (relay) {
@@ -190,26 +208,84 @@ export function openVoiceTest(
 		{ hidden: true, target: "_blank", rel: "noopener" },
 		"Open saved transcript",
 	);
-	const box = el(
+	const details = el(
 		"div",
-		{ class: "modal voice-test" },
-		heading,
+		{ id: `voice-details-${uuid()}`, class: "voice-test-details", hidden: true },
 		intro,
 		el(
 			"p",
 			{},
-			"Use headphones to prevent speaker echo triggering interruptions. Replies shown below are generated text, not proof that every word was heard.",
+			"Headphones help prevent echo. Replies below are generated text, not proof that every word was heard.",
+		),
+		metrics,
+		...(relay
+			? [
+					el(
+						"p",
+						{},
+						"Changing the voice closes the microphone, not Pi work. Your saved conversation stays.",
+					),
+					el("div", { class: "voice-test-controls" }, ...voiceButtons),
+					el(
+						"p",
+						{},
+						"To change the delegated work model or thinking level, select it in the main chat before opening Relay. Existing workers keep their own settings.",
+					),
+					newRelay,
+				]
+			: []),
+	);
+	const settings = el(
+		"button",
+		{ type: "button", "aria-expanded": "false", "aria-controls": details.id },
+		"Voice settings & details",
+	);
+	settings.onclick = () => {
+		details.hidden = !details.hidden;
+		settings.setAttribute("aria-expanded", String(!details.hidden));
+	};
+	const inputHint = localVoice
+		? "Start in the voice panel below."
+		: relay
+			? "Pause briefly to send. Up to 2 minutes per turn."
+			: "Pause briefly to send. Up to 30 seconds per test turn.";
+	const stopHint = !relay
+		? "Headphones help avoid echo."
+		: localVoice || isStreamingPi
+			? "Stopping speech or closing voice leaves Pi work running."
+			: "Interrupt may stop direct Pi tools; workers keep running. Closing voice leaves work running.";
+	const box = el(
+		"div",
+		{ class: "modal-box voice-test" },
+		heading,
+		el(
+			"p",
+			{ class: "voice-test-overview" },
+			useLfmTts
+				? "Talk naturally. Pi handles your requests; LFM reads the replies aloud."
+				: localVoice
+					? "LFM handles the local conversation. Pi handles tools and delegated work."
+					: relay
+						? "Talk naturally. Pi handles your requests; Kokoro reads the replies aloud."
+						: "Try a conversation with DeepSeek. This test cannot use tools or do work.",
 		),
 		model,
-		status,
-		metrics,
-		el("div", { class: "voice-test-controls" }, start, interrupt, stopPi, finish),
+		workerModel,
+		el(
+			"div",
+			{ class: "voice-test-live" },
+			micState,
+			status,
+			el("div", { class: "voice-test-controls" }, start, interrupt, stopPi, finish),
+			el("p", { class: "voice-test-help" }, `${inputHint} ${stopHint}`),
+		),
 		form,
-		...(relay
-			? [job, el("div", { class: "voice-test-controls" }, cancelJob, newRelay, ...voiceButtons)]
-			: []),
+		...(relay ? [job, cancelJob] : []),
+		el("h3", {}, "Conversation"),
 		transcript,
 		link,
+		el("div", { class: "voice-test-controls" }, settings),
+		details,
 	);
 	const overlay = el("div", { class: "modal-overlay" }, box);
 	let dismissed = false;
@@ -239,6 +315,21 @@ export function openVoiceTest(
 	const socket = new WebSocket(
 		`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/chat`,
 	);
+	const renderMic = () => {
+		start.disabled = !ready || ending || micPending;
+		start.textContent = micPending
+			? "Starting microphone…"
+			: stopCapture
+				? "Stop microphone"
+				: "Start microphone";
+		start.setAttribute("aria-pressed", String(Boolean(stopCapture)));
+		micState.textContent = micPending
+			? "Microphone starting…"
+			: stopCapture
+				? "Microphone on"
+				: "Microphone off";
+		micState.dataset.active = String(Boolean(stopCapture));
+	};
 	const sayStatus = (text: string) => {
 		status.textContent = text;
 	};
@@ -324,18 +415,20 @@ export function openVoiceTest(
 	};
 	const addText = (label: string, text: string) => {
 		const row = el("p", {}, el("strong", {}, `${label}: `), text);
+		const follow = transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop < 48;
 		transcript.append(row);
-		row.scrollIntoView({ block: "nearest" });
+		if (follow) transcript.scrollTop = transcript.scrollHeight;
 		return row;
 	};
 	const setMarkdownRow = (row: HTMLElement, label: string, markdown: string) => {
+		const follow = transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop < 48;
 		let body = row.querySelector<HTMLElement>(":scope > .markdown");
 		if (!body) {
 			body = el("div", { class: "markdown" });
 			row.replaceChildren(el("strong", {}, `${label}: `), body);
 		}
 		setRichText(body, markdown);
-		row.scrollIntoView({ block: "nearest" });
+		if (follow) transcript.scrollTop = transcript.scrollHeight;
 	};
 	const addMarkdown = (label: string, markdown: string) => {
 		const row = el("div", { class: "voice-test-row" });
@@ -352,6 +445,7 @@ export function openVoiceTest(
 		discardInput();
 		stopCapture?.close();
 		stopCapture = null;
+		renderMic();
 	};
 	const closeSocket = () => {
 		clearTimeout(startupTimer);
@@ -366,7 +460,8 @@ export function openVoiceTest(
 		speaker?.stop();
 		lfmSpeaker?.disconnect();
 		lfmStartedUtterance = "";
-		start.disabled = send.disabled = interrupt.disabled = stopPi.disabled = finish.disabled = true;
+		start.disabled = send.disabled = interrupt.disabled = stopPi.disabled = true;
+		finish.disabled = !relay;
 		sayStatus("Saving summary…");
 		if (relay) {
 			localFrame?.stop();
@@ -409,7 +504,6 @@ export function openVoiceTest(
 				cancelAudio();
 				lfmSpeaker?.disconnect();
 			}
-			start.textContent = "Start microphone";
 			if (!ending) sayStatus("Microphone paused while tab is hidden");
 		}
 	};
@@ -441,7 +535,7 @@ export function openVoiceTest(
 			}
 			command(`/relay ${action} ${id} ${encodeRelayVoice(payload)}`);
 		}, sayStatus);
-		box.insertBefore(localFrame.element, metrics);
+		box.insertBefore(localFrame.element, form);
 		start.hidden = true;
 	}
 
@@ -450,7 +544,7 @@ export function openVoiceTest(
 		const turnId = uuid();
 		currentTurn = turnId;
 		firstTextMs = 0;
-		sayStatus("Waiting for DeepSeek…");
+		sayStatus("DeepSeek is preparing a reply…");
 		// Remember identity before submission, even if the tab closes before acknowledgement.
 		// An unsaved/missing session then fails closed; never auto-repeat the utterance.
 		try {
@@ -477,17 +571,18 @@ export function openVoiceTest(
 		if (stopCapture) {
 			releaseMic();
 			cancelAudio();
-			start.textContent = "Start microphone";
 			sayStatus("Microphone stopped");
 			return;
 		}
 		if (micPending || ending) return;
 		micPending = true;
+		renderMic();
+		sayStatus("Starting microphone — allow access if asked…");
 		try {
 			const stop = await captureConversation(
 				() => {
 					cancelAudio();
-					sayStatus("Hearing speech…");
+					sayStatus("Hearing speech — keep talking…");
 				},
 				(turn) => {
 					const { audio } = turn;
@@ -497,7 +592,7 @@ export function openVoiceTest(
 					sttController = controller;
 					endedAt = turn.endedAt;
 					const began = performance.now();
-					sayStatus("Transcribing locally…");
+					sayStatus("Recognising your words…");
 					void transcribeAudio(
 						audio,
 						audio.type.includes("wav")
@@ -531,7 +626,6 @@ export function openVoiceTest(
 				},
 				(error) => {
 					releaseMic();
-					start.textContent = "Start microphone";
 					fail(error);
 				},
 				relay ? 120 : 30,
@@ -539,7 +633,6 @@ export function openVoiceTest(
 			if (ending || dismissed || document.visibilityState === "hidden") stop.close();
 			else {
 				stopCapture = stop;
-				start.textContent = "Stop microphone";
 				sayStatus("Listening…");
 				if (useLfmTts) lfmSpeaker?.connect();
 			}
@@ -547,6 +640,7 @@ export function openVoiceTest(
 			fail(error);
 		} finally {
 			micPending = false;
+			renderMic();
 		}
 	};
 	interrupt.onclick = () => {
@@ -682,15 +776,9 @@ export function openVoiceTest(
 					);
 					return;
 				}
-				const voicePrefix = localVoice
-					? "Voice: Server4 LFM · tools: "
-					: useLfmTts
-						? "Voice: Pi + Server4 LFM TTS (speech-only) · model: "
-						: "";
-				handleVoiceEvent({
-					kind: "ready",
-					model: `${voicePrefix}${event.model} · worker: ${event.workerModel.provider}/${event.workerModel.modelId} (${event.workerModel.thinkingLevel})`,
-				});
+				workerModel.textContent = `Delegated work: ${event.workerModel.modelId} · thinking ${event.workerModel.thinkingLevel} (when requested)`;
+				workerModel.title = `${event.workerModel.provider}/${event.workerModel.modelId}. Settings captured from the main chat; this is not a live worker status.`;
+				handleVoiceEvent({ kind: "ready", model: event.model });
 			} else if (event.kind === "voice_config") {
 				if (localVoice) localFrame?.configure(event.config);
 			} else if (event.kind === "voice_context") {
@@ -712,6 +800,7 @@ export function openVoiceTest(
 				handleVoiceEvent(event);
 			} else if (event.kind === "job") {
 				job.replaceChildren();
+				cancelJob.hidden = !event.job;
 				cancelJob.disabled = !event.job || event.job.status === "stopped";
 				if (event.uncertain)
 					job.append(el("p", {}, "Submission uncertain. Inspect the worker; do not submit again."));
@@ -912,13 +1001,12 @@ export function openVoiceTest(
 		if (event.kind === "ready") {
 			clearTimeout(startupTimer);
 			ready = true;
-			model.textContent = event.model;
-			start.disabled =
-				send.disabled =
-				interrupt.disabled =
-				stopPi.disabled =
-				finish.disabled =
-					false;
+			const modelName =
+				event.model === "venice/deepseek-v4-1-flash-1017" ? "DeepSeek Flash" : event.model;
+			model.textContent = `${relay ? (localVoice ? "Pi work" : "Answers & tools") : "Replies"}: ${modelName} · thinking off`;
+			model.title = event.model;
+			send.disabled = interrupt.disabled = stopPi.disabled = finish.disabled = false;
+			renderMic();
 			sayStatus("Ready — start the microphone or send text");
 		} else if (event.kind === "user") {
 			link.hidden = !link.hasAttribute("href");
@@ -952,7 +1040,8 @@ export function openVoiceTest(
 		speaker?.stop();
 		lfmSpeaker?.disconnect();
 		localFrame?.stop();
-		start.disabled = send.disabled = interrupt.disabled = stopPi.disabled = finish.disabled = true;
+		start.disabled = send.disabled = interrupt.disabled = stopPi.disabled = true;
+		finish.disabled = !relay;
 		if (!ending && !failed)
 			sayStatus("Connection closed; microphone stopped. Reopen the test to continue.");
 		clearInterval(watchdog);

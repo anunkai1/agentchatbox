@@ -1341,7 +1341,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await send(page, "/voicetest");
 			const dialog = page.getByRole("dialog", { name: "Browser voice test" });
 			await expect.poll(() => dialog.innerText()).toContain("Ready —");
-			expect(await dialog.innerText()).toContain("venice/deepseek-v4-1-flash-1017");
+			expect(await dialog.innerText()).toContain("DeepSeek Flash · thinking off");
 			expect(await dialog.getByRole("link", { name: "Open saved transcript" }).count()).toBe(0);
 			await dialog.getByRole("textbox", { name: "Voice test message" }).fill("Hello test");
 			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
@@ -1519,7 +1519,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(relayBounds!.x + relayBounds!.width).toBeLessThanOrEqual(voiceBounds!.x);
 			await relayButton.click();
 			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("worker: openai/work-model (high)");
+			await expect
+				.poll(() => dialog.innerText())
+				.toContain("Delegated work: work-model · thinking high");
 			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Inspect the fixture");
 			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
 			await expect
@@ -1539,6 +1541,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.poll(() => dialog.locator(".relay-job").innerText())
 				.toContain("Recorded: stopped");
 			expect(cancelled).toBe(true);
+			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
 			await dialog.getByRole("button", { name: "New Relay conversation" }).click();
 			await expect.poll(() => inits.length).toBe(3);
 			expect(inits.at(-1)?.sessionId).toBeUndefined();
@@ -1790,7 +1793,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect
 				.poll(() => dialog.locator(".voice-test-status").innerText())
 				.toContain("Speaking");
-			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			await dialog.getByRole("button", { name: "Stop speaking", exact: true }).click();
 			await expect.poll(() => prompts.some((p) => p.startsWith("/relay voice-heard "))).toBe(true);
 			const heard = prompts.find((p) => p.startsWith("/relay voice-heard "))!;
 			expect(JSON.parse(Buffer.from(heard.split(" ")[3], "base64url").toString()).text).toContain(
@@ -2002,9 +2005,10 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await send(page, "/relaytrial");
 			let dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
 			await expect.poll(() => dialog.innerText()).toContain("Ready —");
+			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
 			await dialog.getByRole("button", { name: "Use LFM TTS (speech-only)", exact: true }).click();
 			dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("Pi + Server4 LFM TTS (speech-only)");
+			await expect.poll(() => dialog.innerText()).toContain("LFM reads the replies aloud");
 			expect(await dialog.locator("iframe").count()).toBe(0);
 
 			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Check status");
@@ -2029,8 +2033,8 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.toContain("Server4 native 58 ms");
 			await page.waitForTimeout(120);
 
-			// Interrupt mid-speech: stops speech only, sends cancel, records unhinted played prefix, never aborts Pi!
-			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			// Stop speaking mid-speech: sends cancel, records unhinted played prefix, never aborts Pi!
+			await dialog.getByRole("button", { name: "Stop speaking", exact: true }).click();
 			await expect.poll(() => ttsWsReceived.some((m) => m.type === "cancel")).toBe(true);
 			expect(Number(ttsWsReceived.find((m) => m.type === "cancel")?.played_ms)).toBeGreaterThan(0);
 			await expect.poll(() => prompts.some((p) => p.startsWith("/relay voice-heard "))).toBe(true);
@@ -2182,7 +2186,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.toBe(1);
 			expect(prompts.some((p) => p.includes("forged"))).toBe(false);
 			expect(prompts.filter((p) => p.startsWith("/relay voice-request "))).toHaveLength(1);
-			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			await dialog.getByRole("button", { name: "Stop speaking", exact: true }).click();
 			await expect
 				.poll(() =>
 					frame
@@ -2202,6 +2206,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect.poll(() => inits.length).toBe(2);
 			expect(inits[1].sessionId).toBe("local-relay-session");
 			expect(prompts.filter((p) => p.startsWith("/relay voice-request "))).toHaveLength(1);
+			await page.getByRole("button", { name: "Voice settings & details" }).click();
 			await page.getByRole("button", { name: "Use legacy STT/Kokoro", exact: true }).click();
 			await expect.poll(() => inits.length).toBe(3);
 			expect(await page.locator(".relay-local-voice").count()).toBe(0);
@@ -2290,7 +2295,14 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 						ws.send(
 							JSON.stringify({
 								type: "transcript",
-								messages: [{ role: "assistant", content: "**Saved history** stays silent." }],
+								messages: [
+									{
+										role: "assistant",
+										content:
+											"**Saved history** stays silent.\n\n" +
+											Array.from({ length: 40 }, (_, i) => `Saved line ${i}`).join("\n\n"),
+									},
+								],
 							}),
 						);
 					}
@@ -2329,6 +2341,22 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await dialog.locator('iframe[title="Server4 Relay voice"]').count()).toBe(1);
 			expect(ttsWs).toHaveLength(0);
 
+			// The primary screen explains responsibilities without exposing engine switches:
+			expect(await dialog.locator(".voice-test-model").first().innerText()).toContain(
+				"Pi work: DeepSeek Flash · thinking off",
+			);
+			expect(await dialog.getByRole("button", { name: "Cancel work job" }).isVisible()).toBe(false);
+			expect(
+				await dialog
+					.getByRole("button", { name: "Use Pi + LFM TTS (speech-only)", exact: true })
+					.isVisible(),
+			).toBe(false);
+			const settings = dialog.getByRole("button", { name: "Voice settings & details" });
+			expect(await settings.getAttribute("aria-expanded")).toBe("false");
+			await settings.focus();
+			await page.keyboard.press("Enter");
+			expect(await settings.getAttribute("aria-expanded")).toBe("true");
+
 			// Explicitly choose Pi + LFM TTS (speech-only); saved session ID is preserved, history is not spoken:
 			await dialog
 				.getByRole("button", { name: "Use Pi + LFM TTS (speech-only)", exact: true })
@@ -2342,6 +2370,22 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect.poll(() => dialog.innerText()).toContain("Ready —");
 			expect(await dialog.locator("iframe").count()).toBe(0);
 			expect(ttsWs).toHaveLength(0); // Saved history is never replayed to Server4 TTS!
+			expect(await dialog.locator(".voice-test-model").first().innerText()).toBe(
+				"Answers & tools: DeepSeek Flash · thinking off",
+			);
+			expect(await dialog.locator(".voice-test-model").last().innerText()).toContain(
+				"Delegated work: fixture · thinking off (when requested)",
+			);
+			expect(await dialog.locator(".voice-test-help").innerText()).toContain(
+				"Up to 2 minutes per turn",
+			);
+			expect(await dialog.locator(".voice-test-mic-state").innerText()).toBe("Microphone off");
+			const micButton = dialog.getByRole("button", { name: "Start microphone", exact: true });
+			expect((await micButton.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+			expect(await dialog.evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(
+				"rgba(0, 0, 0, 0)",
+			);
+			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
 			expect(
 				await dialog
 					.getByRole("button", { name: "Use Server4 LFM voice", exact: true })
@@ -2357,7 +2401,15 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			).toBe(true);
 			const noOverflow = await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth + 1);
 			expect(noOverflow).toBe(true);
+			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
+			expect(
+				await dialog.getByRole("button", { name: "Stop speaking", exact: true }).isVisible(),
+			).toBe(true);
 
+			// Reading older text must not yank the log or the whole modal to a new reply:
+			await dialog.getByRole("log").evaluate((node) => {
+				node.scrollTop = 0;
+			});
 			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Ping");
 			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
 			await expect.poll(() => ttsWs.some((m) => m.type === "speak")).toBe(true);
@@ -2371,7 +2423,40 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					}),
 				)
 				.toBe(true);
-			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
+			expect(await dialog.getByRole("log").evaluate((node) => node.scrollTop)).toBe(0);
+			await dialog.getByRole("button", { name: "Close voice", exact: true }).click();
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("keeps Relay closable when connection setup fails without starting or cancelling work", async () => {
+		const { page } = await openPage("/");
+		const sent: string[] = [];
+		await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "lfm-tts"));
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				sent.push(message.type);
+				if (message.type === "init")
+					ws.send(JSON.stringify({ type: "error", message: "Fixture connection unavailable" }));
+			});
+		});
+		try {
+			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
+			const dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect
+				.poll(() => dialog.locator(".voice-test-status").innerText())
+				.toContain("Fixture connection unavailable");
+			expect(
+				await dialog.getByRole("button", { name: "Start microphone", exact: true }).isDisabled(),
+			).toBe(true);
+			expect(
+				await dialog.getByRole("button", { name: "Close voice", exact: true }).isEnabled(),
+			).toBe(true);
+			await dialog.getByRole("button", { name: "Close voice", exact: true }).click();
+			expect(await dialog.count()).toBe(0);
+			expect(sent).toEqual(["init"]);
 		} finally {
 			await page.close();
 		}
@@ -2583,17 +2668,37 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				Object.defineProperty(navigator, "mediaDevices", {
 					configurable: true,
 					value: {
-						getUserMedia: async () => ({ getTracks: () => [{ stop() {}, addEventListener() {} }] }),
+						getUserMedia: () =>
+							new Promise((resolve) => {
+								(window as unknown as { __allowMic(): void }).__allowMic = () =>
+									resolve({ getTracks: () => [{ stop() {}, addEventListener() {} }] });
+							}),
 					},
 				}),
 			);
 			await page.clock.install();
 			await dialog.getByRole("button", { name: "Start microphone", exact: true }).click();
+			expect(
+				await dialog
+					.getByRole("button", { name: "Starting microphone…", exact: true })
+					.isDisabled(),
+			).toBe(true);
+			expect(await dialog.locator(".voice-test-mic-state").innerText()).toBe(
+				"Microphone starting…",
+			);
+			await page.evaluate(() => (window as unknown as { __allowMic(): void }).__allowMic());
+			await expect
+				.poll(() => dialog.getByRole("button", { name: "Stop microphone", exact: true }).count())
+				.toBe(1);
+			expect(await dialog.locator(".voice-test-mic-state").innerText()).toBe("Microphone on");
+			expect(
+				await dialog.getByRole("button", { name: "Stop microphone" }).getAttribute("aria-pressed"),
+			).toBe("true");
 			await onset();
 			await page.clock.fastForward(31_000);
-			expect(await dialog.getByRole("button", { name: "Stop microphone", exact: true }).isVisible()).toBe(
-				true,
-			);
+			expect(
+				await dialog.getByRole("button", { name: "Stop microphone", exact: true }).isVisible(),
+			).toBe(true);
 			await end([0.125, 0.25]);
 			await expect.poll(() => requests.length).toBe(1);
 			await onset(); // resumed before recognition of the beginning finishes
@@ -2612,14 +2717,18 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(
 				requests[2].request().postDataBuffer()!.includes(Buffer.from("[0.125,0.25,0.375,0.5]")),
 			).toBe(true);
-			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			await dialog.getByRole("button", { name: "Stop speaking", exact: true }).click();
 			await answer(2, "First sentence, um, final sentence.");
 			await expect.poll(() => contexts).toEqual(["First sentence, um, final sentence."]);
 			expect(controls.filter((s) => s.startsWith("/relay voice-request "))).toHaveLength(1);
 			expect(controls).not.toContain("abort");
-			await dialog
-				.getByRole("button", { name: "Close voice — keep work running", exact: true })
-				.click();
+			await dialog.getByRole("button", { name: "Stop microphone", exact: true }).click();
+			expect(await dialog.locator(".voice-test-mic-state").innerText()).toBe("Microphone off");
+			expect(
+				await dialog.getByRole("button", { name: "Start microphone" }).getAttribute("aria-pressed"),
+			).toBe("false");
+			expect(controls).not.toContain("abort");
+			await dialog.getByRole("button", { name: "Close voice", exact: true }).click();
 		} finally {
 			await page.close();
 		}
