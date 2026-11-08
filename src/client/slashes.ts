@@ -36,7 +36,7 @@ import {
 } from "./state.js";
 import { shareableSessionUrl } from "./url.js";
 import { nextVoiceMode, VOICE_MODE_LABELS } from "./voice-mode.js";
-import { openRelay, openVoiceTest } from "./voice-test.js";
+import { openRelay, openRelayTrial, openVoiceTest } from "./voice-test.js";
 
 /**
  * Small helper for the slash command's help/session/copy messages.
@@ -374,12 +374,30 @@ export function handleSlash(arg: string): void {
 		case "model":
 			openModelPicker();
 			break;
-		case "relay":
-			openRelay();
+		case "relay": {
+			const engineArg = rest.trim().toLowerCase();
+			openRelay(
+				engineArg === "lfm-tts" || engineArg === "lfm"
+					? "lfm-tts"
+					: engineArg === "legacy"
+						? "legacy"
+						: engineArg === "server4"
+							? "server4"
+							: undefined,
+			);
 			return;
-		case "relaytrial":
-			openVoiceTest(true, false, true);
+		}
+		case "relaytrial": {
+			const engineArg = rest.trim().toLowerCase();
+			openRelayTrial(
+				engineArg === "lfm" || engineArg === "lfm-tts"
+					? true
+					: engineArg === "kokoro"
+						? false
+						: undefined,
+			);
 			return;
+		}
 		case "voicetest":
 			// UI only: the separate Pi session owns all conversation/model behaviour.
 			openVoiceTest();

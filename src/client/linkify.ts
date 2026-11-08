@@ -25,20 +25,22 @@ marked.setOptions({ gfm: true, breaks: true });
 // original hand-built <a> elements. DOMPurify already strips unsafe
 // URL schemes (javascript:, data:, ...), so by the time we set target
 // the href is known-safe.
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-	if (node.tagName === "A" && node.getAttribute("href")) {
-		node.setAttribute("target", "_blank");
-		node.setAttribute("rel", "noopener noreferrer");
-		node.classList.add("rich-link");
-	}
-	if (node.tagName === "IMG") {
-		// Images in older transcript rows should not compete with the current
-		// conversation for bandwidth or decode time. Browser-native lazy
-		// loading still fetches images as they approach the viewport.
-		node.setAttribute("loading", "lazy");
-		node.setAttribute("decoding", "async");
-	}
-});
+if (typeof DOMPurify.addHook === "function") {
+	DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+		if (node.tagName === "A" && node.getAttribute("href")) {
+			node.setAttribute("target", "_blank");
+			node.setAttribute("rel", "noopener noreferrer");
+			node.classList.add("rich-link");
+		}
+		if (node.tagName === "IMG") {
+			// Images in older transcript rows should not compete with the current
+			// conversation for bandwidth or decode time. Browser-native lazy
+			// loading still fetches images as they approach the viewport.
+			node.setAttribute("loading", "lazy");
+			node.setAttribute("decoding", "async");
+		}
+	});
+}
 
 /**
  * Render `text` (markdown) into `container` as sanitized HTML, replacing

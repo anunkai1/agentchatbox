@@ -4356,8 +4356,12 @@ select:focus-visible,
 	border-radius: 10px;
 	margin: 8px 0;
 }
-.voice-test p {
+.voice-test p,
+.voice-test-row {
 	margin: 12px 0;
+}
+.voice-test-row > .markdown {
+	margin-top: 4px;
 }
 .voice-test-model,
 .voice-test-metrics {

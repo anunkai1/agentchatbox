@@ -20,29 +20,38 @@ integration or standing proactive mandate is installed.
    use native Pi, not the originating chat's `/cc` mode. Antigravity automation
    is deliberately unavailable under the current provider mandate: choose a
    different work model before starting a new Relay conversation.
-3. The default is **Server4 LFM voice**. Start conversation in the embedded voice
-   panel, allow the microphone and wait for Listening; headphones help. Server4
-   must be awake with its GPU free. **Use legacy STT/Kokoro** explicitly selects
-   the older speech path without that GPU dependency; this device remembers the
-   choice. There is no silent fallback. **Send text** reaches Pi without a mic;
-   local speech speaks its reply only if voice is connected. A clear work
-   request authorises dispatch; discussion is not approval. Relay can inspect
-   files and live state directly to choose the owning repository and resolve
-   missing facts, and must ask only when scope or destination is genuinely unclear.
+3. The default when unset is **Server4 LFM voice** (`acb-relay-voice-engine = "server4"`).
+   Start conversation in the embedded voice panel, allow the microphone and wait
+   for Listening; headphones help. Server4 must be awake with its GPU free.
+   **Use Pi + LFM TTS (speech-only)** (`"lfm-tts"`, or `/relay lfm-tts`) uses
+   local browser Silero VAD + `/api/transcribe` (Server2 Bark STT) → full-access
+   Pi/DeepSeek → rendered `SpokenMarkdown` sentence streaming → progressive 24 kHz
+   PCM synthesis from Server4 LFM `POST /tts` over `/experiments/lfm-voice/ws?tts=1`,
+   without LFM interpreting requests, routing tools or rewriting answers.
+   **Use legacy STT/Kokoro** (`"legacy"`, or `/relay legacy`) explicitly selects
+   the older speech path without Server4 GPU dependency. This device remembers
+   the explicit choice without silently migrating saved sessions or falling back.
+   **Send text** reaches Pi without a mic. A clear work request authorises
+   dispatch; discussion is not approval. Relay can inspect files and live state
+   directly to choose the owning repository and resolve missing facts, and must
+   ask only when scope or destination is genuinely unclear.
 4. Talk while the worker runs. Ask for status or send further instructions.
    Worker reports wake Relay; needs-input questions come back to this chat.
-5. In **Server4 mode**, speaking over a reply or **Interrupt** stops speech only:
-   **Pi direct tools and workers continue**. Approximately played words are kept;
-   correction audio waits for verified native repair, never a silent whole-answer
-   reset. Use **Stop current Pi turn** to explicitly abort the active Pi
+5. In **Server4 LFM voice** and **Pi + LFM TTS (speech-only)** modes, speaking
+   over a reply or **Interrupt** stops speech only: **Pi direct tools and workers
+   continue**. In `Pi + LFM TTS (speech-only)`, the full formatted Markdown reply
+   stays visible in chat while Server4's CPU Whisper `small.en` transcribes only
+   the output-clock-played PCM slice with no text prompt hints (`played_prefix`),
+   recording honest approximate played speech in Pi without overwriting the saved
+   chat reply. Use **Stop current Pi turn** to explicitly abort the active Pi
    coordinator turn; queued voice requests and delegated workers may continue, and
    completed external effects remain. End/hide/close releases microphone and
-   Server4, not Pi work. Microphone capture never restarts automatically. Wait a
-   few seconds for the old children to exit before immediately restarting voice;
-   GPU contention fails explicitly.
+   Server4's GPU, not Pi work. Microphone capture never restarts automatically.
+   Wait a few seconds for the old children to exit before immediately restarting
+   voice; GPU contention fails explicitly.
    **Legacy mode differs:** its Interrupt, new speech or hidden tab can abort the
-   current Pi direct turn, though delegated workers survive. Closing either
-   panel leaves work running.
+   current Pi direct turn, though delegated workers survive. Closing any panel
+   leaves work running.
 6. Reopen `/relay` to resume the saved conversation and associated job. The
    browser remembers the session ID on this device; it never replays utterances,
    work submissions or old speech. The saved transcript and worker chat are also
@@ -59,30 +68,31 @@ integration or standing proactive mandate is installed.
 ## Isolated streaming trial
 
 `/relaytrial` opens **Trial A — streaming Pi voice**: local STT → the same
-full-access Pi/DeepSeek Relay → sentence-streamed Kokoro. It starts speech while
-Pi is still generating, without LFM interpreting the completed answer. It has
-its own saved session (`acb-relay-trial-stream-session`) and does not change the
-normal Relay session or remembered voice engine.
+full-access Pi/DeepSeek Relay → sentence-streamed Kokoro (default) or **Use LFM
+TTS (speech-only)** (`/relaytrial lfm-tts`, persisted separately in
+`acb-relay-trial-engine`). It starts speech while Pi is still generating, without
+LFM interpreting the completed answer. It has its own saved session
+(`acb-relay-trial-stream-session`) and does not change the normal Relay session
+or remembered voice engine.
 
 The speech path renders Markdown before sentence splitting, so headings, list
-markers, emphasis and link destinations are not read as formatting characters.
-Incomplete formatting is buffered; large code blocks use the existing spoken
-cue. Playback evidence records the cleaned spoken segments, while the saved Pi
-answer keeps its original formatting. If later Markdown revises already-emitted
-text, speech stops explicitly rather than replaying it; Pi work continues.
+markers, emphasis and link destinations are not read as formatting characters,
+while the chat log renders the formatted Markdown. Incomplete formatting is
+buffered; large code blocks use the existing spoken cue. If later Markdown
+revises already-emitted text, speech stops explicitly rather than replaying it;
+Pi work continues.
 
 Interrupt, barge-in and hiding the tab stop speech, not Pi work. **Stop current
 Pi turn** is the explicit coordinator abort; **Cancel work job** remains separate.
 After an interruption, further output from that ongoing turn stays muted until
 a new owner turn. Restored history is never replayed as speech.
 
-Playback evidence records segments whose scheduled audio finished. A cut segment
-is explicitly uncertain; there is no word alignment or exact-hearing claim.
-The full generated answer remains in the ordinary Pi chat. This trial does not
-add semantic turn detection, eliminate STT mistakes or guarantee that Pi delegates
-instead of blocking on a direct tool. Test those behaviours rather than assuming
-streaming solves them. Like legacy voice, this uses the existing STT/Kokoro
-services rather than reserving Server4's LFM GPU.
+In Kokoro trial mode, playback evidence records segments whose scheduled audio
+finished, marking a cut segment as uncertain; it needs no Server4 GPU. In LFM
+TTS trial mode, active speech reserves Server4's GPU over `/ws?tts=1` and records
+unhinted Whisper `small.en` approximate played words from the output-clock slice.
+Neither mode adds semantic turn detection, eliminates STT/ASR mistakes, guarantees
+voice timbre continuity across independent `/tts` calls, or proves acoustic hearing.
 
 ## Ownership and persistence
 
