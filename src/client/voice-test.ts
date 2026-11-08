@@ -15,6 +15,7 @@ import { encodeRelayVoice, RelayVoiceFrame } from "./relay-voice.js";
 import { SpokenMarkdown } from "./spoken-markdown.js";
 import { state } from "./state.js";
 import {
+	type ConversationCapture,
 	ConversationSpeaker,
 	cancelVoiceRecord,
 	captureConversation,
@@ -228,11 +229,10 @@ export function openVoiceTest(
 	let relayText = "";
 	let relayMuted = false;
 	let relayFirstText = 0;
-	let speechEpoch = 0;
 	let endedAt = 0;
 	let sttMs = 0;
 	let firstTextMs = 0;
-	let stopCapture: (() => void) | null = null;
+	let stopCapture: ConversationCapture | null = null;
 	let sttController: AbortController | null = null;
 	let closeTimer: ReturnType<typeof setTimeout> | null = null;
 	let micPending = false;
@@ -313,9 +313,6 @@ export function openVoiceTest(
 			localFrame?.interrupt();
 			return;
 		}
-		speechEpoch++;
-		sttController?.abort();
-		sttController = null;
 		speaker?.stop();
 		lfmSpeaker?.stop();
 		lfmStartedUtterance = "";
@@ -348,12 +345,15 @@ export function openVoiceTest(
 		setMarkdownRow(row, label, markdown);
 		return row;
 	};
-	const releaseMic = () => {
-		stopCapture?.();
-		stopCapture = null;
+	const discardInput = () => {
 		sttController?.abort();
 		sttController = null;
-		speechEpoch++;
+		stopCapture?.discard();
+	};
+	const releaseMic = () => {
+		discardInput();
+		stopCapture?.close();
+		stopCapture = null;
 	};
 	const closeSocket = () => {
 		clearTimeout(startupTimer);
@@ -491,12 +491,13 @@ export function openVoiceTest(
 					cancelAudio();
 					sayStatus("Hearing speech…");
 				},
-				(audio, speechEndedAt) => {
-					const epoch = speechEpoch;
+				(turn) => {
+					const { audio } = turn;
 					const controller = new AbortController();
+					// This replacement snapshot includes ALL unsubmitted segments.
 					sttController?.abort();
 					sttController = controller;
-					endedAt = speechEndedAt;
+					endedAt = turn.endedAt;
 					const began = performance.now();
 					sayStatus("Transcribing locally…");
 					void transcribeAudio(
@@ -509,13 +510,25 @@ export function openVoiceTest(
 						controller.signal,
 					)
 						.then((text) => {
-							if (controller.signal.aborted || epoch !== speechEpoch || ending || dismissed) return;
+							if (
+								controller.signal.aborted ||
+								!ready ||
+								socket.readyState !== WebSocket.OPEN ||
+								ending ||
+								dismissed ||
+								!turn.isCurrent()
+							)
+								return;
 							sttMs = performance.now() - began;
-							if (text.trim()) say(text);
-							else sayStatus("No speech recognised — try again");
+							if (text.trim()) {
+								// Only this unchanged draft can be consumed, immediately before dispatch.
+								if (turn.accept()) say(text);
+							} else
+								sayStatus("No speech recognised — continue speaking or restart the microphone");
 						})
 						.catch((error: unknown) => {
-							if (!controller.signal.aborted) fail(error);
+							if (!controller.signal.aborted && turn.isCurrent() && !ending && !dismissed)
+								fail(error);
 						});
 				},
 				(error) => {
@@ -524,7 +537,7 @@ export function openVoiceTest(
 					fail(error);
 				},
 			);
-			if (ending || dismissed || document.visibilityState === "hidden") stop();
+			if (ending || dismissed || document.visibilityState === "hidden") stop.close();
 			else {
 				stopCapture = stop;
 				start.textContent = "Stop microphone";
@@ -569,6 +582,7 @@ export function openVoiceTest(
 		event.preventDefault();
 		const text = input.value.trim();
 		if (!text || !ready || ending) return;
+		discardInput();
 		cancelAudio();
 		endedAt = performance.now();
 		sttMs = 0;

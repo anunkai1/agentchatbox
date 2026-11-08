@@ -17,7 +17,13 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { build } from "esbuild";
-import { type Browser, chromium, type Page, type WebSocketRoute } from "playwright-core";
+import {
+	type Browser,
+	chromium,
+	type Page,
+	type Route,
+	type WebSocketRoute,
+} from "playwright-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
@@ -93,7 +99,7 @@ async function freePort(): Promise<number> {
 	return port;
 }
 
-async function bundleClient(): Promise<{ html: string; js: string; css: string }> {
+async function bundleClient(vadAlias?: string): Promise<{ html: string; js: string; css: string }> {
 	const out = await build({
 		entryPoints: [join(root, "src/client/main.ts")],
 		bundle: true,
@@ -102,6 +108,7 @@ async function bundleClient(): Promise<{ html: string; js: string; css: string }
 		platform: "browser",
 		write: false,
 		define: { "process.env.NODE_ENV": '"production"' },
+		alias: vadAlias ? { "@ricky0123/vad-web": vadAlias } : undefined,
 		logLevel: "silent",
 	});
 	return {
@@ -112,7 +119,10 @@ async function bundleClient(): Promise<{ html: string; js: string; css: string }
 }
 
 /** Serve the in-memory client for page loads; API and WS go to the server. */
-async function openPage(path: string): Promise<{ page: Page; sockets: WebSocketRoute[] }> {
+async function openPage(
+	path: string,
+	script = client.js,
+): Promise<{ page: Page; sockets: WebSocketRoute[] }> {
 	if (!browser) throw new Error("browser not started");
 	const page = await browser.newPage();
 	const sockets: WebSocketRoute[] = [];
@@ -134,7 +144,7 @@ async function openPage(path: string): Promise<{ page: Page; sockets: WebSocketR
 		(route) => {
 			const { pathname } = new URL(route.request().url());
 			if (pathname === "/app.js") {
-				return route.fulfill({ body: client.js, contentType: "text/javascript" });
+				return route.fulfill({ body: script, contentType: "text/javascript" });
 			}
 			if (pathname === "/styles.css") {
 				return route.fulfill({ body: client.css, contentType: "text/css" });
@@ -2386,6 +2396,133 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		} finally {
 			await page.close();
 			for (const file of files) rmSync(file);
+		}
+	});
+
+	it("retains all paused speech and does not cancel ASR when only speech output is interrupted", async () => {
+		// Deterministic VAD onsets + delayed ASR exercise the actual UI input race.
+		// This fixture is test-bundle-only; the existing smoke also starts real Silero.
+		const vadFixture = join(tmp, "synthetic-vad.ts");
+		writeFileSync(
+			vadFixture,
+			`
+			export const MicVAD = { new: async (options) => {
+				window.__inputRaceVad = options;
+				return { start: async () => {}, destroy: async () => {} };
+			}};
+			export const utils = { encodeWAV: (samples) =>
+				new TextEncoder().encode(JSON.stringify(Array.from(samples))).buffer };
+		`,
+		);
+		const synthetic = await bundleClient(vadFixture);
+		const { page } = await openPage("/", synthetic.js);
+		const requests: Route[] = [];
+		const contexts: string[] = [];
+		const controls: string[] = [];
+		await page.route("**/api/transcribe", (route) => {
+			requests.push(route);
+		});
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			const custom = (details: object) =>
+				ws.send(
+					JSON.stringify({
+						type: "event",
+						event: {
+							type: "message_end",
+							message: { role: "custom", customType: "acb-relay", details },
+						},
+					}),
+				);
+			ws.onMessage((raw) => {
+				const m = JSON.parse(String(raw));
+				if (m.type === "init")
+					ws.send(JSON.stringify({ type: "ready", sessionId: "paused-speech-test" }));
+				else if (m.type === "getCapabilities")
+					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
+				else if (m.type === "abort") controls.push("abort");
+				else if (m.type === "prompt") {
+					controls.push(m.text);
+					if (m.text.startsWith("/relay start"))
+						custom({
+							kind: "ready",
+							model: "fixture",
+							workerModel: { provider: "venice", modelId: "fixture", thinkingLevel: "off" },
+						});
+					const [, action, id, encoded] = m.text.split(" ");
+					if (action === "voice-context") {
+						const text = JSON.parse(Buffer.from(encoded, "base64url").toString()).text;
+						contexts.push(text);
+						custom({ kind: "voice_context", id, user: text });
+					}
+				}
+			});
+		});
+		const onset = () =>
+			page.evaluate(() => {
+				const vad = (
+					window as unknown as {
+						__inputRaceVad: { onSpeechStart(): void; onSpeechRealStart(): void };
+					}
+				).__inputRaceVad;
+				vad.onSpeechStart();
+				vad.onSpeechRealStart();
+			});
+		const end = (samples: number[]) =>
+			page.evaluate((data) => {
+				(
+					window as unknown as { __inputRaceVad: { onSpeechEnd(audio: Float32Array): void } }
+				).__inputRaceVad.onSpeechEnd(Float32Array.from(data));
+			}, samples);
+		const answer = async (index: number, text: string) => {
+			const response = page.waitForResponse((r) => r.url().endsWith("/api/transcribe"));
+			await requests[index].fulfill({ json: { text } });
+			await response;
+			await page.evaluate(
+				() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+			);
+		};
+		try {
+			await send(page, "/relaytrial");
+			const dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice" });
+			await expect.poll(() => dialog.locator(".voice-test-status").innerText()).toContain("Ready");
+			await page.evaluate(() =>
+				Object.defineProperty(navigator, "mediaDevices", {
+					configurable: true,
+					value: {
+						getUserMedia: async () => ({ getTracks: () => [{ stop() {}, addEventListener() {} }] }),
+					},
+				}),
+			);
+			await dialog.getByRole("button", { name: "Start microphone", exact: true }).click();
+			await onset();
+			await end([0.125, 0.25]);
+			await expect.poll(() => requests.length).toBe(1);
+			await onset(); // resumed before recognition of the beginning finishes
+			await answer(0, "First sentence.");
+			expect(contexts).toEqual([]);
+			await end([0.375]); // filler
+			await expect.poll(() => requests.length).toBe(2);
+			expect(
+				requests[1].request().postDataBuffer()!.includes(Buffer.from("[0.125,0.25,0.375]")),
+			).toBe(true);
+			await onset();
+			await answer(1, "First sentence, um.");
+			expect(contexts).toEqual([]);
+			await end([0.5]);
+			await expect.poll(() => requests.length).toBe(3);
+			expect(
+				requests[2].request().postDataBuffer()!.includes(Buffer.from("[0.125,0.25,0.375,0.5]")),
+			).toBe(true);
+			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			await answer(2, "First sentence, um, final sentence.");
+			await expect.poll(() => contexts).toEqual(["First sentence, um, final sentence."]);
+			expect(controls.filter((s) => s.startsWith("/relay voice-request "))).toHaveLength(1);
+			expect(controls).not.toContain("abort");
+			await dialog
+				.getByRole("button", { name: "Close voice — keep work running", exact: true })
+				.click();
+		} finally {
+			await page.close();
 		}
 	});
 

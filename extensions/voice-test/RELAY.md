@@ -31,6 +31,12 @@ integration or standing proactive mandate is installed.
    **Use legacy STT/Kokoro** (`"legacy"`, or `/relay legacy`) explicitly selects
    the older speech path without Server4 GPU dependency. This device remembers
    the explicit choice without silently migrating saved sessions or falling back.
+   Browser STT modes allow about 1.4 seconds of quiet before recognition. If you
+   resume during recognition, earlier unsubmitted audio is kept and joined with
+   the next segment; stale partial transcripts cannot dispatch work. This is
+   bounded to 30 seconds of unsent audio, not an unlimited dictation buffer.
+   **Interrupt** stops output without discarding that input. Stopping/hiding/closing
+   the mic clears unsent input; typed submission explicitly replaces it.
    **Send text** reaches Pi without a mic. A clear work request authorises
    dispatch; discussion is not approval. Relay can inspect files and live state
    directly to choose the owning repository and resolve missing facts, and must

@@ -23,9 +23,13 @@ rather than sending an unknown slash command to a full-access coding agent.
 - **Start microphone** requests microphone permission and loads local Silero VAD.
   Use headphones. Browser echo cancellation helps but is not a guarantee against
   speaker audio retriggering speech detection.
-- Speak normally; a 600 ms speech-end window submits the completed utterance to
-  the existing local transcription service. New speech interrupts model output,
-  queued synthesis and playback. **Interrupt** does the same manually.
+- Speak normally; about 1.4 seconds of quiet starts local transcription. If you
+  resume while recognition is pending, the unsent audio is retained and combined
+  with the next speech segment, rather than losing the beginning. Only an
+  unchanged, accepted transcript becomes a request. Unsent audio stays in tab
+  memory and is bounded to 30 seconds; no partial request is sent on a limit error.
+  New speech interrupts model output, queued synthesis and playback. **Interrupt**
+  does the same manually without discarding pending microphone input.
 - **Send text** tests the response/speech path without opening a microphone.
 - **Stop microphone** releases capture and cancels the current turn.
 - **End test & summarise** stops capture/playback, requests a short model summary,
