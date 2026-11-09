@@ -15,7 +15,7 @@
  *    token per run), so one is minted in memory here. Nothing is written back and
  *    no secret is printed or copied into a second store.
  */
-import { readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { remainingFlag, resetAt } from "./format.js";
@@ -30,6 +30,9 @@ export const INSTALL_FILE = join(
 	"install-integrity.json",
 );
 export const CLOUDCODE_BASE = "https://cloudcode-pa.googleapis.com";
+
+export const ACP_LOG = "/tmp/agy_acp_server.par.INFO";
+const LOG_TAIL_BYTES = 512 * 1024;
 
 export interface QuotaBucket {
 	bucketId?: string;
@@ -140,10 +143,49 @@ export async function fetchQuota(file = TOKEN_FILE): Promise<QuotaSummary> {
 	return call<QuotaSummary>("retrieveUserQuotaSummary", token, { project: resolved });
 }
 
-export function formatQuota(summary: QuotaSummary, now = Date.now() / 1000): string[] {
+export interface QuotaBlock {
+	model?: string;
+	/** Epoch seconds when the refused model's allowance comes back. */
+	resetsAt?: number;
+}
+
+/**
+ * The refusal Google actually enforces, read from the agent's own log: a 429
+ * carries `model` and `quotaResetTimeStamp`. Needed because the summary's Argon
+ * bucket is not that counter — it always reads 100% left with a reset of
+ * "now + 7 days", every time it is asked.
+ */
+export function lastBlock(file = ACP_LOG): QuotaBlock | undefined {
+	let handle: number | undefined;
+	try {
+		handle = openSync(file, "r");
+		const size = fstatSync(handle).size;
+		const length = Math.min(size, LOG_TAIL_BYTES);
+		const buffer = Buffer.alloc(length);
+		readSync(handle, buffer, 0, length, size - length);
+		const log = buffer.toString("utf8");
+		const last = [...log.matchAll(/model:([\w.-]+)[^\n]*?quotaResetTimeStamp:(\S+)/g)].at(-1);
+		const resetsAt = last ? Date.parse(last[2]) : Number.NaN;
+		if (!last || Number.isNaN(resetsAt)) return undefined;
+		return { model: last[1], resetsAt: resetsAt / 1000 };
+	} catch {
+		return undefined;
+	} finally {
+		if (handle !== undefined) closeSync(handle);
+	}
+}
+
+export function formatQuota(
+	summary: QuotaSummary,
+	now = Date.now() / 1000,
+	block = lastBlock(),
+): string[] {
 	const lines = ["**📊 /argon-usage** — Antigravity (Gemini 4 Argon)"];
 	for (const group of summary.groups ?? []) {
-		if (group.displayName) lines.push(`_${group.displayName}_`);
+		const advisory = /argon/i.test(group.displayName ?? "")
+			? " _— reported only, not what Google enforces_"
+			: "";
+		if (group.displayName) lines.push(`_${group.displayName}_${advisory}`);
 		for (const bucket of group.buckets ?? []) {
 			const left = Math.round((bucket.remainingFraction ?? 0) * 100);
 			const reset = resetAt(
@@ -154,6 +196,12 @@ export function formatQuota(summary: QuotaSummary, now = Date.now() / 1000): str
 			lines.push(`${name}: ${left}% left${remainingFlag(left)} · resets ${reset}`);
 		}
 	}
-	if (lines.length === 1) lines.push("No allowance reported for this account.");
+	if (block?.resetsAt && block.resetsAt > now) {
+		lines.push(
+			`⛔ ${block.model ?? "Antigravity"}: refused by Google — resets ${resetAt(block.resetsAt, now)}`,
+		);
+	} else if (lines.length === 1) {
+		lines.push("No allowance reported for this account.");
+	}
 	return lines;
 }
