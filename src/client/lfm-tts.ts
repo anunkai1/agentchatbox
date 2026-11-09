@@ -13,7 +13,7 @@ function declarePlaybackAudioSession(): void {
 }
 
 const OUTPUT_RATE = 24_000;
-const PREROLL_SAMPLES = 5_760; // 240 ms @ 24 kHz prevents initial jitter underruns
+const PREROLL_SAMPLES = 2_400; // 100 ms @ 24 kHz balances fast first-audio with jitter protection
 const MAX_QUEUED_SEGMENTS = 40;
 const MAX_QUEUED_CHARS = 10_000;
 const MAX_UTTERANCE_SAMPLES = OUTPUT_RATE * 180;

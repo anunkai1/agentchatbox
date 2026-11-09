@@ -269,7 +269,7 @@ describe("LFM speech-only TTS client primitives", () => {
 		speaker.beginUtterance("utt-2", performance.now(), (r) => reports.push(r));
 		speaker.enqueueSegment("Short reply.");
 		speaker.finishUtterance();
-		ws.receiveBinary(encodePcmFrame(2, new Array(2400).fill(0.1))); // 100 ms (< preroll)
+		ws.receiveBinary(encodePcmFrame(2, new Array(1200).fill(0.1))); // 50 ms (< 100 ms preroll)
 		expect(ctx.nodes).toHaveLength(1); // Still in preroll until utterance_done
 		ws.receiveJson({ type: "utterance_done", epoch: 2, utterance: "utt-2", truncated: false });
 		expect(ctx.nodes).toHaveLength(2); // Flushed on utterance_done!
@@ -279,20 +279,20 @@ describe("LFM speech-only TTS client primitives", () => {
 			type: "played",
 			epoch: 2,
 			utterance: "utt-2",
-			played_ms: 100,
+			played_ms: 50,
 		});
 		ws.receiveJson({
 			type: "played_prefix",
 			epoch: 2,
 			utterance: "utt-2",
-			playedMs: 100,
+			playedMs: 50,
 			text: "Short reply.",
 			complete: true,
 			uncertain: false,
 		});
 		expect(reports.at(-1)).toEqual({
 			utterance: "utt-2",
-			playedMs: 100,
+			playedMs: 50,
 			text: "Short reply.",
 			complete: true,
 			uncertain: false,

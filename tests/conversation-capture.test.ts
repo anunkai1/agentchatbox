@@ -85,7 +85,7 @@ afterEach(() => {
 describe("conversation input drafts", () => {
 	it("allows a natural pause and never submits a partial segment on close", async () => {
 		await begin();
-		expect(mock.options).toMatchObject({ redemptionMs: 1400, submitUserSpeechOnPause: false });
+		expect(mock.options).toMatchObject({ redemptionMs: 500, submitUserSpeechOnPause: false });
 		start();
 		capture!.close();
 		expect(turns).toHaveLength(0);

@@ -39,6 +39,15 @@ describe("voice sentence buffering", () => {
 			"Okay?",
 		]);
 	});
+	it("flushes the opening clause early for faster first-word TTS, then waits for full sentences", () => {
+		const splitter = new SpokenSentences();
+		expect(splitter.push("I checked the Server4 status for you, and ")).toEqual([
+			"I checked the Server4 status for you,",
+		]);
+		expect(
+			splitter.push("the service is running, with all locks free. Next sentence.", true),
+		).toEqual(["and the service is running, with all locks free.", "Next sentence."]);
+	});
 	it("bounds chunks when the model writes a long unpunctuated reply", () => {
 		expect(new SpokenSentences().push("word ".repeat(70)).every((text) => text.length <= 220)).toBe(
 			true,

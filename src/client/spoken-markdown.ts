@@ -18,7 +18,10 @@ export class SpokenMarkdown {
 			);
 		}
 		const tail = text.slice(this.emitted.length);
-		const chunks = new SpokenSentences().push(tail + (/\s$/.test(this.source) ? " " : ""), final);
+		const chunks = new SpokenSentences(!this.emitted).push(
+			tail + (/\s$/.test(this.source) ? " " : ""),
+			final,
+		);
 		let consumed = 0;
 		for (const chunk of chunks) consumed = tail.indexOf(chunk, consumed) + chunk.length;
 		this.emitted = text.slice(0, this.emitted.length + consumed);

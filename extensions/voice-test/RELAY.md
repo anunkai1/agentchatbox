@@ -56,7 +56,7 @@ integration or standing proactive mandate is installed.
    evidence; it never replaces the full saved answer. Reading earlier messages does
    not pull the page away. Legacy **Interrupt** retains its existing direct-turn
    abort behaviour.
-   Browser STT modes allow about 1.4 seconds of quiet before recognition. If you
+   Browser STT modes allow about 0.5 seconds of quiet before recognition. If you
    resume during recognition, earlier unsubmitted audio is kept and joined with
    the next segment; stale partial transcripts cannot dispatch work. This is
    bounded to **two minutes of unsent audio** (including continuous speech),

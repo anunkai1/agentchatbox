@@ -111,7 +111,7 @@ export async function captureConversation(
 			},
 			positiveSpeechThreshold: 0.5,
 			negativeSpeechThreshold: 0.35,
-			redemptionMs: 1400,
+			redemptionMs: 500,
 			preSpeechPadMs: 320,
 			minSpeechMs: 128,
 			submitUserSpeechOnPause: false,
