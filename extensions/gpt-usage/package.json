@@ -1,0 +1,19 @@
+{
+	"name": "acb-gpt-usage",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Pi extension: /gpt-usage reports the ChatGPT plan's five-hour and weekly allowance.",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}
