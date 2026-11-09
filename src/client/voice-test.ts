@@ -159,6 +159,11 @@ export function openVoiceTest(
 		{ type: "button", disabled: true },
 		relay && (localVoice || isStreamingPi) ? "Stop speaking" : "Interrupt",
 	);
+	const pause = el(
+		"button",
+		{ type: "button", hidden: !attached || localVoice, disabled: true, "aria-pressed": "false" },
+		"Pause voice",
+	);
 	const stopPi = el(
 		"button",
 		{
@@ -294,7 +299,7 @@ export function openVoiceTest(
 			{ class: "voice-test-live" },
 			micState,
 			status,
-			el("div", { class: "voice-test-controls" }, start, interrupt, stopPi, finish),
+			el("div", { class: "voice-test-controls" }, start, pause, interrupt, stopPi, finish),
 			el("p", { class: "voice-test-help" }, `${inputHint} ${stopHint}`),
 		),
 		...(!attached ? [form] : []),
@@ -326,6 +331,11 @@ export function openVoiceTest(
 	let sttController: AbortController | null = null;
 	let closeTimer: ReturnType<typeof setTimeout> | null = null;
 	let micPending = false;
+	let voicePaused = false;
+	let pausePending = false;
+	let pausedSpeechMessage = "";
+	let relayPauseSkipped = false;
+	let pauseNotice = "Paused — microphone muted; Pi work continues.";
 	let lastWireAt = Date.now();
 	const rows = new Map<string, HTMLElement>();
 	let drawer: RelayDrawer | null = null;
@@ -353,7 +363,11 @@ export function openVoiceTest(
 			localVoice ? "Server4 voice" : (micState.textContent ?? "Microphone off"),
 		);
 	const renderMic = () => {
-		start.disabled = !ready || ending || micPending;
+		start.disabled = !ready || ending || micPending || voicePaused || pausePending;
+		pause.disabled = !ready || ending || micPending || pausePending;
+		pause.textContent = voicePaused ? "Resume voice" : "Pause voice";
+		pause.setAttribute("aria-pressed", String(voicePaused));
+		drawer?.setPause(voicePaused, pause.disabled);
 		start.textContent = micPending
 			? "Starting microphone…"
 			: stopCapture
@@ -362,14 +376,16 @@ export function openVoiceTest(
 		start.setAttribute("aria-pressed", String(Boolean(stopCapture)));
 		micState.textContent = micPending
 			? "Microphone starting…"
-			: stopCapture
-				? "Microphone on"
-				: "Microphone off";
-		micState.dataset.active = String(Boolean(stopCapture));
+			: voicePaused && stopCapture
+				? "Microphone muted"
+				: stopCapture
+					? "Microphone on"
+					: "Microphone off";
+		micState.dataset.active = String(Boolean(stopCapture) && !voicePaused);
 		syncDrawer();
 	};
 	const sayStatus = (text: string) => {
-		status.textContent = text;
+		status.textContent = voicePaused && !text.startsWith("Error:") ? pauseNotice : text;
 		syncDrawer();
 	};
 	const fail = (error: unknown) => {
@@ -437,6 +453,7 @@ export function openVoiceTest(
 		if (connected()) sendWire({ type: "prompt", text });
 	};
 	const cancelAudio = () => {
+		pausedSpeechMessage = "";
 		if (relay && localVoice) {
 			localFrame?.interrupt();
 			return;
@@ -542,6 +559,10 @@ export function openVoiceTest(
 	const visibility = () => {
 		// Never leave a hidden tab listening or holding Server4's GPU; resuming needs another click.
 		if (document.visibilityState === "hidden") {
+			if (voicePaused || pausePending) {
+				voicePaused = true;
+				pauseNotice = "Paused — tab hidden; unsent speech and playback cleared.";
+			}
 			releaseMic();
 			if (localVoice) localFrame?.stop();
 			else {
@@ -565,7 +586,8 @@ export function openVoiceTest(
 	}, 5_000);
 	window.addEventListener("pagehide", unload);
 	document.addEventListener("visibilitychange", visibility);
-	if (attached) drawer = mountRelayDrawer(box, dispose);
+	if (attached)
+		drawer = mountRelayDrawer(box, dispose, localVoice ? undefined : () => pause.click());
 	const modal =
 		drawer ??
 		mountModal(overlay, box, {
@@ -629,6 +651,43 @@ export function openVoiceTest(
 		} else command(`${control} say ${turnId} ${text}`);
 	}
 
+	pause.onclick = async () => {
+		if (!ready || ending || pausePending || micPending) return;
+		pausePending = true;
+		const resuming = voicePaused;
+		voicePaused = !resuming;
+		if (!resuming) {
+			pauseNotice = "Paused — microphone muted; Pi work continues.";
+			pausedSpeechMessage =
+				relayMessage || (lfmSpeaker?.hasAudio || speaker?.hasAudio ? currentTurn : "");
+			sttController?.abort();
+			sttController = null; // Retain capture/VAD draft, not a stale recognition request.
+		} else {
+			pausedSpeechMessage = "";
+		}
+		renderMic();
+		sayStatus(resuming ? "Resuming voice…" : pauseNotice);
+		try {
+			if (resuming) {
+				await stopCapture?.resume();
+				if (ending || dismissed || document.visibilityState === "hidden") return;
+				await Promise.all([speaker?.resume(), lfmSpeaker?.resume()]);
+			} else {
+				await Promise.all([stopCapture?.pause(), speaker?.pause(), lfmSpeaker?.pause()]);
+			}
+			if (!ending && !dismissed)
+				sayStatus(stopCapture ? "Listening…" : "Ready — start the microphone or send text");
+		} catch (error) {
+			voicePaused = true;
+			speaker?.stop();
+			lfmSpeaker?.stop();
+			await stopCapture?.pause().catch(() => {});
+			fail(error);
+		} finally {
+			pausePending = false;
+			renderMic();
+		}
+	};
 	start.onclick = async () => {
 		if (stopCapture) {
 			releaseMic();
@@ -667,6 +726,7 @@ export function openVoiceTest(
 						.then((text) => {
 							if (
 								controller.signal.aborted ||
+								voicePaused ||
 								!ready ||
 								!connected() ||
 								ending ||
@@ -898,10 +958,12 @@ export function openVoiceTest(
 			const event = wire.event;
 			if (event.type === "message_start" && event.message?.role === "assistant") {
 				relayMessage = uuid();
+				relayPauseSkipped = voicePaused && Boolean(pausedSpeechMessage);
+				if (voicePaused && !pausedSpeechMessage) pausedSpeechMessage = relayMessage;
 				relayText = "";
 				relaySpeech = new SpokenMarkdown();
 				relayFirstText = 0;
-				lfmStartedUtterance = "";
+				if (!relayPauseSkipped) lfmStartedUtterance = "";
 				if (!isStreamingPi) relayMuted = false;
 				currentTurn = relayMessage;
 			} else if (
@@ -941,7 +1003,11 @@ export function openVoiceTest(
 				if (useLfmTts) {
 					if (lfmStartedUtterance === relayMessage) {
 						lfmSpeaker?.finishUtterance();
-					} else if (relayMuted && relayText.trim() && !lfmReportedIds.has(relayMessage)) {
+					} else if (
+						(relayMuted || relayPauseSkipped) &&
+						relayText.trim() &&
+						!lfmReportedIds.has(relayMessage)
+					) {
 						recordLfmPlayback({
 							utterance: relayMessage,
 							playedMs: 0,
@@ -954,6 +1020,7 @@ export function openVoiceTest(
 				if (event.message.errorMessage)
 					handleVoiceEvent({ kind: "error", text: event.message.errorMessage });
 				relayMessage = "";
+				relayPauseSkipped = false;
 			} else if (event.type === "message_end" && event.message?.role === "user") {
 				if (isStreamingPi) relayMuted = false;
 				link.hidden = false;
@@ -1002,7 +1069,7 @@ export function openVoiceTest(
 		}
 	}
 	function streamSpeech(delta: string, final = false): void {
-		if (localVoice || relayMuted || ending || dismissed) return;
+		if (localVoice || relayMuted || relayPauseSkipped || ending || dismissed) return;
 		try {
 			for (const text of relaySpeech.push(delta, final)) speakRelay(text);
 		} catch (error) {

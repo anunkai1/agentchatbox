@@ -143,6 +143,7 @@ export class LfmTtsSpeaker {
 	private wsReady = false;
 	private connecting = false;
 	private closed = false;
+	private paused = false;
 	private connGen = 0;
 	private epoch = 0;
 	private coldLoadMs: number | null = null;
@@ -163,7 +164,7 @@ export class LfmTtsSpeaker {
 			declarePlaybackAudioSession();
 			this.context = new AudioContext();
 		}
-		if (this.context.state === "suspended") {
+		if (!this.paused && this.context.state === "suspended") {
 			void this.context.resume().catch(this.callbacks.onError);
 		}
 		return this.context;
@@ -470,7 +471,7 @@ export class LfmTtsSpeaker {
 	private scheduleSamples(utt: ActiveUtterance, samples: Float32Array): void {
 		if (!samples.length || !this.context) return;
 		const ctx = this.context;
-		if (ctx.state === "suspended") {
+		if (!this.paused && ctx.state === "suspended") {
 			void ctx.resume().catch(() => {});
 		}
 		const buffer = ctx.createBuffer(1, samples.length, OUTPUT_RATE);
@@ -518,7 +519,7 @@ export class LfmTtsSpeaker {
 
 	private checkPlaybackComplete(): void {
 		const utt = this.active;
-		if (!utt?.serverDone || utt.prerollSamples > 0 || this.nodes.size > 0) return;
+		if (this.paused || !utt?.serverDone || utt.prerollSamples > 0 || this.nodes.size > 0) return;
 		const remaining = this.nextAt - this.outputClock();
 		if (remaining > 0.008) {
 			if (this.finishTimer) clearTimeout(this.finishTimer);
@@ -619,6 +620,10 @@ export class LfmTtsSpeaker {
 		return this.pendingReports.size > 0;
 	}
 
+	get hasAudio(): boolean {
+		return Boolean(this.active) || this.nodes.size > 0;
+	}
+
 	/** Wait briefly (bounded) for any in-flight played-prefix report before dispatching a follow-up turn. */
 	async flushPendingReports(timeoutMs = 2_000): Promise<void> {
 		if (this.pendingReports.size === 0) return;
@@ -636,6 +641,25 @@ export class LfmTtsSpeaker {
 			Promise.all(waiters),
 			new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
 		]);
+	}
+
+	/** Freeze the output clock and scheduled PCM; incoming audio keeps its existing bounds. */
+	async pause(): Promise<void> {
+		if (this.closed) return;
+		this.paused = true;
+		if (this.finishTimer) {
+			clearTimeout(this.finishTimer);
+			this.finishTimer = null;
+		}
+		await this.ensureAudioContext().suspend();
+	}
+
+	async resume(): Promise<void> {
+		if (this.closed) return;
+		await this.context?.resume();
+		if (this.closed) return;
+		this.paused = false;
+		this.checkPlaybackComplete();
 	}
 
 	/** Interrupt speech only; keeps Server4 TTS warm for the next utterance and never aborts Pi work. */

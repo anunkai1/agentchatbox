@@ -30,6 +30,13 @@ let turns: CapturedUtterance[];
 let speech: ReturnType<typeof vi.fn>;
 let error: ReturnType<typeof vi.fn>;
 let stop: ReturnType<typeof vi.fn>;
+let suspend: ReturnType<typeof vi.fn>;
+let resume: ReturnType<typeof vi.fn>;
+let track: {
+	enabled: boolean;
+	stop: ReturnType<typeof vi.fn>;
+	addEventListener: ReturnType<typeof vi.fn>;
+};
 
 async function begin(maxInputSeconds: 30 | 120 = 30) {
 	capture = await captureConversation(speech, (turn) => turns.push(turn), error, maxInputSeconds);
@@ -51,15 +58,19 @@ beforeEach(() => {
 	speech = vi.fn();
 	error = vi.fn();
 	stop = vi.fn();
+	suspend = vi.fn(async () => {});
+	resume = vi.fn(async () => {});
+	track = { enabled: true, stop, addEventListener: vi.fn() };
 	vi.stubGlobal("navigator", {
 		mediaDevices: {
-			getUserMedia: async () => ({ getTracks: () => [{ stop, addEventListener: vi.fn() }] }),
+			getUserMedia: async () => ({ getTracks: () => [track] }),
 		},
 	});
 	vi.stubGlobal(
 		"AudioContext",
 		class {
-			async resume() {}
+			suspend = suspend;
+			resume = resume;
 			async close() {}
 		},
 	);
@@ -231,5 +242,55 @@ describe("conversation input drafts", () => {
 		);
 		expect(stop).toHaveBeenCalledOnce();
 		expect(turns).toHaveLength(0);
+	});
+
+	it("mutes the track on pause, fences in-flight ASR, and preserves unsubmitted speech on resume without replaying accepted turns", async () => {
+		await begin(120);
+		start();
+		end([0.125, 0.25]);
+		expect(turns).toHaveLength(1);
+
+		await capture!.pause();
+		expect(track.enabled).toBe(false);
+		expect(suspend).toHaveBeenCalledOnce();
+		// In-flight ASR that finishes while paused must never dispatch.
+		expect(turns[0].isCurrent()).toBe(false);
+		expect(turns[0].accept()).toBe(false);
+
+		// Background room speech while paused is ignored.
+		start();
+		expect(speech).toHaveBeenCalledOnce();
+
+		await capture!.resume();
+		expect(track.enabled).toBe(true);
+		// The unaccepted draft is re-emitted on resume and can be extended or accepted.
+		expect(turns).toHaveLength(2);
+		expect(mock.encoded.at(-1)).toEqual(Float32Array.from([0.125, 0.25]));
+		expect(turns[1].accept()).toBe(true);
+
+		// Pausing and resuming after acceptance must not re-emit the already-submitted turn.
+		await capture!.pause();
+		await capture!.resume();
+		expect(turns).toHaveLength(2);
+	});
+
+	it("freezes the continuous speech timer while paused and restores the remaining budget on resume", async () => {
+		await begin(30);
+		start();
+		await vi.advanceTimersByTimeAsync(20_000);
+		await capture!.pause();
+		// Even a long pause does not trip the active-speech timeout.
+		await vi.advanceTimersByTimeAsync(300_000);
+		expect(error).not.toHaveBeenCalled();
+		expect(stop).not.toHaveBeenCalled();
+
+		await capture!.resume();
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(error).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(error).toHaveBeenCalledWith(
+			expect.objectContaining({ message: expect.stringContaining("30-second") }),
+		);
+		expect(stop).toHaveBeenCalledOnce();
 	});
 });

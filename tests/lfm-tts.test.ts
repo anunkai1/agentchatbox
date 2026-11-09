@@ -46,6 +46,11 @@ class FakeAudioContext {
 		FakeAudioContext.instances.push(this);
 	}
 
+	suspend(): Promise<void> {
+		this.state = "suspended";
+		return Promise.resolve();
+	}
+
 	resume(): Promise<void> {
 		this.state = "running";
 		return Promise.resolve();
@@ -324,6 +329,54 @@ describe("LFM speech-only TTS client primitives", () => {
 				uncertain: true,
 			},
 		]);
+		speaker.close();
+	});
+
+	it("suspends playback on pause without auto-resuming when new PCM arrives, then finishes after resume", async () => {
+		const reports: LfmPlayedReport[] = [];
+		let idleCount = 0;
+		const speaker = new LfmTtsSpeaker(
+			{
+				onStatus: () => {},
+				onPlaying: () => {},
+				onIdle: () => {
+					idleCount++;
+				},
+				onError: (err) => {
+					throw err;
+				},
+			},
+			"wss://agent.mavali.top/experiments/lfm-voice/ws?tts=1",
+		);
+		await speaker.pause();
+		const ctx = FakeAudioContext.instances[0];
+		expect(ctx.state).toBe("suspended");
+
+		speaker.beginUtterance("utt-paused", performance.now(), (r) => reports.push(r));
+		speaker.enqueueSegment("Spoken after resume.");
+		speaker.finishUtterance();
+		const ws = FakeWebSocket.instances[0];
+		ws.receiveJson({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 0 });
+		ws.receiveBinary(encodePcmFrame(1, new Array(6000).fill(0.1)));
+		ws.receiveJson({ type: "utterance_done", epoch: 1, utterance: "utt-paused", truncated: false });
+
+		// Scheduling while paused must NOT auto-resume the suspended AudioContext.
+		expect(ctx.state).toBe("suspended");
+		expect(ctx.nodes).toHaveLength(1);
+		expect(speaker.hasAudio).toBe(true);
+		expect(ws.sent.filter((m) => m.type === "played")).toHaveLength(0);
+
+		await speaker.resume();
+		expect(ctx.state).toBe("running");
+		ctx.outputStampTime = 5.0;
+		ctx.nodes[0].onended?.();
+		expect(ws.sent.at(-1)).toEqual({
+			type: "played",
+			epoch: 1,
+			utterance: "utt-paused",
+			played_ms: 250,
+		});
+		expect(idleCount).toBe(1);
 		speaker.close();
 	});
 });

@@ -784,6 +784,7 @@ export class ConversationSpeaker {
 	private queue = Promise.resolve();
 	private nextAt = 0;
 	private started = false;
+	private paused = false;
 	private pending = 0;
 	private playback = new Set<{
 		startedAt?: number;
@@ -868,8 +869,23 @@ export class ConversationSpeaker {
 			});
 	}
 
+	get hasAudio(): boolean {
+		return this.pending > 0 || this.nodes.size > 0;
+	}
+
+	async pause(): Promise<void> {
+		this.paused = true;
+		await this.context.suspend();
+	}
+
+	async resume(): Promise<void> {
+		await this.context.resume();
+		this.paused = false;
+		this.checkIdle();
+	}
+
 	private checkIdle(): void {
-		if (!this.pending && !this.nodes.size) {
+		if (!this.paused && !this.pending && !this.nodes.size) {
 			this.nextAt = 0;
 			this.onIdle();
 		}

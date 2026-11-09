@@ -40,14 +40,17 @@ integration or standing proactive mandate is installed.
    these details does not change settings or start work. Engine changes remain
    explicit and preserve the saved session. The mic button shows its startup
    state and whether the microphone is on; it is disabled during startup to avoid
-   duplicate permission requests. Streaming/Server4 modes label speech interruption
+   duplicate permission requests. **Pause voice** / **Resume voice** (in
+   browser-STT Relay modes and on the collapsed strip) mutes the microphone and
+   suspends voice playback without discarding unsent speech or stopping Pi work.
+   Streaming/Server4 modes label speech interruption
    **Stop speaking**, separate from **Stop current Pi turn** and the tracked job's
    **Cancel work job** (only shown when a tracked job exists). **End voice** /
    **Close Relay** stay usable even if connection setup fails. Controls sit in a
    non-modal side drawer on desktop or a bottom drawer above the composer on
    smaller screens. **Minimise** (or Escape within the drawer) leaves voice running
-   with a persistent microphone/status strip and **End voice**. Press **R** or the
-   strip to reopen controls. There is no second transcript or text box: recognised
+   with a persistent microphone/status strip, **Pause voice** / **Resume voice**,
+   and **End voice**. Press **R** or the strip to reopen controls. There is no second transcript or text box: recognised
    speech, typed input, streamed full answers and tool activity share the normal
    chat timeline and connection. Approximate played speech is separate, collapsible
    evidence; it never replaces the full saved answer. Reading earlier messages does

@@ -2513,6 +2513,32 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(
 				await dialog.getByRole("button", { name: "Stop speaking", exact: true }).isVisible(),
 			).toBe(true);
+			const pauseBtn = dialog.getByRole("button", { name: "Pause voice", exact: true });
+			expect(await pauseBtn.isVisible()).toBe(true);
+			expect(await pauseBtn.getAttribute("aria-pressed")).toBe("false");
+			await pauseBtn.click();
+			await expect
+				.poll(() => dialog.locator(".voice-test-status").innerText())
+				.toBe("Paused — microphone muted; Pi work continues.");
+			const resumeBtn = dialog.getByRole("button", { name: "Resume voice", exact: true });
+			expect(await resumeBtn.getAttribute("aria-pressed")).toBe("true");
+			// Minimise to collapsed strip and resume from the strip button:
+			await dialog.getByRole("button", { name: "Minimise voice controls", exact: true }).click();
+			const stripResume = page.locator(".relay-voice-strip").getByRole("button", {
+				name: "Resume voice",
+				exact: true,
+			});
+			expect(await stripResume.isVisible()).toBe(true);
+			await stripResume.click();
+			await expect
+				.poll(() =>
+					page
+						.locator(".relay-voice-strip")
+						.getByRole("button", { name: "Pause voice", exact: true })
+						.getAttribute("aria-pressed"),
+				)
+				.toBe("false");
+			await page.locator(".relay-voice-toggle").click();
 
 			await page.locator("#input").fill("Ping");
 			await page.locator("#send-btn").click();

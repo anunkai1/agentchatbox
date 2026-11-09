@@ -3,10 +3,15 @@ import { el, type MountedModal } from "./dom.js";
 export interface RelayDrawer extends MountedModal {
 	reveal(): void;
 	setStatus(status: string, microphone: string): void;
+	setPause(paused: boolean, disabled: boolean): void;
 }
 
 /** Non-modal controls: collapsing never stops capture; End voice always does. */
-export function mountRelayDrawer(box: HTMLElement, onEnd: () => void): RelayDrawer {
+export function mountRelayDrawer(
+	box: HTMLElement,
+	onEnd: () => void,
+	onPause?: () => void,
+): RelayDrawer {
 	box.id = "relay-voice-panel";
 	box.setAttribute("role", "dialog");
 	box.setAttribute("aria-modal", "false");
@@ -21,12 +26,23 @@ export function mountRelayDrawer(box: HTMLElement, onEnd: () => void): RelayDraw
 		},
 		"Voice controls",
 	);
+	const pause = el(
+		"button",
+		{
+			type: "button",
+			hidden: !onPause,
+			disabled: true,
+			"aria-pressed": "false",
+			title: "Mute microphone and pause voice playback; Pi work continues.",
+		},
+		"Pause voice",
+	);
 	const end = el(
 		"button",
 		{ type: "button", title: "Stop the microphone and voice; Pi work continues." },
 		"End voice",
 	);
-	const strip = el("div", { class: "relay-voice-strip", hidden: true }, toggle, end);
+	const strip = el("div", { class: "relay-voice-strip", hidden: true }, toggle, pause, end);
 	const minimise = el(
 		"button",
 		{ type: "button", class: "relay-voice-minimise", "aria-label": "Minimise voice controls" },
@@ -114,6 +130,7 @@ export function mountRelayDrawer(box: HTMLElement, onEnd: () => void): RelayDraw
 	};
 	toggle.onclick = reveal;
 	minimise.onclick = collapse;
+	pause.onclick = () => onPause?.();
 	end.onclick = dismiss;
 	closeButton.onclick = dismiss;
 	box.addEventListener("keydown", (event) => {
@@ -136,6 +153,11 @@ export function mountRelayDrawer(box: HTMLElement, onEnd: () => void): RelayDraw
 		setStatus(status, microphone) {
 			toggle.textContent = `${microphone} · ${status}`;
 			toggle.setAttribute("aria-label", `Show voice controls. ${microphone}. ${status}`);
+		},
+		setPause(paused, disabled) {
+			pause.disabled = disabled;
+			pause.textContent = paused ? "Resume voice" : "Pause voice";
+			pause.setAttribute("aria-pressed", String(paused));
 		},
 	};
 }

@@ -10,6 +10,9 @@ export interface ConversationCapture {
 	close: () => void;
 	/** Explicit input replacement, not speech-output interruption. */
 	discard: () => void;
+	/** Mute input and freeze VAD without losing an unfinished segment. */
+	pause: () => Promise<void>;
+	resume: () => Promise<void>;
 }
 
 const INPUT_RATE = 16_000;
@@ -27,6 +30,9 @@ export async function captureConversation(
 	let vad: import("@ricky0123/vad-web").MicVAD | null = null;
 	let speechTimer: ReturnType<typeof setTimeout> | null = null;
 	let closed = false;
+	let paused = false;
+	let speechRemaining = maxInputSeconds * 1000;
+	let speechStartedAt = 0;
 	let speaking = false;
 	let dropSegment = false;
 	let revision = 0;
@@ -36,6 +42,7 @@ export async function captureConversation(
 		revision++;
 		parts = [];
 		samples = 0;
+		speechRemaining = maxInputSeconds * 1000;
 		// A typed replacement must not later submit the old, still-open VAD segment.
 		dropSegment = speaking;
 	};
@@ -55,8 +62,22 @@ export async function captureConversation(
 		await context.resume();
 		const { MicVAD, utils } = await import("@ricky0123/vad-web");
 		let lastSound = performance.now();
+		const armSpeechTimer = () => {
+			speechStartedAt = performance.now();
+			speechTimer = setTimeout(
+				() => {
+					close();
+					onError(
+						new Error(
+							`Speech exceeded the ${maxInputSeconds}-second limit; restart the microphone.`,
+						),
+					);
+				},
+				Math.max(0, speechRemaining),
+			);
+		};
 		const emit = () => {
-			if (closed || speaking || !samples) return;
+			if (closed || paused || speaking || !samples) return;
 			const version = revision;
 			const merged = new Float32Array(samples);
 			let offset = 0;
@@ -64,7 +85,7 @@ export async function captureConversation(
 				merged.set(part, offset);
 				offset += part.length;
 			}
-			const isCurrent = () => !closed && !speaking && version === revision;
+			const isCurrent = () => !closed && !paused && !speaking && version === revision;
 			onUtterance({
 				audio: new Blob([utils.encodeWAV(merged, 1, INPUT_RATE, 1, 16)], { type: "audio/wav" }),
 				endedAt: lastSound,
@@ -98,28 +119,22 @@ export async function captureConversation(
 				if (probabilities.isSpeech >= 0.35) lastSound = performance.now();
 			},
 			onSpeechStart: () => {
-				if (closed) return;
+				if (closed || paused) return;
 				// Fence an older ASR result immediately, before the real-start debounce.
 				speaking = true;
 				dropSegment = false;
 				revision++;
 			},
 			onSpeechRealStart: () => {
-				if (closed) return;
+				if (closed || paused) return;
 				onSpeech();
 				if (speechTimer) clearTimeout(speechTimer);
-				speechTimer = setTimeout(() => {
-					close();
-					onError(
-						new Error(
-							`Speech exceeded the ${maxInputSeconds}-second limit; restart the microphone.`,
-						),
-					);
-				}, maxInputSeconds * 1000);
+				armSpeechTimer();
 			},
 			onSpeechEnd: (audio) => {
 				if (speechTimer) clearTimeout(speechTimer);
 				speechTimer = null;
+				speechRemaining = maxInputSeconds * 1000;
 				speaking = false;
 				if (closed) return;
 				if (dropSegment) {
@@ -158,7 +173,38 @@ export async function captureConversation(
 			});
 		}
 		await vad.start();
-		return { close, discard };
+		return {
+			close,
+			discard,
+			pause: async () => {
+				if (closed || paused) return;
+				paused = true;
+				revision++;
+				// Disable tracks synchronously: no family/public conversation reaches VAD.
+				stream.getTracks().forEach((track) => {
+					track.enabled = false;
+				});
+				if (speechTimer) {
+					clearTimeout(speechTimer);
+					speechTimer = null;
+					speechRemaining -= performance.now() - speechStartedAt;
+				}
+				await context?.suspend();
+			},
+			resume: async () => {
+				if (closed || !paused) return;
+				await context?.resume();
+				if (closed) return;
+				paused = false;
+				revision++;
+				lastSound = performance.now();
+				stream.getTracks().forEach((track) => {
+					track.enabled = true;
+				});
+				if (speaking) armSpeechTimer();
+				else emit(); // Only unaccepted audio; accepted requests already cleared it.
+			},
+		};
 	} catch (error) {
 		close();
 		throw error;
