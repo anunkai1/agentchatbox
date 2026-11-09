@@ -56,14 +56,28 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
 describe("Relay full-access agent and tracked worker", () => {
-	it("keeps ordinary chats unchanged and refuses to convert a working chat", async () => {
+	it("keeps ordinary chats unchanged until /relay start, converts an idle chat without overwriting its title, and refuses while busy", async () => {
+		let idle = false;
 		const h = harness();
+		h.ctx.isIdle = () => idle;
 		expect(h.hooks.get("before_agent_start")!({}, h.ctx)).toBeUndefined();
 		expect(h.hooks.has("tool_call")).toBe(false);
 		h.ctx.sessionManager.appendMessage({ role: "user", content: "Existing work", timestamp: 1 });
 		await h.command("start");
 		expect(h.pi.setModel).not.toHaveBeenCalled();
-		expect(h.pi.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({ details: { kind: "error", text: expect.stringContaining("empty") } }), expect.anything());
+		expect(h.pi.sendMessage).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				details: { kind: "error", text: expect.stringContaining("Wait for the current reply") },
+			}),
+			expect.anything(),
+		);
+		idle = true;
+		await h.command("start");
+		expect(h.pi.setModel).toHaveBeenCalledWith({
+			provider: "venice",
+			id: "deepseek-v4-1-flash-1017",
+		});
+		expect(h.pi.setSessionName).not.toHaveBeenCalled();
 	});
 	it("uses DeepSeek for Relay and preserves the original ACB worker model/thinking", async () => {
 		const h = harness();

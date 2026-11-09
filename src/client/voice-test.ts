@@ -53,7 +53,7 @@ const TRIAL_ENGINE_KEY = "acb-relay-trial-engine";
 
 export type RelayVoiceEngine = "server4" | "lfm-tts" | "legacy";
 
-export function openRelay(explicitEngine?: RelayVoiceEngine): void {
+export function openRelay(explicitEngine?: RelayVoiceEngine, forceNew = false): void {
 	let engine: RelayVoiceEngine = "server4";
 	try {
 		if (explicitEngine) {
@@ -63,10 +63,11 @@ export function openRelay(explicitEngine?: RelayVoiceEngine): void {
 			const saved = localStorage.getItem("acb-relay-voice-engine");
 			if (saved === "legacy" || saved === "lfm-tts" || saved === "server4") engine = saved;
 		}
+		if (forceNew) localStorage.removeItem(RELAY_SESSION_KEY);
 	} catch {
 		if (explicitEngine) engine = explicitEngine;
 	}
-	openVoiceTest(true, engine === "server4", false, engine === "lfm-tts");
+	openVoiceTest(true, engine === "server4", false, engine === "lfm-tts", undefined, forceNew);
 }
 
 export function openRelayTrial(preferLfmTts?: boolean): void {
@@ -90,6 +91,7 @@ export function openVoiceTest(
 	streamTrial = false,
 	useLfmTts = false,
 	workerStart?: string,
+	forceNew = false,
 ): void {
 	if (opened) {
 		relayUi?.reveal();
@@ -108,9 +110,24 @@ export function openVoiceTest(
 			: `${control} start`;
 	let savedSession: string | null = null;
 	try {
-		if (relay) savedSession = localStorage.getItem(sessionKey);
+		if (relay && !forceNew) savedSession = localStorage.getItem(sessionKey);
 	} catch {
 		/* private mode */
+	}
+	// If the user is in an existing chat with messages (or already viewing a Relay chat),
+	// pressing R attaches Relay directly to this session from this point onwards.
+	if (
+		attached &&
+		!forceNew &&
+		state.sessionId &&
+		(state.messages.length > 0 || savedSession === state.sessionId)
+	) {
+		savedSession = state.sessionId;
+		try {
+			localStorage.setItem(sessionKey, state.sessionId);
+		} catch {
+			/* private mode */
+		}
 	}
 	let sessionId = savedSession;
 	let capturedWorker: string | undefined;
@@ -254,7 +271,6 @@ export function openVoiceTest(
 						{},
 						"To change the delegated work model or thinking level, select it in the main chat before opening Relay. Existing workers keep their own settings.",
 					),
-					newRelay,
 				]
 			: []),
 	);
@@ -305,7 +321,7 @@ export function openVoiceTest(
 		...(!attached ? [form] : []),
 		...(relay ? [job, cancelJob] : []),
 		...(!attached ? [el("h3", {}, "Conversation"), transcript, link] : []),
-		el("div", { class: "voice-test-controls" }, settings),
+		el("div", { class: "voice-test-controls" }, ...(relay ? [newRelay] : []), settings),
 		details,
 	);
 	const overlay = el("div", { class: "modal-overlay" }, box);
@@ -791,7 +807,7 @@ export function openVoiceTest(
 			/* private mode */
 		}
 		modal.dismiss();
-		openVoiceTest(true, localVoice, streamTrial, useLfmTts, capturedWorker);
+		openVoiceTest(true, localVoice, streamTrial, useLfmTts, capturedWorker, true);
 	};
 	form.onsubmit = (event) => {
 		event.preventDefault();

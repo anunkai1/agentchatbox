@@ -11,15 +11,17 @@ integration or standing proactive mandate is installed.
 ## Use
 
 1. Select the desired **work model and thinking level in the ordinary ACB chat**,
-   then press **R** or enter `/relay`. The browser opens the new or saved Relay
-   thread at its ordinary `/s/<id>` address. The originating chat and its running
-   work are kept, not converted into Relay. Relay captures that deliberate
-   selection for its tracked worker, rather than Global's default for
+   then press **R** or enter `/relay` (or `/relay new` / Shift+click **R** for a
+   fresh thread). If you are in an existing chat with messages, pressing **R**
+   converts that chat into a Relay conversation from that point onwards while
+   keeping its history and title; from an empty new chat, pressing **R** opens
+   your saved Relay thread (or a fresh one). Relay captures your chat's model
+   and thinking selection for its tracked worker, rather than Global's default for
    newly opened chats. Relay's own direct work runs on the conversation model;
    additional workers use the normal delegation tools' model-selection behaviour.
 2. The panel shows **Answers & tools: DeepSeek Flash · thinking off** (or **Pi
    work** for the original conversational LFM engine) and a separate **Delegated
-   work** model/thinking line. Conversation remains
+   work** model/thinking line. Conversation uses
    `venice/deepseek-v4-1-flash-1017`; work uses the captured ACB selection. Workers
    use native Pi, not the originating chat's `/cc` mode. Antigravity automation
    is deliberately unavailable under the current provider mandate: choose a
@@ -35,8 +37,9 @@ integration or standing proactive mandate is installed.
    **Use legacy STT/Kokoro** (`"legacy"`, or `/relay legacy`) explicitly selects
    the older speech path without Server4 GPU dependency. This device remembers
    the explicit choice without silently migrating saved sessions or falling back.
-   **Voice settings & details** expands the engine choices, technical/privacy
-   information, timing metrics and **New Relay conversation** control. Opening
+   **New Relay conversation** sits directly beside **Voice settings & details** on
+   the primary drawer, and **Voice settings & details** expands the engine choices,
+   technical/privacy information and timing metrics. Opening
    these details does not change settings or start work. Engine changes remain
    explicit and preserve the saved session. The mic button shows its startup
    state and whether the microphone is on; it is disabled during startup to avoid

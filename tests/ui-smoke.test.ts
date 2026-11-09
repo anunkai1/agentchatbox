@@ -1633,7 +1633,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.poll(() => dialog.locator(".relay-job").innerText())
 				.toContain("Recorded: stopped");
 			expect(cancelled).toBe(true);
-			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
+			expect(
+				await dialog.getByRole("button", { name: "New Relay conversation" }).isVisible(),
+			).toBe(true);
 			await dialog.getByRole("button", { name: "New Relay conversation" }).click();
 			await expect.poll(() => inits.length).toBe(2);
 			expect(inits.at(-1)?.sessionId).toBeUndefined();

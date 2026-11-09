@@ -375,7 +375,9 @@ export function handleSlash(arg: string): void {
 			openModelPicker();
 			break;
 		case "relay": {
-			const engineArg = rest.trim().toLowerCase();
+			const tokens = rest.trim().toLowerCase().split(/\s+/).filter(Boolean);
+			const forceNew = tokens.includes("new");
+			const engineArg = tokens.find((t) => t !== "new");
 			openRelay(
 				engineArg === "lfm-tts" || engineArg === "lfm"
 					? "lfm-tts"
@@ -384,6 +386,7 @@ export function handleSlash(arg: string): void {
 						: engineArg === "server4"
 							? "server4"
 							: undefined,
+				forceNew,
 			);
 			return;
 		}

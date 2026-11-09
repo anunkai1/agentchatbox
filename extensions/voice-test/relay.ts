@@ -114,11 +114,14 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 				const [action, id, ...words] = raw.trim().split(/\s+/);
 				if (action === "start") {
 					if (!state) {
-						if (ctx.sessionManager.getBranch().some((e) => e.type === "message"))
-							throw new Error("Start Relay in a new, empty session");
+						if (!ctx.isIdle())
+							throw new Error(
+								"Wait for the current reply to finish or stop it before starting Relay",
+							);
 						if (!ctx.model || !acb.available)
 							throw new Error("Relay requires an ACB session with a worker model");
-						// Capture the normal ACB selection BEFORE switching this isolated chat to DeepSeek.
+						const hasMessages = ctx.sessionManager.getBranch().some((e) => e.type === "message");
+						// Capture the normal ACB selection BEFORE switching this chat to DeepSeek.
 						const slash = id?.indexOf("/") ?? -1;
 						const selected =
 							slash > 0
@@ -138,7 +141,7 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 						await activate(ctx);
 						state = { version: 1, workerModel };
 						save(ctx, false);
-						pi.setSessionName("Relay · voice coordinator");
+						if (!hasMessages) pi.setSessionName("Relay · voice coordinator");
 					} else await activate(ctx);
 					emit({
 						kind: "ready",
