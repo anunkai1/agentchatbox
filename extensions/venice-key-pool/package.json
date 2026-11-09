@@ -1,8 +1,8 @@
 {
-	"name": "acb-venice-balance",
+	"name": "acb-venice-key-pool",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Pi slash command showing the remaining Venice API balance for every configured key.",
+	"description": "Pi extension: fails over between Venice API keys on 401/402/429 and returns to the primary key after the daily allowance reset.",
 	"type": "module",
 	"keywords": [
 		"pi-package"
