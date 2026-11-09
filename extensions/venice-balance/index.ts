@@ -32,6 +32,10 @@ export interface VeniceBalance {
 	nextEpochBegins?: string | null;
 }
 
+const NO_KEYS =
+	"**💰 /venice-balance** — no Venice keys found: pi's `venice` credential is missing from " +
+	"`~/.secrets/llm/pi-auth.json` and `~/.secrets/llm/venice-keys/` is empty.";
+
 /** pi's stored venice credential, then any extra key slots, in label order. */
 export function readVeniceKeys(authFile = AUTH_FILE, keyDir = KEY_DIR): VeniceKey[] {
 	const keys: VeniceKey[] = [];
@@ -102,26 +106,30 @@ export function formatBalance(label: string, data: VeniceBalance): { text: strin
 export default function registerVeniceBalance(pi: ExtensionAPI): void {
 	pi.registerCommand("venice-balance", {
 		description: "Show remaining Venice API balance for every configured key",
-		handler: async (_args, ctx) => {
+		handler: async () => {
 			const keys = readVeniceKeys();
+			// A display-only "note" message: rendered as its own transcript row
+			// (markdown), never sent to the model and never starts a turn.
+			const show = (content: string) => {
+				pi.sendMessage({ customType: "note", content, display: true }, { triggerTurn: false });
+			};
 			if (keys.length === 0) {
-				ctx.ui.notify("No Venice keys found (pi-auth.json / venice-keys)", "warning");
+				show(NO_KEYS);
 				return;
 			}
 			const lines = await Promise.all(
 				keys.map(async ({ label, key }) => {
 					try {
-						const { text, ok } = formatBalance(label, await fetchBalance(key));
-						return { text, ok };
+						return formatBalance(label, await fetchBalance(key));
 					} catch (error) {
 						return { text: `${label}: ${(error as Error).message}`, ok: false };
 					}
 				}),
 			);
-			ctx.ui.notify(
-				lines.map((line) => line.text).join("\n"),
-				lines.every((line) => line.ok) ? "info" : "warning",
-			);
+			const tail = lines.every((line) => line.ok)
+				? ""
+				: "\n\n_At least one key cannot serve requests._";
+			show(`**💰 /venice-balance**\n\n${lines.map((line) => `- ${line.text}`).join("\n")}${tail}`);
 		},
 	});
 }
