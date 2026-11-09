@@ -74,7 +74,7 @@ export async function fetchBalance(
 }
 
 function money(value: number): string {
-	return value.toFixed(value < 0.01 && value > -0.01 ? 6 : 2);
+	return value.toFixed(value !== 0 && Math.abs(value) < 0.01 ? 6 : 2);
 }
 
 /** A single chat line: balances first, then the decision pi's failover would make. */
