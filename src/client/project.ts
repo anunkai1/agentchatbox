@@ -9,6 +9,7 @@
 
 import type { Message } from "@earendil-works/pi-ai";
 import { extractText } from "../shared/content.js";
+import { relayVoiceDisplay, userMessageDisplay } from "./relay-display.js";
 import type { PersistedMessage } from "./state.js";
 
 /**
@@ -48,7 +49,7 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 		const m = messages[i];
 		if ((m as { role: string }).role !== "custom") seq++;
 		if (m.role === "user") {
-			out.push({ kind: "user", text: extractText(m.content), seq, ts: m.timestamp });
+			userMessageDisplay(out, extractText(m.content), seq, m.timestamp);
 		} else if (m.role === "assistant") {
 			const content = Array.isArray(m.content) ? m.content : [];
 			out.push({
@@ -130,6 +131,13 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 				ts: promptMsg.timestamp,
 				via: promptMsg.details?.target ?? "Claude Code",
 			});
+		} else if (cm.customType === "acb-relay") {
+			const voice = m as {
+				timestamp?: number;
+				details?: { kind?: string; id?: string; user?: string; heard?: string };
+			};
+			if (voice.details?.kind === "voice_context" && typeof voice.details.id === "string")
+				relayVoiceDisplay(out, { ...voice.details, id: voice.details.id }, voice.timestamp);
 		} else if (cm.customType === "acb-voice-test") {
 			const voice = m as { content?: unknown; timestamp?: number };
 			if (typeof voice.content === "string" && voice.content) {

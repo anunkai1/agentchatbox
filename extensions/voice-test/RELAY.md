@@ -11,8 +11,10 @@ integration or standing proactive mandate is installed.
 ## Use
 
 1. Select the desired **work model and thinking level in the ordinary ACB chat**,
-   then enter `/relay`. The original chat is not changed. Relay captures that
-   deliberate selection for its tracked worker, rather than Global's default for
+   then press **R** or enter `/relay`. The browser opens the new or saved Relay
+   thread at its ordinary `/s/<id>` address. The originating chat and its running
+   work are kept, not converted into Relay. Relay captures that deliberate
+   selection for its tracked worker, rather than Global's default for
    newly opened chats. Relay's own direct work runs on the conversation model;
    additional workers use the normal delegation tools' model-selection behaviour.
 2. The panel shows **Answers & tools: DeepSeek Flash · thinking off** (or **Pi
@@ -40,10 +42,17 @@ integration or standing proactive mandate is installed.
    state and whether the microphone is on; it is disabled during startup to avoid
    duplicate permission requests. Streaming/Server4 modes label speech interruption
    **Stop speaking**, separate from **Stop current Pi turn** and the tracked job's
-   **Cancel work job** (only shown when a tracked job exists). **Close voice** stays
-   usable even if connection setup fails. Legacy **Interrupt** retains its existing
-   direct-turn abort behaviour. The log follows new replies only while already near
-   the bottom, so reading earlier messages does not pull the page away.
+   **Cancel work job** (only shown when a tracked job exists). **End voice** /
+   **Close Relay** stay usable even if connection setup fails. Controls sit in a
+   non-modal side drawer on desktop or a bottom drawer above the composer on
+   smaller screens. **Minimise** (or Escape within the drawer) leaves voice running
+   with a persistent microphone/status strip and **End voice**. Press **R** or the
+   strip to reopen controls. There is no second transcript or text box: recognised
+   speech, typed input, streamed full answers and tool activity share the normal
+   chat timeline and connection. Approximate played speech is separate, collapsible
+   evidence; it never replaces the full saved answer. Reading earlier messages does
+   not pull the page away. Legacy **Interrupt** retains its existing direct-turn
+   abort behaviour.
    Browser STT modes allow about 1.4 seconds of quiet before recognition. If you
    resume during recognition, earlier unsubmitted audio is kept and joined with
    the next segment; stale partial transcripts cannot dispatch work. This is
@@ -54,7 +63,9 @@ integration or standing proactive mandate is installed.
    its 30-second test limit.
    **Interrupt** stops output without discarding that input. Stopping/hiding/closing
    the mic clears unsent input; typed submission explicitly replaces it.
-   **Send text** reaches Pi without a mic. A clear work request authorises
+   The normal chat composer reaches Pi without a mic. During a thread switch it
+   is temporarily disabled; the source draft is retained in its original chat.
+   A clear work request authorises
    dispatch; discussion is not approval. Relay can inspect files and live state
    directly to choose the owning repository and resolve missing facts, and must
    ask only when scope or destination is genuinely unclear.
@@ -73,8 +84,9 @@ integration or standing proactive mandate is installed.
    Wait a few seconds for the old children to exit before immediately restarting
    voice; GPU contention fails explicitly.
    **Legacy mode differs:** its Interrupt, new speech or hidden tab can abort the
-   current Pi direct turn, though delegated workers survive. Closing any panel
-   leaves work running.
+   current Pi direct turn, though delegated workers survive. Closing voice or
+   navigating away from a Relay thread leaves Pi tools and workers running:
+   navigation detaches the old view without killing its Pi process.
 6. Reopen `/relay` to resume the saved conversation and associated job. The
    browser remembers the session ID on this device; it never replays utterances,
    work submissions or old speech. The saved transcript and worker chat are also
@@ -83,8 +95,8 @@ integration or standing proactive mandate is installed.
 7. **Cancel work job**, or explicitly ask Relay to cancel it, to terminate the
    worker. This stops its process group and queued work, and blocks automatic
    restart recovery for that execution. It cannot undo completed external effects.
-8. **New Relay conversation** creates a fresh coordinator and captures the current
-   normal-chat work model. It does not cancel the previous worker. Use this for
+8. **New Relay conversation** creates a fresh coordinator, keeping the work-model
+   selection captured when these controls were opened. It does not cancel the previous worker. Use this for
    a clean conversation or a new tracked worker. It is not required for unrelated
    direct work or additional normal delegations; keep follow-ups with their worker.
 

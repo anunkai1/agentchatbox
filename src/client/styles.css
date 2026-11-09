@@ -4350,6 +4350,84 @@ select:focus-visible,
 	max-height: calc(100dvh - 48px);
 	overflow-y: auto;
 }
+.relay-voice-dock {
+	position: fixed;
+	z-index: 210;
+	right: 16px;
+	top: 72px;
+	width: 388px;
+	max-width: calc(100vw - 24px);
+}
+.relay-voice-dock .voice-test {
+	width: 100%;
+	max-height: min(78dvh, 760px);
+	box-shadow: 0 12px 48px rgb(0 0 0 / 45%);
+}
+.relay-voice-dock .voice-test:not([hidden]) {
+	animation: relay-drawer-in 160ms ease-out;
+}
+.relay-voice-minimise {
+	float: right;
+	margin: 0 44px 8px 8px;
+}
+.relay-voice-strip:not([hidden]) {
+	display: flex;
+	gap: 8px;
+	padding: 8px;
+	border: 1px solid var(--accent-border);
+	border-radius: 12px;
+	background: var(--surface);
+	box-shadow: 0 8px 28px rgb(0 0 0 / 35%);
+}
+.relay-voice-strip button {
+	min-height: 44px;
+	padding: 8px 12px;
+	color: var(--text);
+	background: var(--surface-hover);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+.relay-voice-toggle {
+	flex: 1;
+	min-width: 0;
+	text-align: left;
+	overflow-wrap: anywhere;
+}
+.relay-playback-note summary {
+	cursor: pointer;
+	color: var(--text-secondary);
+}
+@media (min-width: 1100px) {
+	body.relay-voice-expanded .main {
+		margin-right: 420px;
+	}
+}
+@media (max-width: 1099px) {
+	.relay-voice-dock {
+		top: auto;
+		bottom: var(--relay-composer-offset, 160px);
+		right: 12px;
+		left: 12px;
+		width: auto;
+	}
+	.relay-voice-dock .voice-test {
+		max-height: min(65dvh, calc(100dvh - var(--relay-composer-offset, 160px) - 76px));
+	}
+	body:has(#relay-voice-ui) #messages {
+		padding-bottom: calc(var(--relay-drawer-height, 64px) + 24px);
+	}
+}
+@keyframes relay-drawer-in {
+	from {
+		opacity: 0;
+		transform: translateY(12px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
 .voice-test-heading {
 	margin: 0 32px 12px 0;
 }

@@ -572,15 +572,20 @@ async function onClientMessage(
 			const cwd = project?.cwd ?? config.piCwd;
 			const provider = project?.defaultProvider ?? session.init.provider;
 			const modelId = project?.defaultModelId ?? session.init.modelId;
-			void replaceSession(ws, session, {
-				provider,
-				modelId,
-				thinkingLevel:
-					readModelThinking(provider, modelId) ??
-					project?.defaultThinkingLevel ??
-					session.init.thinkingLevel,
-				cwd,
-			});
+			void replaceSession(
+				ws,
+				session,
+				{
+					provider,
+					modelId,
+					thinkingLevel:
+						readModelThinking(provider, modelId) ??
+						project?.defaultThinkingLevel ??
+						session.init.thinkingLevel,
+					cwd,
+				},
+				msg.preservePrevious,
+			);
 			break;
 		}
 		case "resumeSession": {
@@ -589,13 +594,18 @@ async function onClientMessage(
 			// session's project is derived from its recorded cwd so pi runs
 			// in the folder whose AGENTS.md shaped that conversation.
 			const cwd = findSessionCwd(msg.sessionId, projectCwds());
-			void replaceSession(ws, session, {
-				provider: session.init.provider,
-				modelId: session.init.modelId,
-				thinkingLevel: session.init.thinkingLevel,
-				sessionId: msg.sessionId,
-				cwd: cwd ?? config.piCwd,
-			});
+			void replaceSession(
+				ws,
+				session,
+				{
+					provider: session.init.provider,
+					modelId: session.init.modelId,
+					thinkingLevel: session.init.thinkingLevel,
+					sessionId: msg.sessionId,
+					cwd: cwd ?? config.piCwd,
+				},
+				msg.preservePrevious,
+			);
 			break;
 		}
 		default: {
@@ -614,7 +624,12 @@ async function onClientMessage(
  * A missing provider key, spawn failure, or pre-ready child exit therefore
  * leaves the current session untouched instead of stranding the browser.
  */
-async function replaceSession(ws: PiSocket, old: LiveSession, init: InitMessage): Promise<void> {
+async function replaceSession(
+	ws: PiSocket,
+	old: LiveSession,
+	init: InitMessage,
+	preservePrevious = false,
+): Promise<void> {
 	if (ws._switching) {
 		deliverError(ws, "a session switch is already in progress");
 		return;
@@ -640,7 +655,9 @@ async function replaceSession(ws: PiSocket, old: LiveSession, init: InitMessage)
 			registry.attach(old, ws);
 			throw err;
 		}
-		registry.kill(old);
+		// Viewing another thread need not cancel work in the previous one.
+		// Existing callers retain their explicit replacement semantics by default.
+		if (!preservePrevious) registry.kill(old);
 	} catch (err) {
 		// A failed candidate is unattached; terminate it so a never-ready
 		// process cannot linger in the registry. Natural exits are already

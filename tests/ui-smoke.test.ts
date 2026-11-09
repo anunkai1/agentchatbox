@@ -91,6 +91,86 @@ let browser: Browser | null = null;
 let base: string;
 let client: { html: string; js: string; css: string };
 
+// Keep the existing speech fixtures while exercising the new single-socket
+// view-open protocol. The initial socket belongs to the source chat; subsequent
+// view changes are asserted non-destructive and handed to each fixture's setup.
+async function relayChatFixture(
+	page: Page,
+	configure: (ws: Pick<WebSocketRoute, "send" | "onMessage">) => void,
+): Promise<void> {
+	let connections = 0;
+	await page.routeWebSocket(/\/api\/chat$/, (socket) => {
+		expect(++connections).toBe(1); // R/engine/drawer changes reuse the normal connection.
+		let userStarted = false;
+		let sessionId = "relay-source-chat";
+		let freshViews = 0;
+		let freshView = false;
+		configure({
+			send(data) {
+				const wire = JSON.parse(String(data));
+				if (wire.type === "ready") {
+					if (freshView && freshViews > 1) wire.sessionId += `-fresh-${freshViews}`;
+					sessionId = wire.sessionId;
+				}
+				if (wire.type === "transcript") wire.sessionId ??= sessionId;
+				if (wire.type === "ready")
+					Object.assign(wire, {
+						provider: "venice",
+						modelId: "deepseek-v4-1-flash-1017",
+						thinkingLevel: "off",
+					});
+				for (const saved of wire.messages ?? []) {
+					if (typeof saved.content === "string" && ["user", "assistant"].includes(saved.role))
+						saved.content = [{ type: "text", text: saved.content }];
+				}
+				const message = wire.event?.message;
+				if (message && ["user", "assistant"].includes(message.role)) {
+					if (typeof message.content === "string")
+						message.content = [{ type: "text", text: message.content }];
+					else message.content ??= [];
+					if (wire.event.type === "message_start" && message.role === "user") userStarted = true;
+					if (wire.event.type === "message_end" && message.role === "user") {
+						if (!userStarted)
+							socket.send(
+								JSON.stringify({ type: "event", event: { type: "message_start", message } }),
+							);
+						userStarted = false;
+					}
+				}
+				socket.send(JSON.stringify(wire));
+			},
+			onMessage(listener) {
+				socket.onMessage((raw) => {
+					const message = JSON.parse(String(raw));
+					if (message.type === "init") {
+						socket.send(
+							JSON.stringify({
+								type: "ready",
+								sessionId: "relay-source-chat",
+								provider: "zai",
+								modelId: "glm-5.2",
+								thinkingLevel: "off",
+							}),
+						);
+					} else if (message.type === "newSession" || message.type === "resumeSession") {
+						expect(message.preservePrevious).toBe(true);
+						freshView = message.type === "newSession";
+						if (freshView) freshViews++;
+						listener(
+							JSON.stringify({
+								type: "init",
+								...(message.sessionId ? { sessionId: message.sessionId } : {}),
+							}),
+						);
+					} else listener(raw);
+				});
+			},
+		});
+	});
+	await page.reload();
+	await expect.poll(() => new URL(page.url()).pathname).toBe("/s/relay-source-chat");
+}
+
 async function freePort(): Promise<number> {
 	const probe = createServer();
 	await new Promise<void>((done) => probe.listen(0, "127.0.0.1", done));
@@ -1434,7 +1514,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				contentType: "application/octet-stream",
 			}),
 		);
-		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+		await relayChatFixture(page, (ws) => {
 			const native = (event: Record<string, unknown>) =>
 				ws.send(JSON.stringify({ type: "event", event }));
 			const custom = (details: Record<string, unknown>) =>
@@ -1479,11 +1559,11 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 							model: "venice/deepseek-v4-1-flash-1017",
 							workerModel: { provider: "openai", modelId: "work-model", thinkingLevel: "high" },
 						});
-						if (message.sessionId || inits.length > 1) job();
-					} else if (message.text.startsWith("/relay say ")) {
+						if (prompts.includes("Inspect the fixture")) job();
+					} else if (message.text === "Inspect the fixture") {
 						native({
 							type: "message_end",
-							message: { role: "user", content: message.text.split(" ").slice(3).join(" ") },
+							message: { role: "user", content: message.text },
 						});
 						native({ type: "message_start", message: { role: "assistant" } });
 						native({
@@ -1517,15 +1597,25 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			const relayBounds = await relayButton.boundingBox();
 			const voiceBounds = await page.locator("#header-voice").boundingBox();
 			expect(relayBounds!.x + relayBounds!.width).toBeLessThanOrEqual(voiceBounds!.x);
+			await page.locator("#input").fill("Keep my source draft");
 			await relayButton.click();
 			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			await expect
 				.poll(() => dialog.innerText())
 				.toContain("Delegated work: work-model · thinking high");
-			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Inspect the fixture");
-			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
+			expect(new URL(page.url()).pathname).toBe("/s/relay-session-1");
+			expect(await page.locator("#input").inputValue()).toBe("");
+			expect(
+				await page.evaluate(() =>
+					Object.values(localStorage).some(
+						(v) => typeof v === "string" && v.includes("Keep my source draft"),
+					),
+				),
+			).toBe(true);
+			await page.locator("#input").fill("Inspect the fixture");
+			await page.locator("#send-btn").click();
 			await expect
-				.poll(() => dialog.getByRole("log").innerText())
+				.poll(() => messages(page).innerText())
 				.toContain("The worker needs your choice.");
 			expect(await dialog.locator(".relay-job").innerText()).toContain("Not live progress");
 			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
@@ -1533,9 +1623,11 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(cancelled).toBe(false);
 			await send(page, "/relay");
 			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.getByRole("log").innerText()).toContain("Your saved answer.");
-			expect(inits.at(-1)?.sessionId).toBe("relay-session-1");
-			expect(prompts.filter((p) => p.startsWith("/relay say "))).toHaveLength(1);
+			await expect
+				.poll(() => messages(page).innerText())
+				.toContain("The worker needs your choice.");
+			expect(inits).toHaveLength(1); // Reopening controls does not reattach/reset the thread.
+			expect(prompts.filter((p) => p === "Inspect the fixture")).toHaveLength(1);
 			await dialog.getByRole("button", { name: "Cancel work job", exact: true }).click();
 			await expect
 				.poll(() => dialog.locator(".relay-job").innerText())
@@ -1543,9 +1635,21 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(cancelled).toBe(true);
 			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
 			await dialog.getByRole("button", { name: "New Relay conversation" }).click();
-			await expect.poll(() => inits.length).toBe(3);
+			await expect.poll(() => inits.length).toBe(2);
 			expect(inits.at(-1)?.sessionId).toBeUndefined();
-			await page.getByRole("button", { name: "Close Relay", exact: true }).click();
+			await expect
+				.poll(() => page.getByRole("dialog", { name: "Relay", exact: true }).innerText())
+				.toContain("Delegated work: work-model · thinking high");
+			expect(new URL(page.url()).pathname).toBe("/s/relay-session-1-fresh-2");
+			const beforeExit = prompts.length;
+			await page.setViewportSize({ width: 1280, height: 900 });
+			if ((await page.locator("#menu-toggle").getAttribute("aria-expanded")) !== "true")
+				await page.locator("#menu-toggle").click();
+			await page.locator(".new-chat-btn").click();
+			await expect.poll(() => inits.length).toBe(3);
+			await expect.poll(() => page.locator("#relay-voice-ui").count()).toBe(0);
+			expect(prompts).toHaveLength(beforeExit); // Leaving is a view change, not abort/start/work.
+			await expect.poll(() => page.locator("#input").isEnabled()).toBe(true);
 		} finally {
 			await page.close();
 		}
@@ -1570,7 +1674,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				contentType: "application/octet-stream",
 			});
 		});
-		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+		await relayChatFixture(page, (ws) => {
 			native = (event) => ws.send(JSON.stringify({ type: "event", event }));
 			ws.onMessage((raw) => {
 				const message = JSON.parse(String(raw));
@@ -1598,7 +1702,8 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 							},
 						},
 					});
-				else if (message.type === "prompt" && message.text.startsWith("/relay say ")) {
+				else if (message.type === "prompt" && message.text === "Read the fixture") {
+					native({ type: "message_end", message: { role: "user", content: message.text } });
 					native({ type: "message_start", message: { role: "assistant" } });
 					native({
 						type: "message_update",
@@ -1611,11 +1716,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await send(page, "/relay legacy");
 			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			await expect.poll(() => dialog.innerText()).toContain("Ready —");
-			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Read the fixture");
-			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
-			await expect
-				.poll(() => dialog.getByRole("log").innerText())
-				.toContain("The first sentence is ready.");
+			await page.locator("#input").fill("Read the fixture");
+			await page.locator("#send-btn").click();
+			await expect.poll(() => messages(page).innerText()).toContain("The first sentence is ready.");
 			expect(tts).toEqual([]); // Unclosed bold must not leak markers to TTS.
 			native({
 				type: "message_update",
@@ -1628,16 +1731,16 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				"Read the guide.",
 				"Keep sensor_home.",
 			]);
-			expect(await dialog.locator(".markdown h3").innerText()).toBe("Status");
-			expect(await dialog.locator(".markdown strong").innerText()).toBe(
+			expect(await messages(page).locator(".markdown h3").innerText()).toBe("Status");
+			expect(await messages(page).locator(".markdown strong").innerText()).toBe(
 				"The first sentence is ready. More detail.",
 			);
-			expect(await dialog.locator(".markdown ol li").count()).toBe(2);
+			expect(await messages(page).locator(".markdown ol li").count()).toBe(2);
 			native({ type: "message_end", message: { role: "assistant", content: markdown } });
 			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
 			await send(page, "/relay legacy");
 			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.locator(".markdown h3").innerText()).toBe("Status");
+			await expect.poll(() => messages(page).locator(".markdown h3").innerText()).toBe("Status");
 			expect(tts).toHaveLength(4);
 			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
 		} finally {
@@ -2087,7 +2190,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		</script>`,
 			}),
 		);
-		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+		await relayChatFixture(page, (ws) => {
 			const native = (event: object) => ws.send(JSON.stringify({ type: "event", event }));
 			const custom = (details: object) =>
 				native({
@@ -2138,7 +2241,11 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			const dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			const frame = page.frameLocator('iframe[title="Server4 Relay voice"]');
 			await expect.poll(() => frame.locator("body").getAttribute("data-ready")).toBe("yes");
-			expect(await dialog.evaluate((node) => document.activeElement === node)).toBe(true);
+			expect(await dialog.getAttribute("aria-modal")).toBe("false");
+			await page.locator("#input").focus();
+			expect(await page.locator("#input").evaluate((node) => document.activeElement === node)).toBe(
+				true,
+			);
 			await frame
 				.locator("body")
 				.evaluate(() =>
@@ -2172,9 +2279,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					location.origin,
 				);
 			});
-			await expect
-				.poll(() => dialog.getByRole("log").innerText())
-				.toContain("The fixture says amber");
+			await expect.poll(() => messages(page).innerText()).toContain("The fixture says amber");
 			await expect
 				.poll(() =>
 					frame
@@ -2197,18 +2302,18 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(controls).not.toContain("abort");
 			expect(ttsCalls).toBe(0);
 			await dialog.getByRole("button", { name: "Stop current Pi turn", exact: true }).click();
-			await expect.poll(() => controls).toEqual(["abort"]);
+			await expect.poll(() => controls.filter((type) => type === "abort")).toEqual(["abort"]);
 			expect(await dialog.locator(".voice-test-status").innerText()).toContain(
 				"Explicit stop requested for the current Pi turn",
 			);
 			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
 			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
-			await expect.poll(() => inits.length).toBe(2);
-			expect(inits[1].sessionId).toBe("local-relay-session");
+			expect(inits).toHaveLength(1);
+			expect(new URL(page.url()).pathname).toBe("/s/local-relay-session");
 			expect(prompts.filter((p) => p.startsWith("/relay voice-request "))).toHaveLength(1);
 			await page.getByRole("button", { name: "Voice settings & details" }).click();
 			await page.getByRole("button", { name: "Use legacy STT/Kokoro", exact: true }).click();
-			await expect.poll(() => inits.length).toBe(3);
+			expect(inits).toHaveLength(1);
 			expect(await page.locator(".relay-local-voice").count()).toBe(0);
 			expect(await page.getByRole("button", { name: "Stop current Pi turn" }).count()).toBe(0);
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
@@ -2223,6 +2328,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 
 	it("exposes Pi + LFM TTS (speech-only) in regular Relay without migrating saved sessions or overflowing mobile", async () => {
 		const { page } = await openPage("/");
+		let finishReply = () => {};
 		const inits: Array<Record<string, unknown>> = [],
 			prompts: string[] = [],
 			ttsWs: Array<Record<string, unknown>> = [];
@@ -2279,7 +2385,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				}
 			});
 		});
-		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+		await relayChatFixture(page, (ws) => {
 			const native = (event: object) => ws.send(JSON.stringify({ type: "event", event }));
 			const custom = (details: object) =>
 				native({
@@ -2317,17 +2423,18 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 							workerModel: { provider: "venice", modelId: "fixture", thinkingLevel: "off" },
 							voice: { protocol: 1, instructions: "Fixture", tools: [] },
 						});
-					} else if (m.text.startsWith("/relay voice-request ")) {
+					} else if (m.text === "Ping" || m.text.startsWith("/relay voice-request ")) {
 						native({ type: "message_end", message: { role: "user", content: "Ping" } });
 						native({ type: "message_start", message: { role: "assistant" } });
 						native({
 							type: "message_update",
-							assistantMessageEvent: { type: "text_delta", delta: "**Ready on mobile.**" },
+							assistantMessageEvent: { type: "text_delta", delta: "**Ready on mobile.** " },
 						});
-						native({
-							type: "message_end",
-							message: { role: "assistant", content: "**Ready on mobile.**" },
-						});
+						finishReply = () =>
+							native({
+								type: "message_end",
+								message: { role: "assistant", content: "**Ready on mobile.**" },
+							});
 					}
 				}
 			});
@@ -2342,9 +2449,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(ttsWs).toHaveLength(0);
 
 			// The primary screen explains responsibilities without exposing engine switches:
-			expect(await dialog.locator(".voice-test-model").first().innerText()).toContain(
-				"Pi work: DeepSeek Flash · thinking off",
-			);
+			await expect
+				.poll(() => dialog.locator(".voice-test-model").first().innerText())
+				.toContain("Pi work: DeepSeek Flash · thinking off");
 			expect(await dialog.getByRole("button", { name: "Cancel work job" }).isVisible()).toBe(false);
 			expect(
 				await dialog
@@ -2362,8 +2469,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.getByRole("button", { name: "Use Pi + LFM TTS (speech-only)", exact: true })
 				.click();
 			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => inits.length).toBe(2);
-			expect(inits[1].sessionId).toBe("saved-relay-session");
+			expect(inits).toHaveLength(1);
+			expect(inits[0].sessionId).toBe("saved-relay-session");
+			expect(new URL(page.url()).pathname).toBe("/s/saved-relay-session");
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
 				"lfm-tts",
 			);
@@ -2381,7 +2489,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			);
 			expect(await dialog.locator(".voice-test-mic-state").innerText()).toBe("Microphone off");
 			const micButton = dialog.getByRole("button", { name: "Start microphone", exact: true });
-			expect((await micButton.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+			expect(Math.round((await micButton.boundingBox())!.height)).toBeGreaterThanOrEqual(44);
 			expect(await dialog.evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(
 				"rgba(0, 0, 0, 0)",
 			);
@@ -2406,13 +2514,15 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				await dialog.getByRole("button", { name: "Stop speaking", exact: true }).isVisible(),
 			).toBe(true);
 
-			// Reading older text must not yank the log or the whole modal to a new reply:
-			await dialog.getByRole("log").evaluate((node) => {
+			await page.locator("#input").fill("Ping");
+			await page.locator("#send-btn").click();
+			await expect.poll(() => ttsWs.some((m) => m.type === "speak")).toBe(true);
+			// The normal composer scrolls to our own input; later model updates
+			// must not yank us away after we choose to read older messages.
+			await messages(page).evaluate((node) => {
 				node.scrollTop = 0;
 			});
-			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Ping");
-			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
-			await expect.poll(() => ttsWs.some((m) => m.type === "speak")).toBe(true);
+			finishReply();
 			expect(ttsWs.find((m) => m.type === "speak")?.text).toBe("Ready on mobile.");
 			await expect
 				.poll(() =>
@@ -2423,23 +2533,44 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					}),
 				)
 				.toBe(true);
-			expect(await dialog.getByRole("log").evaluate((node) => node.scrollTop)).toBe(0);
-			await dialog.getByRole("button", { name: "Close voice", exact: true }).click();
+			expect(await messages(page).evaluate((node) => node.scrollTop)).toBe(0);
+			expect(await messages(page).locator(".row-user").count()).toBe(1); // Typed echo is not duplicated.
+			await page.setViewportSize({ width: 1440, height: 1000 });
+			await expect
+				.poll(async () => {
+					const drawer = await dialog.boundingBox();
+					const main = await page.locator("main").boundingBox();
+					return Boolean(drawer && main && drawer.x >= main.x + main.width);
+				})
+				.toBe(true);
+			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
+			expect(await dialog.count()).toBe(0);
+			expect(new URL(page.url()).pathname).toBe("/s/saved-relay-session");
+			expect(await messages(page).innerText()).toContain("Ready on mobile.");
 		} finally {
 			await page.close();
 		}
 	});
 
-	it("keeps Relay closable when connection setup fails without starting or cancelling work", async () => {
+	it.each([
+		"connection error",
+		"wrong thread",
+	])("keeps Relay closable after %s without starting or cancelling work", async (failure) => {
 		const { page } = await openPage("/");
 		const sent: string[] = [];
 		await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "lfm-tts"));
-		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+		await relayChatFixture(page, (ws) => {
 			ws.onMessage((raw) => {
 				const message = JSON.parse(String(raw));
 				sent.push(message.type);
 				if (message.type === "init")
-					ws.send(JSON.stringify({ type: "error", message: "Fixture connection unavailable" }));
+					ws.send(
+						JSON.stringify(
+							failure === "connection error"
+								? { type: "error", message: "Fixture connection unavailable" }
+								: { type: "ready", sessionId: "relay-source-chat" },
+						),
+					);
 			});
 		});
 		try {
@@ -2447,16 +2578,20 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			const dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			await expect
 				.poll(() => dialog.locator(".voice-test-status").innerText())
-				.toContain("Fixture connection unavailable");
+				.toContain(
+					failure === "connection error"
+						? "Fixture connection unavailable"
+						: "Relay did not open the requested thread",
+				);
 			expect(
 				await dialog.getByRole("button", { name: "Start microphone", exact: true }).isDisabled(),
 			).toBe(true);
-			expect(
-				await dialog.getByRole("button", { name: "Close voice", exact: true }).isEnabled(),
-			).toBe(true);
-			await dialog.getByRole("button", { name: "Close voice", exact: true }).click();
+			expect(await dialog.getByRole("button", { name: "End voice", exact: true }).isEnabled()).toBe(
+				true,
+			);
+			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
 			expect(await dialog.count()).toBe(0);
-			expect(sent).toEqual(["init"]);
+			expect(sent.filter((type) => type === "prompt" || type === "abort")).toEqual([]);
 		} finally {
 			await page.close();
 		}
@@ -2578,7 +2713,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("retains all paused speech and does not cancel ASR when only speech output is interrupted", async () => {
+	it("keeps normal Relay voice active while collapsed, retains paused speech and fences typed replacement", async () => {
 		// Deterministic VAD onsets + delayed ASR exercise the actual UI input race.
 		// This fixture is test-bundle-only; the existing smoke also starts real Silero.
 		const vadFixture = join(tmp, "synthetic-vad.ts");
@@ -2598,10 +2733,13 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		const requests: Route[] = [];
 		const contexts: string[] = [];
 		const controls: string[] = [];
+		await page.routeWebSocket(/\/experiments\/lfm-voice\/ws\?tts=1$/, (ws) => {
+			ws.send(JSON.stringify({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 0 }));
+		});
 		await page.route("**/api/transcribe", (route) => {
 			requests.push(route);
 		});
-		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+		await relayChatFixture(page, (ws) => {
 			const custom = (details: object) =>
 				ws.send(
 					JSON.stringify({
@@ -2661,8 +2799,8 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			);
 		};
 		try {
-			await send(page, "/relaytrial");
-			const dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice" });
+			await send(page, "/relay lfm-tts");
+			const dialog = page.locator("#relay-voice-panel");
 			await expect.poll(() => dialog.locator(".voice-test-status").innerText()).toContain("Ready");
 			await page.evaluate(() =>
 				Object.defineProperty(navigator, "mediaDevices", {
@@ -2691,11 +2829,20 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.poll(() => dialog.getByRole("button", { name: "Stop microphone", exact: true }).count())
 				.toBe(1);
 			expect(await dialog.locator(".voice-test-mic-state").innerText()).toBe("Microphone on");
+			await dialog.getByRole("button", { name: "Minimise voice controls" }).click();
+			expect(await dialog.isVisible()).toBe(false);
+			await expect
+				.poll(() => page.locator(".relay-voice-toggle").innerText())
+				.toContain("Microphone on");
 			expect(
-				await dialog.getByRole("button", { name: "Stop microphone" }).getAttribute("aria-pressed"),
+				await dialog
+					.getByRole("button", { name: "Stop microphone", includeHidden: true })
+					.getAttribute("aria-pressed"),
 			).toBe("true");
 			await onset();
 			await page.clock.fastForward(31_000);
+			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
+			expect(await dialog.locator(".voice-test-mic-state").innerText()).toBe("Microphone on");
 			expect(
 				await dialog.getByRole("button", { name: "Stop microphone", exact: true }).isVisible(),
 			).toBe(true);
@@ -2721,6 +2868,19 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await answer(2, "First sentence, um, final sentence.");
 			await expect.poll(() => contexts).toEqual(["First sentence, um, final sentence."]);
 			expect(controls.filter((s) => s.startsWith("/relay voice-request "))).toHaveLength(1);
+			expect(await messages(page).locator(".row-user").count()).toBe(1);
+			expect(await messages(page).innerText()).toContain("First sentence, um, final sentence.");
+			await onset();
+			await end([0.75]);
+			await expect.poll(() => requests.length).toBe(4);
+			await page.locator("#input").fill("Typed replacement");
+			await page.locator("#send-btn").click();
+			await requests[3].fulfill({ json: { text: "Stale unsent speech must not be submitted." } });
+			await page.evaluate(
+				() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+			);
+			expect(contexts).toEqual(["First sentence, um, final sentence."]);
+			expect(controls.filter((s) => s === "Typed replacement")).toHaveLength(1);
 			expect(controls).not.toContain("abort");
 			await dialog.getByRole("button", { name: "Stop microphone", exact: true }).click();
 			expect(await dialog.locator(".voice-test-mic-state").innerText()).toBe("Microphone off");
@@ -2728,7 +2888,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				await dialog.getByRole("button", { name: "Start microphone" }).getAttribute("aria-pressed"),
 			).toBe("false");
 			expect(controls).not.toContain("abort");
-			await dialog.getByRole("button", { name: "Close voice", exact: true }).click();
+			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
 		} finally {
 			await page.close();
 		}

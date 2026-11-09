@@ -1,4 +1,5 @@
 /** Voice-test UI only. The dedicated Pi session owns the model, prompt and history. */
+import type { ClientMessage } from "../shared/protocol.js";
 import { RELAY_MESSAGE, type RelayEvent } from "../shared/relay.js";
 import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js";
 import { transcribeAudio } from "./api.js";
@@ -10,7 +11,9 @@ import {
 	type LfmUtteranceMetrics,
 } from "./lfm-tts.js";
 import { setRichText } from "./linkify.js";
+import { mountRelayDrawer, type RelayDrawer } from "./relay-drawer.js";
 import { encodeRelayVoice, RelayVoiceFrame } from "./relay-voice.js";
+import { type RelayChatBinding, services } from "./services.js";
 import { SpokenMarkdown } from "./spoken-markdown.js";
 import { state } from "./state.js";
 import {
@@ -22,6 +25,14 @@ import {
 } from "./voice.js";
 
 let opened = false;
+let relayUi: { reveal(): void; end(): void; prepareTyped(): boolean } | null = null;
+
+export function endRelayVoice(): void {
+	relayUi?.end();
+}
+export function prepareRelayTypedInput(): boolean {
+	return relayUi?.prepareTyped() ?? true;
+}
 
 export function isVoiceTestOpen(): boolean {
 	return opened;
@@ -78,15 +89,21 @@ export function openVoiceTest(
 	localVoice = relay,
 	streamTrial = false,
 	useLfmTts = false,
+	workerStart?: string,
 ): void {
-	if (opened) return;
+	if (opened) {
+		relayUi?.reveal();
+		return;
+	}
+	const attached = relay && !streamTrial;
 	useLfmTts = relay && !localVoice && useLfmTts;
 	streamTrial = relay && !localVoice && streamTrial;
 	const isStreamingPi = streamTrial || useLfmTts;
 	const sessionKey = streamTrial ? TRIAL_SESSION_KEY : RELAY_SESSION_KEY;
 	const control = relay ? "/relay" : "/voicetest";
-	const startCommand =
-		relay && state.currentProvider && state.currentModelId
+	const startCommand = workerStart
+		? `/relay start ${workerStart}`
+		: relay && state.currentProvider && state.currentModelId
 			? `/relay start ${state.currentProvider}/${state.currentModelId} ${state.currentThinking}`
 			: `${control} start`;
 	let savedSession: string | null = null;
@@ -96,6 +113,7 @@ export function openVoiceTest(
 		/* private mode */
 	}
 	let sessionId = savedSession;
+	let capturedWorker: string | undefined;
 	opened = true;
 	cancelVoiceRecord();
 	stopAllVoice();
@@ -155,7 +173,7 @@ export function openVoiceTest(
 	const finish = el(
 		"button",
 		{ type: "button", disabled: !relay },
-		relay ? "Close voice" : "End test & summarise",
+		attached ? "End voice" : relay ? "Close voice" : "End test & summarise",
 	);
 	const job = el("div", { class: "relay-job", "aria-live": "polite" });
 	const cancelJob = el(
@@ -279,11 +297,9 @@ export function openVoiceTest(
 			el("div", { class: "voice-test-controls" }, start, interrupt, stopPi, finish),
 			el("p", { class: "voice-test-help" }, `${inputHint} ${stopHint}`),
 		),
-		form,
+		...(!attached ? [form] : []),
 		...(relay ? [job, cancelJob] : []),
-		el("h3", {}, "Conversation"),
-		transcript,
-		link,
+		...(!attached ? [el("h3", {}, "Conversation"), transcript, link] : []),
 		el("div", { class: "voice-test-controls" }, settings),
 		details,
 	);
@@ -312,9 +328,30 @@ export function openVoiceTest(
 	let micPending = false;
 	let lastWireAt = Date.now();
 	const rows = new Map<string, HTMLElement>();
-	const socket = new WebSocket(
-		`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/chat`,
-	);
+	let drawer: RelayDrawer | null = null;
+	let binding: RelayChatBinding | null = null;
+	const socket = attached
+		? null
+		: new WebSocket(
+				`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/chat`,
+			);
+	const connected = () =>
+		attached ? Boolean(binding?.isOpen()) : socket?.readyState === WebSocket.OPEN;
+	const sendWire = (message: ClientMessage): boolean => {
+		if (
+			attached &&
+			(message.type === "prompt" || message.type === "abort" || message.type === "getCapabilities")
+		)
+			return binding?.send(message) ?? false;
+		if (socket?.readyState !== WebSocket.OPEN) return false;
+		socket.send(JSON.stringify(message));
+		return true;
+	};
+	const syncDrawer = () =>
+		drawer?.setStatus(
+			status.textContent ?? "",
+			localVoice ? "Server4 voice" : (micState.textContent ?? "Microphone off"),
+		);
 	const renderMic = () => {
 		start.disabled = !ready || ending || micPending;
 		start.textContent = micPending
@@ -329,9 +366,11 @@ export function openVoiceTest(
 				? "Microphone on"
 				: "Microphone off";
 		micState.dataset.active = String(Boolean(stopCapture));
+		syncDrawer();
 	};
 	const sayStatus = (text: string) => {
 		status.textContent = text;
+		syncDrawer();
 	};
 	const fail = (error: unknown) => {
 		failed = true;
@@ -395,7 +434,7 @@ export function openVoiceTest(
 			})
 		: null;
 	const command = (text: string) => {
-		if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "prompt", text }));
+		if (connected()) sendWire({ type: "prompt", text });
 	};
 	const cancelAudio = () => {
 		if (relay && localVoice) {
@@ -409,11 +448,12 @@ export function openVoiceTest(
 		if (ready && !ending) {
 			if (relay) {
 				relayMuted = true;
-				if (!isStreamingPi) socket.send(JSON.stringify({ type: "abort" }));
+				if (!isStreamingPi) sendWire({ type: "abort" });
 			} else command("/voicetest interrupt");
 		}
 	};
 	const addText = (label: string, text: string) => {
+		if (attached) return el("p"); // The normal chat renderer owns the transcript.
 		const row = el("p", {}, el("strong", {}, `${label}: `), text);
 		const follow = transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop < 48;
 		transcript.append(row);
@@ -421,6 +461,7 @@ export function openVoiceTest(
 		return row;
 	};
 	const setMarkdownRow = (row: HTMLElement, label: string, markdown: string) => {
+		if (attached) return;
 		const follow = transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop < 48;
 		let body = row.querySelector<HTMLElement>(":scope > .markdown");
 		if (!body) {
@@ -451,7 +492,9 @@ export function openVoiceTest(
 		clearTimeout(startupTimer);
 		if (closeTimer) clearTimeout(closeTimer);
 		closeTimer = null;
-		socket.close();
+		binding?.close();
+		binding = null;
+		socket?.close();
 	};
 	const end = () => {
 		if (ending) return;
@@ -483,6 +526,7 @@ export function openVoiceTest(
 		if (dismissed) return;
 		dismissed = true;
 		opened = false;
+		if (attached) relayUi = null;
 		end();
 		speaker?.close();
 		lfmSpeaker?.close();
@@ -521,10 +565,28 @@ export function openVoiceTest(
 	}, 5_000);
 	window.addEventListener("pagehide", unload);
 	document.addEventListener("visibilitychange", visibility);
-	const modal = mountModal(overlay, box, {
-		onDismiss: dispose,
-		initialFocus: localVoice || isStreamingPi ? box : input,
-	});
+	if (attached) drawer = mountRelayDrawer(box, dispose);
+	const modal =
+		drawer ??
+		mountModal(overlay, box, {
+			onDismiss: dispose,
+			initialFocus: localVoice || isStreamingPi ? box : input,
+		});
+	if (attached) {
+		relayUi = {
+			reveal: () => drawer?.reveal(),
+			end: () => modal.dismiss(),
+			prepareTyped: () => {
+				if (!ready || ending || !connected()) return false;
+				discardInput();
+				cancelAudio();
+				endedAt = performance.now();
+				sttMs = 0;
+				return true;
+			},
+		};
+		syncDrawer();
+	}
 	if (relay && localVoice) {
 		localFrame = new RelayVoiceFrame((action, id, payload) => {
 			if (!ready || ending || dismissed) return;
@@ -535,7 +597,7 @@ export function openVoiceTest(
 			}
 			command(`/relay ${action} ${id} ${encodeRelayVoice(payload)}`);
 		}, sayStatus);
-		box.insertBefore(localFrame.element, form);
+		box.insertBefore(localFrame.element, attached ? settings.parentElement : form);
 		start.hidden = true;
 	}
 
@@ -606,7 +668,7 @@ export function openVoiceTest(
 							if (
 								controller.signal.aborted ||
 								!ready ||
-								socket.readyState !== WebSocket.OPEN ||
+								!connected() ||
 								ending ||
 								dismissed ||
 								!turn.isCurrent()
@@ -648,8 +710,8 @@ export function openVoiceTest(
 		sayStatus(stopCapture ? "Listening…" : "Interrupted");
 	};
 	stopPi.onclick = () => {
-		if (!ready || socket.readyState !== WebSocket.OPEN) return;
-		socket.send(JSON.stringify({ type: "abort" }));
+		if (!ready || !connected()) return;
+		sendWire({ type: "abort" });
 		sayStatus(
 			"Explicit stop requested for the current Pi turn. Workers/queued requests may continue; completed effects remain.",
 		);
@@ -669,7 +731,7 @@ export function openVoiceTest(
 			/* private mode */
 		}
 		modal.dismiss();
-		openVoiceTest(true, localVoice, streamTrial, useLfmTts);
+		openVoiceTest(true, localVoice, streamTrial, useLfmTts, capturedWorker);
 	};
 	form.onsubmit = (event) => {
 		event.preventDefault();
@@ -683,19 +745,21 @@ export function openVoiceTest(
 		input.value = "";
 	};
 
-	socket.onopen = () =>
-		socket.send(
-			JSON.stringify({
-				type: "init",
-				provider: state.currentProvider,
-				modelId: state.currentModelId,
-				thinkingLevel: relay ? state.currentThinking : "off",
-				...(savedSession ? { sessionId: savedSession } : {}),
-			}),
-		);
-	socket.onmessage = (message) => {
+	if (socket)
+		socket.onopen = () =>
+			socket.send(
+				JSON.stringify({
+					type: "init",
+					provider: state.currentProvider,
+					modelId: state.currentModelId,
+					thinkingLevel: relay ? state.currentThinking : "off",
+					...(savedSession ? { sessionId: savedSession } : {}),
+				}),
+			);
+	// Pi RPC events are a superset of the typed protocol; unknown events are ignored.
+	// biome-ignore lint/suspicious/noExplicitAny: same permissive RPC dispatch as the normal chat renderer.
+	const handleWire = (wire: Record<string, any>) => {
 		lastWireAt = Date.now();
-		const wire = JSON.parse(String(message.data));
 		if (wire.type === "capabilities") {
 			extensionAvailable = wire.commands.some(
 				(entry: { name?: string }) => entry.name === (relay ? "relay" : "voicetest"),
@@ -721,11 +785,15 @@ export function openVoiceTest(
 				link.href = `/s/${encodeURIComponent(wire.sessionId)}`;
 			}
 			transportReady = true;
-			socket.send(JSON.stringify({ type: "getCapabilities" }));
+			sendWire({ type: "getCapabilities" });
 			if (extensionAvailable && !startSent) {
 				startSent = true;
 				command(startCommand);
 			}
+			return;
+		}
+		if (wire.type === "modelState") {
+			setConversationModel(`${wire.provider}/${wire.modelId}`, wire.thinkingLevel);
 			return;
 		}
 		if (wire.type === "error") {
@@ -734,6 +802,7 @@ export function openVoiceTest(
 			return;
 		}
 		if (relay && wire.type === "transcript") {
+			if (attached) return;
 			transcript.replaceChildren();
 			rows.clear();
 			for (const message of wire.messages ?? []) {
@@ -776,6 +845,7 @@ export function openVoiceTest(
 					);
 					return;
 				}
+				capturedWorker = `${event.workerModel.provider}/${event.workerModel.modelId} ${event.workerModel.thinkingLevel}`;
 				workerModel.textContent = `Delegated work: ${event.workerModel.modelId} · thinking ${event.workerModel.thinkingLevel} (when requested)`;
 				workerModel.title = `${event.workerModel.provider}/${event.workerModel.modelId}. Settings captured from the main chat; this is not a live worker status.`;
 				handleVoiceEvent({ kind: "ready", model: event.model });
@@ -896,12 +966,11 @@ export function openVoiceTest(
 			}
 		}
 		if (
+			!attached &&
 			wire.event.type === "extension_ui_request" &&
 			["select", "input", "confirm", "editor"].includes(wire.event.method)
 		) {
-			socket.send(
-				JSON.stringify({ type: "extension_ui_response", id: wire.event.id, cancelled: true }),
-			);
+			sendWire({ type: "extensionUiResponse", id: wire.event.id, cancelled: true });
 			fail(new Error("Unexpected extension dialog; use a normal chat to configure the provider."));
 			return;
 		}
@@ -966,7 +1035,7 @@ export function openVoiceTest(
 	}
 	const lfmReportedIds = new Set<string>();
 	function recordLfmPlayback(report: LfmPlayedReport): void {
-		if (!ready || socket.readyState !== WebSocket.OPEN) return;
+		if (!ready || !connected()) return;
 		lfmReportedIds.add(report.utterance);
 		while (lfmReportedIds.size > 40) lfmReportedIds.delete(lfmReportedIds.values().next().value!);
 		const history = formatLfmPlayedHistory(report);
@@ -974,7 +1043,7 @@ export function openVoiceTest(
 	}
 	const playedSegments = new Map<string, string[]>();
 	function recordPlayback(id: string, text: string, complete: boolean): void {
-		if (!ready || socket.readyState !== WebSocket.OPEN) return;
+		if (!ready || !connected()) return;
 		const played = playedSegments.get(id) ?? [];
 		if (complete) played.push(text);
 		playedSegments.set(id, played);
@@ -997,14 +1066,16 @@ export function openVoiceTest(
 		}
 		command(`/relay voice-heard ${id} ${encodeRelayVoice({ text: history })}`);
 	}
+	function setConversationModel(id: string, thinking = "off"): void {
+		const name = id === "venice/deepseek-v4-1-flash-1017" ? "DeepSeek Flash" : id;
+		model.textContent = `${relay ? (localVoice ? "Pi work" : "Answers & tools") : "Replies"}: ${name} · thinking ${thinking}`;
+		model.title = id;
+	}
 	function handleVoiceEvent(event: VoiceTestEvent): void {
 		if (event.kind === "ready") {
 			clearTimeout(startupTimer);
 			ready = true;
-			const modelName =
-				event.model === "venice/deepseek-v4-1-flash-1017" ? "DeepSeek Flash" : event.model;
-			model.textContent = `${relay ? (localVoice ? "Pi work" : "Answers & tools") : "Replies"}: ${modelName} · thinking off`;
-			model.title = event.model;
+			setConversationModel(event.model);
 			send.disabled = interrupt.disabled = stopPi.disabled = finish.disabled = false;
 			renderMic();
 			sayStatus("Ready — start the microphone or send text");
@@ -1032,10 +1103,10 @@ export function openVoiceTest(
 			closeSocket();
 		}
 	}
-	socket.onerror = () => fail(new Error("Voice connection failed"));
-	socket.onclose = () => {
+	const disconnected = () => {
 		clearTimeout(startupTimer);
 		ready = false;
+		startSent = transportReady = extensionAvailable = false;
 		releaseMic();
 		speaker?.stop();
 		lfmSpeaker?.disconnect();
@@ -1046,4 +1117,17 @@ export function openVoiceTest(
 			sayStatus("Connection closed; microphone stopped. Reopen the test to continue.");
 		clearInterval(watchdog);
 	};
+	if (socket) {
+		socket.onmessage = (message) => handleWire(JSON.parse(String(message.data)));
+		socket.onerror = () => fail(new Error("Voice connection failed"));
+		socket.onclose = disconnected;
+	} else {
+		binding =
+			services.openRelayChat?.({
+				sessionId: savedSession,
+				onMessage: handleWire,
+				onDisconnect: disconnected,
+			}) ?? null;
+		if (!binding) fail(new Error("Chat connection is not ready. End voice and try R again."));
+	}
 }

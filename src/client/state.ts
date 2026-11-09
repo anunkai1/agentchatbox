@@ -63,6 +63,8 @@ export type PersistedMessage =
 			 * prompts are custom messages, so they carry no fork `seq`.
 			 */
 			via?: string;
+			/** Display identity for recognised input awaiting its Pi echo. */
+			relayVoiceId?: string;
 	  }
 	| {
 			kind: "assistant";
@@ -120,7 +122,7 @@ export type PersistedMessage =
 	 * Rendered as its own markdown row. Carries no seq (custom messages
 	 * aren't `type:"message"` JSONL entries, so they have no fork ordinal).
 	 */
-	| { kind: "note"; text: string; ts?: number };
+	| { kind: "note"; text: string; ts?: number; relayVoiceId?: string; voicePlayback?: boolean };
 
 // ---------------------------------------------------------------------------
 // In-memory app state

@@ -19,6 +19,7 @@ import type {
 	ThinkingContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
+import { extractText } from "../shared/content.js";
 import type { ProjectSummary, PromptImage, SessionSummary } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
 import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
@@ -42,6 +43,7 @@ import {
 	saveSessionPrefs,
 } from "./prefs.js";
 import { projectTranscript } from "./project.js";
+import { type DisplayChange, relayVoiceDisplay, userMessageDisplay } from "./relay-display.js";
 import {
 	appendAssistantPlaceholder,
 	appendCompactionChip,
@@ -124,7 +126,7 @@ import {
 } from "./voice.js";
 import { nextVoiceMode, VOICE_MODE_DESCRIPTIONS } from "./voice-mode.js";
 import { isVoiceFailureNotice, pendingReplyText, voiceableReplyStamp } from "./voice-pending.js";
-import { isVoiceTestOpen } from "./voice-test.js";
+import { endRelayVoice, isVoiceTestOpen, prepareRelayTypedInput } from "./voice-test.js";
 import { createChatClient } from "./ws.js";
 
 // ---------------------------------------------------------------------------
@@ -220,8 +222,17 @@ function clearComposerDraft(): void {
 	refreshNotices();
 }
 
+let relayViewPending = false;
+const relaySessions = new Set<string>();
+
 function handleSend(): void {
 	closeSlashMenu();
+	if (relayViewPending) {
+		showNotice("Opening the Relay conversation — your draft has been kept.", "warning", {
+			key: "relay-opening",
+		});
+		return;
+	}
 	if (isUploadInProgress()) {
 		showNotice("Upload in progress — wait for it to finish before sending.", "warning", {
 			key: "upload-pending",
@@ -276,8 +287,19 @@ function showSendConnectionNotice(): void {
 	});
 }
 
+function prepareTypedMessage(): boolean {
+	if (relayViewPending || (state.connectionStatus === "open" && !prepareRelayTypedInput())) {
+		showNotice("Relay is getting ready — your draft has been kept.", "warning", {
+			key: "relay-opening",
+		});
+		return false;
+	}
+	return true;
+}
+
 /** Send a typed message as the user; agent workflows belong to pi extensions. */
 function sendAsUser(trimmed: string): boolean {
+	if (!prepareTypedMessage()) return false;
 	const messageText = withAttachmentMarkdown(trimmed);
 	if (!messageText) return false;
 	const images = collectUploadedImages();
@@ -327,7 +349,13 @@ let lastAutoVoicedStamp: number | null = null;
  * listened to (their Long button still works).
  */
 function autoVoiceReply(stamp: number | null): void {
-	if (state.voiceMode !== "reply" || state.compaction || isVoiceTestOpen()) return;
+	if (
+		state.voiceMode !== "reply" ||
+		state.compaction ||
+		isVoiceTestOpen() ||
+		(state.sessionId !== null && relaySessions.has(state.sessionId))
+	)
+		return;
 	if (document.visibilityState !== "visible") return;
 	if (stamp === null || stamp === lastAutoVoicedStamp) return;
 	lastAutoVoicedStamp = stamp;
@@ -429,13 +457,34 @@ function withAttachmentMarkdown(text: string): string {
 	return [...images, ...files, text].filter(Boolean).join("\n");
 }
 
-/**
- * Stamp the most recent user block that has no `seq` yet with the given
- * JSONL ordinal. The optimistic user block is pushed at send time before
- * the server echoes it; this lands the ordinal once pi's message_start
- * echo arrives. Finds the LAST unstamped user block so a rapid sequence
- * of sends (rare, but possible) still lines up with their echoes in order.
- */
+/** Reconcile display-only voice evidence with the ordinary timeline. */
+function paintRelayDisplay(change: DisplayChange | null): void {
+	if (!change) return;
+	if (change.added) {
+		appendNode(renderMessageNode(change.message), { pin: change.message.kind === "note" });
+		return;
+	}
+	const kind = change.message.kind;
+	const index = state.messages.filter((m) => m.kind === kind).indexOf(change.message);
+	const row = document.querySelectorAll(`#messages .row-${kind}`)[index];
+	row?.replaceWith(renderMessageNode(change.message));
+}
+
+function showRelayContext(message: {
+	details?: { kind?: string; id?: string; user?: string; heard?: string };
+	timestamp?: number;
+}): void {
+	const context = message.details;
+	if (context?.kind !== "voice_context" || typeof context.id !== "string") return;
+	for (const change of relayVoiceDisplay(
+		state.messages,
+		{ ...context, id: context.id },
+		message.timestamp,
+	))
+		paintRelayDisplay(change);
+}
+
+/** Fallback ordinal for a pending user bubble when Pi's echo contains no text. */
 function stampLastUserBlock(seq: number): void {
 	for (let i = state.messages.length - 1; i >= 0; i--) {
 		const m = state.messages[i];
@@ -482,6 +531,7 @@ function recoverStrandedSteer(): void {
  * course-correction, not a standalone prompt you'd recall with ↑/↓.
  */
 function sendSteer(trimmed: string): boolean {
+	if (!prepareTypedMessage()) return false;
 	const messageText = withAttachmentMarkdown(trimmed);
 	if (!messageText) return false;
 	const images = collectUploadedImages();
@@ -811,7 +861,9 @@ function onEvent(event: Record<string, unknown>): void {
 				// Its content grows the context, so count it (pi's estimator does too).
 				noteContextMessage(e.message);
 				refreshStatus();
-				if (e.message.customType === "voice-reply") {
+				if (e.message.customType === "acb-relay") {
+					showRelayContext(e.message);
+				} else if (e.message.customType === "voice-reply") {
 					const details =
 						(
 							e.message as {
@@ -957,7 +1009,16 @@ function onEvent(event: Record<string, unknown>): void {
 				// User message echoed by the server (we already showed it
 				// optimistically at send time). Stamp the matching block now
 				// that we know its JSONL ordinal.
-				stampLastUserBlock(liveMessageSeq);
+				if (state.sessionId && relaySessions.has(state.sessionId))
+					paintRelayDisplay(
+						userMessageDisplay(
+							state.messages,
+							extractText(e.message.content),
+							liveMessageSeq,
+							e.message.timestamp,
+						),
+					);
+				else stampLastUserBlock(liveMessageSeq);
 				noteContextMessage(e.message);
 				refreshStatus();
 			} else if (e.message.role === "toolResult") {
@@ -1060,6 +1121,7 @@ function onEvent(event: Record<string, unknown>): void {
 		}
 
 		case "message_end": {
+			if (e.message?.customType === "acb-relay") showRelayContext(e.message);
 			// Flush any streaming repaint still pending from the last tokens
 			// (message_update coalesces to rAF) so the final text is painted
 			// before this case finalizes or removes the row.
@@ -1099,6 +1161,17 @@ function onEvent(event: Record<string, unknown>): void {
 					if (block.type === "text") finalText += (block as TextContent).text;
 					else if (block.type === "thinking") finalThinking += (block as ThinkingContent).thinking;
 				}
+			}
+			if (
+				m.role === "assistant" &&
+				(finalText || finalThinking) &&
+				lastAssistant?.kind === "assistant" &&
+				lastAssistantDom
+			) {
+				lastAssistant.text = finalText;
+				lastAssistant.thinking = finalThinking;
+				state.lastAssistantText = finalText;
+				paintStreamDom({ dom: lastAssistantDom, text: finalText, thinking: finalThinking });
 			}
 			const isModelError =
 				m.role === "assistant" && (m as { stopReason?: string }).stopReason === "error";
@@ -1486,6 +1559,27 @@ async function boot(): Promise<void> {
 	// shell handlers before `createChatClient()` ran — the closures
 	// would have crashed if any handler fired during boot.)
 	const chatClient = createChatClient();
+	let mainReady = false;
+	const viewingRelay = () => Boolean(state.sessionId && relaySessions.has(state.sessionId));
+	const newChatView = (projectId?: string) => {
+		const preserve = viewingRelay();
+		if (preserve) {
+			endRelayVoice();
+			relayViewPending = true;
+			$<HTMLTextAreaElement>("#input").disabled = true;
+		}
+		chatClient.newSession(projectId, preserve);
+	};
+	const resumeChatView = (sessionId: string) => {
+		if (sessionId === state.sessionId) return;
+		const preserve = viewingRelay();
+		if (preserve) {
+			endRelayVoice();
+			relayViewPending = true;
+			$<HTMLTextAreaElement>("#input").disabled = true;
+		}
+		chatClient.resumeSession(sessionId, preserve);
+	};
 
 	// Register cross-module handlers BEFORE renderShell so the UI
 	// buttons can find them. Once renderShell runs, the handlers
@@ -1539,7 +1633,7 @@ async function boot(): Promise<void> {
 		moveSession: (sessionId, projectId) => chatClient.moveSession(sessionId, projectId),
 		newGlobalSession: () => {
 			resetChatState();
-			chatClient.newSession();
+			newChatView();
 		},
 		toggleVoiceMode: () => {
 			state.voiceMode = nextVoiceMode(state.voiceMode);
@@ -1550,7 +1644,7 @@ async function boot(): Promise<void> {
 		newSessionInProject: (projectId) => {
 			if (confirm("Start a new chat in this project?")) {
 				resetChatState();
-				chatClient.newSession(projectId);
+				newChatView(projectId);
 			}
 		},
 		createProject: (input) => chatClient.createProject(input),
@@ -1596,19 +1690,31 @@ async function boot(): Promise<void> {
 		setThinking: (level) => chatClient.setThinking(level),
 		abort: () => stopRun(),
 		compact: (customInstructions) => chatClient.compact(customInstructions),
-		newSession: (projectId) => chatClient.newSession(projectId),
-		resumeSession: (id) => chatClient.resumeSession(id),
+		newSession: newChatView,
+		resumeSession: resumeChatView,
 		listSessions: () => chatClient.listSessions(),
 		renameSession: (name) => chatClient.renameSession(name),
 		updateProject: (input) => chatClient.updateProject(input),
 	});
 	chatClient.onStatus((s) => {
+		if (s !== "open") mainReady = false;
 		state.connectionStatus = s;
 		refreshStatus();
 	});
 	reconnectHook = () => chatClient.reconnect();
 	chatClient.onReady((info) => {
+		mainReady = true;
 		clearNotice("send-connection");
+		if (relayViewPending) {
+			relayViewPending = false;
+			clearNotice("relay-opening");
+			flushStreamDom();
+			lastAssistant = null;
+			lastAssistantDom = null;
+			state.isStreaming = false;
+			state.compaction = null;
+			resetChatState();
+		}
 		if (pendingFork) {
 			const { sessionId, messageCount } = pendingFork;
 			pendingFork = null;
@@ -1693,6 +1799,11 @@ async function boot(): Promise<void> {
 	});
 	chatClient.onEvent(onEvent);
 	chatClient.onError((msg) => {
+		if (relayViewPending) {
+			relayViewPending = false;
+			$<HTMLTextAreaElement>("#input").disabled = false;
+			clearNotice("relay-opening");
+		}
 		if (msg === "not connected to server") showSendConnectionNotice();
 		else appendError(msg);
 	});
@@ -1784,6 +1895,8 @@ async function boot(): Promise<void> {
 	// matches what's on screen — avoids a flicker + scroll jump every
 	// time the mobile WS drops and reconnects.
 	chatClient.onTranscript((sessionId, messages) => {
+		if (messages.some((message) => (message as { customType?: string }).customType === "acb-relay"))
+			relaySessions.add(sessionId);
 		const projected = projectTranscript(messages);
 		const sameSession = state.sessionId === sessionId;
 		const sameLength = state.messages.length === projected.length;
@@ -1886,6 +1999,98 @@ async function boot(): Promise<void> {
 	// registry (a leaf module) so render.ts doesn't have to dynamic-import
 	// this file or voice.ts — breaking the render↔{main,voice} cycle.
 	setServices({
+		openRelayChat: (options) => {
+			if (!mainReady || isUploadInProgress()) {
+				let closed = false;
+				queueMicrotask(() => {
+					if (!closed)
+						options.onMessage({
+							type: "error",
+							message: isUploadInProgress()
+								? "Wait for the upload to finish, then end voice and try R again."
+								: "Chat is still connecting. End voice and try R again in a moment.",
+						});
+				});
+				return {
+					isOpen: () => false,
+					send: () => false,
+					close: () => {
+						closed = true;
+					},
+				};
+			}
+			const sourceId = state.sessionId;
+			let bound = options.sessionId !== null && options.sessionId === state.sessionId;
+			let target = options.sessionId;
+			let closed = false;
+			const unsubscribe = chatClient.onWire((wire) => {
+				if (wire.type === "ready") {
+					const id = String(wire.sessionId ?? "");
+					if (bound && target !== id) {
+						endRelayVoice();
+						return;
+					}
+					if (!bound && ((target && target !== id) || (!target && sourceId === id))) {
+						options.onMessage({
+							type: "error",
+							message:
+								"Relay did not open the requested thread. End voice and try R again; no voice input was submitted.",
+						});
+						return;
+					}
+					target = id;
+					bound = true;
+					relaySessions.add(id);
+				}
+				if (!bound && wire.type === "error") {
+					relayViewPending = false;
+					clearNotice("relay-opening");
+					options.onMessage(wire);
+				} else if (bound) options.onMessage(wire);
+			});
+			const unsubscribeStatus = chatClient.onStatus((status) => {
+				if (status === "closed" || status === "stalled") options.onDisconnect();
+			});
+			if (bound) {
+				relaySessions.add(target!);
+				queueMicrotask(() => {
+					if (!closed) options.onMessage({ type: "ready", sessionId: target });
+				});
+			} else {
+				persistDraft($<HTMLTextAreaElement>("#input").value);
+				relayViewPending = true;
+				$<HTMLTextAreaElement>("#input").disabled = true;
+				if (target) chatClient.resumeSession(target, true);
+				else chatClient.newSession(undefined, true);
+			}
+			return {
+				isOpen: () =>
+					!closed &&
+					bound &&
+					!relayViewPending &&
+					state.sessionId === target &&
+					state.connectionStatus === "open",
+				send: (message) => {
+					if (
+						closed ||
+						!bound ||
+						relayViewPending ||
+						state.sessionId !== target ||
+						state.connectionStatus !== "open"
+					)
+						return false;
+					if (message.type === "prompt") return chatClient.prompt(message.text);
+					if (message.type === "abort") chatClient.abort();
+					else chatClient.getCapabilities();
+					return true;
+				},
+				close: () => {
+					closed = true;
+					unsubscribe();
+					unsubscribeStatus();
+				},
+			};
+		},
 		sendSlashCommand: (text) => {
 			sendPromptHook(text);
 		},
@@ -1912,7 +2117,7 @@ async function boot(): Promise<void> {
 	// fresh one bound to the forked JSONL, which replays as the prior
 	// transcript — so the chat seamlessly continues from the fork point.
 	chatClient.onForked((newSessionId) => {
-		chatClient.resumeSession(newSessionId);
+		resumeChatView(newSessionId);
 	});
 
 	// Fill the non-essential metadata once it arrives. This runs after the

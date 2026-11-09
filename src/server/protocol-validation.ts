@@ -156,13 +156,27 @@ export function parseClientMessage(value: unknown): ClientMessage {
 		case "abort":
 		case "abortRetry":
 		case "listSessions":
-		case "newSession":
 		case "getCapabilities":
 		case "getSessionStats":
 		case "listProjects":
-			return type === "newSession" && msg.projectId !== undefined
-				? { type, projectId: identifier(msg.projectId, "projectId") }
-				: ({ type } as ClientMessage);
+			return { type };
+		case "newSession":
+		case "resumeSession":
+			if (msg.preservePrevious !== undefined && typeof msg.preservePrevious !== "boolean")
+				throw new ProtocolError("preservePrevious must be boolean");
+			return {
+				...(type === "resumeSession"
+					? { type, sessionId: identifier(msg.sessionId, "sessionId") }
+					: {
+							type,
+							...(msg.projectId === undefined
+								? {}
+								: { projectId: identifier(msg.projectId, "projectId") }),
+						}),
+				...(typeof msg.preservePrevious === "boolean"
+					? { preservePrevious: msg.preservePrevious }
+					: {}),
+			};
 		case "setModel": {
 			const provider = string(msg.provider, "provider", 64);
 			const modelId = string(msg.modelId, "modelId", 256);
@@ -210,7 +224,6 @@ export function parseClientMessage(value: unknown): ClientMessage {
 			if (typeof msg.pinned !== "boolean") throw new ProtocolError("pinned must be boolean");
 			return { type, sessionId: identifier(msg.sessionId, "sessionId"), pinned: msg.pinned };
 		case "deleteSession":
-		case "resumeSession":
 			return { type, sessionId: identifier(msg.sessionId, "sessionId") };
 		case "moveSession":
 			return {

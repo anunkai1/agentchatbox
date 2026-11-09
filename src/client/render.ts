@@ -364,7 +364,16 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 		const body = el("div", { class: "body" });
 		const text = el("div", { class: "text markdown" }, " ");
 		setRichText(text, m.text || " ");
-		body.append(text);
+		body.append(
+			m.voicePlayback
+				? el(
+						"details",
+						{ class: "relay-playback-note" },
+						el("summary", {}, "Voice playback (approximate)"),
+						text,
+					)
+				: text,
+		);
 		if (m.ts !== undefined) body.append(makeTimestampEl(m.ts));
 		row.append(body);
 		return row;
@@ -2260,9 +2269,13 @@ export function renderShell(): void {
 	state.ttsInFlight = 0;
 	if (statusNoticeTimer) clearTimeout(statusNoticeTimer);
 	statusNoticeTimer = null;
-	document.body.innerHTML = "";
+	// Keep the attached voice drawer (and its live iframe/mic) mounted across
+	// normal transcript renders. Reparenting an iframe would reload it.
+	for (const child of [...document.body.children]) {
+		if (child.id !== "relay-voice-ui") child.remove();
+	}
 	const root = el("div", { id: "app" });
-	document.body.append(root);
+	document.body.prepend(root);
 
 	// ── Sidebar ────────────────────────────────────────────────────
 	const sidebar = el("aside", {
@@ -2446,7 +2459,8 @@ export function renderShell(): void {
 				type: "button",
 				title: "Relay (/relay)",
 				"aria-label": "Open Relay",
-				"aria-haspopup": "dialog",
+				"aria-controls": "relay-voice-panel",
+				"aria-expanded": String(document.body.classList.contains("relay-voice-expanded")),
 				onclick: () => shellHandlers?.handleSlash("relay"),
 			},
 			el("span", { class: "header-voice-v", "aria-hidden": "true" }, "R"),

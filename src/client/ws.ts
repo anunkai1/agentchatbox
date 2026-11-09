@@ -107,10 +107,10 @@ export interface ChatClient {
 	forkSession(sessionId: string, messageCount: number): void;
 	/** Request the list of saved sessions. Replies via onSessionsUpdated. */
 	listSessions(): void;
-	/** Kill the current `pi` and start a fresh session in a project. */
-	newSession(projectId?: string): void;
-	/** Kill the current `pi` and resume the session with the given id. */
-	resumeSession(sessionId: string): void;
+	/** Start a fresh session; preservePrevious detaches rather than kills the old Pi. */
+	newSession(projectId?: string, preservePrevious?: boolean): void;
+	/** Resume a session; preservePrevious detaches rather than kills the old Pi. */
+	resumeSession(sessionId: string, preservePrevious?: boolean): void;
 	/** Request the list of projects. Replies via onProjectsUpdated. */
 	listProjects(): void;
 	/** Request loaded commands/skills/extensions. Replies via onCapabilities. */
@@ -136,6 +136,8 @@ export interface ChatClient {
 	}): void;
 	deleteProject(id: string): void;
 	reorderProjects(order: string[]): void;
+	/** Observe transport frames after normal dispatch, for attached voice controls. */
+	onWire(listener: EventListener): () => void;
 	/** Subscribe to `pi` events. Returns an unsubscribe fn. */
 	onEvent(listener: EventListener): () => void;
 	/** Called once after the server has spawned `pi` and the first session line arrives. */
@@ -194,6 +196,7 @@ export function createChatClient(): ChatClient {
 	let watchdog: ReturnType<typeof setInterval> | null = null;
 
 	const eventListeners = new Set<EventListener>();
+	const wireListeners = new Set<EventListener>();
 	const readyListeners = new Set<ReadyListener>();
 	const errorListeners = new Set<ErrorListener>();
 	const statusListeners = new Set<StatusListener>();
@@ -319,6 +322,7 @@ export function createChatClient(): ChatClient {
 					for (const l of errorListeners) l(String(msg.message ?? "unknown error"));
 					break;
 			}
+			for (const listener of wireListeners) listener(msg);
 		});
 
 		socket.addEventListener("close", (ev) => {
@@ -461,8 +465,18 @@ export function createChatClient(): ChatClient {
 		forkSession: (sessionId, messageCount) =>
 			send({ type: "forkSession", sessionId, messageCount }),
 		listSessions: () => send({ type: "listSessions" }),
-		newSession: (projectId) => send({ type: "newSession", ...(projectId ? { projectId } : {}) }),
-		resumeSession: (sessionId) => send({ type: "resumeSession", sessionId }),
+		newSession: (projectId, preservePrevious) =>
+			send({
+				type: "newSession",
+				...(projectId ? { projectId } : {}),
+				...(preservePrevious ? { preservePrevious: true } : {}),
+			}),
+		resumeSession: (sessionId, preservePrevious) =>
+			send({
+				type: "resumeSession",
+				sessionId,
+				...(preservePrevious ? { preservePrevious: true } : {}),
+			}),
 		listProjects: () => send({ type: "listProjects" }),
 		/**
 		 * Ask pi (via the server) for the commands/skills/extensions the
@@ -476,6 +490,7 @@ export function createChatClient(): ChatClient {
 		updateProject: (input) => send({ type: "updateProject", ...input }),
 		deleteProject: (id) => send({ type: "deleteProject", id }),
 		reorderProjects: (order) => send({ type: "reorderProjects", order }),
+		onWire: (l) => subscribe(wireListeners, l),
 		onEvent: (l) => subscribe(eventListeners, l),
 		onReady: (l) => subscribe(readyListeners, l),
 		onError: (l) => subscribe(errorListeners, l),

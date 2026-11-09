@@ -1895,10 +1895,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			const deadline = Date.now() + 3000;
 			while (
 				Date.now() < deadline &&
-				!c1.inbox.all().some(
-					(m) =>
-						m.type === "event" &&
-						(m.event as { statusKey?: string }).statusKey === "claude-progress",
+				!c1.inbox
+					.all()
+					.some(
+						(m) =>
+							m.type === "event" &&
+							(m.event as { statusKey?: string }).statusKey === "claude-progress",
 					)
 			) {
 				await new Promise((r) => setTimeout(r, 20));
@@ -1921,10 +1923,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 				}),
 			);
 			const deadlineForError = Date.now() + 3000;
-			while (
-				Date.now() < deadlineForError &&
-				!c1.inbox.all().some((m) => m.type === "error")
-			) {
+			while (Date.now() < deadlineForError && !c1.inbox.all().some((m) => m.type === "error")) {
 				await new Promise((r) => setTimeout(r, 20));
 			}
 			const error = c1.inbox.all().find((m) => m.type === "error");
@@ -2036,6 +2035,77 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 
 		delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
 		delete process.env.AGENTCHATBOX_IDLE_GRACE_MS;
+	});
+
+	it.each([
+		"newSession",
+		"resumeSession",
+	])("preserves active Pi work when %s is a non-cancelling view change", async (operation) => {
+		fakePiPath = makeFakePi("running");
+		const marker = join(fakePiPath, "..", "view-pids");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		writeFileSync(
+			fakePiPath,
+			`#!/usr/bin/env bash
+session="view-$$"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--session" ]; then session="$2"; shift; fi
+  shift
+done
+echo "$$" >> "$AGENTCHATBOX_FAKE_PI_MARKER"
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    get_state) printf '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"%s","messageCount":0}}\\n' "$session" ;;
+    prompt) echo '{"type":"agent_start"}'; echo '{"type":"turn_start"}' ;;
+    *) printf '{"type":"response","command":"%s","success":true}\\n' "$type" ;;
+  esac
+done
+`,
+			{ mode: 0o755 },
+		);
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+				}),
+			);
+			expect(await waitForReadyCount(inbox, 1, 3000)).toBe(true);
+			const sourceId = inbox.all().find((m) => m.type === "ready")!.sessionId;
+			ws.send(JSON.stringify({ type: "prompt", text: "Synthetic long-running work" }));
+			await waitForEventOfType(inbox, "agent_start", 0, 3000);
+			const sourcePid = Number(readFileSync(marker, "utf8").trim());
+			ws.send(
+				JSON.stringify({
+					type: operation,
+					preservePrevious: true,
+					...(operation === "resumeSession" ? { sessionId: "target-view" } : {}),
+				}),
+			);
+			expect(await waitForReadyCount(inbox, 2, 3000)).toBe(true);
+			expect(() => process.kill(sourcePid, 0)).not.toThrow();
+			ws.send(
+				JSON.stringify({ type: "resumeSession", sessionId: sourceId, preservePrevious: true }),
+			);
+			expect(await waitForReadyCount(inbox, 3, 3000)).toBe(true);
+			const lastReady = inbox
+				.all()
+				.filter((m) => m.type === "ready")
+				.at(-1);
+			expect(lastReady).toMatchObject({ sessionId: sourceId, isStreaming: true });
+			expect(readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(2); // Reused source; no restart/replay.
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+		}
 	});
 
 	it("prompts after resumeSession reach the NEW child (no stale-session hang)", async () => {

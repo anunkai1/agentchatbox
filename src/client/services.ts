@@ -15,7 +15,25 @@
  * hook behavior).
  */
 
+export type RelayChatCommand =
+	| { type: "prompt"; text: string }
+	| { type: "abort" }
+	| { type: "getCapabilities" };
+
+export interface RelayChatBinding {
+	send(message: RelayChatCommand): boolean;
+	isOpen(): boolean;
+	/** Detach controls only; the normal chat and Pi work stay connected. */
+	close(): void;
+}
+
 export interface ClientServices {
+	/** Open a Relay thread on the normal chat connection, without cancelling the old thread. */
+	openRelayChat(options: {
+		sessionId: string | null;
+		onMessage(message: Record<string, unknown>): void;
+		onDisconnect(): void;
+	}): RelayChatBinding;
 	/** Send a slash command / prompt with no local echo (voice-reply button). */
 	sendSlashCommand(text: string): void;
 	/** Send the composer's contents exactly as pressing Enter would (voice-mode auto-send). */

@@ -18,6 +18,23 @@ describe("parseClientMessage", () => {
 		});
 	});
 
+	it("accepts only explicit boolean non-cancelling view switches without changing defaults", () => {
+		for (const request of [
+			{ type: "newSession" },
+			{ type: "resumeSession", sessionId: "relay-thread" },
+		]) {
+			expect(parseClientMessage(request)).toEqual(request);
+			expect(parseClientMessage({ ...request, preservePrevious: true })).toEqual({
+				...request,
+				preservePrevious: true,
+			});
+			for (const invalid of ["true", 1, null, {}])
+				expect(() => parseClientMessage({ ...request, preservePrevious: invalid })).toThrow(
+					"preservePrevious",
+				);
+		}
+	});
+
 	it("rejects unknown messages and invalid thinking levels", () => {
 		expect(() => parseClientMessage({ type: "shell", command: "id" })).toThrow(ProtocolError);
 		expect(() => parseClientMessage({ type: "setThinking", level: "unlimited" })).toThrow(

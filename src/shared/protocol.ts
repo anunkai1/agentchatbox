@@ -345,14 +345,14 @@ export type ClientMessage =
 			cancelled?: boolean;
 	  }
 	| { type: "listSessions" }
-	| { type: "resumeSession"; sessionId: string }
+	| { type: "resumeSession"; sessionId: string; preservePrevious?: boolean }
 	/**
 	 * Start a fresh session. `projectId` selects which project's cwd the
 	 * new `pi` child runs in (defaults to Global = config.piCwd).
 	 * Instructions for that project come from its AGENTS.md, which pi
 	 * auto-loads from cwd — no system-prompt wiring needed.
 	 */
-	| { type: "newSession"; projectId?: string }
+	| { type: "newSession"; projectId?: string; preservePrevious?: boolean }
 	| { type: "renameSession"; name: string }
 	/**
 	 * Rename ANY session (not just the current one) by id. The server
