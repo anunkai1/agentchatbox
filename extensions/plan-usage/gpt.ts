@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resetAt } from "./format.js";
 
 export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 export const CODEX_AUTH_FILE = join(homedir(), ".secrets", "llm", "codex-auth.json");
@@ -151,36 +152,10 @@ export async function fetchFirstUsage(
 	);
 }
 
-function brisbane(epochSeconds: number): string {
-	const parts = new Intl.DateTimeFormat("en-AU", {
-		timeZone: "Australia/Brisbane",
-		day: "2-digit",
-		month: "2-digit",
-		hour: "2-digit",
-		minute: "2-digit",
-		hour12: false,
-	}).formatToParts(new Date(epochSeconds * 1000));
-	const part = (type: Intl.DateTimeFormatPartTypes) =>
-		parts.find((entry) => entry.type === type)?.value ?? "";
-	return `${part("day")}/${part("month")} ${part("hour")}:${part("minute")}`;
-}
-
-function duration(seconds: number): string {
-	const hours = Math.floor(seconds / 3600);
-	const minutes = Math.round((seconds % 3600) / 60);
-	if (hours >= 24) {
-		const days = Math.floor(hours / 24);
-		return `${days}d ${hours % 24}h`;
-	}
-	return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-}
-
 function windowLine(name: string, window: RateLimitWindow, now: number): string {
 	const used = Math.round(window.used_percent ?? 0);
-	const when = window.reset_at ? brisbane(window.reset_at) : "unknown";
-	const wait = window.reset_at ? ` (in ${duration(Math.max(0, window.reset_at - now))})` : "";
 	const flag = used >= 95 ? " 🚫" : used >= 80 ? " ⚠️" : "";
-	return `${name}: ${used}% used${flag} · resets ${when} AEST${wait}`;
+	return `${name}: ${used}% used${flag} · resets ${resetAt(window.reset_at, now)}`;
 }
 
 export function formatUsage(report: UsageReport, now = Date.now() / 1000): string[] {
