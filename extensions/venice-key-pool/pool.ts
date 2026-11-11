@@ -255,7 +255,10 @@ export function createVeniceFetch(
 		// Balance probes name their own key and must not be rewritten.
 		const solo = request.headers.has(SOLO_HEADER);
 		if (solo) request.headers.delete(SOLO_HEADER);
-		const candidates = solo || !request.replayable ? [] : pool.candidates(now());
+		// Non-replayable bodies get one original attempt, not a reconstruction
+		// that would discard the body and the remaining RequestInit options.
+		if (!request.replayable) return inner(input, init);
+		const candidates = solo ? [] : pool.candidates(now());
 
 		const send = (headers: Headers) =>
 			inner(request.url, {

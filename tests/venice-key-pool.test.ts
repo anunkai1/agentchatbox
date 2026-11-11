@@ -176,6 +176,34 @@ describe("request failover", () => {
 		expect(inner).toHaveBeenCalledTimes(1);
 	});
 
+	it.each(["URLSearchParams", "FormData"])(
+		"passes a non-replayable %s body through unchanged for one attempt",
+		async (kind) => {
+			const pool = new KeyPool(sandbox());
+			const candidates = vi.spyOn(pool, "candidates");
+			const body =
+				kind === "URLSearchParams"
+					? new URLSearchParams({ message: "preserve-me" })
+					: new FormData();
+			if (body instanceof FormData) body.append("message", "preserve-me");
+			const inner = vi.fn(async (_url: string, init?: RequestInit) => {
+				expect(init?.body).toBe(body);
+				expect(init?.cache).toBe("no-store");
+				return ok();
+			});
+
+			const response = await createVeniceFetch(pool, inner as unknown as typeof fetch)(url, {
+				method: "POST",
+				body,
+				cache: "no-store",
+			});
+
+			expect(response.status).toBe(200);
+			expect(inner).toHaveBeenCalledTimes(1);
+			expect(candidates).not.toHaveBeenCalled();
+		},
+	);
+
 	it("returns the refusal when every key is out", async () => {
 		const box = sandbox();
 		const pool = new KeyPool(box);
