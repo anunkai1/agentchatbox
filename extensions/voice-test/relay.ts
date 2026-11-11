@@ -86,12 +86,19 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 		});
 	}
 	async function activate(ctx: ExtensionContext): Promise<void> {
+		const previousTools = pi.getActiveTools();
 		pi.setActiveTools([]); // Do not start turns with a partially configured Relay.
-		const model = ctx.modelRegistry.find(VOICE_PROVIDER, VOICE_MODEL);
-		if (!model || !(await pi.setModel(model)))
-			throw new Error(`Relay needs configured ${VOICE_PROVIDER}/${VOICE_MODEL}`);
-		pi.setThinkingLevel("off");
-		pi.setActiveTools(pi.getAllTools().map((tool) => tool.name));
+		try {
+			const model = ctx.modelRegistry.find(VOICE_PROVIDER, VOICE_MODEL);
+			if (!model || !(await pi.setModel(model)))
+				throw new Error(`Relay needs configured ${VOICE_PROVIDER}/${VOICE_MODEL}`);
+			pi.setThinkingLevel("off");
+			pi.setActiveTools(pi.getAllTools().map((tool) => tool.name));
+		} catch (error) {
+			// A failed conversion must not leave the ordinary chat tool-less.
+			pi.setActiveTools(previousTools);
+			throw error;
+		}
 	}
 	pi.on("session_start", async (_event, ctx) => {
 		state = undefined;

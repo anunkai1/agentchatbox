@@ -18,9 +18,11 @@ function harness(manager = SessionManager.create(tmpdir(), root)) {
 		isIdle: () => true,
 	};
 	const allTools = ["read", "bash", "edit", "write", "delegate", "delegate_status", "delegate_message", "web_enable", "relay_job"].map((name) => ({ name }));
+	let activeTools = allTools.map((tool) => tool.name);
 	const pi = {
 		on: (name: string, fn: Handler) => hooks.set(name, fn),
 		getAllTools: vi.fn(() => allTools),
+		getActiveTools: vi.fn(() => activeTools),
 		registerCommand: (name: string, options: { handler: Handler }) => commands.set(name, options.handler),
 		registerTool: (tool: { name: string; execute: Handler }) => tools.set(tool.name, tool),
 		appendEntry: (name: string, data: unknown) => manager.appendCustomEntry(name, structuredClone(data)),
@@ -28,7 +30,9 @@ function harness(manager = SessionManager.create(tmpdir(), root)) {
 		sendUserMessage: vi.fn((text) => manager.appendMessage({ role: "user", content: text, timestamp: Date.now() })),
 		setModel: vi.fn(async () => true),
 		getThinkingLevel: () => "high",
-		setThinkingLevel: vi.fn(), setActiveTools: vi.fn(), setSessionName: vi.fn(),
+		setThinkingLevel: vi.fn(),
+		setActiveTools: vi.fn((names: string[]) => { activeTools = names; }),
+		setSessionName: vi.fn(),
 	};
 	const acb = {
 		available: true,
@@ -208,11 +212,26 @@ describe("Relay full-access agent and tracked worker", () => {
 		expect(hook({ payload: {} }, { model: { provider: "venice" } })).not.toHaveProperty("max_tokens");
 		expect(hook({ payload: {} }, { model: { provider: "openai" } })).toBeUndefined();
 	});
-	it("fails closed when Relay model auth is absent but allows full access after a successful retry", async () => {
-		const h = harness(); h.pi.setModel.mockResolvedValueOnce(false); await h.command("start");
-		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith([]);
+	it("restores ordinary tools after a rejected Relay switch and allows full access after a successful retry", async () => {
+		const h = harness();
+		const ordinaryTools = h.pi.getActiveTools();
+		h.pi.setModel.mockResolvedValueOnce(false);
+		await h.command("start");
+		expect(h.pi.getActiveTools()).toEqual(ordinaryTools);
+		h.hooks.get("before_agent_start")!({ systemPrompt: "Existing owner rules" }, h.ctx);
+		expect(h.pi.getActiveTools()).toEqual(ordinaryTools);
 		await expect(h.run(START)).rejects.toThrow("not active");
 		await h.command("start");
-		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(h.pi.getAllTools().map((tool) => tool.name));
+		expect(h.pi.getActiveTools()).toEqual(h.pi.getAllTools().map((tool) => tool.name));
+	});
+	it("restores ordinary tools when the Relay model is missing", async () => {
+		const h = harness();
+		const ordinaryTools = h.pi.getActiveTools();
+		h.ctx.modelRegistry.find = () => undefined;
+		await h.command("start");
+		expect(h.pi.setModel).not.toHaveBeenCalled();
+		expect(h.pi.getActiveTools()).toEqual(ordinaryTools);
+		h.hooks.get("before_agent_start")!({ systemPrompt: "Existing owner rules" }, h.ctx);
+		expect(h.pi.getActiveTools()).toEqual(ordinaryTools);
 	});
 });
