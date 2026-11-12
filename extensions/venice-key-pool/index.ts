@@ -68,7 +68,7 @@ export default function registerVeniceKeyPool(pi: ExtensionAPI): void {
 	});
 
 	// Same report under the allowance-command naming used by /gpt-usage and
-	// /argon-usage, so the three providers are found the same way.
+	// /gemini-usage, so the three providers are found the same way.
 	pi.registerCommand("venice-usage", {
 		description: "Alias of /venice-balance: Venice allowance for every pooled key",
 		handler: showBalances("venice-usage"),

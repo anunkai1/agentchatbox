@@ -1,11 +1,11 @@
 /**
- * Antigravity (Gemini 4 Argon) allowance reporting.
+ * Antigravity (Gemini) allowance reporting.
  *
  * The Antigravity ACP agent is Google's consumer Cloud Code client, so its
  * remaining allowance is readable from the private API the agent itself calls:
- * `POST /v1internal:retrieveUserQuotaSummary` returns one group of buckets — a
- * five-hour and a weekly window for "Claude and GPT models" — as a
- * `remainingFraction` plus the reset time.
+ * `POST /v1internal:retrieveUserQuotaSummary` returns groups of buckets —
+ * five-hour and weekly windows per model group — as a `remainingFraction` plus
+ * the reset time.
  *
  * Two backend requirements, both learned from the agent's own source:
  *  - the `User-Agent` must start with `antigravity/`, because the backend
@@ -180,12 +180,9 @@ export function formatQuota(
 	now = Date.now() / 1000,
 	block = lastBlock(),
 ): string[] {
-	const lines = ["**📊 /argon-usage** — Antigravity (Gemini 4 Argon)"];
+	const lines = ["**📊 /gemini-usage** — Antigravity (Gemini)"];
 	for (const group of summary.groups ?? []) {
-		const advisory = /argon/i.test(group.displayName ?? "")
-			? " _— reported only, not what Google enforces_"
-			: "";
-		if (group.displayName) lines.push(`_${group.displayName}_${advisory}`);
+		if (group.displayName) lines.push(`_${group.displayName}_`);
 		for (const bucket of group.buckets ?? []) {
 			const left = Math.round((bucket.remainingFraction ?? 0) * 100);
 			const reset = resetAt(

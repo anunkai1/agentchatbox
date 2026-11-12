@@ -2,7 +2,7 @@
 	"name": "acb-plan-usage",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Pi extension: /gpt-usage and /argon-usage report subscription plan allowances.",
+	"description": "Pi extension: /gpt-usage and /gemini-usage report subscription plan allowances.",
 	"type": "module",
 	"keywords": [
 		"pi-package"
