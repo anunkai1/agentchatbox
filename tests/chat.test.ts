@@ -2415,6 +2415,159 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 		}
 	});
 
+	it("fences concurrent resumes while a deleted owner flushes its transcript", async () => {
+		const markerDir = mkdtempSync(join(tmpdir(), "delete-fence-"));
+		const marker = join(markerDir, "events");
+		const dir = join(sessionsRoot!, "--tmp--");
+		mkdirSync(dir, { recursive: true });
+		const transcript = join(dir, "delete-fence.jsonl");
+		writeFileSync(transcript, `${JSON.stringify({ type: "session", version: 3, id: "delete-fence-session-001", cwd: "/tmp" })}\n`);
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		process.env.AGENTCHATBOX_FAKE_SESSION_FILE = transcript;
+		fakePiPath = makeFakePi("ack");
+		writeFileSync(fakePiPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'spawn\\n');
+setInterval(() => {}, 1000);
+process.on('SIGTERM', () => {
+  fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_SESSION_FILE, '{"type":"custom","id":"final-flush"}\\n');
+  fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'term\\n');
+  setTimeout(() => process.exit(0), 500);
+});
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.type === 'get_state') console.log(JSON.stringify({ type: 'response', command: 'get_state', success: true, data: { sessionId: 'delete-fence-session-001' } }));
+});
+`, { mode: 0o755 });
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+		const { mountChatWs, shutdownChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const first = await connectClient();
+		let second: Awaited<ReturnType<typeof connectClient>> | undefined;
+		try {
+			const init = { type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off", sessionId: "delete-fence-session-001" };
+			first.ws.send(JSON.stringify(init));
+			expect(await waitForReadyCount(first.inbox, 1, 3000)).toBe(true);
+			first.ws.send(JSON.stringify({ type: "deleteSession", sessionId: init.sessionId }));
+			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("term"));
+			second = await connectClient();
+			second.ws.send(JSON.stringify(init));
+			const errors = await waitForType(second.inbox, "error", 1, 3000);
+			expect(String(errors[0]?.message)).toContain("session is being moved or deleted");
+			await vi.waitFor(() => expect(existsSync(transcript)).toBe(false));
+			expect(readFileSync(marker, "utf8").split("\n").filter((line) => line === "spawn")).toHaveLength(1);
+		} finally {
+			first.close();
+			second?.close();
+			shutdownChatWs();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(markerDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reattaches the original owner when a move fails due to a target conflict", async () => {
+		const markerDir = mkdtempSync(join(tmpdir(), "move-conflict-"));
+		const marker = join(markerDir, "prompts");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		fakePiPath = makeFakePi("ack");
+		writeFileSync(fakePiPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.type === 'get_state') console.log(JSON.stringify({ type: 'response', command: 'get_state', success: true, data: { sessionId: 'move-conflict-session-001' } }));
+  if (msg.type === 'prompt') fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, msg.message + '\\n');
+});
+`, { mode: 0o755 });
+		process.env.PI_BIN = fakePiPath;
+		const dir = join(sessionsRoot!, "--tmp--");
+		mkdirSync(dir, { recursive: true });
+		const source = join(dir, "conflict.jsonl");
+		const original = `${JSON.stringify({ type: "session", version: 3, id: "move-conflict-session-001", cwd: "/tmp" })}\n`;
+		writeFileSync(source, original);
+		vi.resetModules();
+		const { mountChatWs, shutdownChatWs } = await import("../src/server/chat.js");
+		const { createProject } = await import("../src/server/projects.js");
+		const { sessionsDirFor } = await import("../src/server/session-list.js");
+		const project = createProject({ name: "Move conflict target" });
+		const targetDir = sessionsDirFor(project.cwd);
+		mkdirSync(targetDir, { recursive: true });
+		const target = join(targetDir, "conflict.jsonl");
+		writeFileSync(target, "existing target\n");
+		mountChatWs(server!);
+		const client = await connectClient();
+		try {
+			client.ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off", sessionId: "move-conflict-session-001" }));
+			expect(await waitForReadyCount(client.inbox, 1, 3000)).toBe(true);
+			client.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-conflict-session-001", projectId: project.id }));
+			expect(await waitForReadyCount(client.inbox, 2, 3000)).toBe(true);
+			const errors = await waitForType(client.inbox, "error", 1, 3000);
+			expect(String(errors[0]?.message)).toContain("already has a session");
+			expect(readFileSync(source, "utf8")).toBe(original);
+			expect(readFileSync(target, "utf8")).toBe("existing target\n");
+			client.ws.send(JSON.stringify({ type: "prompt", text: "still usable" }));
+			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("still usable"));
+		} finally {
+			client.close();
+			shutdownChatWs();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(project.cwd, { recursive: true, force: true });
+			rmSync(markerDir, { recursive: true, force: true });
+		}
+	});
+
+	it("closes the view if reopening the original session after a failed move also fails", async () => {
+		const markerDir = mkdtempSync(join(tmpdir(), "move-conflict-restart-"));
+		const marker = join(markerDir, "started");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		fakePiPath = makeFakePi("ack");
+		writeFileSync(fakePiPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+if (fs.existsSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER)) process.exit(42);
+fs.writeFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'started');
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.type === 'get_state') console.log(JSON.stringify({ type: 'response', command: 'get_state', success: true, data: { sessionId: 'move-conflict-restart-001' } }));
+});
+`, { mode: 0o755 });
+		process.env.PI_BIN = fakePiPath;
+		const dir = join(sessionsRoot!, "--tmp--");
+		mkdirSync(dir, { recursive: true });
+		const source = join(dir, "restart-conflict.jsonl");
+		const original = `${JSON.stringify({ type: "session", version: 3, id: "move-conflict-restart-001", cwd: "/tmp" })}\n`;
+		writeFileSync(source, original);
+		vi.resetModules();
+		const { mountChatWs, shutdownChatWs } = await import("../src/server/chat.js");
+		const { createProject } = await import("../src/server/projects.js");
+		const { sessionsDirFor } = await import("../src/server/session-list.js");
+		const project = createProject({ name: "Move conflict restart target" });
+		const targetDir = sessionsDirFor(project.cwd);
+		mkdirSync(targetDir, { recursive: true });
+		writeFileSync(join(targetDir, "restart-conflict.jsonl"), "existing target\n");
+		mountChatWs(server!);
+		const client = await connectClient();
+		try {
+			client.ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off", sessionId: "move-conflict-restart-001" }));
+			expect(await waitForReadyCount(client.inbox, 1, 3000)).toBe(true);
+			const closed = new Promise<number>((resolve) => client.ws.once("close", resolve));
+			client.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-conflict-restart-001", projectId: project.id }));
+			const errors = await waitForType(client.inbox, "error", 1, 3000);
+			expect(String(errors[0]?.message)).toContain("could not reopen session after move");
+			expect(String(errors[0]?.message)).not.toContain("current session is still active");
+			expect(await closed).toBe(1011);
+			expect(readFileSync(source, "utf8")).toBe(original);
+		} finally {
+			client.close();
+			shutdownChatWs();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(project.cwd, { recursive: true, force: true });
+			rmSync(markerDir, { recursive: true, force: true });
+		}
+	});
+
 	it("closes the view for reconnect if a moved session cannot restart", async () => {
 		fakePiPath = makeFakePi("ack");
 		writeFileSync(fakePiPath, `#!/usr/bin/env node
