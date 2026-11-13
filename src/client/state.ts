@@ -4,8 +4,8 @@
  * dispatcher.
  *
  * Sessions are owned by the server (via `pi --mode rpc`'s on-disk
- * JSONL files). The browser no longer persists anything — every
- * session operation goes through the WS protocol to the server.
+ * JSONL files). Session operations go through the WS protocol to the
+ * server; the browser separately stores UI preferences and text drafts.
  * `state.messages` is a renderer cache: the server's transcript
  * replay on resume populates it once, and live `pi` events append
  * to it as the conversation continues.

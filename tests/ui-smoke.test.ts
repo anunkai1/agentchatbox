@@ -446,6 +446,109 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it.each([
+		["normally", null],
+		["when another tab replaces the unbound key", "Another tab's draft"],
+	])("binds a draft typed while a new session connects %s", async (_case, replacement) => {
+		const { page } = await openPage("/");
+		let socket: WebSocketRoute | undefined;
+		const prompts: string[] = [];
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			socket = ws;
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "prompt") prompts.push(message.text);
+			});
+		});
+		try {
+			await page.goto(`${base}/`);
+			await expect.poll(() => Boolean(socket)).toBe(true);
+			await page.locator("#input").fill("Written before ready");
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(
+				"Written before ready",
+			);
+			if (replacement) {
+				await page.evaluate((text) => localStorage.setItem("acb-draft-v1:new", text), replacement);
+			}
+			socket!.send(
+				JSON.stringify({
+					type: "ready",
+					sessionId: "new-draft-session",
+					provider: "zai",
+					modelId: "glm-5.2",
+					thinkingLevel: "off",
+				}),
+			);
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/new-draft-session");
+			expect(await page.locator("#input").inputValue()).toBe("Written before ready");
+			expect(
+				await page.evaluate(() => localStorage.getItem("acb-draft-v1:new-draft-session")),
+			).toBe("Written before ready");
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(replacement);
+			// Transcript replay rebuilds the composer; the bound draft must survive it.
+			socket!.send(
+				JSON.stringify({
+					type: "transcript",
+					sessionId: "new-draft-session",
+					messages: [
+						{ role: "user", content: [{ type: "text", text: "Earlier message" }], timestamp: 1 },
+					],
+				}),
+			);
+			await expect.poll(() => messages(page).innerText()).toContain("Earlier message");
+			expect(await page.locator("#input").inputValue()).toBe("Written before ready");
+			await page.locator("#send-btn").click();
+			await expect.poll(() => prompts).toEqual(["Written before ready"]);
+			expect(
+				await page.evaluate(() => localStorage.getItem("acb-draft-v1:new-draft-session")),
+			).toBeNull();
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(replacement);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("does not move an unbound new-chat draft into an existing conversation", async () => {
+		const { page } = await openPage("/");
+		try {
+			await page.evaluate(() => localStorage.setItem("acb-draft-v1:new", "Unbound draft"));
+			await page.goto(`${base}/s/${SEEDED_ID}`);
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			expect(await page.locator("#input").inputValue()).toBe("");
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(
+				"Unbound draft",
+			);
+			expect(
+				await page.evaluate((id) => localStorage.getItem(`acb-draft-v1:${id}`), SEEDED_ID),
+			).toBeNull();
+			await page.locator("#input").fill("This session's own draft");
+			await page.reload();
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			expect(await page.locator("#input").inputValue()).toBe("This session's own draft");
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(
+				"Unbound draft",
+			);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("opens an ask link as a new-session draft without submitting it", async () => {
+		const question = "Tell me more about this";
+		const { page } = await openPage(`/?ask=${encodeURIComponent(question)}`);
+		try {
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/live-session-001");
+			expect(await page.locator("#input").inputValue()).toBe(question);
+			expect(await page.locator(".row-user").count()).toBe(0);
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBeNull();
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:live-session-001"))).toBe(
+				question,
+			);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("cycles voice mode in the header and Settings and preserves it on refresh", async () => {
 		const { page } = await openPage(`/s/${SEEDED_ID}`);
 		try {

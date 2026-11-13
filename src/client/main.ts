@@ -187,20 +187,30 @@ function clearSavedDraft(): void {
 	}
 }
 
+/** Bind an unbound draft only to the first new session, never a resumed chat. */
+function bindInitialDraft(): void {
+	const input = $<HTMLTextAreaElement>("#input");
+	try {
+		const unboundKey = draftStorageKey(null);
+		const unbound = localStorage.getItem(unboundKey);
+		const sessionKey = draftStorageKey();
+		// A visible draft may have been typed while pi was starting. Otherwise
+		// keep an existing session draft in preference to the unbound one.
+		const text = input.value || (!localStorage.getItem(sessionKey) ? unbound : null);
+		if (!text) return;
+		localStorage.setItem(sessionKey, text);
+		// Another tab may have replaced the shared unbound key in the meantime.
+		if (unbound === text) localStorage.removeItem(unboundKey);
+	} catch {
+		/* Keep the live composer usable if storage is unavailable. */
+	}
+}
+
 function restoreSavedDraft(): void {
 	const input = $<HTMLTextAreaElement>("#input");
 	if (input.value) return;
 	try {
-		let text = localStorage.getItem(draftStorageKey());
-		// Text typed before the first session id arrived is saved under "new".
-		// Migrate it to the real session when the server handshake completes.
-		if (!text && state.sessionId) {
-			text = localStorage.getItem(draftStorageKey(null));
-			if (text) {
-				localStorage.setItem(draftStorageKey(), text);
-				localStorage.removeItem(draftStorageKey(null));
-			}
-		}
+		const text = localStorage.getItem(draftStorageKey());
 		if (text) {
 			input.value = text;
 			autoSize();
@@ -1731,12 +1741,14 @@ async function boot(): Promise<void> {
 		// Track the session id for export/display. Keep attachments on a
 		// same-session reconnect, but never carry them into a different chat.
 		if (info.sessionId) {
+			const wasUnbound = state.sessionId === null;
 			if (state.sessionId && state.sessionId !== info.sessionId) {
 				state.uploadedImages.clear();
 				state.uploadedFiles.clear();
 				clearAttachmentPreviews();
 			}
 			state.sessionId = info.sessionId;
+			if (wasUnbound) bindInitialDraft();
 			setNoticeSession(info.sessionId);
 			applySessionPrefs();
 			syncDisplayPreferences();
