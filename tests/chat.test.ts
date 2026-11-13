@@ -2316,6 +2316,14 @@ done
 	});
 
 	it("waits for a live child's final flush before deleting its transcript", async () => {
+		// Deletion also writes the pins sidecar. The test must never use the
+		// checkout's live data/pins.json, even when run by the deployer.
+		const pinsFile = process.env.AGENTCHATBOX_PINS_FILE;
+		expect(pinsFile).toBeTruthy();
+		writeFileSync(
+			pinsFile!,
+			JSON.stringify({ "unrelated-pin": true, "delete-live-session-001": true }),
+		);
 		expect(sessionsRoot).not.toBeNull();
 		const dir = join(sessionsRoot!, "--tmp--");
 		mkdirSync(dir, { recursive: true });
@@ -2346,6 +2354,7 @@ done
 			ws.send(JSON.stringify({ type: "deleteSession", sessionId: "delete-live-session-001" }));
 			expect((await waitForType(inbox, "sessions", 1, 5000)).length).toBe(1);
 			expect(existsSync(transcript)).toBe(false);
+			expect(JSON.parse(readFileSync(pinsFile!, "utf8"))).toEqual({ "unrelated-pin": true });
 			expect(inbox.all().filter((m) => m.type === "error")).toHaveLength(0);
 		} finally {
 			close();

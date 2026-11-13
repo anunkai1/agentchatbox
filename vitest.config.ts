@@ -18,6 +18,8 @@ export default defineConfig({
 			// An inherited production setting must not open or prune the live search index.
 			AGENTCHATBOX_SEARCH_ENABLED: "0",
 			AGENTCHATBOX_SEARCH_DB: join(mkdtempSync(join(tmpdir(), "acb-test-search-")), "search.db"),
+			// Deleting a session also rewrites the pinned-session sidecar.
+			AGENTCHATBOX_PINS_FILE: join(mkdtempSync(join(tmpdir(), "acb-test-pins-")), "pins.json"),
 			// Chat tests send setThinking, which saves into pi's settings file.
 			AGENTCHATBOX_PI_SETTINGS_FILE: join(
 				mkdtempSync(join(tmpdir(), "acb-test-pi-")),

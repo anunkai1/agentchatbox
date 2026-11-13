@@ -34,6 +34,7 @@ beforeEach(() => {
 	mkdirSync(join(root, "--home-test-project--"), { recursive: true });
 	mkdirSync(join(root, "--home-other-project--"), { recursive: true });
 	process.env.PI_CODING_AGENT_SESSION_DIR = root;
+	process.env.AGENTCHATBOX_PINS_FILE = join(root, "pins.json");
 });
 
 afterEach(() => {
