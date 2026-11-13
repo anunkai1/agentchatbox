@@ -145,7 +145,7 @@ export function createInternalSessionsRouter(): Router {
 						throw new Error("session exited before submission");
 					if (typeof since === "number" && transportStoppedSince(origin, id, since))
 						throw new Error("session explicitly stopped");
-					ready.pi.send({
+					registry.sendInstruction(ready, {
 						type: "prompt",
 						message,
 						...(ready.streaming || ready.busy ? { streamingBehavior: "followUp" } : {}),

@@ -285,6 +285,8 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 			(msg.type === "prompt" || msg.type === "steer") &&
 			!!ws._session?.sessionId &&
 			registry.isMutating(ws._session.sessionId);
+		const ingress = msg.type === "prompt" || msg.type === "steer" ? ws._session : null;
+		if (ingress) ingress.pendingIngress++;
 		messageQueue = messageQueue
 			.then(async () => {
 				if (duringSwitch || duringMutation) {
@@ -309,6 +311,12 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 			.catch((err) => {
 				if (isSwitch) pendingSwitches--;
 				reportDispatchError(err, isSwitch);
+			})
+			.finally(() => {
+				if (ingress) {
+					ingress.pendingIngress--;
+					registry.releaseUnattached(ingress);
+				}
 			});
 	});
 
@@ -371,7 +379,7 @@ async function onClientMessage(
 			// in the structured `images` field (see rewriteUploadUrls).
 			const hasImages = imageContent !== undefined && imageContent.length > 0;
 			const message = rewriteUploadUrls(msg.text, hasImages);
-			pi.send({
+			registry.sendInstruction(session, {
 				type: "prompt",
 				message,
 				...(hasImages ? { images: imageContent } : {}),
@@ -396,7 +404,7 @@ async function onClientMessage(
 			// before the next LLM call. Same upload-URL rewriting as `prompt`.
 			const hasImages = imageContent !== undefined && imageContent.length > 0;
 			const message = rewriteUploadUrls(msg.text, hasImages);
-			pi.send({
+			registry.sendInstruction(session, {
 				type: "steer",
 				message,
 				...(hasImages ? { images: imageContent } : {}),

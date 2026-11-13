@@ -18,6 +18,7 @@ const registry = vi.hoisted(() => ({
 	isMutating: vi.fn(),
 	beginMutation: vi.fn(),
 	endMutation: vi.fn(),
+	sendInstruction: vi.fn(),
 }));
 const broadcastSessions = vi.hoisted(() => vi.fn());
 vi.mock("../src/server/session-registry.js", () => ({
@@ -74,6 +75,7 @@ beforeEach(() => {
 	registry.statusSnapshot.mockReturnValue([]);
 	registry.isMutating.mockReturnValue(false);
 	registry.beginMutation.mockReturnValue(Symbol("mutation"));
+	registry.sendInstruction.mockImplementation((session, command) => session.pi.send(command));
 });
 
 function post(path: string, body: unknown, token = config.internalToken) {

@@ -257,7 +257,7 @@ while IFS= read -r line; do
       echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"between-turns-session-001","messageCount":0}}'
       ;;
     "prompt")
-      echo '{"type":"response","command":"prompt","success":true}'
+      echo "$line" | jq -c '{type:"response",command:"prompt",success:true,id:.id,data:{disposition:"started"}}'
       echo '{"type":"agent_start"}'
       echo '{"type":"turn_start"}'
       echo '{"type":"turn_end","message":{"role":"assistant","content":[],"timestamp":1},"toolResults":[]}'
@@ -285,8 +285,8 @@ while IFS= read -r line; do
       echo '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"claude-run-session-001","messageCount":0}}'
       ;;
     "prompt")
-      echo '{"type":"response","command":"prompt","success":true}'
       echo '{"type":"extension_ui_request","id":"s1","method":"setStatus","statusKey":"claude-progress","statusText":"working"}'
+      echo "$line" | jq -c '{type:"response",command:"prompt",success:true,id:.id,data:{disposition:"handled"}}'
       sleep 0.8
       echo '{"type":"extension_ui_request","id":"s2","method":"setStatus","statusKey":"claude-progress"}'
       ;;
@@ -2415,7 +2415,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 		}
 	});
 
-	it("rejects an upload-delayed prompt if another tab starts moving its owner", async () => {
+	it("refuses to move a session while an upload-delayed prompt is being prepared", async () => {
 		const markerDir = mkdtempSync(join(tmpdir(), "move-upload-race-"));
 		const marker = join(markerDir, "events");
 		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
@@ -2462,15 +2462,70 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			owner.ws.send(JSON.stringify({ type: "prompt", text: "delayed upload" }));
 			await imageStarted;
 			controller.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-upload-race-001", projectId: project.id }));
-			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("term move-upload-race-001"));
+			const errors = await waitForType(controller.inbox, "error", 1, 3000);
+			expect(String(errors[0]?.message)).toContain("still running");
 			release();
-			const errors = await waitForType(owner.inbox, "error", 1, 3000);
-			expect(String(errors[0]?.message)).toContain("session is switching");
-			expect(readFileSync(marker, "utf8")).not.toContain("prompt move-upload-race-001");
+			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("prompt move-upload-race-001"));
+			expect(readFileSync(marker, "utf8")).not.toContain("term move-upload-race-001");
 		} finally {
 			release();
 			owner.close(); controller.close(); shutdownChatWs();
 			vi.doUnmock("../src/server/prompt-images.js");
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(project.cwd, { recursive: true, force: true });
+			rmSync(markerDir, { recursive: true, force: true });
+		}
+	});
+
+	it("will not move an owner until Pi acknowledges a previously forwarded prompt", async () => {
+		const markerDir = mkdtempSync(join(tmpdir(), "move-preflight-"));
+		const marker = join(markerDir, "events");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		fakePiPath = makeFakePi("ack");
+		writeFileSync(fakePiPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const index = process.argv.indexOf('--session');
+const id = index >= 0 ? process.argv[index + 1] : 'preflight-controller';
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.type === 'get_state') console.log(JSON.stringify({ type: 'response', command: 'get_state', success: true, data: { sessionId: id } }));
+  if (msg.type === 'prompt') {
+    fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'received\\n');
+    setTimeout(() => {
+      console.log(JSON.stringify({ type: 'response', command: 'prompt', success: true, id: msg.id, data: { disposition: 'handled' } }));
+      fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'acknowledged\\n');
+    }, 500);
+  }
+});
+`, { mode: 0o755 });
+		process.env.PI_BIN = fakePiPath;
+		const dir = join(sessionsRoot!, "--tmp--");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "preflight.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "move-preflight-001", cwd: "/tmp" })}\n`);
+		vi.resetModules();
+		const { mountChatWs, shutdownChatWs } = await import("../src/server/chat.js");
+		const { createProject } = await import("../src/server/projects.js");
+		const project = createProject({ name: "Move preflight target" });
+		mountChatWs(server!);
+		const owner = await connectClient();
+		const controller = await connectClient();
+		try {
+			owner.ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off", sessionId: "move-preflight-001" }));
+			controller.ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
+			expect(await waitForReadyCount(owner.inbox, 1, 3000)).toBe(true);
+			expect(await waitForReadyCount(controller.inbox, 1, 3000)).toBe(true);
+			owner.ws.send(JSON.stringify({ type: "prompt", text: "pending preflight" }));
+			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("received"));
+			controller.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-preflight-001", projectId: project.id }));
+			const errors = await waitForType(controller.inbox, "error", 1, 3000);
+			expect(String(errors[0]?.message)).toContain("still running");
+			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("acknowledged"));
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			controller.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-preflight-001", projectId: project.id }));
+			expect(await waitForReadyCount(owner.inbox, 2, 3000)).toBe(true);
+		} finally {
+			owner.close(); controller.close(); shutdownChatWs();
 			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
 			rmSync(project.cwd, { recursive: true, force: true });
 			rmSync(markerDir, { recursive: true, force: true });

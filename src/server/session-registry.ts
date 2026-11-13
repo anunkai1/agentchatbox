@@ -35,6 +35,7 @@ import { refreshSearchIndex } from "./search/index.js";
  * pipe reattachable, no smarter.
  */
 
+import { randomUUID } from "node:crypto";
 import type { Message } from "@earendil-works/pi-ai";
 import type { WebSocket } from "ws";
 import type {
@@ -133,6 +134,10 @@ export interface LiveSession {
 	name?: string;
 	ws: PiSocket | null;
 	ready: boolean;
+	/** Client instructions already received but not yet forwarded to Pi. */
+	pendingIngress: number;
+	/** Instructions awaiting Pi's preflight acknowledgement / run start. */
+	pendingInstructions: Map<string, "waiting" | "starting">;
 	busy: boolean;
 	/**
 	 * Whether the agent is mid-run (between agent_start and agent_end).
@@ -223,9 +228,16 @@ function hasClaudeRun(session: Pick<LiveSession, "statusFrames">): boolean {
 
 /** Work that must never be reaped: a pi turn or run, or a detached /cc run. */
 export function isWorking(
-	session: Pick<LiveSession, "busy" | "streaming" | "statusFrames">,
+	session: Pick<LiveSession, "busy" | "streaming" | "statusFrames"> &
+		Partial<Pick<LiveSession, "pendingIngress" | "pendingInstructions">>,
 ): boolean {
-	return session.busy || session.streaming || hasClaudeRun(session);
+	return (
+		session.busy ||
+		session.streaming ||
+		(session.pendingIngress ?? 0) > 0 ||
+		(session.pendingInstructions?.size ?? 0) > 0 ||
+		hasClaudeRun(session)
+	);
 }
 
 /** Pure transport projection, split out so its public contract is regression-tested. */
@@ -384,6 +396,13 @@ class SessionRegistry {
 		return out;
 	}
 
+	/** Track instruction preflight so a move cannot stop Pi before it accepts a send. */
+	sendInstruction(session: LiveSession, command: Record<string, unknown>): void {
+		const id = randomUUID();
+		session.pendingInstructions.set(id, "waiting");
+		session.pi.send({ ...command, id });
+	}
+
 	/** Read-only lifecycle snapshot for local status consumers such as Shed. */
 	statusSnapshot(): AgentLifecycleStatus[] {
 		return buildStatusSnapshot(this.entries);
@@ -464,6 +483,8 @@ class SessionRegistry {
 			sessionId: init.sessionId ?? "",
 			ws: null,
 			ready: false,
+			pendingIngress: 0,
+			pendingInstructions: new Map(),
 			busy: false,
 			streaming: false,
 			compaction: null,
@@ -669,7 +690,7 @@ class SessionRegistry {
 	 * so it is cleaned up once its work ends; agent_start cancels the timer.
 	 */
 	releaseUnattached(session: LiveSession): void {
-		if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
+		if (!session.pi.killed && !session.ws && !isWorking(session)) this.scheduleIdleReap(session);
 	}
 
 	/** Force-kill a session and remove it from the registry. */
@@ -926,6 +947,27 @@ class SessionRegistry {
 			return;
 		}
 
+		// Pi's prompt preflight acknowledgement closes the gap between an
+		// stdin write and agent_start. Never move/reap the owner in that gap.
+		if (
+			line.type === "response" &&
+			typeof line.id === "string" &&
+			session.pendingInstructions.has(line.id)
+		) {
+			const data =
+				line.data && typeof line.data === "object" ? (line.data as Record<string, unknown>) : {};
+			const started =
+				line.command === "prompt" &&
+				data.disposition !== "handled" &&
+				data.disposition !== "queued";
+			if (line.success !== false && started && !session.streaming) {
+				session.pendingInstructions.set(line.id, "starting");
+			} else {
+				session.pendingInstructions.delete(line.id);
+				if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
+			}
+		}
+
 		// Drop success acks (noise — pi's events are the real confirmation).
 		// Fall through for success:false so failures reach the client: that
 		// is what makes this a transparent pipe rather than a silent dropper.
@@ -985,6 +1027,9 @@ class SessionRegistry {
 			// client's isStreaming so a tab refresh can recover it from the
 			// server's `ready` (the browser's local copy is wiped on reload).
 			session.streaming = true;
+			for (const [id, phase] of session.pendingInstructions) {
+				if (phase === "starting") session.pendingInstructions.delete(id);
+			}
 			// A run may start before its first turn_start. Cancel cleanup at
 			// the broadest work boundary so that window is protected too.
 			if (session.idleTimer) {
