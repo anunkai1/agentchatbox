@@ -117,6 +117,7 @@ import {
 	handlePaste,
 	handleVoiceRecord,
 	isUploadInProgress,
+	isVoiceInputBusy,
 	pauseVoice,
 	promptImageLimitError,
 	resumeVoice,
@@ -170,20 +171,13 @@ function draftStorageKey(sessionId = state.sessionId): string {
 
 function persistDraft(text: string): void {
 	try {
+		const storage = state.sessionId ? localStorage : sessionStorage;
 		const key = draftStorageKey();
-		if (text) localStorage.setItem(key, text);
-		else localStorage.removeItem(key);
+		if (text) storage.setItem(key, text);
+		else storage.removeItem(key);
 	} catch {
 		// Draft persistence is best-effort; the live composer remains usable
 		// when storage is disabled or full.
-	}
-}
-
-function clearSavedDraft(): void {
-	try {
-		localStorage.removeItem(draftStorageKey());
-	} catch {
-		/* ignore storage failures */
 	}
 }
 
@@ -192,15 +186,14 @@ function bindInitialDraft(): void {
 	const input = $<HTMLTextAreaElement>("#input");
 	try {
 		const unboundKey = draftStorageKey(null);
-		const unbound = localStorage.getItem(unboundKey);
+		const unbound = sessionStorage.getItem(unboundKey);
 		const sessionKey = draftStorageKey();
 		// A visible draft may have been typed while pi was starting. Otherwise
 		// keep an existing session draft in preference to the unbound one.
 		const text = input.value || (!localStorage.getItem(sessionKey) ? unbound : null);
 		if (!text) return;
 		localStorage.setItem(sessionKey, text);
-		// Another tab may have replaced the shared unbound key in the meantime.
-		if (unbound === text) localStorage.removeItem(unboundKey);
+		if (unbound === text) sessionStorage.removeItem(unboundKey);
 	} catch {
 		/* Keep the live composer usable if storage is unavailable. */
 	}
@@ -210,7 +203,8 @@ function restoreSavedDraft(): void {
 	const input = $<HTMLTextAreaElement>("#input");
 	if (input.value) return;
 	try {
-		const text = localStorage.getItem(draftStorageKey());
+		const storage = state.sessionId ? localStorage : sessionStorage;
+		const text = storage.getItem(draftStorageKey());
 		if (text) {
 			input.value = text;
 			autoSize();
@@ -220,6 +214,47 @@ function restoreSavedDraft(): void {
 	}
 }
 
+let offeredLegacyDraft = false;
+
+/** Old versions shared one unbound key across tabs; never adopt it silently. */
+function offerLegacyDraft(): void {
+	if (offeredLegacyDraft) return;
+	try {
+		if (!localStorage.getItem(draftStorageKey(null))) return;
+	} catch {
+		return;
+	}
+	offeredLegacyDraft = true;
+	showNotice(
+		"An older unassigned draft is available. Recover it into an empty composer.",
+		"warning",
+		{
+			key: "legacy-draft",
+			action: {
+				label: "Recover old draft",
+				run: () => {
+					const input = $<HTMLTextAreaElement>("#input");
+					if (input.value) {
+						showToast("Clear the current draft before recovering the older one.", "warning");
+						return;
+					}
+					try {
+						const text = localStorage.getItem(draftStorageKey(null));
+						if (text) {
+							input.value = text;
+							persistDraft(text);
+							autoSize();
+						}
+						clearNotice("legacy-draft");
+					} catch {
+						showToast("Could not read the older draft from browser storage.", "warning");
+					}
+				},
+			},
+		},
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Send
 // ---------------------------------------------------------------------------
@@ -227,22 +262,31 @@ function restoreSavedDraft(): void {
 function clearComposerDraft(): void {
 	$<HTMLTextAreaElement>("#input").value = "";
 	clearAttachmentPreviews();
-	clearSavedDraft();
+	persistDraft("");
 	autoSize();
 	refreshNotices();
 }
 
-let relayViewPending = false;
+type SessionSwitch = { target: string | null; deleteAfter?: string };
+/** The previous view stays intact until the requested session is ready. */
+let sessionSwitch: SessionSwitch | null = null;
 const relaySessions = new Set<string>();
+
+function setSessionSwitch(pending: SessionSwitch | null): void {
+	sessionSwitch = pending;
+	for (const id of ["#input", "#send-btn", "#attach-btn", "#voice-btn"]) {
+		$<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>(id).disabled = Boolean(pending);
+	}
+	if (pending) {
+		showNotice("Opening chat — the current draft is safe. Please wait.", "warning", {
+			key: "session-opening",
+		});
+	} else clearNotice("session-opening");
+}
 
 function handleSend(): void {
 	closeSlashMenu();
-	if (relayViewPending) {
-		showNotice("Opening the Relay conversation — your draft has been kept.", "warning", {
-			key: "relay-opening",
-		});
-		return;
-	}
+	if (sessionSwitch) return;
 	if (isUploadInProgress()) {
 		showNotice("Upload in progress — wait for it to finish before sending.", "warning", {
 			key: "upload-pending",
@@ -298,7 +342,8 @@ function showSendConnectionNotice(): void {
 }
 
 function prepareTypedMessage(): boolean {
-	if (relayViewPending || (state.connectionStatus === "open" && !prepareRelayTypedInput())) {
+	if (sessionSwitch) return false;
+	if (state.connectionStatus === "open" && !prepareRelayTypedInput()) {
 		showNotice("Relay is getting ready — your draft has been kept.", "warning", {
 			key: "relay-opening",
 		});
@@ -361,6 +406,7 @@ let lastAutoVoicedStamp: number | null = null;
 function autoVoiceReply(stamp: number | null): void {
 	if (
 		state.voiceMode !== "reply" ||
+		sessionSwitch ||
 		state.compaction ||
 		isVoiceTestOpen() ||
 		(state.sessionId !== null && relaySessions.has(state.sessionId))
@@ -523,7 +569,7 @@ function stampLastUserBlock(seq: number): void {
  * the original steer and live in its queue, so they are not re-sent.)
  */
 function recoverStrandedSteer(): void {
-	if (state.isStreaming) return;
+	if (state.isStreaming || sessionSwitch) return;
 	const stranded = state.messages.find(
 		(m): m is Extract<PersistedMessage, { kind: "steer" }> => m.kind === "steer" && !m.delivered,
 	);
@@ -1571,23 +1617,49 @@ async function boot(): Promise<void> {
 	const chatClient = createChatClient();
 	let mainReady = false;
 	const viewingRelay = () => Boolean(state.sessionId && relaySessions.has(state.sessionId));
-	const newChatView = (projectId?: string) => {
-		const preserve = viewingRelay();
-		if (preserve) {
-			endRelayVoice();
-			relayViewPending = true;
-			$<HTMLTextAreaElement>("#input").disabled = true;
+	const beginSessionSwitch = (target: string | null, deleteAfter?: string): boolean => {
+		if (sessionSwitch) return false;
+		if (!mainReady || state.connectionStatus !== "open") {
+			showNotice(
+				"Chat is still connecting. Wait for it to reconnect before switching.",
+				"warning",
+				{
+					key: "switch-connection",
+				},
+			);
+			return false;
 		}
-		chatClient.newSession(projectId, preserve);
+		if (isUploadInProgress()) {
+			showNotice("Wait for the upload to finish before switching chats.", "warning", {
+				key: "upload-pending",
+				resolved: () => !isUploadInProgress(),
+			});
+			return false;
+		}
+		if (isVoiceInputBusy()) {
+			showNotice("Finish the recording or transcription before switching chats.", "warning", {
+				key: "switch-voice",
+				resolved: () => !isVoiceInputBusy(),
+			});
+			return false;
+		}
+		clearNotice("switch-connection");
+		persistDraft($<HTMLTextAreaElement>("#input").value);
+		setSessionSwitch({ target, deleteAfter });
+		return true;
+	};
+	const requestNewSession = (projectId?: string, preservePrevious = false) => {
+		const relay = viewingRelay();
+		if (relay) endRelayVoice();
+		chatClient.newSession(projectId, preservePrevious || relay);
+	};
+	const newChatView = (projectId?: string) => {
+		if (beginSessionSwitch(null)) requestNewSession(projectId);
 	};
 	const resumeChatView = (sessionId: string) => {
-		if (sessionId === state.sessionId) return;
+		if (sessionId === state.sessionId || !beginSessionSwitch(sessionId)) return;
 		const preserve = viewingRelay();
-		if (preserve) {
-			endRelayVoice();
-			relayViewPending = true;
-			$<HTMLTextAreaElement>("#input").disabled = true;
-		}
+		if (preserve) endRelayVoice();
 		chatClient.resumeSession(sessionId, preserve);
 	};
 
@@ -1634,17 +1706,14 @@ async function boot(): Promise<void> {
 			// its next event. The server's broadcastSessions refresh will
 			// drop the row from every sidebar.
 			const wasActive = sessionId === state.sessionId;
-			chatClient.deleteSession(sessionId);
 			if (wasActive) {
-				resetChatState();
-				chatClient.newSession();
-			}
+				// Keep the original child and transcript until the replacement is
+				// ready; a failed switch must not delete the current chat.
+				if (beginSessionSwitch(null, sessionId)) requestNewSession(undefined, true);
+			} else chatClient.deleteSession(sessionId);
 		},
 		moveSession: (sessionId, projectId) => chatClient.moveSession(sessionId, projectId),
-		newGlobalSession: () => {
-			resetChatState();
-			newChatView();
-		},
+		newGlobalSession: () => newChatView(),
 		toggleVoiceMode: () => {
 			state.voiceMode = nextVoiceMode(state.voiceMode);
 			saveSessionPrefs();
@@ -1652,10 +1721,7 @@ async function boot(): Promise<void> {
 			showToast(VOICE_MODE_DESCRIPTIONS[state.voiceMode]);
 		},
 		newSessionInProject: (projectId) => {
-			if (confirm("Start a new chat in this project?")) {
-				resetChatState();
-				newChatView(projectId);
-			}
+			if (confirm("Start a new chat in this project?")) newChatView(projectId);
 		},
 		createProject: (input) => chatClient.createProject(input),
 		updateProject: (input) => chatClient.updateProject(input),
@@ -1665,6 +1731,7 @@ async function boot(): Promise<void> {
 	registerShellHandlers(shellHandlers);
 
 	renderShell();
+	restoreSavedDraft();
 
 	// Voice mode is device-wide, so another tab can flip it while this one sits
 	// open. `storage` fires only in the OTHER tabs, so re-read the flag there and
@@ -1707,7 +1774,15 @@ async function boot(): Promise<void> {
 		updateProject: (input) => chatClient.updateProject(input),
 	});
 	chatClient.onStatus((s) => {
-		if (s !== "open") mainReady = false;
+		if (s !== "open") {
+			mainReady = false;
+			if (sessionSwitch) {
+				setSessionSwitch(null);
+				showNotice("Chat switch interrupted. The previous chat will reconnect.", "warning", {
+					key: "switch-connection",
+				});
+			}
+		}
 		state.connectionStatus = s;
 		refreshStatus();
 	});
@@ -1715,15 +1790,31 @@ async function boot(): Promise<void> {
 	chatClient.onReady((info) => {
 		mainReady = true;
 		clearNotice("send-connection");
-		if (relayViewPending) {
-			relayViewPending = false;
+		const switching = sessionSwitch;
+		const switched = Boolean(
+			switching &&
+				info.sessionId &&
+				info.sessionId !== state.sessionId &&
+				(!switching.target || switching.target === info.sessionId),
+		);
+		if (switching) {
+			setSessionSwitch(null);
 			clearNotice("relay-opening");
-			flushStreamDom();
-			lastAssistant = null;
-			lastAssistantDom = null;
-			state.isStreaming = false;
-			state.compaction = null;
-			resetChatState();
+			if (switched) {
+				flushStreamDom();
+				lastAssistant = null;
+				lastAssistantDom = null;
+				state.isStreaming = false;
+				state.compaction = null;
+				resetChatState();
+			} else {
+				showNotice("The requested chat did not open; the current chat was kept.", "warning");
+				if (!info.sessionId || info.sessionId !== state.sessionId) {
+					mainReady = false;
+					chatClient.reconnect();
+				}
+				return;
+			}
 		}
 		if (pendingFork) {
 			const { sessionId, messageCount } = pendingFork;
@@ -1748,8 +1839,10 @@ async function boot(): Promise<void> {
 				clearAttachmentPreviews();
 			}
 			state.sessionId = info.sessionId;
-			if (wasUnbound) bindInitialDraft();
+			const newChat = wasUnbound || (switched && switching?.target === null);
+			if (newChat) bindInitialDraft();
 			setNoticeSession(info.sessionId);
+			if (newChat) offerLegacyDraft();
 			applySessionPrefs();
 			syncDisplayPreferences();
 			// A cached/server sidebar snapshot can name a resumed session before
@@ -1761,6 +1854,7 @@ async function boot(): Promise<void> {
 			writeSessionIdToUrl(info.sessionId);
 		}
 		restoreSavedDraft();
+		if (switched && switching?.deleteAfter) chatClient.deleteSession(switching.deleteAfter);
 		// Adopt pi's authoritative model unless the user picked another model
 		// while this child was still starting. In that race, the first ready
 		// frame describes the original spawn model; keep the optimistic pick
@@ -1811,10 +1905,13 @@ async function boot(): Promise<void> {
 	});
 	chatClient.onEvent(onEvent);
 	chatClient.onError((msg) => {
-		if (relayViewPending) {
-			relayViewPending = false;
-			$<HTMLTextAreaElement>("#input").disabled = false;
+		if (
+			sessionSwitch &&
+			(msg.startsWith("could not switch session;") || msg === "not connected to server")
+		) {
+			setSessionSwitch(null);
 			clearNotice("relay-opening");
+			if (msg.startsWith("could not switch session;")) recoverStrandedSteer();
 		}
 		if (msg === "not connected to server") showSendConnectionNotice();
 		else appendError(msg);
@@ -1942,6 +2039,7 @@ async function boot(): Promise<void> {
 		// state too or renderSidebarSessions would intentionally no-op.
 		state.searchActive = false;
 		renderShell();
+		if (sessionSwitch) setSessionSwitch(sessionSwitch);
 		if (hasSidebarSessionSnapshot) renderSidebarSessions(sidebarSessionsForCache);
 		// onReady restores the session draft before the transcript event, and
 		// renderShell replaces that textarea. Restore it once more into the new
@@ -2012,7 +2110,7 @@ async function boot(): Promise<void> {
 	// this file or voice.ts — breaking the render↔{main,voice} cycle.
 	setServices({
 		openRelayChat: (options) => {
-			if (!mainReady || isUploadInProgress()) {
+			if (!mainReady || sessionSwitch || isUploadInProgress() || isVoiceInputBusy()) {
 				let closed = false;
 				queueMicrotask(() => {
 					if (!closed)
@@ -2020,7 +2118,9 @@ async function boot(): Promise<void> {
 							type: "error",
 							message: isUploadInProgress()
 								? "Wait for the upload to finish, then end voice and try R again."
-								: "Chat is still connecting. End voice and try R again in a moment.",
+								: isVoiceInputBusy()
+									? "Finish the recording or transcription, then end voice and try R again."
+									: "Chat is still connecting. End voice and try R again in a moment.",
 						});
 				});
 				return {
@@ -2034,6 +2134,7 @@ async function boot(): Promise<void> {
 			const sourceId = state.sessionId;
 			let bound = options.sessionId !== null && options.sessionId === state.sessionId;
 			let target = options.sessionId;
+			let ownSwitch: SessionSwitch | null = null;
 			let closed = false;
 			const unsubscribe = chatClient.onWire((wire) => {
 				if (wire.type === "ready") {
@@ -2055,7 +2156,6 @@ async function boot(): Promise<void> {
 					relaySessions.add(id);
 				}
 				if (!bound && wire.type === "error") {
-					relayViewPending = false;
 					clearNotice("relay-opening");
 					options.onMessage(wire);
 				} else if (bound) options.onMessage(wire);
@@ -2070,8 +2170,8 @@ async function boot(): Promise<void> {
 				});
 			} else {
 				persistDraft($<HTMLTextAreaElement>("#input").value);
-				relayViewPending = true;
-				$<HTMLTextAreaElement>("#input").disabled = true;
+				ownSwitch = { target };
+				setSessionSwitch(ownSwitch);
 				if (target) chatClient.resumeSession(target, true);
 				else chatClient.newSession(undefined, true);
 			}
@@ -2079,14 +2179,14 @@ async function boot(): Promise<void> {
 				isOpen: () =>
 					!closed &&
 					bound &&
-					!relayViewPending &&
+					!sessionSwitch &&
 					state.sessionId === target &&
 					state.connectionStatus === "open",
 				send: (message) => {
 					if (
 						closed ||
 						!bound ||
-						relayViewPending ||
+						sessionSwitch ||
 						state.sessionId !== target ||
 						state.connectionStatus !== "open"
 					)
@@ -2100,6 +2200,9 @@ async function boot(): Promise<void> {
 					closed = true;
 					unsubscribe();
 					unsubscribeStatus();
+					// Abandon an unresolved Relay switch by reconnecting to the old
+					// chat; simply unlocking could send into the old child mid-switch.
+					if (!bound && ownSwitch && sessionSwitch === ownSwitch) chatClient.reconnect();
 				},
 			};
 		},

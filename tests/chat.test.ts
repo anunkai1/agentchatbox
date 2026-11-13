@@ -766,6 +766,38 @@ async function waitForType(
 	return inbox.all().filter((m) => m.type === type);
 }
 
+function installGatedSwitchPi(): string {
+	fakePiPath = makeFakePi("track");
+	const marker = join(fakePiPath, "..", "switch-gate");
+	process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+	writeFileSync(
+		fakePiPath,
+		`#!/usr/bin/env bash
+session="source-session-001"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--session" ]; then session="$2"; shift; fi
+  shift
+done
+printf '%s:%s\\n' "$session" "$$" >> "$AGENTCHATBOX_FAKE_PI_MARKER.pids"
+if [ "$session" = "target-session-001" ]; then
+  touch "$AGENTCHATBOX_FAKE_PI_MARKER.waiting"
+  while [ ! -f "$AGENTCHATBOX_FAKE_PI_MARKER.release" ]; do sleep 0.02; done
+fi
+while IFS= read -r line; do
+  type="$(echo "$line" | jq -r '.type // ""')"
+  case "$type" in
+    get_state) printf '{"type":"response","command":"get_state","success":true,"data":{"sessionId":"%s","messageCount":0}}\\n' "$session" ;;
+    prompt|steer) printf '%s:%s\\n' "$session" "$type" >> "$AGENTCHATBOX_FAKE_PI_MARKER.prompts" ;;
+    abort) printf '%s:%s\\n' "$session" "$type" >> "$AGENTCHATBOX_FAKE_PI_MARKER.controls" ;;
+  esac
+done
+`,
+		{ mode: 0o755 },
+	);
+	process.env.PI_BIN = fakePiPath;
+	return marker;
+}
+
 describe("mountChatWs — pi subprocess pipe", () => {
 	it("emits ready after the first session line, then forwards pi events", async () => {
 		const { mountChatWs } = await import("../src/server/chat.js");
@@ -2104,6 +2136,130 @@ done
 			expect(readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(2); // Reused source; no restart/replay.
 		} finally {
 			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+		}
+	});
+
+	it("rejects prompts and steering while a replacement session is starting", async () => {
+		const marker = installGatedSwitchPi();
+		vi.resetModules();
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }),
+			);
+			expect(await waitForReadyCount(inbox, 1, 3000)).toBe(true);
+			ws.send(JSON.stringify({ type: "resumeSession", sessionId: "target-session-001" }));
+			await vi.waitFor(() => expect(existsSync(`${marker}.waiting`)).toBe(true), { timeout: 3000 });
+			ws.send(JSON.stringify({ type: "prompt", text: "not for the old chat" }));
+			ws.send(JSON.stringify({ type: "steer", text: "not for the old chat either" }));
+			ws.send(JSON.stringify({ type: "abort" }));
+			await vi.waitFor(
+				() =>
+					expect(readFileSync(`${marker}.controls`, "utf8").trim()).toBe(
+						"source-session-001:abort",
+					),
+				{ timeout: 3000 },
+			);
+			const errors = await waitForType(inbox, "error", 2, 3000);
+			expect(errors).toHaveLength(2);
+			for (const error of errors) expect(String(error.message)).toMatch(/switch/i);
+			expect(existsSync(`${marker}.prompts`)).toBe(false);
+			writeFileSync(`${marker}.release`, "");
+			expect(await waitForReadyCount(inbox, 2, 3000)).toBe(true);
+			ws.send(JSON.stringify({ type: "prompt", text: "for the new chat" }));
+			await vi.waitFor(
+				() =>
+					expect(readFileSync(`${marker}.prompts`, "utf8").trim()).toBe(
+						"target-session-001:prompt",
+					),
+				{ timeout: 3000 },
+			);
+		} finally {
+			writeFileSync(`${marker}.release`, "");
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+		}
+	});
+
+	it("does not route a batched prompt to the old chat when a switch fails immediately", async () => {
+		const marker = installGatedSwitchPi();
+		process.env.AGENTCHATBOX_MAX_LIVE_SESSIONS = "1";
+		vi.resetModules();
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }),
+			);
+			expect(await waitForReadyCount(inbox, 1, 3000)).toBe(true);
+			ws.send(JSON.stringify({ type: "newSession" }));
+			ws.send(JSON.stringify({ type: "prompt", text: "intended for the new chat" }));
+			const errors = await waitForType(inbox, "error", 2, 3000);
+			expect(errors).toHaveLength(2);
+			expect(existsSync(`${marker}.prompts`)).toBe(false);
+			ws.send(
+				JSON.stringify({ type: "prompt", text: "explicitly for the old chat after failure" }),
+			);
+			await vi.waitFor(
+				() =>
+					expect(readFileSync(`${marker}.prompts`, "utf8").trim()).toBe(
+						"source-session-001:prompt",
+					),
+				{ timeout: 3000 },
+			);
+		} finally {
+			close();
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			delete process.env.AGENTCHATBOX_MAX_LIVE_SESSIONS;
+		}
+	});
+
+	it("keeps the old child alive if the browser disconnects during a switch", async () => {
+		const marker = installGatedSwitchPi();
+		vi.resetModules();
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const client = await connectClient();
+		let reconnected: Awaited<ReturnType<typeof connectClient>> | undefined;
+		try {
+			client.ws.send(
+				JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }),
+			);
+			expect(await waitForReadyCount(client.inbox, 1, 3000)).toBe(true);
+			const sourcePid = Number(readFileSync(`${marker}.pids`, "utf8").trim().split(":")[1]);
+			client.ws.send(JSON.stringify({ type: "resumeSession", sessionId: "target-session-001" }));
+			await vi.waitFor(() => expect(existsSync(`${marker}.waiting`)).toBe(true), { timeout: 3000 });
+			const closed = new Promise<void>((resolve) => client.ws.once("close", () => resolve()));
+			client.close();
+			await closed;
+			writeFileSync(`${marker}.release`, "");
+			await new Promise((resolve) => setTimeout(resolve, 350));
+			expect(() => process.kill(sourcePid, 0)).not.toThrow();
+			reconnected = await connectClient();
+			reconnected.ws.send(
+				JSON.stringify({
+					type: "init",
+					provider: "deepseek",
+					modelId: "m1",
+					thinkingLevel: "off",
+					sessionId: "source-session-001",
+				}),
+			);
+			expect(await waitForReadyCount(reconnected.inbox, 1, 3000)).toBe(true);
+			expect(
+				readFileSync(`${marker}.pids`, "utf8")
+					.trim()
+					.split("\n")
+					.filter((line) => line.startsWith("source-session-001:")),
+			).toHaveLength(1);
+		} finally {
+			writeFileSync(`${marker}.release`, "");
+			client.close();
+			reconnected?.close();
 			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
 		}
 	});

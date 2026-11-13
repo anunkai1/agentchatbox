@@ -341,10 +341,8 @@ export function setChatControls(c: ChatControls): void {
 }
 
 /**
- * Reset the renderer cache + cost counters for a brand-new chat. Shared by
- * /clear (Global) and /project <name> so both leave a clean slate before
- * the server's new `pi` child reports back. The server auto-saved the
- * prior session, so there's no local save step.
+ * Reset the renderer cache + cost counters after a different session becomes
+ * ready. Until then the previous view and its draft remain intact.
  */
 function resetChatState(): void {
 	state.title = "New chat";
@@ -359,7 +357,7 @@ function resetChatState(): void {
 	renderShell();
 }
 
-/** Public so main.ts's `newSessionInProject` can reset before spawning. */
+/** Main resets the view only after the replacement session is ready. */
 export { resetChatState };
 
 export function handleSlash(arg: string): void {
@@ -435,7 +433,6 @@ export function handleSlash(arg: string): void {
 				// Server-side: `pi` already auto-saves on every event, so
 				// there's no local "save the prior session" step. We just
 				// ask the server to start a new one (in Global by default).
-				resetChatState();
 				chatControls?.newSession();
 			}
 			break;
@@ -500,7 +497,6 @@ export function handleSlash(arg: string): void {
 					}`,
 				);
 			} else if (confirm(`Start a new chat in "${match.name}"?`)) {
-				resetChatState();
 				chatControls?.newSession(match.id);
 			}
 			$<HTMLTextAreaElement>("#input").value = "";

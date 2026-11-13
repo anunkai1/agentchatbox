@@ -97,10 +97,12 @@ let client: { html: string; js: string; css: string };
 async function relayChatFixture(
 	page: Page,
 	configure: (ws: Pick<WebSocketRoute, "send" | "onMessage">) => void,
+	allowReconnect = false,
 ): Promise<void> {
 	let connections = 0;
 	await page.routeWebSocket(/\/api\/chat$/, (socket) => {
-		expect(++connections).toBe(1); // R/engine/drawer changes reuse the normal connection.
+		connections++;
+		if (!allowReconnect) expect(connections).toBe(1); // Normal R/engine/drawer changes reuse one socket.
 		let userStarted = false;
 		let sessionId = "relay-source-chat";
 		let freshViews = 0;
@@ -464,7 +466,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.goto(`${base}/`);
 			await expect.poll(() => Boolean(socket)).toBe(true);
 			await page.locator("#input").fill("Written before ready");
-			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(
+			expect(await page.evaluate(() => sessionStorage.getItem("acb-draft-v1:new"))).toBe(
 				"Written before ready",
 			);
 			if (replacement) {
@@ -485,6 +487,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				await page.evaluate(() => localStorage.getItem("acb-draft-v1:new-draft-session")),
 			).toBe("Written before ready");
 			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(replacement);
+			expect(await page.evaluate(() => sessionStorage.getItem("acb-draft-v1:new"))).toBeNull();
 			// Transcript replay rebuilds the composer; the bound draft must survive it.
 			socket!.send(
 				JSON.stringify({
@@ -511,7 +514,10 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 	it("does not move an unbound new-chat draft into an existing conversation", async () => {
 		const { page } = await openPage("/");
 		try {
-			await page.evaluate(() => localStorage.setItem("acb-draft-v1:new", "Unbound draft"));
+			await page.evaluate(() => {
+				localStorage.setItem("acb-draft-v1:new", "Unbound draft");
+				sessionStorage.setItem("acb-draft-v1:new", "This tab's unbound draft");
+			});
 			await page.goto(`${base}/s/${SEEDED_ID}`);
 			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
 			expect(await page.locator("#input").inputValue()).toBe("");
@@ -528,6 +534,16 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(
 				"Unbound draft",
 			);
+			expect(await page.evaluate(() => sessionStorage.getItem("acb-draft-v1:new"))).toBe(
+				"This tab's unbound draft",
+			);
+			await page.locator(".new-chat-btn").click();
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/live-session-001");
+			expect(await page.locator("#input").inputValue()).toBe("This tab's unbound draft");
+			expect(
+				await page.evaluate((id) => localStorage.getItem(`acb-draft-v1:${id}`), SEEDED_ID),
+			).toBe("This session's own draft");
+			expect(await page.evaluate(() => sessionStorage.getItem("acb-draft-v1:new"))).toBeNull();
 		} finally {
 			await page.close();
 		}
@@ -544,6 +560,403 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:live-session-001"))).toBe(
 				question,
 			);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("keeps new-tab drafts private to each tab and restores an unbound draft after reload", async () => {
+		const context = await browser!.newContext();
+		const first = await context.newPage();
+		const second = await context.newPage();
+		let firstSocket: WebSocketRoute | undefined;
+		let secondSocket: WebSocketRoute | undefined;
+		await context.route(
+			(url) => url.origin === base && !url.pathname.startsWith("/api/"),
+			(route) => {
+				const pathname = new URL(route.request().url()).pathname;
+				if (pathname === "/app.js")
+					return route.fulfill({ body: client.js, contentType: "text/javascript" });
+				if (pathname === "/styles.css")
+					return route.fulfill({ body: client.css, contentType: "text/css" });
+				if (pathname === "/" || pathname.startsWith("/s/"))
+					return route.fulfill({ body: client.html, contentType: "text/html" });
+				return route.fulfill({ status: 404, body: "" });
+			},
+		);
+		await first.routeWebSocket(/\/api\/chat$/, (ws) => {
+			firstSocket = ws;
+			ws.onMessage(() => {});
+		});
+		await second.routeWebSocket(/\/api\/chat$/, (ws) => {
+			secondSocket = ws;
+			ws.onMessage(() => {});
+		});
+		try {
+			await first.goto(`${base}/`);
+			await second.goto(`${base}/`);
+			await expect.poll(() => Boolean(firstSocket && secondSocket)).toBe(true);
+			await second.locator("#input").fill("Second tab only");
+			firstSocket!.send(
+				JSON.stringify({
+					type: "ready",
+					sessionId: "first-tab-session",
+					modelId: "glm-5.2",
+					provider: "zai",
+					thinkingLevel: "off",
+				}),
+			);
+			await expect.poll(() => new URL(first.url()).pathname).toBe("/s/first-tab-session");
+			expect(await first.locator("#input").inputValue()).toBe("");
+			expect(
+				await first.evaluate(() => localStorage.getItem("acb-draft-v1:first-tab-session")),
+			).toBeNull();
+			await second.reload();
+			await expect.poll(() => second.locator("#input").inputValue()).toBe("Second tab only");
+			secondSocket!.send(
+				JSON.stringify({
+					type: "ready",
+					sessionId: "second-tab-session",
+					modelId: "glm-5.2",
+					provider: "zai",
+					thinkingLevel: "off",
+				}),
+			);
+			await expect.poll(() => new URL(second.url()).pathname).toBe("/s/second-tab-session");
+			expect(
+				await second.evaluate(() => localStorage.getItem("acb-draft-v1:second-tab-session")),
+			).toBe("Second tab only");
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("offers a legacy unbound draft without moving it or overwriting a current draft", async () => {
+		const { page } = await openPage("/");
+		let socket: WebSocketRoute | undefined;
+		const prompts: string[] = [];
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			socket = ws;
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "prompt") prompts.push(message.text);
+			});
+		});
+		try {
+			await page.evaluate(() => localStorage.setItem("acb-draft-v1:new", "Old recoverable draft"));
+			await page.goto(`${base}/`);
+			await expect.poll(() => Boolean(socket)).toBe(true);
+			socket!.send(
+				JSON.stringify({
+					type: "ready",
+					sessionId: "legacy-recovery-session",
+					modelId: "glm-5.2",
+					provider: "zai",
+					thinkingLevel: "off",
+				}),
+			);
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/legacy-recovery-session");
+			expect(await page.locator("#input").inputValue()).toBe("");
+			const recover = page.getByRole("button", { name: "Recover old draft", exact: true });
+			await recover.waitFor();
+			await page.locator("#input").fill("Current draft");
+			await recover.click();
+			expect(await page.locator("#input").inputValue()).toBe("Current draft");
+			await page.locator("#input").fill("");
+			await recover.click();
+			expect(await page.locator("#input").inputValue()).toBe("Old recoverable draft");
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(
+				"Old recoverable draft",
+			);
+			expect(
+				await page.evaluate(() => localStorage.getItem("acb-draft-v1:legacy-recovery-session")),
+			).toBe("Old recoverable draft");
+			expect(prompts).toEqual([]);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it.each([
+		"success",
+		"failure",
+	])("keeps the old draft and blocks submission while a new chat opens (%s)", async (outcome) => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		let socket: WebSocketRoute | undefined;
+		const prompts: string[] = [];
+		let newRequests = 0;
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			socket = ws;
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init") {
+					ws.send(
+						JSON.stringify({
+							type: "ready",
+							sessionId: SEEDED_ID,
+							modelId: "glm-5.2",
+							provider: "zai",
+							thinkingLevel: "off",
+						}),
+					);
+					ws.send(
+						JSON.stringify({
+							type: "transcript",
+							sessionId: SEEDED_ID,
+							messages: [
+								{
+									role: "user",
+									content: [{ type: "text", text: "Previous conversation" }],
+									timestamp: 1,
+								},
+							],
+						}),
+					);
+				} else if (message.type === "newSession") newRequests++;
+				else if (message.type === "prompt") prompts.push(message.text);
+			});
+		});
+		try {
+			await page.reload();
+			await expect.poll(() => messages(page).innerText()).toContain("Previous conversation");
+			await page.locator("#input").fill("Old unsent draft");
+			await page.locator(".new-chat-btn").click();
+			await expect.poll(() => newRequests).toBe(1);
+			expect(await page.locator("#input").isDisabled()).toBe(true);
+			expect(await page.locator("#input").inputValue()).toBe("Old unsent draft");
+			await page.locator("#send-btn").dispatchEvent("click");
+			expect(prompts).toEqual([]);
+			const dropped = await page.evaluate(() => {
+				const data = new DataTransfer();
+				data.items.add(new File(["fixture"], "during-switch.txt", { type: "text/plain" }));
+				const event = new DragEvent("drop", {
+					bubbles: true,
+					cancelable: true,
+					dataTransfer: data,
+				});
+				document.querySelector("#input")!.dispatchEvent(event);
+				return {
+					prevented: event.defaultPrevented,
+					previews: document.querySelectorAll("#attachment-previews .attachment-preview").length,
+				};
+			});
+			expect(dropped).toEqual({ prevented: true, previews: 0 });
+			expect(
+				await page.evaluate((id) => localStorage.getItem(`acb-draft-v1:${id}`), SEEDED_ID),
+			).toBe("Old unsent draft");
+			// An unrelated error from the old child must not unlock the composer.
+			for (const message of [
+				"unrelated old-session error",
+				"a session switch is already in progress",
+			]) {
+				socket!.send(JSON.stringify({ type: "error", message }));
+				await expect.poll(() => messages(page).innerText()).toContain(message);
+				expect(await page.locator("#input").isDisabled()).toBe(true);
+			}
+			if (outcome === "failure") {
+				socket!.send(
+					JSON.stringify({
+						type: "error",
+						message: "could not switch session; current session is still active: test failure",
+					}),
+				);
+				await expect.poll(() => page.locator("#input").isEnabled()).toBe(true);
+				expect(await page.locator("#input").inputValue()).toBe("Old unsent draft");
+				expect(await messages(page).innerText()).toContain("Previous conversation");
+				await page.locator("#send-btn").click();
+				await expect.poll(() => prompts).toEqual(["Old unsent draft"]);
+			} else {
+				socket!.send(
+					JSON.stringify({
+						type: "ready",
+						sessionId: "next-session",
+						modelId: "glm-5.2",
+						provider: "zai",
+						thinkingLevel: "off",
+					}),
+				);
+				await expect.poll(() => new URL(page.url()).pathname).toBe("/s/next-session");
+				expect(await page.locator("#input").isEnabled()).toBe(true);
+				expect(await page.locator("#input").inputValue()).toBe("");
+				expect(
+					await page.evaluate((id) => localStorage.getItem(`acb-draft-v1:${id}`), SEEDED_ID),
+				).toBe("Old unsent draft");
+				await page.locator("#input").fill("New session draft");
+				socket!.send(
+					JSON.stringify({
+						type: "transcript",
+						sessionId: "next-session",
+						messages: [
+							{
+								role: "user",
+								content: [{ type: "text", text: "New fixture transcript" }],
+								timestamp: 1,
+							},
+						],
+					}),
+				);
+				await expect.poll(() => messages(page).innerText()).toContain("New fixture transcript");
+				expect(await page.locator("#input").inputValue()).toBe("New session draft");
+			}
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("keeps the old view and draft while resuming an empty conversation", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		let socket: WebSocketRoute | undefined;
+		const prompts: string[] = [];
+		let resumeRequest = "";
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			socket = ws;
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init") {
+					ws.send(
+						JSON.stringify({
+							type: "ready",
+							sessionId: SEEDED_ID,
+							modelId: "glm-5.2",
+							provider: "zai",
+							thinkingLevel: "off",
+						}),
+					);
+					ws.send(
+						JSON.stringify({
+							type: "transcript",
+							sessionId: SEEDED_ID,
+							messages: [
+								{
+									role: "user",
+									content: [{ type: "text", text: "Previous conversation" }],
+									timestamp: 1,
+								},
+							],
+						}),
+					);
+				} else if (message.type === "listSessions") {
+					ws.send(
+						JSON.stringify({
+							type: "sessions",
+							sessions: [
+								{
+									id: "empty-target",
+									cwd: join(tmp, "cwd"),
+									title: "Empty target",
+									createdAt: "2026-01-01T00:00:00Z",
+									modifiedAt: "2026-01-01T00:00:00Z",
+									messageCount: 0,
+								},
+							],
+						}),
+					);
+				} else if (message.type === "resumeSession") resumeRequest = message.sessionId;
+				else if (message.type === "prompt") prompts.push(message.text);
+			});
+		});
+		try {
+			await page.reload();
+			await expect.poll(() => messages(page).innerText()).toContain("Previous conversation");
+			await page.locator("#input").fill("Old draft during resume");
+			await page.locator('a[href="/s/empty-target"]').click();
+			await expect.poll(() => resumeRequest).toBe("empty-target");
+			expect(await page.locator("#input").isDisabled()).toBe(true);
+			expect(await messages(page).innerText()).toContain("Previous conversation");
+			await page.locator("#send-btn").dispatchEvent("click");
+			expect(prompts).toEqual([]);
+			socket!.send(
+				JSON.stringify({
+					type: "ready",
+					sessionId: "empty-target",
+					modelId: "glm-5.2",
+					provider: "zai",
+					thinkingLevel: "off",
+				}),
+			);
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/empty-target");
+			expect(await page.locator("#input").inputValue()).toBe("");
+			expect(await messages(page).innerText()).not.toContain("Previous conversation");
+			expect(
+				await page.evaluate((id) => localStorage.getItem(`acb-draft-v1:${id}`), SEEDED_ID),
+			).toBe("Old draft during resume");
+		} finally {
+			await page.close();
+		}
+	});
+
+	it.each([
+		"failure",
+		"success",
+	])("deletes the active chat only after the replacement is ready: %s", async (result) => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		let socket: WebSocketRoute | undefined;
+		const sent: Array<{ type: string; sessionId?: string; preservePrevious?: boolean }> = [];
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			socket = ws;
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				sent.push(message);
+				if (message.type === "init")
+					ws.send(
+						JSON.stringify({
+							type: "ready",
+							sessionId: SEEDED_ID,
+							modelId: "glm-5.2",
+							provider: "zai",
+							thinkingLevel: "off",
+						}),
+					);
+				else if (message.type === "listSessions")
+					ws.send(
+						JSON.stringify({
+							type: "sessions",
+							sessions: [
+								{
+									id: SEEDED_ID,
+									cwd: join(tmp, "cwd"),
+									title: "Delete source",
+									createdAt: "2026-01-01T00:00:00Z",
+									modifiedAt: "2026-01-01T00:00:00Z",
+									messageCount: 1,
+								},
+							],
+						}),
+					);
+			});
+		});
+		try {
+			await page.reload();
+			await page.locator('[aria-label="Delete Delete source"]').dispatchEvent("click");
+			await page.getByRole("button", { name: "Delete permanently", exact: true }).click();
+			await expect
+				.poll(() => sent.find((entry) => entry.type === "newSession")?.preservePrevious)
+				.toBe(true);
+			expect(sent.filter((entry) => entry.type === "deleteSession")).toEqual([]);
+			if (result === "failure") {
+				socket!.send(
+					JSON.stringify({
+						type: "error",
+						message: "could not switch session; current session is still active: fixture failed",
+					}),
+				);
+				await expect.poll(() => page.locator("#input").isEnabled()).toBe(true);
+				expect(new URL(page.url()).pathname).toBe(`/s/${SEEDED_ID}`);
+				expect(sent.filter((entry) => entry.type === "deleteSession")).toEqual([]);
+			} else {
+				socket!.send(
+					JSON.stringify({
+						type: "ready",
+						sessionId: "deletion-replacement",
+						modelId: "glm-5.2",
+						provider: "zai",
+						thinkingLevel: "off",
+					}),
+				);
+				await expect
+					.poll(() => sent.find((entry) => entry.type === "deleteSession")?.sessionId)
+					.toBe(SEEDED_ID);
+			}
 		} finally {
 			await page.close();
 		}
@@ -605,6 +1018,47 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				else expect(await messages(page).innerText()).not.toContain("reply 2");
 			}
 		} finally {
+			await page.close();
+		}
+	});
+
+	it("waits for recording and transcription before switching, keeping the voice draft", async () => {
+		const { page } = await openPage(`/s/${SEEDED_ID}`);
+		let release = () => {};
+		const ready = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let transcriptions = 0;
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await mockMicrophone(page);
+			await page.route("**/api/transcribe", async (route) => {
+				transcriptions++;
+				await ready;
+				await route.fulfill({ json: { text: "Voice draft for the old chat" } });
+			});
+			await page.locator("#voice-btn").click();
+			await page.locator(".new-chat-btn").dispatchEvent("click");
+			await expect
+				.poll(() => page.locator(".composer-notice-warning").innerText())
+				.toContain("Finish the recording");
+			expect(new URL(page.url()).pathname).toBe(`/s/${SEEDED_ID}`);
+			await page.locator("#voice-btn").click();
+			await expect.poll(() => transcriptions).toBe(1);
+			await page.locator(".new-chat-btn").dispatchEvent("click");
+			expect(new URL(page.url()).pathname).toBe(`/s/${SEEDED_ID}`);
+			release();
+			await expect
+				.poll(() => page.locator("#input").inputValue())
+				.toBe("Voice draft for the old chat");
+			await expect.poll(() => page.locator(".composer-notice-warning").count()).toBe(0);
+			await page.locator(".new-chat-btn").dispatchEvent("click");
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/live-session-001");
+			expect(
+				await page.evaluate((id) => localStorage.getItem(`acb-draft-v1:${id}`), SEEDED_ID),
+			).toBe("Voice draft for the old chat");
+		} finally {
+			release();
 			await page.close();
 		}
 	});
@@ -2690,20 +3144,24 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		const { page } = await openPage("/");
 		const sent: string[] = [];
 		await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "lfm-tts"));
-		await relayChatFixture(page, (ws) => {
-			ws.onMessage((raw) => {
-				const message = JSON.parse(String(raw));
-				sent.push(message.type);
-				if (message.type === "init")
-					ws.send(
-						JSON.stringify(
-							failure === "connection error"
-								? { type: "error", message: "Fixture connection unavailable" }
-								: { type: "ready", sessionId: "relay-source-chat" },
-						),
-					);
-			});
-		});
+		await relayChatFixture(
+			page,
+			(ws) => {
+				ws.onMessage((raw) => {
+					const message = JSON.parse(String(raw));
+					sent.push(message.type);
+					if (message.type === "init")
+						ws.send(
+							JSON.stringify(
+								failure === "connection error"
+									? { type: "error", message: "Fixture connection unavailable" }
+									: { type: "ready", sessionId: "relay-source-chat" },
+							),
+						);
+				});
+			},
+			true,
+		);
 		try {
 			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
 			const dialog = page.getByRole("dialog", { name: "Relay", exact: true });
@@ -2722,6 +3180,8 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			);
 			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
 			expect(await dialog.count()).toBe(0);
+			await expect.poll(() => page.locator("#input").isEnabled()).toBe(true);
+			expect(new URL(page.url()).pathname).toBe("/s/relay-source-chat");
 			expect(sent.filter((type) => type === "prompt" || type === "abort")).toEqual([]);
 		} finally {
 			await page.close();

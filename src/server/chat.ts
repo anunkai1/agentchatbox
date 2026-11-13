@@ -257,6 +257,17 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 	// dispatch keeps a prompt followed immediately by Abort/Steer in the same
 	// order the browser sent it.
 	let messageQueue = Promise.resolve();
+	let pendingSwitches = 0;
+	const reportDispatchError = (err: unknown, switching = false) => {
+		const message = err instanceof Error ? err.message : String(err);
+		log.error("client message handler threw", { error: message });
+		deliverError(
+			ws,
+			switching
+				? "could not switch session; current session is still active: internal server error"
+				: "internal server error",
+		);
+	};
 	ws.on("message", (raw) => {
 		let msg: ClientMessage;
 		try {
@@ -265,24 +276,35 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 			protocolViolation(ws, error);
 			return;
 		}
+		const isSwitch = msg.type === "newSession" || msg.type === "resumeSession";
+		if (isSwitch) pendingSwitches++;
+		// Remember the state at receipt, not just at dispatch: a candidate can
+		// fail synchronously before an already-queued prompt reaches the handler.
+		const duringSwitch = pendingSwitches > 0 && (msg.type === "prompt" || msg.type === "steer");
 		messageQueue = messageQueue
 			.then(async () => {
-				// Read the CURRENTLY bound session off the socket — NOT the
-				// `session` captured at init time. newSession / resumeSession swap
-				// the bound session via registry.attach (which sets ws._session).
+				if (duringSwitch) {
+					deliverError(ws, "session is switching; wait until it is ready before sending");
+					return;
+				}
+				// Read the CURRENTLY bound session, not the session captured at init.
 				const current = ws._session;
 				if (!current) {
+					if (isSwitch) pendingSwitches--;
 					deliverError(ws, "no active session");
 					return;
 				}
-				await onClientMessage(ws, msg, current);
+				const operation = onClientMessage(ws, msg, current);
+				if (isSwitch) {
+					// Do not block Abort or other commands while a child starts.
+					void operation
+						.catch((err) => reportDispatchError(err, true))
+						.finally(() => pendingSwitches--);
+				} else await operation;
 			})
 			.catch((err) => {
-				// Never leave the chain rejected: later browser commands must still
-				// run even when one command hits an unexpected transport failure.
-				const message = err instanceof Error ? err.message : String(err);
-				log.error("client message handler threw", { error: message });
-				deliverError(ws, "internal server error");
+				if (isSwitch) pendingSwitches--;
+				reportDispatchError(err, isSwitch);
 			});
 	});
 
@@ -305,6 +327,13 @@ async function onClientMessage(
 	session: LiveSession,
 ): Promise<void> {
 	const pi = session.pi;
+
+	// A switch starts the candidate asynchronously; the socket still points at
+	// the old child until it is ready. Never route a new instruction there.
+	if (ws._switching && (msg.type === "prompt" || msg.type === "steer")) {
+		deliverError(ws, "session is switching; wait until it is ready before sending");
+		return;
+	}
 
 	switch (msg.type) {
 		case "init": {
@@ -572,7 +601,7 @@ async function onClientMessage(
 			const cwd = project?.cwd ?? config.piCwd;
 			const provider = project?.defaultProvider ?? session.init.provider;
 			const modelId = project?.defaultModelId ?? session.init.modelId;
-			void replaceSession(
+			return replaceSession(
 				ws,
 				session,
 				{
@@ -586,7 +615,6 @@ async function onClientMessage(
 				},
 				msg.preservePrevious,
 			);
-			break;
 		}
 		case "resumeSession": {
 			// Switch to a different session: reattach if it is still live in
@@ -594,7 +622,7 @@ async function onClientMessage(
 			// session's project is derived from its recorded cwd so pi runs
 			// in the folder whose AGENTS.md shaped that conversation.
 			const cwd = findSessionCwd(msg.sessionId, projectCwds());
-			void replaceSession(
+			return replaceSession(
 				ws,
 				session,
 				{
@@ -606,7 +634,6 @@ async function onClientMessage(
 				},
 				msg.preservePrevious,
 			);
-			break;
 		}
 		default: {
 			// Exhaustiveness check.
@@ -644,7 +671,10 @@ async function replaceSession(
 
 		// The socket may have closed or been displaced by another tab while
 		// the candidate was starting. Never steal it back after that race.
-		if (ws._session !== old) return;
+		if (ws.readyState !== ws.OPEN || ws._session !== old) {
+			registry.releaseUnattached(next);
+			return;
+		}
 
 		registry.detach(old, ws);
 		try {

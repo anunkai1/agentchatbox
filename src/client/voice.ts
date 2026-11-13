@@ -940,7 +940,9 @@ export { type ConversationCapture, captureConversation } from "./conversation-ca
  * <input type=file> simply pass an empty Event-less path.
  */
 export async function attachFiles(files: File[]): Promise<void> {
-	if (files.length === 0) return;
+	// Drop/paste and a previously opened picker can still fire while the
+	// composer is disabled for a session switch.
+	if (files.length === 0 || $<HTMLTextAreaElement>("#input").disabled) return;
 	const jobs = files.map(async (file, index) => {
 		const reservesImage = file.type.startsWith("image/");
 		if (file.type.startsWith("image/") && file.size > MAX_PROMPT_IMAGE_BYTES) {
@@ -1198,6 +1200,12 @@ function watchForSpeech(
  * over the status line. The button is also disabled so the state is visible.
  */
 let transcribing = false;
+let recordingPending = false;
+
+/** Prevent a chat switch from losing or misdirecting an in-flight voice note. */
+export function isVoiceInputBusy(): boolean {
+	return recordingPending || transcribing;
+}
 
 async function transcribeRecording(blob: Blob, secs: number, key: string): Promise<void> {
 	if (transcribing || mediaRecorder?.state === "recording") {
@@ -1245,14 +1253,11 @@ async function transcribeRecording(blob: Blob, secs: number, key: string): Promi
 	} finally {
 		transcribing = false;
 		btn.disabled = false;
+		refreshNotices();
 	}
 }
 
 export async function handleVoiceRecord(): Promise<void> {
-	if (transcribing) {
-		setStatusMessage("still transcribing the previous recording…");
-		return;
-	}
 	if (mediaRecorder && mediaRecorder.state === "recording") {
 		mediaRecorder.stop();
 		// Flip the button back to the mic icon immediately so the user
@@ -1262,8 +1267,13 @@ export async function handleVoiceRecord(): Promise<void> {
 		setRecordingUi(false);
 		return;
 	}
+	if (isVoiceInputBusy()) {
+		setStatusMessage("finish the current recording or transcription first…");
+		return;
+	}
 	// Voice mode: a reply still playing would be picked up by the mic.
 	if (state.voiceMode !== "off") stopAllVoice();
+	recordingPending = true;
 	let stream: MediaStream | null = null;
 	try {
 		stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1274,24 +1284,28 @@ export async function handleVoiceRecord(): Promise<void> {
 			if (e.data.size > 0) recordedChunks.push(e.data);
 		};
 		mediaRecorder.onstop = async () => {
-			stopSpeechWatch?.();
-			stopSpeechWatch = null;
-			// Canonical teardown: ensure the mic button reverts to its
-			// idle icon no matter how recording stopped (button click,
-			// an OS/permission revoke, etc.).
-			setRecordingUi(false);
-			micStream.getTracks().forEach((t) => {
-				t.stop();
-			});
-			if (discardMessage) {
-				setStatusMessage(discardMessage);
-				discardMessage = null;
-				return;
+			try {
+				stopSpeechWatch?.();
+				stopSpeechWatch = null;
+				// Canonical teardown also covers an OS/permission revoke.
+				setRecordingUi(false);
+				micStream.getTracks().forEach((t) => {
+					t.stop();
+				});
+				if (discardMessage) {
+					setStatusMessage(discardMessage);
+					discardMessage = null;
+					return;
+				}
+				const blob = new Blob(recordedChunks, { type: "audio/webm" });
+				const secs = (Date.now() - recordingStart) / 1000;
+				recordedChunks = [];
+				await transcribeRecording(blob, secs, `voice-recording-${recordingStart}`);
+			} finally {
+				recordingPending = false;
+				mediaRecorder = null;
+				refreshNotices();
 			}
-			const blob = new Blob(recordedChunks, { type: "audio/webm" });
-			const secs = (Date.now() - recordingStart) / 1000;
-			recordedChunks = [];
-			await transcribeRecording(blob, secs, `voice-recording-${recordingStart}`);
 		};
 		recordingStart = Date.now();
 		discardMessage = null;
@@ -1306,6 +1320,8 @@ export async function handleVoiceRecord(): Promise<void> {
 		setRecordingUi(true);
 		setStatusMessage("recording… click the mic to stop, ✕ to cancel");
 	} catch (err) {
+		recordingPending = false;
+		refreshNotices();
 		// The mic may already be open (MediaRecorder setup failed): release it.
 		stream?.getTracks().forEach((t) => {
 			t.stop();
