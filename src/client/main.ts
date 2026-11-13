@@ -270,13 +270,22 @@ function clearComposerDraft(): void {
 type SessionSwitch = { target: string | null; deleteAfter?: string };
 /** The previous view stays intact until the requested session is ready. */
 let sessionSwitch: SessionSwitch | null = null;
+let pendingSend: { id: string; commit: () => void } | null = null;
+let deferredSteering: unknown[] | null = null;
+let sessionMoving = false;
 const relaySessions = new Set<string>();
+
+function updateComposerLock(): void {
+	for (const id of ["#input", "#send-btn", "#attach-btn", "#voice-btn"]) {
+		$<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>(id).disabled = Boolean(
+			sessionSwitch || pendingSend || sessionMoving,
+		);
+	}
+}
 
 function setSessionSwitch(pending: SessionSwitch | null): void {
 	sessionSwitch = pending;
-	for (const id of ["#input", "#send-btn", "#attach-btn", "#voice-btn"]) {
-		$<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>(id).disabled = Boolean(pending);
-	}
+	updateComposerLock();
 	if (pending) {
 		showNotice("Opening chat — the current draft is safe. Please wait.", "warning", {
 			key: "session-opening",
@@ -286,7 +295,7 @@ function setSessionSwitch(pending: SessionSwitch | null): void {
 
 function handleSend(): void {
 	closeSlashMenu();
-	if (sessionSwitch) return;
+	if (sessionSwitch || pendingSend || sessionMoving) return;
 	if (isUploadInProgress()) {
 		showNotice("Upload in progress — wait for it to finish before sending.", "warning", {
 			key: "upload-pending",
@@ -321,8 +330,9 @@ function handleSend(): void {
 
 	// While the agent is streaming, a typed message is a steering comment:
 	// queued and delivered after the current turn's tool calls finish.
-	const accepted = state.isStreaming ? sendSteer(trimmed) : sendAsUser(trimmed);
-	if (accepted) clearComposerDraft();
+	const requestId = crypto.randomUUID();
+	if (state.isStreaming) sendSteer(trimmed, requestId);
+	else sendAsUser(trimmed, requestId);
 }
 
 /**
@@ -342,7 +352,7 @@ function showSendConnectionNotice(): void {
 }
 
 function prepareTypedMessage(): boolean {
-	if (sessionSwitch) return false;
+	if (sessionSwitch || pendingSend || sessionMoving) return false;
 	if (state.connectionStatus === "open" && !prepareRelayTypedInput()) {
 		showNotice("Relay is getting ready — your draft has been kept.", "warning", {
 			key: "relay-opening",
@@ -353,44 +363,53 @@ function prepareTypedMessage(): boolean {
 }
 
 /** Send a typed message as the user; agent workflows belong to pi extensions. */
-function sendAsUser(trimmed: string): boolean {
+function sendAsUser(trimmed: string, requestId?: string): boolean {
 	if (!prepareTypedMessage()) return false;
 	const messageText = withAttachmentMarkdown(trimmed);
 	if (!messageText) return false;
 	const images = collectUploadedImages();
-	if (!sendPromptHook(messageText, images.length > 0 ? images : undefined)) {
+	if (!sendPromptHook(messageText, images.length > 0 ? images : undefined, requestId)) {
 		showSendConnectionNotice();
 		return false;
 	}
-	clearNotice("send-connection");
-	// Only clear the attachment references after the WebSocket accepted the
-	// prompt. If the connection is unavailable, the draft and attachments
-	// remain resubmittable.
-	const attachmentTitle = state.uploadedFiles.values().next().value?.filename ?? "Photo";
-	state.uploadedImages.clear();
-	state.uploadedFiles.clear();
+	const finish = () => {
+		clearNotice("send-connection");
+		const attachmentTitle = state.uploadedFiles.values().next().value?.filename ?? "Photo";
+		state.uploadedImages.clear();
+		state.uploadedFiles.clear();
 
-	// Push typed text to history only after acceptance; attachment Markdown
-	// is transport/display metadata and should not reappear in the composer.
-	if (trimmed && state.history[state.history.length - 1] !== trimmed) state.history.push(trimmed);
-	state.historyIdx = null;
+		// Push typed text to history only after acceptance; attachment Markdown
+		// is transport/display metadata and should not reappear in the composer.
+		if (trimmed && state.history[state.history.length - 1] !== trimmed) state.history.push(trimmed);
+		state.historyIdx = null;
 
-	// Add user message to in-memory transcript. ts is stamped locally
-	// at send time (ms-accurate enough for a relative "2m" label); the
-	// authoritative SDK timestamp lands on resume via projectTranscript.
-	const userMsg = { kind: "user" as const, text: messageText, ts: Date.now() };
-	state.messages.push(userMsg);
-	// New message resets the jump walk: the next Alt+↑ / button press
-	// should start fresh from this newest position, not resume a stale
-	// index from before the send.
-	resetJumpNav();
-	appendNode(renderMessageNode(userMsg));
+		// Add user message to in-memory transcript. ts is stamped locally
+		// at send time (ms-accurate enough for a relative "2m" label); the
+		// authoritative SDK timestamp lands on resume via projectTranscript.
+		const userMsg = { kind: "user" as const, text: messageText, ts: Date.now() };
+		state.messages.push(userMsg);
+		// New message resets the jump walk: the next Alt+↑ / button press
+		// should start fresh from this newest position, not resume a stale
+		// index from before the send.
+		resetJumpNav();
+		appendNode(renderMessageNode(userMsg));
 
-	// Auto-title from the first user message.
-	if (state.title === "New chat" || !state.title) {
-		state.title = trimmed.split(/[.\n!?]/)[0].slice(0, 50) || attachmentTitle.slice(0, 50);
-		$<HTMLSpanElement>("#title").textContent = state.title;
-	}
+		// Auto-title from the first user message.
+		if (state.title === "New chat" || !state.title) {
+			state.title = trimmed.split(/[.\n!?]/)[0].slice(0, 50) || attachmentTitle.slice(0, 50);
+			$<HTMLSpanElement>("#title").textContent = state.title;
+		}
+	};
+	if (requestId) {
+		pendingSend = {
+			id: requestId,
+			commit: () => {
+				finish();
+				clearComposerDraft();
+			},
+		};
+		updateComposerLock();
+	} else finish();
 	return true;
 }
 
@@ -424,7 +443,7 @@ function autoVoiceReply(stamp: number | null): void {
  * hook because composer handlers are registered before the WebSocket client
  * finishes booting.
  */
-type SendPromptHook = (text: string, images?: PromptImage[]) => boolean;
+type SendPromptHook = (text: string, images?: PromptImage[], requestId?: string) => boolean;
 let sendPromptHook: SendPromptHook = () => false;
 let abortPiHook: () => void = () => {};
 let reconnectHook: () => void = () => {};
@@ -586,23 +605,35 @@ function recoverStrandedSteer(): void {
  * Steering text is NOT pushed into `state.history` — it's an inline
  * course-correction, not a standalone prompt you'd recall with ↑/↓.
  */
-function sendSteer(trimmed: string): boolean {
+function sendSteer(trimmed: string, requestId?: string): boolean {
 	if (!prepareTypedMessage()) return false;
 	const messageText = withAttachmentMarkdown(trimmed);
 	if (!messageText) return false;
 	const images = collectUploadedImages();
-	if (!steerHook(messageText, images.length > 0 ? images : undefined)) {
+	if (!steerHook(messageText, images.length > 0 ? images : undefined, requestId)) {
 		showSendConnectionNotice();
 		return false;
 	}
-	clearNotice("send-connection");
-	state.uploadedImages.clear();
-	state.uploadedFiles.clear();
-	const msg: PersistedMessage = { kind: "steer", text: messageText, delivered: false };
-	state.messages.push(msg);
-	appendNode(renderMessageNode(msg), { pin: true });
-	state.pendingSteerCount += 1;
-	refreshStatus();
+	const finish = () => {
+		clearNotice("send-connection");
+		state.uploadedImages.clear();
+		state.uploadedFiles.clear();
+		const msg: PersistedMessage = { kind: "steer", text: messageText, delivered: false };
+		state.messages.push(msg);
+		appendNode(renderMessageNode(msg), { pin: true });
+		state.pendingSteerCount += 1;
+		refreshStatus();
+	};
+	if (requestId) {
+		pendingSend = {
+			id: requestId,
+			commit: () => {
+				finish();
+				clearComposerDraft();
+			},
+		};
+		updateComposerLock();
+	} else finish();
 	return true;
 }
 
@@ -1167,6 +1198,12 @@ function onEvent(event: Record<string, unknown>): void {
 			// steering array to flip our queued steer bubbles to
 			// "delivered" as the agent consumes them.
 			const steering = Array.isArray(e.steering) ? (e.steering as unknown[]) : [];
+			// Pi emits this snapshot before acknowledging a steer. Wait until
+			// its optimistic bubble is committed, otherwise it is painted twice.
+			if (pendingSend) {
+				deferredSteering = steering;
+				break;
+			}
 			reconcileSteerQueue(steering);
 			// If a steer lands while the agent is already idle (the race:
 			// isStreaming was true when we sent, but the agent finished
@@ -1618,7 +1655,7 @@ async function boot(): Promise<void> {
 	let mainReady = false;
 	const viewingRelay = () => Boolean(state.sessionId && relaySessions.has(state.sessionId));
 	const beginSessionSwitch = (target: string | null, deleteAfter?: string): boolean => {
-		if (sessionSwitch) return false;
+		if (sessionSwitch || pendingSend || sessionMoving) return false;
 		if (!mainReady || state.connectionStatus !== "open") {
 			showNotice(
 				"Chat is still connecting. Wait for it to reconnect before switching.",
@@ -1776,6 +1813,22 @@ async function boot(): Promise<void> {
 	chatClient.onStatus((s) => {
 		if (s !== "open") {
 			mainReady = false;
+			if (sessionMoving) {
+				sessionMoving = false;
+				updateComposerLock();
+				clearNotice("session-moving");
+			}
+			if (pendingSend) {
+				pendingSend = null;
+				if (deferredSteering) reconcileSteerQueue(deferredSteering);
+				deferredSteering = null;
+				updateComposerLock();
+				showNotice(
+					"Send was not confirmed. Your draft was kept; check the chat before retrying.",
+					"warning",
+					{ key: "send-uncertain" },
+				);
+			}
 			if (sessionSwitch) {
 				setSessionSwitch(null);
 				showNotice("Chat switch interrupted. The previous chat will reconnect.", "warning", {
@@ -1789,6 +1842,11 @@ async function boot(): Promise<void> {
 	reconnectHook = () => chatClient.reconnect();
 	chatClient.onReady((info) => {
 		mainReady = true;
+		if (sessionMoving && info.sessionId === state.sessionId) {
+			sessionMoving = false;
+			updateComposerLock();
+			clearNotice("session-moving");
+		}
 		clearNotice("send-connection");
 		const switching = sessionSwitch;
 		const switched = Boolean(
@@ -1904,6 +1962,36 @@ async function boot(): Promise<void> {
 		chatClient.getSessionStats();
 	});
 	chatClient.onEvent(onEvent);
+	chatClient.onWire((wire) => {
+		if (wire.type === "sessionMoving" && wire.sessionId === state.sessionId) {
+			sessionMoving = true;
+			updateComposerLock();
+			showNotice("Moving this chat — your draft is safe. Please wait.", "warning", {
+				key: "session-moving",
+			});
+			return;
+		}
+		if (wire.type !== "sendResult" || !pendingSend || wire.requestId !== pendingSend.id) return;
+		const pending = pendingSend;
+		pendingSend = null;
+		updateComposerLock();
+		if (wire.accepted === true) {
+			clearNotice("send-uncertain");
+			pending.commit();
+		} else {
+			showNotice(
+				`${String(wire.message ?? "Send was rejected")}. Your draft was kept.`,
+				"warning",
+				{ key: "send-uncertain" },
+			);
+		}
+		if (deferredSteering) {
+			const steering = deferredSteering;
+			deferredSteering = null;
+			reconcileSteerQueue(steering);
+			if (!state.isStreaming && steering.length > 0) recoverStrandedSteer();
+		}
+	});
 	chatClient.onError((msg) => {
 		if (
 			sessionSwitch &&
@@ -2040,6 +2128,7 @@ async function boot(): Promise<void> {
 		state.searchActive = false;
 		renderShell();
 		if (sessionSwitch) setSessionSwitch(sessionSwitch);
+		else updateComposerLock();
 		if (hasSidebarSessionSnapshot) renderSidebarSessions(sidebarSessionsForCache);
 		// onReady restores the session draft before the transcript event, and
 		// renderShell replaces that textarea. Restore it once more into the new
@@ -2100,9 +2189,9 @@ async function boot(): Promise<void> {
 	// Wire the prompt-send hook used by composer submissions. The hook is a
 	// no-op until this runs; user gestures can only reach it after renderShell
 	// has installed the handlers.
-	sendPromptHook = (text, images) => chatClient.prompt(text, images);
+	sendPromptHook = (text, images, requestId) => chatClient.prompt(text, images, requestId);
 	abortPiHook = () => chatClient.abort();
-	steerHook = (text, images) => chatClient.steer(text, images);
+	steerHook = (text, images, requestId) => chatClient.steer(text, images, requestId);
 	getSessionStatsHook = () => chatClient.getSessionStats();
 	extensionUiResponder = (id, response) => chatClient.extensionUiResponse(id, response);
 	// Wire the render→main/render→voice callbacks through the services

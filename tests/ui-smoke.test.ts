@@ -65,7 +65,7 @@ while IFS= read -r line; do
       text="$(echo "$line" | jq -c '.message // ""')"
       user="{\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":$text}],\\"timestamp\\":1}"
       reply="{\\"role\\":\\"assistant\\",\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"reply $n\\"}],\\"api\\":\\"anthropic-messages\\",\\"provider\\":\\"zai\\",\\"model\\":\\"test\\",\\"stopReason\\":\\"stop\\",\\"timestamp\\":2}"
-      echo '{"type":"response","command":"prompt","success":true}'
+      echo "$line" | jq -c '{type:"response",command:"prompt",success:true,id:.id,data:{disposition:"started"}}'
       echo '{"type":"agent_start"}'
       echo '{"type":"turn_start"}'
       echo "{\\"type\\":\\"message_start\\",\\"message\\":$user}"
@@ -75,6 +75,9 @@ while IFS= read -r line; do
       echo "{\\"type\\":\\"message_end\\",\\"message\\":$reply}"
       echo "{\\"type\\":\\"turn_end\\",\\"message\\":$reply,\\"toolResults\\":[]}"
       echo "{\\"type\\":\\"agent_end\\",\\"messages\\":[$reply],\\"willRetry\\":false}"
+      ;;
+    "steer")
+      echo "$line" | jq -c '{type:"response",command:"steer",success:true,id:.id,data:{disposition:"queued"}}'
       ;;
     "") ;;
     *)
@@ -144,6 +147,9 @@ async function relayChatFixture(
 			onMessage(listener) {
 				socket.onMessage((raw) => {
 					const message = JSON.parse(String(raw));
+					if ((message.type === "prompt" || message.type === "steer") && message.requestId) {
+						socket.send(JSON.stringify({ type: "sendResult", requestId: message.requestId, accepted: true }));
+					}
 					if (message.type === "init") {
 						socket.send(
 							JSON.stringify({
@@ -459,7 +465,10 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			socket = ws;
 			ws.onMessage((raw) => {
 				const message = JSON.parse(String(raw));
-				if (message.type === "prompt") prompts.push(message.text);
+				if (message.type === "prompt") {
+					prompts.push(message.text);
+					ws.send(JSON.stringify({ type: "sendResult", requestId: message.requestId, accepted: true }));
+				}
 			});
 		});
 		try {
@@ -502,10 +511,69 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await page.locator("#input").inputValue()).toBe("Written before ready");
 			await page.locator("#send-btn").click();
 			await expect.poll(() => prompts).toEqual(["Written before ready"]);
-			expect(
-				await page.evaluate(() => localStorage.getItem("acb-draft-v1:new-draft-session")),
-			).toBeNull();
+			await expect.poll(() => page.evaluate(() => localStorage.getItem("acb-draft-v1:new-draft-session"))).toBeNull();
 			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(replacement);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("keeps the text and attachment when a move rejects an unconfirmed send", async () => {
+		const { page } = await openPage("/");
+		let socket: WebSocketRoute | undefined;
+		const sent: Array<{ requestId: string; text: string }> = [];
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			socket = ws;
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init") ws.send(JSON.stringify({ type: "ready", sessionId: "ack-draft-session", provider: "zai", modelId: "glm-5.2", thinkingLevel: "off" }));
+				if (message.type === "prompt" || message.type === "steer") sent.push(message);
+			});
+		});
+		try {
+			await page.goto(`${base}/`);
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/ack-draft-session");
+			await page.locator("#input").fill("Keep this draft");
+			await page.locator("#file-input").setInputFiles({ name: "keep.txt", mimeType: "text/plain", buffer: Buffer.from("content") });
+			await page.getByRole("button", { name: "Remove keep.txt", exact: true }).waitFor();
+			await page.locator("#send-btn").click();
+			await expect.poll(() => sent.length).toBe(1);
+			expect(await page.locator("#input").inputValue()).toBe("Keep this draft");
+			expect(await page.locator("#input").isDisabled()).toBe(true);
+			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:ack-draft-session"))).toBe("Keep this draft");
+			socket!.send(JSON.stringify({ type: "sendResult", requestId: sent[0].requestId, accepted: false, message: "session is switching" }));
+			await expect.poll(() => page.locator("#input").isDisabled()).toBe(false);
+			expect(await page.locator("#input").inputValue()).toBe("Keep this draft");
+			expect(await page.getByRole("button", { name: "Remove keep.txt", exact: true }).count()).toBe(1);
+			socket!.send(JSON.stringify({ type: "sessionMoving", sessionId: "ack-draft-session" }));
+			await expect.poll(() => page.locator("#input").isDisabled()).toBe(true);
+			expect(await page.locator("#input").inputValue()).toBe("Keep this draft");
+			socket!.send(JSON.stringify({ type: "ready", sessionId: "ack-draft-session", provider: "zai", modelId: "glm-5.2", thinkingLevel: "off" }));
+			await expect.poll(() => page.locator("#input").isDisabled()).toBe(false);
+			expect(await page.getByRole("button", { name: "Remove keep.txt", exact: true }).count()).toBe(1);
+			await page.locator("#send-btn").click();
+			await expect.poll(() => sent.length).toBe(2);
+			expect(sent[1].text).toContain("[file: keep.txt]");
+			socket!.send(JSON.stringify({ type: "sendResult", requestId: sent[1].requestId, accepted: true }));
+			await expect.poll(() => page.locator("#input").inputValue()).toBe("");
+			expect(await page.locator("#attachment-previews .attachment-preview").count()).toBe(0);
+			socket!.send(JSON.stringify({ type: "event", event: { type: "agent_start" } }));
+			await expect.poll(() => page.locator("#send-btn").getAttribute("aria-label")).toBe("Queue instruction");
+			await page.locator("#input").fill("Change direction");
+			await page.locator("#send-btn").click();
+			await expect.poll(() => sent.length).toBe(3);
+			socket!.send(JSON.stringify({ type: "event", event: { type: "queue_update", steering: ["Change direction"] } }));
+			socket!.send(JSON.stringify({ type: "sendResult", requestId: sent[2].requestId, accepted: true }));
+			await expect.poll(() => page.locator(".row-steer").count()).toBe(1);
+			expect(await page.locator("#status-dynamic").innerText()).toContain("1 queued");
+			await page.locator("#input").fill("Possibly delivered");
+			await page.locator("#send-btn").click();
+			await expect.poll(() => sent.length).toBe(4);
+			await socket!.close({ code: 1001, reason: "lost acknowledgement" });
+			await expect.poll(() => page.locator("#input").isDisabled()).toBe(false);
+			expect(await page.locator("#input").inputValue()).toBe("Possibly delivered");
+			await expect.poll(() => page.locator("body").innerText()).toContain("check the chat before retrying");
+			expect(sent).toHaveLength(4);
 		} finally {
 			await page.close();
 		}

@@ -277,6 +277,8 @@ export type ServerMessage =
 	| { type: "projects"; projects: ProjectSummary[] }
 	| { type: "ping" }
 	| { type: "error"; message: string }
+	| { type: "sendResult"; requestId: string; accepted: boolean; message?: string }
+	| { type: "sessionMoving"; sessionId: string }
 	/** Reply to forkSession: the new session's id, ready to resume. */
 	| { type: "forked"; sessionId: string }
 	/**
@@ -323,8 +325,8 @@ export type ClientMessage =
 			thinkingLevel: ThinkingLevel;
 			sessionId?: string;
 	  }
-	| { type: "prompt"; text: string; images?: PromptImage[] }
-	| { type: "steer"; text: string; images?: PromptImage[] }
+	| { type: "prompt"; text: string; images?: PromptImage[]; requestId?: string }
+	| { type: "steer"; text: string; images?: PromptImage[]; requestId?: string }
 	| { type: "abort" }
 	| { type: "compact"; customInstructions?: string }
 	| { type: "abortRetry" }

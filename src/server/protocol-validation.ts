@@ -152,6 +152,9 @@ export function parseClientMessage(value: unknown): ClientMessage {
 				type,
 				text: string(msg.text, "text", MAX_PROMPT_CHARS, true),
 				...(msg.images === undefined ? {} : { images: images(msg.images) }),
+				...(msg.requestId === undefined
+					? {}
+					: { requestId: identifier(msg.requestId, "requestId") }),
 			};
 		case "abort":
 		case "abortRetry":

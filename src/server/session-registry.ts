@@ -137,7 +137,13 @@ export interface LiveSession {
 	/** Client instructions already received but not yet forwarded to Pi. */
 	pendingIngress: number;
 	/** Instructions awaiting Pi's preflight acknowledgement / run start. */
-	pendingInstructions: Map<string, "waiting" | "starting">;
+	pendingInstructions: Map<
+		string,
+		{
+			phase: "waiting" | "starting";
+			delivery?: { ws: PiSocket; requestId: string };
+		}
+	>;
 	busy: boolean;
 	/**
 	 * Whether the agent is mid-run (between agent_start and agent_end).
@@ -397,9 +403,13 @@ class SessionRegistry {
 	}
 
 	/** Track instruction preflight so a move cannot stop Pi before it accepts a send. */
-	sendInstruction(session: LiveSession, command: Record<string, unknown>): void {
+	sendInstruction(
+		session: LiveSession,
+		command: Record<string, unknown>,
+		delivery?: { ws: PiSocket; requestId: string },
+	): void {
 		const id = randomUUID();
-		session.pendingInstructions.set(id, "waiting");
+		session.pendingInstructions.set(id, { phase: "waiting", ...(delivery ? { delivery } : {}) });
 		session.pi.send({ ...command, id });
 	}
 
@@ -960,8 +970,20 @@ class SessionRegistry {
 				line.command === "prompt" &&
 				data.disposition !== "handled" &&
 				data.disposition !== "queued";
+			const pending = session.pendingInstructions.get(line.id)!;
+			if (pending.delivery) {
+				deliver(pending.delivery.ws, {
+					type: "sendResult",
+					requestId: pending.delivery.requestId,
+					accepted: line.success !== false,
+					...(line.success === false
+						? { message: String(line.error ?? "Pi rejected the send") }
+						: {}),
+				});
+				delete pending.delivery;
+			}
 			if (line.success !== false && started && !session.streaming) {
-				session.pendingInstructions.set(line.id, "starting");
+				pending.phase = "starting";
 			} else {
 				session.pendingInstructions.delete(line.id);
 				if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
@@ -1027,8 +1049,8 @@ class SessionRegistry {
 			// client's isStreaming so a tab refresh can recover it from the
 			// server's `ready` (the browser's local copy is wiped on reload).
 			session.streaming = true;
-			for (const [id, phase] of session.pendingInstructions) {
-				if (phase === "starting") session.pendingInstructions.delete(id);
+			for (const [id, pending] of session.pendingInstructions) {
+				if (pending.phase === "starting") session.pendingInstructions.delete(id);
 			}
 			// A run may start before its first turn_start. Cancel cleanup at
 			// the broadest work boundary so that window is protected too.

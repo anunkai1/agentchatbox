@@ -214,6 +214,16 @@ export function mountChatWs(server: HttpServer): void {
  */
 // (PiSocket._session is declared in session-registry.ts.)
 
+function rejectInstruction(
+	ws: PiSocket,
+	msg: Extract<ClientMessage, { type: "prompt" | "steer" }>,
+	message: string,
+): void {
+	if (msg.requestId)
+		deliver(ws, { type: "sendResult", requestId: msg.requestId, accepted: false, message });
+	else deliverError(ws, message);
+}
+
 async function handleConnection(ws: PiSocket): Promise<void> {
 	// The first message from the client must be a validated `init`. Client
 	// input never supplies cwd; that trust decision is derived server-side
@@ -289,15 +299,17 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 		if (ingress) ingress.pendingIngress++;
 		messageQueue = messageQueue
 			.then(async () => {
-				if (duringSwitch || duringMutation) {
-					deliverError(ws, "session is switching; wait until it is ready before sending");
+				if ((duringSwitch || duringMutation) && (msg.type === "prompt" || msg.type === "steer")) {
+					rejectInstruction(ws, msg, "session is switching; wait until it is ready before sending");
 					return;
 				}
 				// Read the CURRENTLY bound session, not the session captured at init.
 				const current = ws._session;
 				if (!current) {
 					if (isSwitch) pendingSwitches--;
-					deliverError(ws, "no active session");
+					if (msg.type === "prompt" || msg.type === "steer")
+						rejectInstruction(ws, msg, "no active session");
+					else deliverError(ws, "no active session");
 					return;
 				}
 				const operation = onClientMessage(ws, msg, current);
@@ -310,7 +322,10 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 			})
 			.catch((err) => {
 				if (isSwitch) pendingSwitches--;
-				reportDispatchError(err, isSwitch);
+				if ((msg.type === "prompt" || msg.type === "steer") && msg.requestId) {
+					log.error("client instruction handler threw", { error: String(err) });
+					rejectInstruction(ws, msg, "send was not confirmed; check the chat before retrying");
+				} else reportDispatchError(err, isSwitch);
 			})
 			.finally(() => {
 				if (ingress) {
@@ -343,7 +358,7 @@ async function onClientMessage(
 	// A switch starts the candidate asynchronously; the socket still points at
 	// the old child until it is ready. Never route a new instruction there.
 	if (ws._switching && (msg.type === "prompt" || msg.type === "steer")) {
-		deliverError(ws, "session is switching; wait until it is ready before sending");
+		rejectInstruction(ws, msg, "session is switching; wait until it is ready before sending");
 		return;
 	}
 
@@ -360,14 +375,14 @@ async function onClientMessage(
 				imageContent = await resolvePromptImages(msg.images);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				deliverError(ws, `could not send image: ${message}`);
+				rejectInstruction(ws, msg, `could not send image: ${message}`);
 				break;
 			}
 			// Image resolution is asynchronous: another tab may have moved or
 			// deleted this session while it was reading an upload. Never write
 			// into the old child's dead stdin or the wrong current binding.
 			if (registry.isMutating(session.sessionId) || pi.killed || ws._session !== session) {
-				deliverError(ws, "session is switching; wait until it is ready before sending");
+				rejectInstruction(ws, msg, "session is switching; wait until it is ready before sending");
 				break;
 			}
 			// Translate /uploads/<file> web URLs to absolute filesystem paths
@@ -379,11 +394,11 @@ async function onClientMessage(
 			// in the structured `images` field (see rewriteUploadUrls).
 			const hasImages = imageContent !== undefined && imageContent.length > 0;
 			const message = rewriteUploadUrls(msg.text, hasImages);
-			registry.sendInstruction(session, {
-				type: "prompt",
-				message,
-				...(hasImages ? { images: imageContent } : {}),
-			});
+			registry.sendInstruction(
+				session,
+				{ type: "prompt", message, ...(hasImages ? { images: imageContent } : {}) },
+				msg.requestId ? { ws, requestId: msg.requestId } : undefined,
+			);
 			break;
 		}
 		case "steer": {
@@ -392,11 +407,11 @@ async function onClientMessage(
 				imageContent = await resolvePromptImages(msg.images);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				deliverError(ws, `could not send image: ${message}`);
+				rejectInstruction(ws, msg, `could not send image: ${message}`);
 				break;
 			}
 			if (registry.isMutating(session.sessionId) || pi.killed || ws._session !== session) {
-				deliverError(ws, "session is switching; wait until it is ready before sending");
+				rejectInstruction(ws, msg, "session is switching; wait until it is ready before sending");
 				break;
 			}
 			// Steering messages are queued while the agent runs and delivered
@@ -404,11 +419,11 @@ async function onClientMessage(
 			// before the next LLM call. Same upload-URL rewriting as `prompt`.
 			const hasImages = imageContent !== undefined && imageContent.length > 0;
 			const message = rewriteUploadUrls(msg.text, hasImages);
-			registry.sendInstruction(session, {
-				type: "steer",
-				message,
-				...(hasImages ? { images: imageContent } : {}),
-			});
+			registry.sendInstruction(
+				session,
+				{ type: "steer", message, ...(hasImages ? { images: imageContent } : {}) },
+				msg.requestId ? { ws, requestId: msg.requestId } : undefined,
+			);
 			break;
 		}
 		case "abort": {
@@ -806,6 +821,7 @@ async function moveSessionToProject(
 			return;
 		}
 
+		if (view) deliver(view, { type: "sessionMoving", sessionId });
 		const stopped = live ? await registry.terminateById(sessionId) : null;
 
 		// Model/provider/thinking carry over from the session's own child when

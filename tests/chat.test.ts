@@ -2395,9 +2395,14 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			expect(await waitForReadyCount(first.inbox, 1, 3000)).toBe(true);
 			first.ws.send(JSON.stringify({ type: "moveSession", sessionId: init.sessionId, projectId: project.id }));
 			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("term"));
+			const moving = await waitForType(first.inbox, "sessionMoving", 1, 3000);
+			expect(moving[0]).toMatchObject({ sessionId: init.sessionId });
 			first.ws.send(JSON.stringify({ type: "prompt", text: "during move" }));
 			const moveErrors = await waitForType(first.inbox, "error", 1, 3000);
 			expect(String(moveErrors[0]?.message)).toContain("session is switching");
+			first.ws.send(JSON.stringify({ type: "prompt", text: "keep draft", requestId: "draft-request-001" }));
+			const results = await waitForType(first.inbox, "sendResult", 1, 3000);
+			expect(results[0]).toMatchObject({ requestId: "draft-request-001", accepted: false });
 			second = await connectClient();
 			second.ws.send(JSON.stringify(init));
 			const errors = await waitForType(second.inbox, "error", 1, 3000);
@@ -2433,7 +2438,12 @@ process.on('SIGTERM', () => {
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const msg = JSON.parse(line);
   if (msg.type === 'get_state') console.log(JSON.stringify({ type: 'response', command: 'get_state', success: true, data: { sessionId: id } }));
-  if (msg.type === 'prompt') fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'prompt ' + id + '\\n');
+  if (msg.type === 'prompt') {
+    fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'prompt ' + id + '\\n');
+    console.log(JSON.stringify(msg.message === 'reject preflight'
+      ? { type: 'response', command: 'prompt', success: false, id: msg.id, error: 'preflight rejected' }
+      : { type: 'response', command: 'prompt', success: true, id: msg.id, data: { disposition: 'handled' } }));
+  }
 });
 `, { mode: 0o755 });
 		process.env.PI_BIN = fakePiPath;
@@ -2467,6 +2477,15 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			release();
 			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("prompt move-upload-race-001"));
 			expect(readFileSync(marker, "utf8")).not.toContain("term move-upload-race-001");
+			const { registry } = await import("../src/server/session-registry.js");
+			await vi.waitFor(() => expect(registry.liveFor("move-upload-race-001")?.pendingInstructions.size).toBe(0));
+			controller.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-upload-race-001", projectId: project.id }));
+			const moving = await waitForType(owner.inbox, "sessionMoving", 1, 3000);
+			expect(moving[0]).toMatchObject({ sessionId: "move-upload-race-001" });
+			expect(await waitForReadyCount(owner.inbox, 2, 3000)).toBe(true);
+			owner.ws.send(JSON.stringify({ type: "prompt", text: "reject preflight", requestId: "rejected-by-pi" }));
+			const rejected = await waitForType(owner.inbox, "sendResult", 1, 3000);
+			expect(rejected[0]).toMatchObject({ requestId: "rejected-by-pi", accepted: false, message: "preflight rejected" });
 		} finally {
 			release();
 			owner.close(); controller.close(); shutdownChatWs();
@@ -2515,13 +2534,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			controller.ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
 			expect(await waitForReadyCount(owner.inbox, 1, 3000)).toBe(true);
 			expect(await waitForReadyCount(controller.inbox, 1, 3000)).toBe(true);
-			owner.ws.send(JSON.stringify({ type: "prompt", text: "pending preflight" }));
+			owner.ws.send(JSON.stringify({ type: "prompt", text: "pending preflight", requestId: "preflight-request" }));
 			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("received"));
+			expect(owner.inbox.all().filter((item) => item.type === "sendResult")).toHaveLength(0);
 			controller.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-preflight-001", projectId: project.id }));
 			const errors = await waitForType(controller.inbox, "error", 1, 3000);
 			expect(String(errors[0]?.message)).toContain("still running");
 			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("acknowledged"));
-			await new Promise((resolve) => setTimeout(resolve, 50));
+			const confirmations = await waitForType(owner.inbox, "sendResult", 1, 3000);
+			expect(confirmations[0]).toMatchObject({ requestId: "preflight-request", accepted: true });
+			const { registry } = await import("../src/server/session-registry.js");
+			await vi.waitFor(() => expect(registry.liveFor("move-preflight-001")?.pendingInstructions.size).toBe(0));
 			controller.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-preflight-001", projectId: project.id }));
 			expect(await waitForReadyCount(owner.inbox, 2, 3000)).toBe(true);
 		} finally {

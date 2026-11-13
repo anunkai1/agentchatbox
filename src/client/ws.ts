@@ -60,12 +60,12 @@ export interface ChatClient {
 		sessionId?: string;
 	}): void;
 	/** Send a user prompt. Optionally attach uploaded image references. */
-	prompt(text: string, images?: PromptImage[]): boolean;
+	prompt(text: string, images?: PromptImage[], requestId?: string): boolean;
 	/**
 	 * Queue a steering message while the agent is running. Delivered
 	 * after the current assistant turn finishes its tool calls.
 	 */
-	steer(text: string, images?: PromptImage[]): boolean;
+	steer(text: string, images?: PromptImage[], requestId?: string): boolean;
 	/** Abort the current run, if any. */
 	abort(): void;
 	/**
@@ -420,7 +420,7 @@ export function createChatClient(): ChatClient {
 			inited = true;
 			send({ type: "init", ...opts });
 		},
-		prompt: (text, images) => {
+		prompt: (text, images, requestId) => {
 			if (!inited) {
 				for (const l of errorListeners) l("prompt sent before init");
 				return false;
@@ -429,9 +429,10 @@ export function createChatClient(): ChatClient {
 				type: "prompt",
 				text,
 				...(images && images.length > 0 ? { images } : {}),
+				...(requestId ? { requestId } : {}),
 			});
 		},
-		steer: (text, images) => {
+		steer: (text, images, requestId) => {
 			if (!inited) {
 				for (const l of errorListeners) l("steer sent before init");
 				return false;
@@ -440,6 +441,7 @@ export function createChatClient(): ChatClient {
 				type: "steer",
 				text,
 				...(images && images.length > 0 ? { images } : {}),
+				...(requestId ? { requestId } : {}),
 			});
 		},
 		abort: () => {
