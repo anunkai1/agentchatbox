@@ -1,0 +1,19 @@
+{
+	"name": "acb-antigravity-thinking",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Injects thinkingConfig.thinkingLevel for Google Antigravity ACP OAuth requests until agy_acp_server sets it.",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}

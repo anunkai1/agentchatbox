@@ -33,6 +33,7 @@ export const DEFAULT_BUNDLED_EXTENSIONS = [
 	"acb-workflows",
 	"codex-fast",
 	"venice-no-system-prompt",
+	"antigravity-thinking",
 	"claude-delegate",
 	"delegate",
 ];

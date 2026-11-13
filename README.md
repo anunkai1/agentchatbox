@@ -98,6 +98,7 @@ extensions/
   delegate/                # pi-owned background worker chats (/delegate)
   claude-delegate/         # optional Claude Code CLI passthrough (/cc)
   venice-no-system-prompt/ # disables Venice's injected persona prompt
+  antigravity-thinking/    # injects thinkingLevel for Antigravity OAuth requests
   openai-models/           # optional filter keeping GPT-6+ only in OpenAI picker
 tests/                    # vitest, server-side + pure extension helpers + UI smoke
 scripts/                  # build + setup + dev helpers
