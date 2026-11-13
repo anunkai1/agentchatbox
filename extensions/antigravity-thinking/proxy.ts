@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	type ClientRequest,
 	createServer,
 	request as httpRequest,
 	type IncomingHttpHeaders,
@@ -58,6 +59,12 @@ const LOAD_CODE_ASSIST_TIMEOUT_MS = 10_000;
 export interface CcpaThinkingProxyOptions {
 	/** Fixed upstream CCPA base URL (skips per-project consumer/prod detection). */
 	upstreamBaseUrl?: string;
+	/** Override prod CCPA base URL used for loadCodeAssist and GCP-ToS accounts (used in tests). */
+	prodBaseUrl?: string;
+	/** Override consumer CCPA base URL (used in tests). */
+	consumerBaseUrl?: string;
+	/** Override loadCodeAssist timeout in ms (used in tests). */
+	loadCodeAssistTimeoutMs?: number;
 	/** Custom upstream resolver hook (used in tests). */
 	resolveUpstreamBaseUrl?: (info: {
 		project?: string;
@@ -201,11 +208,20 @@ function headerValue(headers: IncomingHttpHeaders, name: string): string | undef
 	return undefined;
 }
 
+interface UpstreamResolution {
+	endpoint: string;
+	authoritative: boolean;
+}
+
 async function defaultResolveUpstreamFromLoadCodeAssist(
 	authorization: string,
 	userAgent?: string,
-): Promise<string> {
-	const target = new URL("/v1internal:loadCodeAssist", PROD_CCPA_BASE_URL);
+	prodBaseUrl: string = PROD_CCPA_BASE_URL,
+	consumerBaseUrl: string = CONSUMER_CCPA_BASE_URL,
+	timeoutMs: number = LOAD_CODE_ASSIST_TIMEOUT_MS,
+): Promise<UpstreamResolution> {
+	const target = new URL("/v1internal:loadCodeAssist", prodBaseUrl);
+	const requester = target.protocol === "https:" ? httpsRequest : httpRequest;
 	const body = Buffer.from(JSON.stringify({ metadata: { ideType: "ANTIGRAVITY" } }), "utf8");
 	const headers: Record<string, string> = {
 		authorization,
@@ -215,38 +231,46 @@ async function defaultResolveUpstreamFromLoadCodeAssist(
 	if (userAgent) headers["user-agent"] = userAgent;
 
 	return new Promise((resolve) => {
-		const req = httpsRequest(
-			target,
-			{ method: "POST", headers, timeout: LOAD_CODE_ASSIST_TIMEOUT_MS },
-			(res) => {
-				const chunks: Buffer[] = [];
-				res.on("data", (chunk: Buffer | string) => {
-					chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-				});
-				res.on("end", () => {
-					try {
-						const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-						if (
-							isPlainObject(parsed) &&
-							isPlainObject(parsed.paidTier) &&
-							parsed.paidTier.usesGcpTos === true
-						) {
-							resolve(PROD_CCPA_BASE_URL);
+		let settled = false;
+		const finish = (result: UpstreamResolution) => {
+			if (settled) return;
+			settled = true;
+			resolve(result);
+		};
+
+		const req = requester(target, { method: "POST", headers, timeout: timeoutMs }, (res) => {
+			const chunks: Buffer[] = [];
+			res.on("data", (chunk: Buffer | string) => {
+				chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+			});
+			res.on("end", () => {
+				const statusCode = res.statusCode ?? 0;
+				if (!res.complete || statusCode < 200 || statusCode >= 300) {
+					finish({ endpoint: consumerBaseUrl, authoritative: false });
+					return;
+				}
+				try {
+					const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+					if (isPlainObject(parsed)) {
+						if (isPlainObject(parsed.paidTier) && parsed.paidTier.usesGcpTos === true) {
+							finish({ endpoint: prodBaseUrl, authoritative: true });
 							return;
 						}
-					} catch {
-						// Fall back to consumer daily endpoint if response cannot be parsed.
+						finish({ endpoint: consumerBaseUrl, authoritative: true });
+						return;
 					}
-					resolve(CONSUMER_CCPA_BASE_URL);
-				});
-				res.on("error", () => resolve(CONSUMER_CCPA_BASE_URL));
-			},
-		);
+				} catch {
+					// Fall back to consumer daily endpoint if response cannot be parsed.
+				}
+				finish({ endpoint: consumerBaseUrl, authoritative: false });
+			});
+			res.on("error", () => finish({ endpoint: consumerBaseUrl, authoritative: false }));
+		});
 		req.on("timeout", () => {
 			req.destroy();
-			resolve(CONSUMER_CCPA_BASE_URL);
+			finish({ endpoint: consumerBaseUrl, authoritative: false });
 		});
-		req.on("error", () => resolve(CONSUMER_CCPA_BASE_URL));
+		req.on("error", () => finish({ endpoint: consumerBaseUrl, authoritative: false }));
 		req.end(body);
 	});
 }
@@ -254,6 +278,9 @@ async function defaultResolveUpstreamFromLoadCodeAssist(
 export async function startCcpaThinkingProxy(
 	options: CcpaThinkingProxyOptions = {},
 ): Promise<CcpaThinkingProxy> {
+	const prodBaseUrl = options.prodBaseUrl ?? PROD_CCPA_BASE_URL;
+	const consumerBaseUrl = options.consumerBaseUrl ?? CONSUMER_CCPA_BASE_URL;
+	const loadCodeAssistTimeoutMs = options.loadCodeAssistTimeoutMs ?? LOAD_CODE_ASSIST_TIMEOUT_MS;
 	const discoveredLevels = new Map<string, ThinkingLevelName>();
 	const resolvedUpstreams = new Map<string, string>();
 	const inflightUpstreams = new Map<string, Promise<string>>();
@@ -265,8 +292,8 @@ export async function startCcpaThinkingProxy(
 	}): Promise<string> {
 		if (options.upstreamBaseUrl) return options.upstreamBaseUrl;
 		if (options.resolveUpstreamBaseUrl) return options.resolveUpstreamBaseUrl(info);
-		if (info.project === CONSUMER_PROJECT_ID) return CONSUMER_CCPA_BASE_URL;
-		if (!info.authorization) return CONSUMER_CCPA_BASE_URL;
+		if (info.project === CONSUMER_PROJECT_ID) return consumerBaseUrl;
+		if (!info.authorization) return consumerBaseUrl;
 
 		const cacheKey = createHash("sha256")
 			.update(`${info.project ?? ""}\0${info.authorization}`)
@@ -274,13 +301,21 @@ export async function startCcpaThinkingProxy(
 		const cached = resolvedUpstreams.get(cacheKey);
 		if (cached) return cached;
 
-		if (!info.project) return CONSUMER_CCPA_BASE_URL;
+		if (!info.project) return consumerBaseUrl;
 
 		let pending = inflightUpstreams.get(cacheKey);
 		if (!pending) {
-			pending = defaultResolveUpstreamFromLoadCodeAssist(info.authorization, info.userAgent)
-				.then((endpoint) => {
-					resolvedUpstreams.set(cacheKey, endpoint);
+			pending = defaultResolveUpstreamFromLoadCodeAssist(
+				info.authorization,
+				info.userAgent,
+				prodBaseUrl,
+				consumerBaseUrl,
+				loadCodeAssistTimeoutMs,
+			)
+				.then(({ endpoint, authoritative }) => {
+					if (authoritative) {
+						resolvedUpstreams.set(cacheKey, endpoint);
+					}
 					return endpoint;
 				})
 				.finally(() => {
@@ -301,6 +336,17 @@ export async function startCcpaThinkingProxy(
 				pathname === "/v1internal:generateContent");
 		const isDiscoveryPath = method === "POST" && pathname === "/v1internal:fetchAvailableModels";
 
+		let clientClosed = false;
+		let upstreamReq: ClientRequest | undefined;
+		const handleClientClose = () => {
+			if (!res.writableFinished) {
+				clientClosed = true;
+				upstreamReq?.destroy();
+			}
+		};
+		res.on("close", handleClientClose);
+		req.on("aborted", handleClientClose);
+
 		let rawBody: Buffer | undefined;
 		let forwardBody: Buffer | undefined;
 		let parsedBody: unknown;
@@ -308,6 +354,7 @@ export async function startCcpaThinkingProxy(
 		try {
 			if (method !== "GET" && method !== "HEAD") {
 				rawBody = await readStream(req);
+				if (clientClosed || res.closed || res.destroyed) return;
 				forwardBody = rawBody;
 				if (rawBody.length > 0 && pathname.startsWith("/v1internal:")) {
 					try {
@@ -333,11 +380,13 @@ export async function startCcpaThinkingProxy(
 				authorization: headerValue(req.headers, "authorization"),
 				userAgent: headerValue(req.headers, "user-agent"),
 			});
+			if (clientClosed || res.closed || res.destroyed) return;
+
 			const targetUrl = new URL(reqUrl.pathname + reqUrl.search, upstreamBase);
 			const requester = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
 			const headers = forwardRequestHeaders(req.headers, forwardBody?.length);
 
-			const upstreamReq = requester(
+			upstreamReq = requester(
 				targetUrl,
 				{
 					method,
@@ -385,13 +434,13 @@ export async function startCcpaThinkingProxy(
 				},
 			);
 
-			res.on("close", () => {
-				if (!res.writableFinished) {
-					upstreamReq.destroy();
-				}
-			});
+			if (clientClosed || res.closed || res.destroyed) {
+				upstreamReq.destroy();
+				return;
+			}
 
 			upstreamReq.on("error", (err) => {
+				if (clientClosed || res.closed || res.destroyed) return;
 				if (!res.headersSent) {
 					const payload = JSON.stringify({
 						error: {
@@ -416,6 +465,7 @@ export async function startCcpaThinkingProxy(
 				upstreamReq.end();
 			}
 		} catch (err) {
+			if (clientClosed || res.closed || res.destroyed) return;
 			const message = err instanceof Error ? err.message : String(err);
 			if (!res.headersSent) {
 				const payload = JSON.stringify({

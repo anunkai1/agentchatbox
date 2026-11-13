@@ -264,6 +264,146 @@ describe("startCcpaThinkingProxy", () => {
 		const json = (await res.json()) as { error?: { code?: number } };
 		expect(json.error?.code).toBe(502);
 	});
+
+	it("does not dispatch an upstream request if the client aborts while resolveUpstream is pending", async () => {
+		let upstreamHits = 0;
+		const upstream = await startMockUpstream((_req, _body, res) => {
+			upstreamHits += 1;
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ ok: true }));
+		});
+
+		let resolveGate!: () => void;
+		let lookupStarted!: () => void;
+		const lookupStartedPromise = new Promise<void>((r) => {
+			lookupStarted = r;
+		});
+		const proxy = await startCcpaThinkingProxy({
+			resolveUpstreamBaseUrl: async () => {
+				lookupStarted();
+				await new Promise<void>((r) => {
+					resolveGate = r;
+				});
+				return upstream.url;
+			},
+		});
+		cleanups.push(() => proxy.close());
+
+		const ac = new AbortController();
+		const reqPromise = fetch(`${proxy.url}/v1internal:generateContent`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: "Bearer tok" },
+			body: JSON.stringify({ project: "proj-1", model: "gemini-4-hydrogen-high", request: {} }),
+			signal: ac.signal,
+		}).catch((err) => err);
+
+		await lookupStartedPromise;
+		ac.abort();
+		const result = await reqPromise;
+		expect(result).toBeInstanceOf(Error);
+
+		// Give the server socket close event a turn on the event loop before resolving lookup.
+		await new Promise((r) => setTimeout(r, 25));
+		resolveGate();
+		await new Promise((r) => setTimeout(r, 25));
+		expect(upstreamHits).toBe(0);
+	});
+
+	it("does not permanently cache transient loadCodeAssist failures onto the consumer endpoint", async () => {
+		let loadCodeAssistHits = 0;
+		let loadCodeAssistMode: "429" | "invalid-json" | "timeout" | "paid" | "consumer" = "429";
+		let prodGenerateHits = 0;
+		let consumerGenerateHits = 0;
+
+		const mockProd = await startMockUpstream((req, _body, res) => {
+			if (req.url === "/v1internal:loadCodeAssist") {
+				loadCodeAssistHits += 1;
+				if (loadCodeAssistMode === "429") {
+					res.writeHead(429, { "content-type": "application/json" });
+					res.end(JSON.stringify({ error: { code: 429, status: "RESOURCE_EXHAUSTED" } }));
+					return;
+				}
+				if (loadCodeAssistMode === "invalid-json") {
+					res.writeHead(200, { "content-type": "application/json" });
+					res.end("{truncated");
+					return;
+				}
+				if (loadCodeAssistMode === "timeout") {
+					// Hang longer than loadCodeAssistTimeoutMs without answering.
+					setTimeout(() => {
+						if (!res.destroyed && !res.writableEnded) {
+							res.writeHead(200);
+							res.end("{}");
+						}
+					}, 200);
+					return;
+				}
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify(
+						loadCodeAssistMode === "paid" ? { paidTier: { usesGcpTos: true } } : { cloudaicompanionProject: "p" },
+					),
+				);
+				return;
+			}
+			prodGenerateHits += 1;
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ target: "prod" }));
+		});
+
+		const mockConsumer = await startMockUpstream((_req, _body, res) => {
+			consumerGenerateHits += 1;
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ target: "consumer" }));
+		});
+
+		const proxy = await startCcpaThinkingProxy({
+			prodBaseUrl: mockProd.url,
+			consumerBaseUrl: mockConsumer.url,
+			loadCodeAssistTimeoutMs: 40,
+		});
+		cleanups.push(() => proxy.close());
+
+		const sendGenerate = (auth: string, project = "workspace-proj") =>
+			fetch(`${proxy.url}/v1internal:generateContent`, {
+				method: "POST",
+				headers: { "content-type": "application/json", authorization: auth },
+				body: JSON.stringify({ project, model: "gemini-4-hydrogen-high", request: {} }),
+			});
+
+		// 1. 429 on loadCodeAssist falls back once without caching consumerBaseUrl.
+		loadCodeAssistMode = "429";
+		expect(await (await sendGenerate("Bearer paid-1")).json()).toEqual({ target: "consumer" });
+		expect(loadCodeAssistHits).toBe(1);
+
+		// 2. Subsequent 200 invalid-json also must not cache.
+		loadCodeAssistMode = "invalid-json";
+		expect(await (await sendGenerate("Bearer paid-1")).json()).toEqual({ target: "consumer" });
+		expect(loadCodeAssistHits).toBe(2);
+
+		// 3. Subsequent timeout also must not cache.
+		loadCodeAssistMode = "timeout";
+		expect(await (await sendGenerate("Bearer paid-1")).json()).toEqual({ target: "consumer" });
+		expect(loadCodeAssistHits).toBe(3);
+
+		// 4. Recovery to authoritative 200 routes to prod and caches it.
+		loadCodeAssistMode = "paid";
+		expect(await (await sendGenerate("Bearer paid-1")).json()).toEqual({ target: "prod" });
+		expect(loadCodeAssistHits).toBe(4);
+		expect(prodGenerateHits).toBe(1);
+
+		// 5. Repeat call reuses cached prod without hitting loadCodeAssist again.
+		expect(await (await sendGenerate("Bearer paid-1")).json()).toEqual({ target: "prod" });
+		expect(loadCodeAssistHits).toBe(4);
+		expect(prodGenerateHits).toBe(2);
+
+		// 6. Authoritative 200 without usesGcpTos caches consumer for a different token.
+		loadCodeAssistMode = "consumer";
+		expect(await (await sendGenerate("Bearer free-1")).json()).toEqual({ target: "consumer" });
+		expect(await (await sendGenerate("Bearer free-1")).json()).toEqual({ target: "consumer" });
+		expect(loadCodeAssistHits).toBe(5);
+		expect(consumerGenerateHits).toBe(5);
+	});
 });
 
 describe("registerAntigravityThinking lifecycle", () => {
