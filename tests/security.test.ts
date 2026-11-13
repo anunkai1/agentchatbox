@@ -1,13 +1,24 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 import { config } from "../src/server/config.js";
 import { isAllowedWsOrigin, securityHeaders } from "../src/server/security.js";
-import { safeInlineMime } from "../src/server/uploads-serving.js";
+import { createUploadsServingRouter, safeInlineMime } from "../src/server/uploads-serving.js";
 
+const originalUploadsDir = config.uploadsDir;
 let server: Server | null = null;
-afterEach(() => {
-	if (server) return new Promise<void>((resolve) => server!.close(() => resolve()));
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+	config.uploadsDir = originalUploadsDir;
+	if (server) {
+		await new Promise<void>((resolve) => server!.close(() => resolve()));
+		server = null;
+	}
+	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("HTTP and upload security", () => {
@@ -41,5 +52,39 @@ describe("HTTP and upload security", () => {
 		expect(safeInlineMime("logo.SVG", Buffer.from("<svg>"))).toBe("image/svg+xml");
 		expect(safeInlineMime("attack.html", Buffer.from("<script>alert(1)"))).toBeNull();
 		expect(safeInlineMime("fake.png", Buffer.from("<script>alert(1)"))).toBeNull();
+	});
+
+	it("serves uploaded SVGs inline under sandbox CSP and forces HTML downloads", async () => {
+		const uploadsDir = mkdtempSync(join(tmpdir(), "acb-uploads-sec-"));
+		tempDirs.push(uploadsDir);
+		writeFileSync(
+			join(uploadsDir, "badge.svg"),
+			'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+		);
+		writeFileSync(join(uploadsDir, "attack.html"), "<script>alert(1)</script>");
+		config.uploadsDir = uploadsDir;
+
+		const app = express();
+		app.use("/uploads", createUploadsServingRouter());
+		server = createServer(app);
+		await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("missing test address");
+		const baseUrl = `http://127.0.0.1:${address.port}/uploads`;
+
+		const svgRes = await fetch(`${baseUrl}/badge.svg`);
+		expect(svgRes.status).toBe(200);
+		expect(svgRes.headers.get("content-type")).toMatch(/^image\/svg\+xml\b/);
+		expect(svgRes.headers.get("content-disposition")).toBe("inline");
+		expect(svgRes.headers.get("content-security-policy")).toContain("sandbox");
+		expect(svgRes.headers.get("content-security-policy")).toContain("default-src 'none'");
+		expect(svgRes.headers.get("x-content-type-options")).toBe("nosniff");
+
+		const htmlRes = await fetch(`${baseUrl}/attack.html`);
+		expect(htmlRes.status).toBe(200);
+		expect(htmlRes.headers.get("content-type")).toBe("application/octet-stream");
+		expect(htmlRes.headers.get("content-disposition")).toBe('attachment; filename="attack.html"');
+		expect(htmlRes.headers.get("content-security-policy")).toContain("sandbox");
+		expect(htmlRes.headers.get("x-content-type-options")).toBe("nosniff");
 	});
 });
