@@ -15,6 +15,9 @@ export default defineConfig({
 		env: {
 			UPLOADS_DIR: mkdtempSync(join(tmpdir(), "acb-test-uploads-")),
 			ACB_TRANSPORT_STATE_DIR: mkdtempSync(join(tmpdir(), "acb-test-transport-")),
+			// An inherited production setting must not open or prune the live search index.
+			AGENTCHATBOX_SEARCH_ENABLED: "0",
+			AGENTCHATBOX_SEARCH_DB: join(mkdtempSync(join(tmpdir(), "acb-test-search-")), "search.db"),
 			// Chat tests send setThinking, which saves into pi's settings file.
 			AGENTCHATBOX_PI_SETTINGS_FILE: join(
 				mkdtempSync(join(tmpdir(), "acb-test-pi-")),
