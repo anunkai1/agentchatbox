@@ -355,6 +355,13 @@ async function onClientMessage(
 				deliverError(ws, `could not send image: ${message}`);
 				break;
 			}
+			// Image resolution is asynchronous: another tab may have moved or
+			// deleted this session while it was reading an upload. Never write
+			// into the old child's dead stdin or the wrong current binding.
+			if (registry.isMutating(session.sessionId) || pi.killed || ws._session !== session) {
+				deliverError(ws, "session is switching; wait until it is ready before sending");
+				break;
+			}
 			// Translate /uploads/<file> web URLs to absolute filesystem paths
 			// so pi's read tool can access uploaded files. The browser
 			// inserts markdown links like [/uploads/<uuid>.csv] in the
@@ -378,6 +385,10 @@ async function onClientMessage(
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				deliverError(ws, `could not send image: ${message}`);
+				break;
+			}
+			if (registry.isMutating(session.sessionId) || pi.killed || ws._session !== session) {
+				deliverError(ws, "session is switching; wait until it is ready before sending");
 				break;
 			}
 			// Steering messages are queued while the agent runs and delivered

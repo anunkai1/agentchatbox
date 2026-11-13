@@ -2415,6 +2415,68 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 		}
 	});
 
+	it("rejects an upload-delayed prompt if another tab starts moving its owner", async () => {
+		const markerDir = mkdtempSync(join(tmpdir(), "move-upload-race-"));
+		const marker = join(markerDir, "events");
+		process.env.AGENTCHATBOX_FAKE_PI_MARKER = marker;
+		fakePiPath = makeFakePi("ack");
+		writeFileSync(fakePiPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const index = process.argv.indexOf('--session');
+const id = index >= 0 ? process.argv[index + 1] : 'move-race-controller';
+setInterval(() => {}, 1000);
+process.on('SIGTERM', () => {
+  fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'term ' + id + '\\n');
+  setTimeout(() => process.exit(0), 500);
+});
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.type === 'get_state') console.log(JSON.stringify({ type: 'response', command: 'get_state', success: true, data: { sessionId: id } }));
+  if (msg.type === 'prompt') fs.appendFileSync(process.env.AGENTCHATBOX_FAKE_PI_MARKER, 'prompt ' + id + '\\n');
+});
+`, { mode: 0o755 });
+		process.env.PI_BIN = fakePiPath;
+		const dir = join(sessionsRoot!, "--tmp--");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "upload-race.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "move-upload-race-001", cwd: "/tmp" })}\n`);
+		let release!: () => void;
+		let started!: () => void;
+		const waiting = new Promise<void>((resolve) => { release = resolve; });
+		const imageStarted = new Promise<void>((resolve) => { started = resolve; });
+		vi.resetModules();
+		vi.doMock("../src/server/prompt-images.js", () => ({
+			resolvePromptImages: async () => { started(); await waiting; return undefined; },
+		}));
+		const { mountChatWs, shutdownChatWs } = await import("../src/server/chat.js");
+		const { createProject } = await import("../src/server/projects.js");
+		const project = createProject({ name: "Move upload race target" });
+		mountChatWs(server!);
+		const owner = await connectClient();
+		const controller = await connectClient();
+		try {
+			owner.ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off", sessionId: "move-upload-race-001" }));
+			controller.ws.send(JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }));
+			expect(await waitForReadyCount(owner.inbox, 1, 3000)).toBe(true);
+			expect(await waitForReadyCount(controller.inbox, 1, 3000)).toBe(true);
+			owner.ws.send(JSON.stringify({ type: "prompt", text: "delayed upload" }));
+			await imageStarted;
+			controller.ws.send(JSON.stringify({ type: "moveSession", sessionId: "move-upload-race-001", projectId: project.id }));
+			await vi.waitFor(() => expect(readFileSync(marker, "utf8")).toContain("term move-upload-race-001"));
+			release();
+			const errors = await waitForType(owner.inbox, "error", 1, 3000);
+			expect(String(errors[0]?.message)).toContain("session is switching");
+			expect(readFileSync(marker, "utf8")).not.toContain("prompt move-upload-race-001");
+		} finally {
+			release();
+			owner.close(); controller.close(); shutdownChatWs();
+			vi.doUnmock("../src/server/prompt-images.js");
+			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
+			rmSync(project.cwd, { recursive: true, force: true });
+			rmSync(markerDir, { recursive: true, force: true });
+		}
+	});
+
 	it("fences concurrent resumes while a deleted owner flushes its transcript", async () => {
 		const markerDir = mkdtempSync(join(tmpdir(), "delete-fence-"));
 		const marker = join(markerDir, "events");
