@@ -27,6 +27,7 @@ import {
 	appendFileSync,
 	closeSync,
 	existsSync,
+	fstatSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -705,29 +706,78 @@ export function findPiSessionFile(cwd: string, sessionId: string): string | null
 }
 
 /**
- * Rename a session by appending a `session_info` line to its JSONL.
+ * Rename an INACTIVE Pi session. The caller must first ensure no Pi child
+ * owns this id: a live owner has an in-memory leaf and must handle its own
+ * `set_session_name` RPC. Pi's last entry is its current leaf; link the new
+ * info entry to it instead of appending an unparented root.
  *
- * This is pi's own persistence format — pi itself writes the identical
- * `{"type":"session_info","id":"...","name":"..."}` line when you call
- * `set_session_name`, and reads the last such line back as the session
- * name (the TUI picker and `get_state`'s `sessionName` both come from
- * it). Appending it here lets the sidebar rename ANY session (not just
- * the one currently bound to a live pi child), and because the JSONL is
- * the shared on-disk source of truth the rename is immediately visible
- * to every device. An empty/whitespace name clears it (matches pi's
- * `set_session_name` semantics).
- *
- * Trade-off vs forwarding `set_session_name` to the live child: a
- * currently-active session's pi child keeps its old in-memory name until
- * the next resume re-reads the JSONL — acceptable for a single-user
- * homelab, and the sidebar (which reads the JSONL directly) is correct
- * immediately. Symmetric with how the server already reads these files
- * (session-list.ts, search/).
+ * Refuse unknown, malformed, legacy or exceptionally large final entries
+ * rather than guessing at their leaf. A caller can open such a session and
+ * ask Pi to rename it. The bounded tail avoids parsing large image transcripts.
  */
 export function setPiSessionName(cwd: string, sessionId: string, name: string): boolean {
 	const file = findPiSessionFile(cwd, sessionId);
 	if (!file) return false;
-	const line = `${JSON.stringify({ type: "session_info", id: sessionId, name })}\n`;
+	const headerLine = readFirstLine(file);
+	let header: Record<string, unknown>;
+	try {
+		header = headerLine ? (JSON.parse(headerLine) as Record<string, unknown>) : {};
+	} catch {
+		return false;
+	}
+	if (header.type !== "session" || header.id !== sessionId || header.version !== 3) return false;
+
+	const fd = openSync(file, "r");
+	let tail: Buffer;
+	let startsAt: number;
+	let snapshot: ReturnType<typeof fstatSync>;
+	try {
+		snapshot = fstatSync(fd);
+		const size = snapshot.size;
+		const length = Math.min(size, 1024 * 1024);
+		startsAt = size - length;
+		tail = Buffer.alloc(length);
+		if (readSync(fd, tail, 0, length, startsAt) !== length) return false;
+	} finally {
+		closeSync(fd);
+	}
+	const trimmed = tail.toString("utf8").trimEnd();
+	const newline = trimmed.lastIndexOf("\n");
+	if (!trimmed || (newline < 0 && startsAt > 0)) return false;
+	let last: Record<string, unknown>;
+	try {
+		last = JSON.parse(trimmed.slice(newline + 1)) as Record<string, unknown>;
+	} catch {
+		return false;
+	}
+	let parentId: string | null = null;
+	if (last.type === "session" && last.id !== sessionId) return false;
+	if (last.type !== "session") {
+		if (
+			typeof last.id !== "string" ||
+			!last.id ||
+			(last.parentId !== null && typeof last.parentId !== "string") ||
+			typeof last.timestamp !== "string"
+		)
+			return false;
+		parentId = last.id;
+	}
+	const current = statSync(file);
+	if (
+		current.dev !== snapshot.dev ||
+		current.ino !== snapshot.ino ||
+		current.size !== snapshot.size ||
+		current.mtimeMs !== snapshot.mtimeMs
+	)
+		return false;
+	const separator = tail.length > 0 && tail[tail.length - 1] !== 0x0a ? "\n" : "";
+	const line = `${separator}${JSON.stringify({
+		type: "session_info",
+		id: randomUUID(),
+		parentId,
+		timestamp: new Date().toISOString(),
+		name: name.replace(/[\r\n]+/g, " ").trim(),
+	})}\n`;
 	appendFileSync(file, line);
 	// Invalidate the per-file summary cache for THIS file. The cache is
 	// keyed by mtime, but `appendFileSync` racing a prior write inside the
@@ -971,33 +1021,82 @@ export function readPiSessionMessages(cwd: string, sessionId: string): Message[]
 	const file = findPiSessionFile(cwd, sessionId);
 	if (!file) return [];
 
-	// Walk incrementally and parse only the two line types the browser uses.
-	// This bounds peak memory to the largest individual message rather than the
-	// complete image-heavy JSONL plus a second split-string copy.
+	// Retain physical order (and therefore fork ordinals and pre-compaction
+	// history), but identify entries outside Pi's current parent chain. Keep
+	// only the small id/parent graph plus browser-safe messages in memory.
 	const messages: Message[] = [];
+	const messageIds: Array<string | null> = [];
+	const parents = new Map<string, string | null>();
+	let lastId: string | null = null;
+	let invalidGraph = false;
 	forEachJsonlLine(file, (line) => {
 		const type = jsonlLineType(line);
-		if (type !== "message" && type !== "custom_message") return;
+		if (!type) {
+			if (line.trim()) invalidGraph = true;
+			return;
+		}
+		if (type === "session") return;
+		// Unknown extension metadata can contain huge binary payloads. If it
+		// cannot be inspected cheaply, warn rather than guess at the branch.
+		if (type !== "message" && type !== "custom_message" && line.length > 1024 * 1024) {
+			invalidGraph = true;
+			return;
+		}
 		let e: Record<string, unknown>;
 		try {
 			e = JSON.parse(line) as Record<string, unknown>;
 		} catch {
+			invalidGraph = true;
 			return;
+		}
+		const id = typeof e.id === "string" && e.id ? e.id : null;
+		const parent = e.parentId;
+		if (!id || (parent !== null && typeof parent !== "string") || parents.has(id)) {
+			invalidGraph = true;
+		} else {
+			parents.set(id, parent as string | null);
+			lastId = id;
 		}
 		if (type === "message" && e.message) {
 			messages.push(browserReplayMessage(e.message as Message));
+			messageIds.push(id);
 		} else if (type === "custom_message") {
-			// Reconstruct the live custom-message shape so persisted voice
-			// variants remain attached after a refresh/reconnect.
 			messages.push({
 				role: "custom",
 				customType: e.customType,
 				content: e.content,
 				details: e.details,
 			} as unknown as Message);
+			messageIds.push(id);
 		}
 	});
-	return messages;
+	const active = new Set<string>();
+	// `lastId` is assigned by the line callback; TypeScript cannot see that.
+	let cursor: string | null = lastId as string | null;
+	while (!invalidGraph && cursor !== null) {
+		if (active.has(cursor) || !parents.has(cursor)) {
+			invalidGraph = true;
+			break;
+		}
+		active.add(cursor);
+		cursor = parents.get(cursor) ?? null;
+	}
+	if (invalidGraph) {
+		return [
+			{
+				role: "custom",
+				customType: "acb-history-warning",
+				content:
+					"History branches could not be verified; the visible transcript may differ from Pi's context.",
+			} as unknown as Message,
+			...messages,
+		];
+	}
+	return messages.map((message, index) =>
+		messageIds[index] && !active.has(messageIds[index]!)
+			? ({ ...message, _acbInactiveBranch: true } as unknown as Message)
+			: message,
+	);
 }
 
 /**

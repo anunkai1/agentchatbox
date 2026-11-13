@@ -4069,10 +4069,10 @@ function openMoveToProjectDialog(s: SessionSummary): void {
 
 /**
  * Replace the title node with an inline text input, commit on Enter /
- * blur, cancel on Escape. Commit sends the new name to the server
- * (which appends a session_info line to the session JSONL), and the
- * server's rebroadcast refreshes the sidebar. Empty input clears the
- * name (falls back to the auto-derived first-message title).
+ * blur, cancel on Escape. Commit sends the new name to the server;
+ * Pi or the inactive-session writer persists it, and the server's
+ * rebroadcast refreshes the sidebar. Empty input clears an inactive
+ * session's name (Pi's live rename RPC does not accept empty names).
  */
 function startRename(titleEl: HTMLElement, actions: HTMLElement, s: SessionSummary): void {
 	const current = s.title || "";
@@ -4099,9 +4099,7 @@ function startRename(titleEl: HTMLElement, actions: HTMLElement, s: SessionSumma
 		done = true;
 		if (commit) {
 			const next = input.value.trim();
-			// Only round-trip if the name actually changed; the server
-			// appends a session_info line either way, so skip when it's
-			// a no-op to avoid cluttering the JSONL.
+			// Skip a no-op to avoid cluttering the JSONL.
 			if (next !== current) {
 				shellHandlers?.renameSessionById(s.id, next);
 			}

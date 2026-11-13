@@ -355,11 +355,9 @@ export type ClientMessage =
 	| { type: "newSession"; projectId?: string; preservePrevious?: boolean }
 	| { type: "renameSession"; name: string }
 	/**
-	 * Rename ANY session (not just the current one) by id. The server
-	 * appends a `session_info` line to that session's JSONL (pi's own
-	 * persistence format), so the rename is visible to every device and
-	 * survives across browsers. `renameSession` (above) still exists for
-	 * renaming the *current* session via the live pi child (`/name`).
+	 * Rename a session by id. A live owner handles the rename through Pi;
+	 * an inactive session gets a correctly linked `session_info` entry.
+	 * `renameSession` (above) is the current-session `/name` command.
 	 */
 	| { type: "renameSessionById"; sessionId: string; name: string }
 	/**

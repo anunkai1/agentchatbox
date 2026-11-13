@@ -314,6 +314,24 @@ export function browserEvent(event: Record<string, unknown>): Record<string, unk
 class SessionRegistry {
 	/** Every live `pi` child, keyed by session id. */
 	private readonly entries = new Map<string, LiveSession>();
+	private readonly terminating = new Map<string, LiveSession>();
+	private readonly mutations = new Map<string, symbol>();
+
+	/** Fence all acquisition paths while a transcript is being moved or deleted. */
+	beginMutation(sessionId: string): symbol | null {
+		if (this.mutations.has(sessionId)) return null;
+		const token = Symbol(sessionId);
+		this.mutations.set(sessionId, token);
+		return token;
+	}
+
+	endMutation(sessionId: string, token: symbol): void {
+		if (this.mutations.get(sessionId) === token) this.mutations.delete(sessionId);
+	}
+
+	isMutating(sessionId: string): boolean {
+		return this.mutations.has(sessionId);
+	}
 
 	/**
 	 * Sessions whose `pi` child has been spawned but hasn't yet reported a
@@ -383,7 +401,7 @@ class SessionRegistry {
 	 * file moves between project folders.
 	 */
 	liveFor(sessionId: string): LiveSession | null {
-		return this.entries.get(sessionId) ?? null;
+		return this.entries.get(sessionId) ?? this.terminating.get(sessionId) ?? null;
 	}
 
 	/**
@@ -392,8 +410,15 @@ class SessionRegistry {
 	 * reconnect whose `init.sessionId` is still live returns the running
 	 * child (reattach), otherwise a new child is spawned.
 	 */
-	acquire(init: InitMessage): LiveSession {
+	acquire(init: InitMessage, mutationToken?: symbol): LiveSession {
 		if (init.sessionId) {
+			const mutation = this.mutations.get(init.sessionId);
+			if (mutation && mutation !== mutationToken) {
+				throw new Error("session is being moved or deleted; try again shortly");
+			}
+			if (this.terminating.has(init.sessionId)) {
+				throw new Error("session is still shutting down; try again shortly");
+			}
 			const existing = this.entries.get(init.sessionId);
 			if (existing) {
 				log.info("session reattach", { sessionId: init.sessionId });
@@ -476,6 +501,9 @@ class SessionRegistry {
 			deliver(session.ws, { type: "error", message: "pi subprocess error" });
 		});
 		pi.on("exit", (info) => {
+			if (this.terminating.get(session.sessionId) === session) {
+				this.terminating.delete(session.sessionId);
+			}
 			if (session.idleTimer) {
 				clearTimeout(session.idleTimer);
 				session.idleTimer = null;
@@ -661,6 +689,12 @@ class SessionRegistry {
 		}
 		if (session.sessionId && this.entries.get(session.sessionId) === session) {
 			this.entries.delete(session.sessionId);
+			// A signalled process can still flush to its old path. Keep its id
+			// fenced until exit, including after ordinary switches or idle reap.
+			// A failed spawn has no pid and cannot have opened the transcript.
+			if (session.pi.pid > 0) {
+				this.terminating.set(session.sessionId, session);
+			}
 		}
 		this.pending.delete(session);
 		session.terminationExpected = true;
@@ -684,12 +718,12 @@ class SessionRegistry {
 	 * final flush recreate a transcript the user just deleted.
 	 */
 	async terminateById(sessionId: string): Promise<LiveSession | null> {
-		const session = this.entries.get(sessionId);
+		const session = this.liveFor(sessionId);
 		if (!session) return null;
 		const exited = new Promise<void>((resolve) => {
 			session.pi.once("exit", () => resolve());
 		});
-		this.kill(session);
+		if (this.terminating.get(sessionId) !== session) this.kill(session);
 		await exited;
 		return session;
 	}
@@ -1002,6 +1036,7 @@ class SessionRegistry {
 		}
 
 		if (line.type === "session_info_changed") {
+			session.name = typeof line.name === "string" ? line.name : undefined;
 			for (const listener of this.sessionInfoChangedListeners) listener();
 		}
 

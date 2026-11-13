@@ -281,9 +281,13 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 		// Remember the state at receipt, not just at dispatch: a candidate can
 		// fail synchronously before an already-queued prompt reaches the handler.
 		const duringSwitch = pendingSwitches > 0 && (msg.type === "prompt" || msg.type === "steer");
+		const duringMutation =
+			(msg.type === "prompt" || msg.type === "steer") &&
+			!!ws._session?.sessionId &&
+			registry.isMutating(ws._session.sessionId);
 		messageQueue = messageQueue
 			.then(async () => {
-				if (duringSwitch) {
+				if (duringSwitch || duringMutation) {
 					deliverError(ws, "session is switching; wait until it is ready before sending");
 					return;
 				}
@@ -465,17 +469,28 @@ async function onClientMessage(
 			break;
 		}
 		case "renameSessionById": {
-			// Append a session_info line to the target session's JSONL (pi's
-			// own format) so ANY session can be renamed from the sidebar,
-			// not just the one bound to this connection's live pi child.
-			// Resolve the session's actual cwd — a session in a project
-			// folder is NOT under config.piCwd, so hardcoding the global cwd
-			// (as forkSession used to) silently failed the rename for every
-			// non-global chat. Rebroadcast so every device's sidebar updates.
+			if (registry.isMutating(msg.sessionId)) {
+				deliverError(ws, "could not rename session while it is being moved or deleted");
+				break;
+			}
+			// A live Pi owns its in-memory leaf. Never append behind its back:
+			// it would lose the new entry when it next writes to the transcript.
+			const owner = registry.liveFor(msg.sessionId);
+			if (owner) {
+				if (!owner.ready || owner.pi.killed) {
+					deliverError(ws, "could not rename session while it is starting or stopping");
+				} else if (!msg.name.trim()) {
+					// Pi's RPC rejects empty names; clearing remains available when
+					// the chat is closed, using the safe inactive-session path.
+					deliverError(ws, "close the chat before clearing its name");
+				} else {
+					owner.pi.send({ type: "set_session_name", name: msg.name });
+				}
+				break;
+			}
 			const renameCwd = findSessionCwd(msg.sessionId, projectCwds()) ?? config.piCwd;
-			const renamed = setPiSessionName(renameCwd, msg.sessionId, msg.name);
-			if (!renamed) {
-				deliverError(ws, "could not rename session (not found on disk)");
+			if (!setPiSessionName(renameCwd, msg.sessionId, msg.name)) {
+				deliverError(ws, "could not safely rename session; open the chat and try again");
 				break;
 			}
 			broadcastSessions();
@@ -656,6 +671,7 @@ async function replaceSession(
 	old: LiveSession,
 	init: InitMessage,
 	preservePrevious = false,
+	mutationToken?: symbol,
 ): Promise<void> {
 	if (ws._switching) {
 		deliverError(ws, "a session switch is already in progress");
@@ -664,7 +680,7 @@ async function replaceSession(
 	ws._switching = true;
 	let next: LiveSession | null = null;
 	try {
-		next = registry.acquire(init);
+		next = registry.acquire(init, mutationToken);
 		if (next === old) return;
 
 		await registry.waitUntilReady(next);
@@ -694,11 +710,18 @@ async function replaceSession(
 		// marked killed, making this cleanup idempotent.
 		if (next && next !== old && !next.ready) registry.kill(next);
 		const message = err instanceof Error ? err.message : String(err);
-		log.warn("session replacement failed; keeping current session", {
-			sessionId: old.sessionId,
-			error: message,
-		});
-		if (ws._session === old) {
+		log.warn("session replacement failed", { sessionId: old.sessionId, error: message });
+		if (ws._session === old && old.pi.killed) {
+			// A move has already stopped the previous owner. Do not leave this
+			// view attached to a dead stdin or claim the old chat is active.
+			ws._session = null;
+			deliverError(ws, `could not reopen session after move: ${message}; reconnecting`);
+			try {
+				ws.close(1011, "session replacement failed");
+			} catch {
+				/* socket may already be closed */
+			}
+		} else if (ws._session === old) {
 			deliverError(ws, `could not switch session; current session is still active: ${message}`);
 		}
 	} finally {
@@ -727,6 +750,11 @@ async function moveSessionToProject(
 	sessionId: string,
 	projectId: string,
 ): Promise<void> {
+	const mutation = registry.beginMutation(sessionId);
+	if (!mutation) {
+		deliverError(ws, "could not move conversation: session is already being moved or deleted");
+		return;
+	}
 	try {
 		const project = getProject(projectId);
 		if (!project) {
@@ -737,6 +765,10 @@ async function moveSessionToProject(
 		// Read-committed liveness probe: the session may be bound to a child
 		// (this tab, or another one), which must be stopped first.
 		const live = registry.liveFor(sessionId);
+		if (live?.ws?._switching || (live && !live.ready && !live.pi.killed)) {
+			deliverError(ws, "could not move conversation while it is opening or switching");
+			return;
+		}
 		if (live && isWorking(live)) {
 			deliverError(ws, "could not move conversation: it is still running — stop it first");
 			return;
@@ -772,7 +804,8 @@ async function moveSessionToProject(
 		const result = movePiSession(fromCwd, sessionId, project.cwd);
 		if (result !== "moved") {
 			// Put a stopped conversation back the way we found it.
-			if (stopped && view) await replaceSession(view, stopped, resumeInit(fromCwd));
+			if (stopped && view)
+				await replaceSession(view, stopped, resumeInit(fromCwd), false, mutation);
 			deliverError(ws, moveFailureMessage(result, project.name));
 			return;
 		}
@@ -781,13 +814,15 @@ async function moveSessionToProject(
 		// (not `bound`) is the correct old binding for both tabs, and it is
 		// always set when there was a view — a view implies a live child.
 		if (view && stopped && view._session === stopped) {
-			await replaceSession(view, stopped, resumeInit(project.cwd));
+			await replaceSession(view, stopped, resumeInit(project.cwd), false, mutation);
 		}
 		broadcastSessions();
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		log.error("session move failed", { sessionId, projectId, error: message });
 		deliverError(ws, `could not move conversation: ${message}`);
+	} finally {
+		registry.endMutation(sessionId, mutation);
 	}
 }
 
@@ -815,6 +850,11 @@ function moveFailureMessage(
  * have a JSONL yet; terminating it still counts as a successful deletion.
  */
 async function deleteSessionAndTranscript(ws: PiSocket, sessionId: string): Promise<void> {
+	const mutation = registry.beginMutation(sessionId);
+	if (!mutation) {
+		deliverError(ws, "could not delete session while it is being moved or deleted");
+		return;
+	}
 	try {
 		const live = await registry.terminateById(sessionId);
 		const cwd = live?.init.cwd ?? findSessionCwd(sessionId, projectCwds()) ?? config.piCwd;
@@ -832,6 +872,8 @@ async function deleteSessionAndTranscript(ws: PiSocket, sessionId: string): Prom
 		const message = err instanceof Error ? err.message : String(err);
 		log.error("session deletion failed", { sessionId, error: message });
 		deliverError(ws, `could not delete session: ${message}`);
+	} finally {
+		registry.endMutation(sessionId, mutation);
 	}
 }
 

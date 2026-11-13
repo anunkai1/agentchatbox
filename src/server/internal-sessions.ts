@@ -116,6 +116,7 @@ export function createInternalSessionsRouter(): Router {
 				throw new BadRequest("notStoppedSince is invalid");
 			}
 			const prepare = async (): Promise<() => void> => {
+				if (registry.isMutating(id)) throw new Error("session is being moved or deleted");
 				let session = registry.liveFor(id);
 				if (exclusive && session) throw new Error("session already live");
 				if (idleOnly && session && (isWorking(session) || session.compaction))
@@ -135,6 +136,7 @@ export function createInternalSessionsRouter(): Router {
 				// Also reap an idle child if cancellation or receipt persistence fails.
 				registry.releaseUnattached(ready);
 				return () => {
+					if (registry.isMutating(id)) throw new Error("session is being moved or deleted");
 					if (exclusive && (ready.busy || ready.streaming || ready.ws))
 						throw new Error("session already live");
 					if (idleOnly && (isWorking(ready) || ready.compaction))
@@ -171,11 +173,17 @@ export function createInternalSessionsRouter(): Router {
 		asyncHandler(async (req, res) => {
 			const id = req.params.id;
 			if (!ID_RE.test(id)) throw new BadRequest("invalid session id");
-			recordTransportStop(origin, id);
-			// Wait for the process group to exit, including external /cc runs.
-			// This also discards queued prompts instead of running them after abort.
-			const live = await registry.terminateById(id);
-			res.json({ ok: true, live: Boolean(live) });
+			const mutation = registry.beginMutation(id);
+			if (!mutation) throw new Error("session is being moved or deleted");
+			try {
+				recordTransportStop(origin, id);
+				// Wait for the process group to exit, including external /cc runs.
+				// This also discards queued prompts instead of running them after abort.
+				const live = await registry.terminateById(id);
+				res.json({ ok: true, live: Boolean(live) });
+			} finally {
+				registry.endMutation(id, mutation);
+			}
 		}),
 	);
 

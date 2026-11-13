@@ -34,7 +34,8 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 	const resultsById = new Map<string, { text: string; isError: boolean }>();
 	for (const m of messages) {
 		if (m.role === "toolResult") {
-			resultsById.set(m.toolCallId, {
+			const inactive = (m as { _acbInactiveBranch?: boolean })._acbInactiveBranch === true;
+			resultsById.set(`${inactive ? "inactive" : "active"}:${m.toolCallId}`, {
 				text: extractText(m.content),
 				isError: Boolean(m.isError),
 			});
@@ -42,23 +43,37 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 	}
 
 	const out: PersistedMessage[] = [];
+	const assistantBranches = new Map<PersistedMessage, boolean>();
+	let inInactiveBranch = false;
 	// Fork ordinal: position among the JSONL `type:"message"` entries. Custom
 	// messages (role "custom") are separate entries and are not counted.
 	let seq = 0;
 	for (let i = 0; i < messages.length; i++) {
 		const m = messages[i];
+		const inactive = (m as { _acbInactiveBranch?: boolean })._acbInactiveBranch === true;
+		if (inactive !== inInactiveBranch) {
+			out.push({
+				kind: "note",
+				text: inactive
+					? "Earlier branch — not included in the current conversation."
+					: "Current branch resumes.",
+			});
+			inInactiveBranch = inactive;
+		}
 		if ((m as { role: string }).role !== "custom") seq++;
 		if (m.role === "user") {
 			userMessageDisplay(out, extractText(m.content), seq, m.timestamp);
 		} else if (m.role === "assistant") {
 			const content = Array.isArray(m.content) ? m.content : [];
-			out.push({
+			const assistant: PersistedMessage = {
 				kind: "assistant",
 				text: extractText(content),
 				thinking: extractThinking(content),
 				seq,
 				ts: m.timestamp,
-			});
+			};
+			out.push(assistant);
+			assistantBranches.set(assistant, inactive);
 			// Emit a tool row for each toolCall block on this assistant
 			// message, correlated with its toolResult if one exists.
 			for (const block of content) {
@@ -70,7 +85,7 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 					continue;
 				}
 				const tc = block as { id: string; name: string; arguments: unknown };
-				const r = resultsById.get(tc.id);
+				const r = resultsById.get(`${inactive ? "inactive" : "active"}:${tc.id}`);
 				if (r) {
 					out.push({
 						kind: "tool",
@@ -108,7 +123,7 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 				(m as { details?: { long?: string; medium?: string; short?: string } }).details ?? {};
 			for (let j = out.length - 1; j >= 0; j--) {
 				const prev = out[j];
-				if (prev.kind === "assistant") {
+				if (prev.kind === "assistant" && assistantBranches.get(prev) === inactive) {
 					if (details.long !== undefined) prev.voiceLong = details.long;
 					if (details.medium !== undefined) prev.voiceMedium = details.medium;
 					if (details.short !== undefined) prev.voiceShort = details.short;
@@ -138,6 +153,9 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 			};
 			if (voice.details?.kind === "voice_context" && typeof voice.details.id === "string")
 				relayVoiceDisplay(out, { ...voice.details, id: voice.details.id }, voice.timestamp);
+		} else if (cm.customType === "acb-history-warning") {
+			const warning = m as { content?: unknown };
+			if (typeof warning.content === "string") out.push({ kind: "note", text: warning.content });
 		} else if (cm.customType === "acb-voice-test") {
 			const voice = m as { content?: unknown; timestamp?: number };
 			if (typeof voice.content === "string" && voice.content) {
@@ -161,8 +179,13 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 
 /** True when a claude-code assistant mirror sits next to the note at `index`. */
 function isMirroredByAssistant(messages: Message[], index: number): boolean {
+	const inactive =
+		(messages[index] as { _acbInactiveBranch?: boolean })._acbInactiveBranch === true;
 	return [messages[index - 1], messages[index + 1]].some(
-		(m) => m?.role === "assistant" && (m as { provider?: string }).provider === "claude-code",
+		(m) =>
+			m?.role === "assistant" &&
+			(m as { provider?: string }).provider === "claude-code" &&
+			((m as { _acbInactiveBranch?: boolean })._acbInactiveBranch === true) === inactive,
 	);
 }
 

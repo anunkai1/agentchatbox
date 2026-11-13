@@ -61,13 +61,20 @@ function writeSession(
 	extraLines: string[] = [],
 ): void {
 	const lines: string[] = [JSON.stringify({ type: "session", version: 3, id, timestamp, cwd })];
+	let previous: string | null = null;
+	let ordinal = 0;
 	for (const text of userTexts) {
 		// We add both the user and assistant message so messageCount
 		// counts user+assistant. (Real pi JSONL includes tool results
 		// too; we keep the fake small.)
+		const userId = `${id}-entry-${++ordinal}`;
+		const assistantId = `${id}-entry-${++ordinal}`;
 		lines.push(
 			JSON.stringify({
 				type: "message",
+				id: userId,
+				parentId: previous,
+				timestamp,
 				message: {
 					role: "user",
 					content: [{ type: "text", text }],
@@ -78,6 +85,9 @@ function writeSession(
 		lines.push(
 			JSON.stringify({
 				type: "message",
+				id: assistantId,
+				parentId: userId,
+				timestamp,
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: "ok" }],
@@ -85,6 +95,7 @@ function writeSession(
 				},
 			}),
 		);
+		previous = assistantId;
 	}
 	for (const extra of extraLines) lines.push(extra);
 	writeFileSync(join(root!, cwdDir, name), `${lines.join("\n")}\n`);
@@ -358,7 +369,7 @@ describe("conversation activity times", () => {
 		expect(listPiSessions(cwd)[0].modifiedAt).toBe(createdAt);
 		appendFileSync(
 			file,
-			`${JSON.stringify({ type: "message", timestamp: repliedAt, message: { role: "user", content: "follow up" } })}\n`,
+			`${JSON.stringify({ type: "message", id: "continued-follow-up", parentId: "continued-entry-2", timestamp: repliedAt, message: { role: "user", content: "follow up" } })}\n`,
 		);
 		expect(listPiSessions(cwd)[0].modifiedAt).toBe(repliedAt);
 		expect(setPiSessionName(cwd, "continued", "renamed")).toBe(true);
@@ -499,6 +510,50 @@ describe("readPiSessionMessages", () => {
 		expect((msgs[2] as { content: Array<{ text: string }> }).content[0].text).toBe("follow up");
 	});
 
+	it("labels abandoned branches while keeping Pi context and fork ordinals correct", async () => {
+		const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+		const { readPiSessionMessages, forkPiSession, findPiSessionFile } = await import("../src/server/session-list.js");
+		const { projectTranscript } = await import("../src/client/project.js");
+		const dir = join(root!, "--home-test-project--");
+		mkdirSync(dir, { recursive: true });
+		const manager = SessionManager.create(cwd, dir);
+		const user = (text: string) => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 }) as never;
+		const assistant = (text: string) => ({ role: "assistant", content: [{ type: "text", text }], timestamp: 2 }) as never;
+		manager.appendMessage(user("root"));
+		const branchPoint = manager.appendMessage(assistant("root reply"));
+		manager.appendMessage(user("abandoned"));
+		manager.appendMessage(assistant("abandoned reply"));
+		manager.branch(branchPoint);
+		manager.appendMessage(user("current"));
+		manager.appendMessage(assistant("current reply"));
+		const piContext = manager.buildSessionContext().messages;
+		expect(piContext).toHaveLength(4);
+		const replay = readPiSessionMessages(cwd, manager.getSessionId());
+		expect(replay).toHaveLength(6);
+		expect(replay.map((m) => (m as { _acbInactiveBranch?: boolean })._acbInactiveBranch === true)).toEqual([false, false, true, true, false, false]);
+		const rows = projectTranscript(replay);
+		expect(rows.filter((r) => r.kind === "note").map((r) => r.text)).toEqual([
+			"Earlier branch — not included in the current conversation.",
+			"Current branch resumes.",
+		]);
+		expect(rows.filter((r) => r.kind === "user").map((r) => r.seq)).toEqual([1, 3, 5]);
+		const fork = forkPiSession(cwd, manager.getSessionId(), 5);
+		const forkFile = findPiSessionFile(cwd, fork!);
+		expect(forkFile).not.toBeNull();
+		expect(SessionManager.open(forkFile!).buildSessionContext().messages).toEqual(piContext.slice(0, 3));
+	});
+
+	it("warns when a malformed leaf makes the active branch uncertain", async () => {
+		writeSession("--home-test-project--", "broken.jsonl", "broken", "2026-06-15T10:00:00.000Z", ["hello"], [
+			JSON.stringify({ type: "session_info", id: "broken", name: "bad rename" }),
+		]);
+		const { readPiSessionMessages } = await import("../src/server/session-list.js");
+		const { projectTranscript } = await import("../src/client/project.js");
+		const rows = projectTranscript(readPiSessionMessages(cwd, "broken"));
+		expect(rows[0]).toMatchObject({ kind: "note", text: expect.stringContaining("could not be verified") });
+		expect(rows.filter((row) => row.kind === "user").map((row) => row.seq)).toEqual([1]);
+	});
+
 	it("streams JSONL lines larger than the read chunk without corrupting UTF-8", async () => {
 		const header = JSON.stringify({
 			type: "session",
@@ -510,6 +565,9 @@ describe("readPiSessionMessages", () => {
 		const marker = "__UNICODE_MARKER__";
 		const template = JSON.stringify({
 			type: "message",
+			id: "large-message",
+			parentId: null,
+			timestamp: "2026-06-15T10:00:00.000Z",
 			message: {
 				role: "assistant",
 				content: [{ type: "text", text: marker }],
@@ -544,6 +602,9 @@ describe("readPiSessionMessages", () => {
 			[
 				JSON.stringify({
 					type: "message",
+					id: "image-user",
+					parentId: null,
+					timestamp: "2026-06-15T10:30:00.000Z",
 					message: {
 						role: "user",
 						content: [{ type: "text", text: "look" }, userImage],
@@ -552,6 +613,9 @@ describe("readPiSessionMessages", () => {
 				}),
 				JSON.stringify({
 					type: "message",
+					id: "image-tool",
+					parentId: "image-user",
+					timestamp: "2026-06-15T10:30:01.000Z",
 					message: {
 						role: "toolResult",
 						toolCallId: "read-1",
@@ -626,7 +690,7 @@ describe("readPiSessionMessages", () => {
 					display: true,
 					details: { long: "the long variant", short: "the short variant" },
 					id: "deadbeef",
-					parentId: "cafebabe",
+					parentId: "ccc-entry-2",
 					timestamp: "2026-06-15T12:00:01.000Z",
 				}),
 			],
@@ -657,13 +721,43 @@ describe("setPiSessionName", () => {
 			["first prompt"],
 		);
 		const { listPiSessions, setPiSessionName } = await import("../src/server/session-list.js");
-		// Before: title is the first user message.
+		const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+		const file = join(root!, "--home-test-project--", "2026-06-15T10-00-00_aaa.jsonl");
+		const before = SessionManager.open(file).buildSessionContext();
+		expect(before.messages).toHaveLength(2);
 		expect(listPiSessions(cwd)[0].title).toBe("first prompt");
 
 		expect(setPiSessionName(cwd, "aaa", "renamed from sidebar")).toBe(true);
+		expect(setPiSessionName(cwd, "aaa", "renamed again")).toBe(true);
 
-		// After: the appended session_info line wins as the title.
-		expect(listPiSessions(cwd)[0].title).toBe("renamed from sidebar");
+		const after = SessionManager.open(file);
+		expect(after.buildSessionContext()).toEqual(before);
+		expect(after.getSessionName()).toBe("renamed again");
+		const entries = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+		expect(entries.at(-2)).toMatchObject({ type: "session_info", parentId: "aaa-entry-2" });
+		expect(entries.at(-1).parentId).toBe(entries.at(-2).id);
+		expect(entries.at(-1).id).not.toBe("aaa");
+		expect(listPiSessions(cwd)[0].title).toBe("renamed again");
+	});
+
+	it("adds the missing line separator before appending", async () => {
+		writeSession("--home-test-project--", "aaa.jsonl", "aaa", "2026-06-15T10:00:00.000Z", ["hi"]);
+		const file = join(root!, "--home-test-project--", "aaa.jsonl");
+		writeFileSync(file, readFileSync(file, "utf8").trimEnd());
+		const { setPiSessionName } = await import("../src/server/session-list.js");
+		expect(setPiSessionName(cwd, "aaa", "new name")).toBe(true);
+		const entries = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+		expect(entries.at(-1)).toMatchObject({ type: "session_info", parentId: "aaa-entry-2" });
+	});
+
+	it("refuses a malformed final entry without changing the transcript", async () => {
+		writeSession("--home-test-project--", "aaa.jsonl", "aaa", "2026-06-15T10:00:00.000Z", ["hi"]);
+		const file = join(root!, "--home-test-project--", "aaa.jsonl");
+		appendFileSync(file, `${JSON.stringify({ type: "session_info", id: "aaa", name: "broken" })}\n`);
+		const original = readFileSync(file, "utf8");
+		const { setPiSessionName } = await import("../src/server/session-list.js");
+		expect(setPiSessionName(cwd, "aaa", "new name")).toBe(false);
+		expect(readFileSync(file, "utf8")).toBe(original);
 	});
 
 	it("returns false for an unknown session id (no file to append to)", async () => {

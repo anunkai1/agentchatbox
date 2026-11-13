@@ -266,7 +266,12 @@ The sidebar keeps pinned chats first, then sorts each project's chats by the lat
 recorded message time (including Claude Code `/cc` prompts and replies). Empty chats
 and forks use their creation time until new activity arrives. File modification
 times only invalidate the summary cache: copying, redacting, renaming or moving an
-old conversation does not make it look recent.
+old conversation does not make it look recent. When a chat has branched, replay
+labels earlier branches separately from the current one; fork actions still use
+the original message positions. If the entry tree cannot be verified, replay
+shows a warning rather than implying that every visible message is in Pi's context.
+Sidebar renames go through the live Pi when a chat is open. Clearing a custom name
+requires the chat to be inactive because Pi's live rename command rejects empty names.
 
 Delegated chats (`/delegate` or `/d`) appear as indented workers underneath their
 parent chat, even when they work in another project. Each worker shows its actual

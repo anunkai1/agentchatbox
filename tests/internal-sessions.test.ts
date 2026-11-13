@@ -15,6 +15,9 @@ const registry = vi.hoisted(() => ({
 	releaseUnattached: vi.fn(),
 	statusSnapshot: vi.fn(),
 	terminateById: vi.fn(),
+	isMutating: vi.fn(),
+	beginMutation: vi.fn(),
+	endMutation: vi.fn(),
 }));
 const broadcastSessions = vi.hoisted(() => vi.fn());
 vi.mock("../src/server/session-registry.js", () => ({
@@ -69,6 +72,8 @@ beforeEach(() => {
 	broadcastSessions.mockReset();
 	registry.waitUntilReady.mockResolvedValue(undefined);
 	registry.statusSnapshot.mockReturnValue([]);
+	registry.isMutating.mockReturnValue(false);
+	registry.beginMutation.mockReturnValue(Symbol("mutation"));
 });
 
 function post(path: string, body: unknown, token = config.internalToken) {
@@ -89,6 +94,20 @@ describe("/api/internal", () => {
 	it("hides itself from requests without the pi children's token", async () => {
 		expect((await post("/sessions", {}, "wrong")).status).toBe(404);
 		expect((await fetch(`${base}/api/internal/sessions`, { method: "POST" })).status).toBe(404);
+	});
+
+	it("refuses internal prompts and stops while the session is moving", async () => {
+		const session = liveSession();
+		registry.liveFor.mockReturnValue(session);
+		registry.isMutating.mockReturnValue(true);
+		registry.beginMutation.mockReturnValue(null);
+		const prompt = await post("/sessions/live-1/prompt", { message: "do not send", ...MODEL });
+		expect(prompt.status).toBe(503);
+		expect(await prompt.json()).toEqual({ error: "session is being moved or deleted" });
+		expect(session.pi.send).not.toHaveBeenCalled();
+		const stop = await post("/sessions/live-1/stop", {});
+		expect(stop.status).toBe(503);
+		expect(registry.terminateById).not.toHaveBeenCalled();
 	});
 
 	it("refuses a folder that does not exist", async () => {
