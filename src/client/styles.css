@@ -2605,12 +2605,12 @@ body.sidebar-resizing iframe {
 }
 .status-core-btn {
 	display: inline;
-	border: 0;
-	border-radius: 4px;
-	padding: 0;
+	border: 1px solid var(--border-strong);
+	border-radius: 999px;
+	padding: 0 6px;
 	margin: 0;
-	background: transparent;
-	color: inherit;
+	background: rgba(255, 255, 255, 0.05);
+	color: var(--text-secondary);
 	font: inherit;
 	letter-spacing: inherit;
 	line-height: inherit;
@@ -2618,11 +2618,24 @@ body.sidebar-resizing iframe {
 	white-space: inherit;
 	overflow-wrap: inherit;
 	cursor: pointer;
+	transition:
+		background 0.12s,
+		border-color 0.12s,
+		color 0.12s;
+}
+.status-core-btn::after {
+	content: " ▾";
+	color: var(--text-muted);
+	font-size: 0.9em;
 }
 .status-core-btn:hover,
 .status-core-btn:focus-visible {
 	background: var(--accent-soft);
+	border-color: var(--accent-border);
 	color: var(--text);
+}
+.status-core-btn:active {
+	background: rgba(38, 137, 199, 0.24);
 }
 .status-bar > .status-voice:not(:empty) {
 	margin-left: 14px;
