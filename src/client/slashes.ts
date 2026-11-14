@@ -832,18 +832,7 @@ export function openModelPicker(): void {
 
 			if (m.id === state.currentModelId) row.classList.add("active");
 			makeKeyboardClickable(row, () => {
-				// Update displayed model optimistically so the picker
-				// feels instant, but mark the model as "pending" so the
-				// server's next `ready` event confirms it (rather than
-				// being mistaken for a default-rebroadcast on a new
-				// connection). See onReady in boot() for the matching
-				// logic.
-				state.currentModelId = m.id;
-				state.currentProvider = m.provider;
-				state.currentModelLabel = m.name ?? m.id;
-				state.pendingModelSet = m.id;
-				chatControls?.setModel(m.id, m.provider);
-				refreshStatus();
+				selectModel(m);
 				overlay.remove();
 			});
 			rows.append(row);
@@ -917,6 +906,98 @@ export function openModelPicker(): void {
 			onclick: () => overlay.remove(),
 		}),
 	);
+}
+
+/**
+ * Update displayed model optimistically so the picker feels instant,
+ * while marking the model as "pending" so the server's next `ready`
+ * event confirms it (see onReady in boot()).
+ */
+function selectModel(m: ModelOption): void {
+	state.currentModelId = m.id;
+	state.currentProvider = m.provider;
+	state.currentModelLabel = m.name ?? m.id;
+	state.pendingModelSet = m.id;
+	chatControls?.setModel(m.id, m.provider);
+	refreshStatus();
+}
+
+/**
+ * Quick picker for pinned models (opened from the status-bar model button).
+ * Falls back to the full model picker when no models are pinned yet, and
+ * offers an "All models…" action to jump to the full picker.
+ */
+export function openPinnedModelPicker(): void {
+	if (state.availableModels.length === 0) {
+		openModelPicker();
+		return;
+	}
+	const pinned = state.availableModels
+		.filter(isPinnedModel)
+		.sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
+	if (pinned.length === 0) {
+		openModelPicker();
+		return;
+	}
+	const { overlay, box } = openModal("Pinned models", "model-picker-box");
+	const currentDefault = defaultModelForNewChats();
+	for (const m of pinned) {
+		const row = el("div", { class: "model-row" });
+		row.dataset.modelId = m.id;
+		row.dataset.modelProvider = m.provider;
+		const info = el("div", { class: "model-row-info" });
+		const main = el("div", { class: "model-name" }, m.name ?? m.id);
+		if (m.reasoning) {
+			main.append(
+				el("span", { class: "model-badge", title: "Supports extended thinking" }, "thinking"),
+			);
+		}
+		const isDefault =
+			!!currentDefault && currentDefault.id === m.id && currentDefault.provider === m.provider;
+		if (isDefault) {
+			main.append(
+				el(
+					"span",
+					{ class: "model-badge model-badge-default", title: "Default for new chats" },
+					"default",
+				),
+			);
+		}
+		info.append(main);
+		info.append(
+			el(
+				"div",
+				{ class: "model-provider" },
+				m.id === m.name ? m.provider : `${m.provider} · ${m.id}`,
+			),
+		);
+		row.append(info);
+		if (m.id === state.currentModelId) row.classList.add("active");
+		makeKeyboardClickable(row, () => {
+			selectModel(m);
+			overlay.remove();
+		});
+		box.append(row);
+	}
+	const actions = el("div", { class: "dialog-actions" });
+	actions.append(
+		el("button", {
+			class: "btn",
+			type: "button",
+			text: "All models…",
+			onclick: () => {
+				overlay.remove();
+				openModelPicker();
+			},
+		}),
+		el("button", {
+			class: "btn",
+			type: "button",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
+	box.append(actions);
 }
 
 /**

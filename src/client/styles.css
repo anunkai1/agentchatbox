@@ -2603,6 +2603,27 @@ body.sidebar-resizing iframe {
 	white-space: inherit;
 	min-width: 0;
 }
+.status-core-btn {
+	display: inline;
+	border: 0;
+	border-radius: 4px;
+	padding: 0;
+	margin: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	letter-spacing: inherit;
+	line-height: inherit;
+	font-variant-numeric: inherit;
+	white-space: inherit;
+	overflow-wrap: inherit;
+	cursor: pointer;
+}
+.status-core-btn:hover,
+.status-core-btn:focus-visible {
+	background: var(--accent-soft);
+	color: var(--text);
+}
 .status-bar > .status-voice:not(:empty) {
 	margin-left: 14px;
 }

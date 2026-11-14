@@ -1681,14 +1681,18 @@ export function refreshStatus(): void {
 		// disagree. They reset together when pi compacts. `tokens` is null
 		// right after a compaction (pi can't size the context until the next
 		// reply) → show `?`.
+		const modelTitle = `Pinned models (/model) — current id: ${state.currentModelId ?? "…"}`;
 		const core = [
-			esc(modelLabel),
-			`think: ${esc(state.currentThinking)}`,
+			`<button type="button" class="status-core-btn" data-status-model title="${esc(modelTitle)}" aria-label="Choose pinned model">${esc(modelLabel)}</button>`,
+			`<button type="button" class="status-core-btn" data-status-think title="Thinking (/think)" aria-label="Choose thinking level">think: ${esc(state.currentThinking)}</button>`,
 			esc(contextFillLabel()),
 		].join(" · ");
-		coreEl.innerHTML = core;
-		// Full value on hover when truncated.
-		coreEl.title = coreEl.textContent ?? "";
+		if (voiceSlotHtml.get(coreEl) !== core) {
+			voiceSlotHtml.set(coreEl, core);
+			coreEl.innerHTML = core;
+			// Full value on hover when truncated.
+			coreEl.title = coreEl.textContent ?? "";
+		}
 	}
 
 	paintStatusDynamic();
@@ -1868,7 +1872,10 @@ function paintStatusDynamic(): void {
  */
 export function setStatusMessage(text: string): void {
 	const coreEl = $<HTMLSpanElement>("#status-core");
-	if (coreEl) coreEl.textContent = text;
+	if (coreEl) {
+		voiceSlotHtml.delete(coreEl);
+		coreEl.textContent = text;
+	}
 	const dynEl = $<HTMLSpanElement>("#status-dynamic");
 	if (dynEl) dynEl.textContent = "";
 }
@@ -2139,6 +2146,7 @@ export interface ShellHandlers {
 	handleSlashMenuKeydown: (event: KeyboardEvent) => boolean;
 	handleSlash: (cmd: string) => void;
 	openModelPicker: () => void;
+	openPinnedModelPicker?: () => void;
 	openThinkPicker: () => void;
 	openVoicePicker: () => void;
 	openSpeedPicker: () => void;
@@ -2749,6 +2757,11 @@ export function renderShell(): void {
 			shellHandlers?.pauseVoice();
 		} else if (target.closest("[data-voice-resume]")) {
 			shellHandlers?.resumeVoice();
+		} else if (target.closest("[data-status-model]")) {
+			if (shellHandlers?.openPinnedModelPicker) shellHandlers.openPinnedModelPicker();
+			else shellHandlers?.openModelPicker();
+		} else if (target.closest("[data-status-think]")) {
+			shellHandlers?.openThinkPicker();
 		}
 	});
 	main.append(statusBar);

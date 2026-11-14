@@ -33,6 +33,7 @@ const MODELS = Array.from({ length: 12 }, (_, i) => ({
 	id: i === 0 ? "glm-5.2" : `model-${i + 1}`,
 	provider: "zai",
 	name: `Model ${i + 1}`,
+	reasoning: true,
 }));
 // A 1x1 PNG, so the served upload passes the server's magic-byte check.
 const PNG_1X1 = Buffer.from(
@@ -78,6 +79,9 @@ while IFS= read -r line; do
       ;;
     "steer")
       echo "$line" | jq -c '{type:"response",command:"steer",success:true,id:.id,data:{disposition:"queued"}}'
+      ;;
+    "set_model")
+      echo "$line" | jq -c '{type:"response",command:"set_model",success:true,data:{provider:.provider,id:.modelId}}'
       ;;
     "") ;;
     *)
@@ -3332,6 +3336,20 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect.poll(() => pinned.textContent()).toBe(`♥ Pinned · ${MODELS.length}`);
 			expect(await savedPins()).toEqual(expectedPins);
 		}
+		await page.getByRole("button", { name: "Close", exact: true }).click({ timeout: 3000 });
+		await page.locator("#status-bar [data-status-model]").click({ timeout: 3000 });
+		const pinnedDialog = page.getByRole("dialog", { name: "Pinned models" });
+		await expect.poll(() => pinnedDialog.locator(".model-row").count()).toBe(MODELS.length);
+		await pinnedDialog.locator(`.model-row[data-model-id="${last.id}"]`).click({ timeout: 3000 });
+		await expect
+			.poll(() => page.locator("#status-bar [data-status-model]").textContent())
+			.toBe(last.name);
+		await page.locator("#status-bar [data-status-think]").click({ timeout: 3000 });
+		const thinkDialog = page.getByRole("dialog", { name: "Thinking level" });
+		await thinkDialog.locator(".model-row", { hasText: "low" }).click({ timeout: 3000 });
+		await expect
+			.poll(() => page.locator("#status-bar [data-status-think]").textContent())
+			.toBe("think: low");
 		await page.close();
 	});
 
