@@ -17,7 +17,7 @@ A web chat interface for the [pi coding agent](https://pi.dev). The browser is a
 - **OpenAI Fast control** — a header button and Settings row open the pi extension’s Fast/Standard picker for supported OpenAI models, including ChatGPT subscription sign-in and legacy Codex sign-in. Settings mirrors the saved preference; persistence and the `service_tier: "priority"` request remain extension-owned. OpenAI may process a request on the standard tier instead; Fast is a request preference, not a speed guarantee.
 - **Keyboard, screen-reader, and touch friendly** — labelled controls, trapped/restored modal focus, keyboard-operable pickers and project folders, and 44px mobile action targets
 - **Shareable session links** — every chat lives at `/s/<session-id>`. Bookmark it, copy it (`/link` or the Settings menu), or open it on another device to resume the same conversation
-- Local TTS (Kokoro, 1.25× default playback) and STT (pi-stt-server: multilingual Qwen3-ASR) — no paid cloud APIs
+- Local TTS (Kokoro, 1.25× default playback) and STT (pi-stt-server: Fluid Speech Pro) — no paid cloud APIs
 - Slash commands, model switching mid-conversation, session history / resume / rename
 - Session list / transcript replay via `/api/sessions`
 

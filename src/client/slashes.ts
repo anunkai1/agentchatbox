@@ -1500,7 +1500,10 @@ export function openModelsPanel(): void {
 		svcRow(
 			"Speech-to-text",
 			"Transcribes your mic / voice notes. Local, resident daemon (pi-stt-server).",
-			modelLine(pill("env", "set"), `pi-stt-server · ${state.whisperModel ?? "bark"}`),
+			modelLine(
+				pill("env", "set"),
+				`pi-stt-server · ${state.whisperModel ?? "fluid-speech-pro-onnx-fa588e9f"}`,
+			),
 			hint("change → ", kbd("STT_PRIMARY_URL"), " / ", kbd("STT_FALLBACK_URL")),
 		),
 	);

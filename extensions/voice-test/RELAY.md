@@ -30,7 +30,7 @@ integration or standing proactive mandate is installed.
    Start conversation in the embedded voice panel, allow the microphone and wait
    for Listening; headphones help. Server4 must be awake with its GPU free.
    **Use Pi + LFM TTS (speech-only)** (`"lfm-tts"`, or `/relay lfm-tts`) uses
-   local browser Silero VAD + `/api/transcribe` (Server2 Bark STT) → full-access
+   local browser Silero VAD + `/api/transcribe` (Server2 Fluid Speech Pro STT) → full-access
    Pi/DeepSeek → rendered `SpokenMarkdown` sentence streaming → progressive 24 kHz
    PCM synthesis from Server4 LFM `POST /tts` over `/experiments/lfm-voice/ws?tts=1`,
    without LFM interpreting requests, routing tools or rewriting answers.
@@ -80,7 +80,7 @@ integration or standing proactive mandate is installed.
 5. In **Server4 LFM voice** and **Pi + LFM TTS (speech-only)** modes, speaking
    over a reply or **Interrupt** stops speech only: **Pi direct tools and workers
    continue**. In `Pi + LFM TTS (speech-only)`, the full formatted Markdown reply
-   stays visible in chat while Server4's CPU Whisper `small.en` transcribes only
+   stays visible in chat while Server4's CPU Fluid Speech Pro transcribes only
    the output-clock-played PCM slice with no text prompt hints (`played_prefix`),
    recording honest approximate played speech in Pi without overwriting the saved
    chat reply. Use **Stop current Pi turn** to explicitly abort the active Pi
@@ -142,7 +142,7 @@ a new owner turn. Restored history is never replayed as speech.
 In Kokoro trial mode, playback evidence records segments whose scheduled audio
 finished, marking a cut segment as uncertain; it needs no Server4 GPU. In LFM
 TTS trial mode, active speech reserves Server4's GPU over `/ws?tts=1` and records
-unhinted Whisper `small.en` approximate played words from the output-clock slice.
+unhinted Fluid Speech Pro approximate played words from the output-clock slice.
 Neither mode adds semantic turn detection, eliminates STT/ASR mistakes, guarantees
 voice timbre continuity across independent `/tts` calls, or proves acoustic hearing.
 
@@ -215,8 +215,8 @@ Existing docs are the map; live checks establish present facts.
 
 ## Audio and retention
 
-**Default:** LFM3-Audio-2B speech understanding/generation and CPU Whisper small.en
-run on Server4. Whisper separately recognises owner input for Pi and aligns actual
+**Default:** LFM3-Audio-2B speech understanding/generation and CPU Fluid Speech Pro ONNX (`int8`)
+run on Server4. Fluid Speech Pro separately recognises owner input for Pi and aligns actual
 output audio for approximate played-prefix history. Every owner utterance routes
 through `relay_request` to Pi (`local_chat` is disabled so LFM never guesses
 capabilities or facts on its own). `relay_request` takes no arguments; unknown
