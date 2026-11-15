@@ -196,4 +196,33 @@ describe("delegation sidebar browser", { timeout: 30_000 }, () => {
 			await page.close();
 		}
 	});
+	it("groups sidebar sessions into Pinned, recent days, and monthly sections without overlap", async () => {
+		const page = await open();
+		try {
+			await page.clock.setFixedTime(new Date("2026-11-16T00:37:00+10:00"));
+			await render(page, [
+				{ ...parent, id: "pin", title: "Pinned item", pinned: true, modifiedAt: "2026-03-01T10:00:00+10:00" },
+				{ ...parent, id: "s-today", title: "Today item", modifiedAt: "2026-11-16T00:10:00+10:00" },
+				{ ...parent, id: "s-yest", title: "Yesterday item", modifiedAt: "2026-11-15T12:00:00+10:00" },
+				{ ...parent, id: "s-week", title: "Week item", modifiedAt: "2026-11-12T12:00:00+10:00" },
+				{ ...parent, id: "s-oct", title: "October item", modifiedAt: "2026-10-15T12:00:00+10:00" },
+				{ ...parent, id: "s-apr", title: "April item", modifiedAt: "2026-04-08T12:00:00+10:00" },
+			]);
+			const labels = page.locator("#project-body-global .group-label");
+			await expect.poll(() => labels.count()).toBe(6);
+			expect(await labels.allInnerTexts()).toEqual([
+				"PINNED",
+				"TODAY",
+				"YESTERDAY",
+				"LAST 7 DAYS",
+				"OCTOBER 2026",
+				"APRIL 2026",
+			]);
+			const firstHeader = await labels.first().boundingBox();
+			const firstRow = await page.locator("#project-body-global .session-item").first().boundingBox();
+			expect(firstHeader!.y + firstHeader!.height).toBeLessThanOrEqual(firstRow!.y);
+		} finally {
+			await page.close();
+		}
+	});
 });

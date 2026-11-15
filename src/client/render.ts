@@ -45,6 +45,12 @@ import { setRichText, setUserRichText } from "./linkify.js";
 import { mountNotices, type NoticeOptions, refreshNotices, showNotice } from "./notices.js";
 import { services } from "./services.js";
 import {
+	brisbaneDayKey,
+	buildSidebarEntries,
+	msUntilNextBrisbaneMidnight,
+	type SidebarListEntry,
+} from "./session-groups.js";
+import {
 	buildSessionTree,
 	type SessionNode,
 	type SessionTreeRow,
@@ -3303,6 +3309,35 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	}
 	projectsPane.scrollTop = projectsScrollTop;
 	sessionsPane.scrollTop = sessionsScrollTop;
+	scheduleSidebarDayRefresh();
+}
+
+let lastSidebarDayKey: string | null = null;
+let sidebarMidnightTimer: ReturnType<typeof setTimeout> | null = null;
+let sidebarDayListenersBound = false;
+
+function refreshSidebarIfDayChanged(): void {
+	if (state.searchActive || lastSessions.length === 0) return;
+	if (brisbaneDayKey(Date.now()) !== lastSidebarDayKey) {
+		renderSidebarSessions(lastSessions);
+	}
+}
+
+function scheduleSidebarDayRefresh(): void {
+	const now = Date.now();
+	lastSidebarDayKey = brisbaneDayKey(now);
+	if (sidebarMidnightTimer) clearTimeout(sidebarMidnightTimer);
+	sidebarMidnightTimer = setTimeout(() => {
+		sidebarMidnightTimer = null;
+		refreshSidebarIfDayChanged();
+	}, msUntilNextBrisbaneMidnight(now));
+	if (!sidebarDayListenersBound && typeof document !== "undefined") {
+		sidebarDayListenersBound = true;
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState === "visible") refreshSidebarIfDayChanged();
+		});
+		window.addEventListener("focus", refreshSidebarIfDayChanged);
+	}
 }
 
 /** localStorage-backed collapse state per project id. */
@@ -3513,6 +3548,7 @@ function initSidebarSplitter(): void {
  */
 const SIDEBAR_SESSION_ROW_PITCH = 59;
 const SIDEBAR_SESSION_ROW_HEIGHT = 57;
+const SIDEBAR_GROUP_HEADER_HEIGHT = 28;
 // Mobile rows put the title on its own line and keep the action buttons beside
 // the metadata below it. Keep the original compact row pitch now that the
 // controls use smaller, directly clickable targets.
@@ -3526,14 +3562,41 @@ type WindowedSessionList = HTMLDivElement & {
 	dispose?: () => void;
 };
 
+function findFirstVisibleEntry(entries: SidebarListEntry[], visibleTop: number): number {
+	let lo = 0;
+	let hi = entries.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (entries[mid].top + entries[mid].height <= visibleTop) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
+
+function findFirstEntryAfterBottom(entries: SidebarListEntry[], visibleBottom: number): number {
+	let lo = 0;
+	let hi = entries.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (entries[mid].top < visibleBottom) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
+
 function renderWindowedSessionList(items: SessionTreeRow[]): WindowedSessionList {
 	const compactLayout = window.matchMedia(
 		"(hover: none), (pointer: coarse), (max-width: 720px)",
 	).matches;
 	const rowPitch = compactLayout ? SIDEBAR_MOBILE_ROW_PITCH : SIDEBAR_SESSION_ROW_PITCH;
 	const rowHeight = compactLayout ? SIDEBAR_MOBILE_ROW_HEIGHT : SIDEBAR_SESSION_ROW_HEIGHT;
+	const { entries, totalHeight } = buildSidebarEntries(items, {
+		headerHeight: SIDEBAR_GROUP_HEADER_HEIGHT,
+		rowPitch,
+		rowHeight,
+	});
 	const list = el("div", { class: "windowed-session-list" }) as WindowedSessionList;
-	list.style.height = `${items.length * rowPitch}px`;
+	list.style.height = `${totalHeight}px`;
 	let renderedStart = -1;
 	let renderedEnd = -1;
 
@@ -3544,14 +3607,11 @@ function renderWindowedSessionList(items: SessionTreeRow[]): WindowedSessionList
 		const listRect = list.getBoundingClientRect();
 		const listTop = pane.scrollTop + listRect.top - paneRect.top;
 		const visibleTop = Math.max(0, pane.scrollTop - listTop);
-		const visibleBottom = Math.min(
-			items.length * rowPitch,
-			pane.scrollTop + pane.clientHeight - listTop,
-		);
-		const start = Math.max(0, Math.floor(visibleTop / rowPitch) - SIDEBAR_WINDOW_OVERSCAN);
+		const visibleBottom = Math.min(totalHeight, pane.scrollTop + pane.clientHeight - listTop);
+		const start = Math.max(0, findFirstVisibleEntry(entries, visibleTop) - SIDEBAR_WINDOW_OVERSCAN);
 		const end = Math.min(
-			items.length,
-			Math.ceil(visibleBottom / rowPitch) + SIDEBAR_WINDOW_OVERSCAN,
+			entries.length,
+			findFirstEntryAfterBottom(entries, visibleBottom) + SIDEBAR_WINDOW_OVERSCAN,
 		);
 		if (start === renderedStart && end === renderedEnd) return;
 		renderedStart = start;
@@ -3559,11 +3619,15 @@ function renderWindowedSessionList(items: SessionTreeRow[]): WindowedSessionList
 
 		const fragment = document.createDocumentFragment();
 		for (let i = start; i < end; i++) {
-			const row = renderSessionItem(items[i].node.session, items[i]);
-			row.classList.add("windowed-session-item");
-			row.style.top = `${i * rowPitch}px`;
-			row.style.height = `${rowHeight}px`;
-			fragment.append(row);
+			const entry = entries[i];
+			const node =
+				entry.kind === "header"
+					? el("div", { class: "group-label", text: entry.label })
+					: renderSessionItem(entry.row.node.session, entry.row);
+			node.classList.add("windowed-session-item");
+			node.style.top = `${entry.top}px`;
+			node.style.height = `${entry.height}px`;
+			fragment.append(node);
 		}
 		list.replaceChildren(fragment);
 	};
@@ -3578,12 +3642,12 @@ function renderWindowedSessionList(items: SessionTreeRow[]): WindowedSessionList
 		if (!list.isConnected) return;
 		boundPane = list.closest<HTMLElement>(".sidebar-pane");
 		boundPane?.addEventListener("scroll", refresh, { passive: true });
-		const activeIndex = items.findIndex((row) => row.node.session.id === sidebarPendingReveal);
-		if (boundPane && activeIndex >= 0) {
+		const activeEntry = entries.find(
+			(entry) => entry.kind === "session" && entry.row.node.session.id === sidebarPendingReveal,
+		);
+		if (boundPane && activeEntry) {
 			const top =
-				list.getBoundingClientRect().top -
-				boundPane.getBoundingClientRect().top +
-				activeIndex * rowPitch;
+				list.getBoundingClientRect().top - boundPane.getBoundingClientRect().top + activeEntry.top;
 			if (top < 0 || top + rowPitch > boundPane.clientHeight) {
 				boundPane.scrollTop += top - Math.max(0, (boundPane.clientHeight - rowPitch) / 2);
 			}
