@@ -23,8 +23,18 @@ export interface SessionDateGroup {
 	label: string;
 }
 
+export interface SidebarHeaderEntry {
+	kind: "header";
+	key: string;
+	label: string;
+	count: number;
+	collapsed: boolean;
+	top: number;
+	height: number;
+}
+
 export type SidebarListEntry =
-	| { kind: "header"; key: string; label: string; top: number; height: number }
+	| SidebarHeaderEntry
 	| { kind: "session"; row: SessionTreeRow; top: number; height: number };
 
 function getBrisbaneDateParts(ms: number): { year: number; month: number; day: number } {
@@ -56,6 +66,11 @@ export function msUntilNextBrisbaneMidnight(nowMs = Date.now()): number {
 	return Math.max(1000, nextMidnightMs - nowMs + 250);
 }
 
+/** Per-project localStorage key for collapsing a date group independently. */
+export function dateGroupCollapseId(projectId: string, groupKey: string): string {
+	return `${projectId}:${groupKey}`;
+}
+
 /**
  * Bucket a session into Today, Yesterday, Last 7 Days, or calendar Month Year
  * (e.g. "November 2026", "October 2026", "April 2026") in Australia/Brisbane.
@@ -80,9 +95,9 @@ export function sessionDateGroup(
 }
 
 /**
- * Interleave date group headers into a flattened session tree list and
- * precompute fixed vertical offsets for virtualised rendering.
- * Child worker rows stay beneath their parent and inherit its group.
+ * Interleave collapsible date group headers into a flattened session tree list
+ * and precompute fixed vertical offsets for virtualised rendering.
+ * Child worker rows stay beneath their parent and follow its group's collapse state.
  */
 export function buildSidebarEntries(
 	rows: SessionTreeRow[],
@@ -91,10 +106,13 @@ export function buildSidebarEntries(
 		rowPitch: number;
 		rowHeight: number;
 		nowMs?: number;
+		isGroupCollapsed?: (groupKey: string) => boolean;
 	},
 ): { entries: SidebarListEntry[]; totalHeight: number } {
 	const nowMs = opts.nowMs ?? Date.now();
 	const entries: SidebarListEntry[] = [];
+	let currentHeader: SidebarHeaderEntry | null = null;
+	let currentCollapsed = false;
 	let currentKey: string | null = null;
 	let y = 0;
 
@@ -103,16 +121,22 @@ export function buildSidebarEntries(
 			const group = sessionDateGroup(row.node.modifiedAt, nowMs, !!row.node.session.pinned);
 			if (group.key !== currentKey) {
 				currentKey = group.key;
-				entries.push({
+				currentCollapsed = opts.isGroupCollapsed?.(group.key) ?? false;
+				currentHeader = {
 					kind: "header",
 					key: group.key,
 					label: group.label,
+					count: 0,
+					collapsed: currentCollapsed,
 					top: y,
 					height: opts.headerHeight,
-				});
+				};
+				entries.push(currentHeader);
 				y += opts.headerHeight;
 			}
+			if (currentHeader) currentHeader.count += 1;
 		}
+		if (currentCollapsed) continue;
 		entries.push({
 			kind: "session",
 			row,

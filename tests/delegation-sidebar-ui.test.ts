@@ -196,19 +196,20 @@ describe("delegation sidebar browser", { timeout: 30_000 }, () => {
 			await page.close();
 		}
 	});
-	it("groups sidebar sessions into Pinned, recent days, and monthly sections without overlap", async () => {
+	it("groups sidebar sessions into Pinned, recent days, and monthly sections and toggles collapse", async () => {
 		const page = await open();
 		try {
 			await page.clock.setFixedTime(new Date("2026-11-16T00:37:00+10:00"));
-			await render(page, [
+			const sample = [
 				{ ...parent, id: "pin", title: "Pinned item", pinned: true, modifiedAt: "2026-03-01T10:00:00+10:00" },
 				{ ...parent, id: "s-today", title: "Today item", modifiedAt: "2026-11-16T00:10:00+10:00" },
 				{ ...parent, id: "s-yest", title: "Yesterday item", modifiedAt: "2026-11-15T12:00:00+10:00" },
 				{ ...parent, id: "s-week", title: "Week item", modifiedAt: "2026-11-12T12:00:00+10:00" },
 				{ ...parent, id: "s-oct", title: "October item", modifiedAt: "2026-10-15T12:00:00+10:00" },
 				{ ...parent, id: "s-apr", title: "April item", modifiedAt: "2026-04-08T12:00:00+10:00" },
-			]);
-			const labels = page.locator("#project-body-global .group-label");
+			];
+			await render(page, sample);
+			const labels = page.locator("#project-body-global .group-label-text");
 			await expect.poll(() => labels.count()).toBe(6);
 			expect(await labels.allInnerTexts()).toEqual([
 				"PINNED",
@@ -218,9 +219,28 @@ describe("delegation sidebar browser", { timeout: 30_000 }, () => {
 				"OCTOBER 2026",
 				"APRIL 2026",
 			]);
-			const firstHeader = await labels.first().boundingBox();
+			const firstHeader = await page.locator("#project-body-global .group-label").first().boundingBox();
 			const firstRow = await page.locator("#project-body-global .session-item").first().boundingBox();
 			expect(firstHeader!.y + firstHeader!.height).toBeLessThanOrEqual(firstRow!.y);
+
+			// Collapse Today and Yesterday; their session rows disappear while headers remain.
+			await page.getByRole("button", { name: "Collapse Today" }).click();
+			await page.getByRole("button", { name: "Collapse Yesterday" }).click();
+			await expect.poll(() => page.locator('#project-body-global a[href="/s/s-today"]').count()).toBe(0);
+			await expect.poll(() => page.locator('#project-body-global a[href="/s/s-yest"]').count()).toBe(0);
+			expect(
+				await page.getByRole("button", { name: "Expand Today" }).getAttribute("aria-expanded"),
+			).toBe("false");
+
+			// Collapse state persists across re-renders, and expanding restores the chat.
+			await render(page, sample);
+			await expect.poll(() => page.locator('#project-body-global a[href="/s/s-today"]').count()).toBe(0);
+			await page.getByRole("button", { name: "Expand Today" }).click();
+			await expect.poll(() => page.locator('#project-body-global a[href="/s/s-today"]').isVisible()).toBe(true);
+
+			// Opening an active session inside a collapsed group auto-expands it.
+			await render(page, sample, "s-yest");
+			await expect.poll(() => page.locator('#project-body-global a[href="/s/s-yest"]').isVisible()).toBe(true);
 		} finally {
 			await page.close();
 		}

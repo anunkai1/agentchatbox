@@ -116,6 +116,46 @@ describe("sidebar date grouping (Australia/Brisbane)", () => {
 		}
 	});
 
+	it("skips collapsed group rows (including workers) while keeping group counts", () => {
+		const sessions = [
+			session("today-1", "2026-11-16T00:10:00+10:00"),
+			session("yest-parent", "2026-11-15T10:00:00+10:00"),
+			session("yest-worker", "2026-11-14T09:00:00+10:00", {
+				delegation: { parentSessionId: "yest-parent", status: "done" },
+			}),
+			session("oct-1", "2026-10-20T10:00:00+10:00"),
+			session("oct-2", "2026-10-03T10:00:00+10:00"),
+		];
+		const { roots } = buildSessionTree(sessions);
+		const rows = visibleSessionRows(roots, new Set());
+		const { entries, totalHeight } = buildSidebarEntries(rows, {
+			headerHeight: 30,
+			rowPitch: 59,
+			rowHeight: 57,
+			nowMs: now,
+			isGroupCollapsed: (key) => key === "yesterday" || key === "month:2026-10",
+		});
+
+		expect(entries).toHaveLength(4);
+		expect(entries[0]).toMatchObject({ kind: "header", label: "Today", count: 1, collapsed: false });
+		expect(entries[1]).toMatchObject({ kind: "session", top: 30 });
+		expect(entries[2]).toMatchObject({
+			kind: "header",
+			label: "Yesterday",
+			count: 1,
+			collapsed: true,
+			top: 89,
+		});
+		expect(entries[3]).toMatchObject({
+			kind: "header",
+			label: "October 2026",
+			count: 2,
+			collapsed: true,
+			top: 119,
+		});
+		expect(totalHeight).toBe(3 * 30 + 59);
+	});
+
 	it("computes Brisbane day keys and time until midnight", () => {
 		expect(brisbaneDayKey(now)).toBe("2026-11-16");
 		const ms = msUntilNextBrisbaneMidnight(now);

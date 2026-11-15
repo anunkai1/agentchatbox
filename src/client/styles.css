@@ -345,15 +345,55 @@ body.sidebar-resizing iframe {
 .sidebar-sessions .group-label {
 	font-size: 11px;
 	font-weight: 600;
-	line-height: 14px;
+	line-height: 16px;
 	color: var(--text-muted);
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
-	padding: 10px 8px 4px;
+	padding: 7px 8px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	user-select: none;
+}
+.sidebar-sessions .group-label.group-toggle {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	font-family: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition:
+		background 0.12s,
+		color 0.12s;
+}
+.sidebar-sessions .group-label.group-toggle:hover,
+.sidebar-sessions .group-label.group-toggle:focus-visible {
+	background: var(--surface-hover, rgba(255, 255, 255, 0.05));
+	color: var(--text-secondary);
+}
+.group-chevron {
+	width: 10px;
+	text-align: center;
+	font-size: 10px;
+	opacity: 0.75;
+	flex-shrink: 0;
+}
+.group-label-text {
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.group-count {
+	margin-left: auto;
+	font-size: 10px;
+	font-weight: 500;
+	opacity: 0.65;
+	flex-shrink: 0;
 }
 .session-item {
 	display: flex;

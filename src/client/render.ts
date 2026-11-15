@@ -47,8 +47,10 @@ import { services } from "./services.js";
 import {
 	brisbaneDayKey,
 	buildSidebarEntries,
+	dateGroupCollapseId,
 	msUntilNextBrisbaneMidnight,
 	type SidebarListEntry,
+	sessionDateGroup,
 } from "./session-groups.js";
 import {
 	buildSessionTree,
@@ -3272,6 +3274,10 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 			collapsedProjects.delete(pid);
 			if (pid !== "global" && pid !== "other") collapsedProjects.delete(PROJECTS_CONTAINER_ID);
 			writeCollapseState(collapsedProjects);
+			const dateGroup = sessionDateGroup(root.modifiedAt, Date.now(), !!root.session.pinned);
+			const collapsedGroups = readCollapseState(DATE_GROUP_COLLAPSE_KEY);
+			collapsedGroups.delete(dateGroupCollapseId(pid, dateGroup.key));
+			writeCollapseState(collapsedGroups, DATE_GROUP_COLLAPSE_KEY);
 			sidebarPages.set(pid, Math.floor(buckets.get(pid)!.indexOf(root) / SIDEBAR_PAGE_SIZE));
 		}
 	}
@@ -3343,6 +3349,7 @@ function scheduleSidebarDayRefresh(): void {
 /** localStorage-backed collapse state per project id. */
 const PROJECT_COLLAPSE_KEY = "acb-project-collapse";
 const WORKER_COLLAPSE_KEY = "acb-worker-collapse";
+const DATE_GROUP_COLLAPSE_KEY = "acb-date-group-collapse";
 const sidebarPages = new Map<string, number>();
 let sidebarRevealedPath: string | null = null;
 let sidebarPendingReveal: string | null = null;
@@ -3548,7 +3555,7 @@ function initSidebarSplitter(): void {
  */
 const SIDEBAR_SESSION_ROW_PITCH = 59;
 const SIDEBAR_SESSION_ROW_HEIGHT = 57;
-const SIDEBAR_GROUP_HEADER_HEIGHT = 28;
+const SIDEBAR_GROUP_HEADER_HEIGHT = 30;
 // Mobile rows put the title on its own line and keep the action buttons beside
 // the metadata below it. Keep the original compact row pitch now that the
 // controls use smaller, directly clickable targets.
@@ -3584,16 +3591,53 @@ function findFirstEntryAfterBottom(entries: SidebarListEntry[], visibleBottom: n
 	return lo;
 }
 
-function renderWindowedSessionList(items: SessionTreeRow[]): WindowedSessionList {
+function renderDateGroupHeader(
+	entry: Extract<SidebarListEntry, { kind: "header" }>,
+	onToggle: (groupKey: string) => void,
+): HTMLElement {
+	const btn = el("button", {
+		class: `group-label group-toggle${entry.collapsed ? " collapsed" : ""}`,
+		type: "button",
+		"aria-expanded": String(!entry.collapsed),
+		"aria-label": `${entry.collapsed ? "Expand" : "Collapse"} ${entry.label}`,
+	});
+	btn.dataset.groupKey = entry.key;
+	btn.append(
+		el("span", {
+			class: "group-chevron",
+			text: entry.collapsed ? "▸" : "▾",
+			"aria-hidden": "true",
+		}),
+		el("span", { class: "group-label-text", text: entry.label }),
+		el("span", {
+			class: "group-count",
+			text: String(entry.count),
+			"aria-label": `${entry.count} conversations`,
+		}),
+	);
+	btn.addEventListener("click", (e) => {
+		e.stopPropagation();
+		onToggle(entry.key);
+	});
+	return btn;
+}
+
+function renderWindowedSessionList(
+	items: SessionTreeRow[],
+	projectId: string,
+	onToggleGroup: (groupKey: string) => void,
+): WindowedSessionList {
 	const compactLayout = window.matchMedia(
 		"(hover: none), (pointer: coarse), (max-width: 720px)",
 	).matches;
 	const rowPitch = compactLayout ? SIDEBAR_MOBILE_ROW_PITCH : SIDEBAR_SESSION_ROW_PITCH;
 	const rowHeight = compactLayout ? SIDEBAR_MOBILE_ROW_HEIGHT : SIDEBAR_SESSION_ROW_HEIGHT;
+	const collapsedGroups = readCollapseState(DATE_GROUP_COLLAPSE_KEY);
 	const { entries, totalHeight } = buildSidebarEntries(items, {
 		headerHeight: SIDEBAR_GROUP_HEADER_HEIGHT,
 		rowPitch,
 		rowHeight,
+		isGroupCollapsed: (key) => collapsedGroups.has(dateGroupCollapseId(projectId, key)),
 	});
 	const list = el("div", { class: "windowed-session-list" }) as WindowedSessionList;
 	list.style.height = `${totalHeight}px`;
@@ -3622,7 +3666,7 @@ function renderWindowedSessionList(items: SessionTreeRow[]): WindowedSessionList
 			const entry = entries[i];
 			const node =
 				entry.kind === "header"
-					? el("div", { class: "group-label", text: entry.label })
+					? renderDateGroupHeader(entry, onToggleGroup)
 					: renderSessionItem(entry.row.node.session, entry.row);
 			node.classList.add("windowed-session-item");
 			node.style.top = `${entry.top}px`;
@@ -3760,6 +3804,18 @@ function renderProjectFolder(p: ProjectSummary, items: SessionNode[]): HTMLEleme
 	) as HTMLButtonElement;
 	pagination.append(previous, pageLabel, next);
 
+	const toggleDateGroup = (groupKey: string) => {
+		const set = readCollapseState(DATE_GROUP_COLLAPSE_KEY);
+		const id = dateGroupCollapseId(p.id, groupKey);
+		if (set.has(id)) set.delete(id);
+		else set.add(id);
+		writeCollapseState(set, DATE_GROUP_COLLAPSE_KEY);
+		const pane = body.closest<HTMLElement>(".sidebar-pane");
+		const scrollTop = pane?.scrollTop ?? 0;
+		renderPage();
+		if (pane) pane.scrollTop = scrollTop;
+	};
+
 	const renderPage = () => {
 		windowed?.dispose?.();
 		const start = page * SIDEBAR_PAGE_SIZE;
@@ -3770,7 +3826,7 @@ function renderProjectFolder(p: ProjectSummary, items: SessionNode[]): HTMLEleme
 		);
 		body.replaceChildren();
 		if (totalPages > 1) body.append(pagination);
-		windowed = renderWindowedSessionList(pageItems);
+		windowed = renderWindowedSessionList(pageItems, p.id, toggleDateGroup);
 		body.append(windowed);
 		if (items.length === 0 && isGlobal) {
 			body.append(el("div", { class: "sidebar-empty" }, "No conversations yet"));
