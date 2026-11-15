@@ -7,7 +7,12 @@
  * five-hour and weekly windows per model group — as a `remainingFraction` plus
  * the reset time.
  *
- * Two backend requirements, both learned from the agent's own source:
+ * Three backend requirements, all learned from the agent's own source:
+ *  - `loadCodeAssist` on `cloudcode-pa.googleapis.com` selects the metered host:
+ *    consumer tiers (Free, Google AI Pro/Ultra) route to
+ *    `daily-cloudcode-pa.googleapis.com`, while GCP-ToS enterprise tiers use
+ *    `cloudcode-pa.googleapis.com`; querying the wrong host returns stale/empty
+ *    counters that miss real usage and Argon exhaustion;
  *  - the `User-Agent` must start with `antigravity/`, because the backend
  *    attributes the caller to ClientType_ANTIGRAVITY from that token and answers
  *    403 "no valid license" otherwise;
@@ -37,7 +42,8 @@ export const INSTALL_FILE = join(
 	"current",
 	"install-integrity.json",
 );
-export const CLOUDCODE_BASE = "https://cloudcode-pa.googleapis.com";
+export const CLOUDCODE_PROD_BASE = "https://cloudcode-pa.googleapis.com";
+export const CLOUDCODE_DAILY_BASE = "https://daily-cloudcode-pa.googleapis.com";
 
 export const ACP_LOG_DIR = "/tmp";
 export const ACP_LOG_PATTERN = /^agy_acp_server\.par\..*\.log\.WARNING\./;
@@ -69,6 +75,13 @@ export interface QuotaGroup {
 
 export interface QuotaSummary {
 	groups?: QuotaGroup[];
+	tierName?: string;
+}
+
+interface LoadCodeAssistResponse {
+	cloudaicompanionProject?: string;
+	currentTier?: { name?: string };
+	paidTier?: { name?: string; usesGcpTos?: boolean };
 }
 
 interface TokenFile {
@@ -130,8 +143,8 @@ async function accessToken(file: string): Promise<string> {
 	return body.access_token;
 }
 
-async function call<T>(method: string, token: string, body: unknown): Promise<T> {
-	const response = await fetch(`${CLOUDCODE_BASE}/v1internal:${method}`, {
+async function call<T>(base: string, method: string, token: string, body: unknown): Promise<T> {
+	const response = await fetch(`${base.replace(/\/+$/, "")}/v1internal:${method}`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${token}`,
@@ -145,22 +158,49 @@ async function call<T>(method: string, token: string, body: unknown): Promise<T>
 	return (await response.json()) as T;
 }
 
+/**
+ * Matches ACP's onboarding routing (`onboard.py`): consumer tiers (Free,
+ * Google AI Pro/Ultra) are metered on `daily-cloudcode-pa.googleapis.com`,
+ * while GCP-ToS enterprise tiers use `cloudcode-pa.googleapis.com`.
+ */
+export function resolveEndpoint(assist: LoadCodeAssistResponse): string {
+	return assist.paidTier?.usesGcpTos ? CLOUDCODE_PROD_BASE : CLOUDCODE_DAILY_BASE;
+}
+
 export async function fetchQuota(file = TOKEN_FILE): Promise<QuotaSummary> {
 	const token = await accessToken(file);
-	const project = readTokenFile(file).project_id;
-	if (project) {
+	const cachedProject = readTokenFile(file).project_id;
+
+	let assist: LoadCodeAssistResponse | undefined;
+	try {
+		assist = await call<LoadCodeAssistResponse>(CLOUDCODE_PROD_BASE, "loadCodeAssist", token, {
+			metadata: { ideType: "ANTIGRAVITY" },
+		});
+	} catch (error) {
+		if (!cachedProject) throw error;
+	}
+
+	const endpoint = assist ? resolveEndpoint(assist) : CLOUDCODE_DAILY_BASE;
+	const tierName = assist?.paidTier?.name || assist?.currentTier?.name;
+
+	let summary: QuotaSummary | undefined;
+	if (cachedProject) {
 		try {
-			return await call<QuotaSummary>("retrieveUserQuotaSummary", token, { project });
+			summary = await call<QuotaSummary>(endpoint, "retrieveUserQuotaSummary", token, {
+				project: cachedProject,
+			});
 		} catch {
-			// Fall through: resolve the project the way the agent does on onboarding.
+			// Fall through to the project resolved by loadCodeAssist.
 		}
 	}
-	const assist = await call<{ cloudaicompanionProject?: string }>("loadCodeAssist", token, {
-		metadata: { pluginType: "GEMINI" },
-	});
-	const resolved = assist.cloudaicompanionProject;
-	if (!resolved) throw new Error("Antigravity reported no Cloud Code project for this account.");
-	return call<QuotaSummary>("retrieveUserQuotaSummary", token, { project: resolved });
+	if (!summary) {
+		const resolved = assist?.cloudaicompanionProject;
+		if (!resolved) throw new Error("Antigravity reported no Cloud Code project for this account.");
+		summary = await call<QuotaSummary>(endpoint, "retrieveUserQuotaSummary", token, {
+			project: resolved,
+		});
+	}
+	return tierName ? { ...summary, tierName } : summary;
 }
 
 export interface QuotaBlock {
@@ -286,7 +326,10 @@ export function formatQuota(
 	now = Date.now() / 1000,
 	blocks = activeBlocks(now),
 ): string[] {
-	const lines = ["**📊 /gemini-usage** — Antigravity (Gemini)"];
+	const header = summary.tierName
+		? `**📊 /gemini-usage** — Antigravity (${summary.tierName})`
+		: "**📊 /gemini-usage** — Antigravity (Gemini)";
+	const lines = [header];
 	const active = blocks.filter((b) => b.resetsAt > now);
 	const matched = new Set<QuotaBlock>();
 
@@ -299,8 +342,10 @@ export function formatQuota(
 					return true;
 				})
 			: [];
-		const advisory = kind === "argon" ? " _— reported only, not what Google enforces_" : "";
-		if (group.displayName) lines.push(`_${group.displayName}_${advisory}`);
+		const hasExhaustedBucket = (group.buckets ?? []).some(
+			(b) => typeof b.remainingFraction === "number" && Math.round(b.remainingFraction * 100) <= 0,
+		);
+		if (group.displayName) lines.push(`_${group.displayName}_`);
 
 		for (const bucket of group.buckets ?? []) {
 			const name = bucket.displayName ?? bucket.window ?? "allowance";
@@ -325,8 +370,11 @@ export function formatQuota(
 			}
 		}
 
-		for (const block of groupBlocks) {
-			lines.push(`⛔ ${block.model}: refused by Google — resets ${resetAt(block.resetsAt, now)}`);
+		// Only show a separate 429 block line if the group's API bucket didn't already report 0%.
+		if (!hasExhaustedBucket) {
+			for (const block of groupBlocks) {
+				lines.push(`⛔ ${block.model}: refused by Google — resets ${resetAt(block.resetsAt, now)}`);
+			}
 		}
 	}
 
