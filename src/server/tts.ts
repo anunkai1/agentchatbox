@@ -17,6 +17,7 @@
  */
 
 import express, { type Request, type Response, type Router } from "express";
+import { KOKORO_ALIGNMENT } from "../shared/kokoro.js";
 import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
 
@@ -149,8 +150,10 @@ export function createTtsRouter(): Router {
 	 * server stays the transport layer; the browser owns chunked playback.
 	 */
 	router.post(
-		"/stream",
+		["/stream", "/relay-stream"],
 		asyncHandler(async (req: Request, res: Response) => {
+			// Relay-only opt-in pipe; ordinary chat streaming never changes format.
+			const aligned = req.path === "/relay-stream";
 			const parsed = parseTtsBody(req);
 			if ("error" in parsed) {
 				res.status(parsed.status).json({ error: parsed.error });
@@ -177,7 +180,10 @@ export function createTtsRouter(): Router {
 			try {
 				upstream = await fetch(`${KOKORO_BASE}/tts/stream`, {
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: {
+						"Content-Type": "application/json",
+						...(aligned ? { "X-Kokoro-Alignment": KOKORO_ALIGNMENT } : {}),
+					},
 					body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed }),
 					signal: clientGone.signal,
 				});
@@ -207,6 +213,16 @@ export function createTtsRouter(): Router {
 				return;
 			}
 
+			if (aligned) {
+				if (upstream.headers.get("X-Kokoro-Alignment") !== KOKORO_ALIGNMENT) {
+					clientGone.abort();
+					res
+						.status(502)
+						.json({ error: "Kokoro synthesis alignment unavailable; no speech fallback" });
+					return;
+				}
+				res.setHeader("X-Kokoro-Alignment", KOKORO_ALIGNMENT);
+			}
 			res.setHeader("Content-Type", "application/octet-stream");
 			res.setHeader("Cache-Control", "no-store");
 			res.setHeader("X-Accel-Buffering", "no"); // defeat any reverse-proxy buffering

@@ -4,15 +4,22 @@ import { RELAY_MESSAGE, type RelayEvent } from "../shared/relay.js";
 import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js";
 import { transcribeAudio } from "./api.js";
 import { el, mountModal, uuid } from "./dom.js";
+import { createKokoroSpeaker, formatKokoroPlayedHistory } from "./kokoro-tts.js";
 import {
 	formatLfmPlayedHistory,
 	type LfmPlayedReport,
 	LfmTtsSpeaker,
+	type LfmTtsSpeakerCallbacks,
 	type LfmUtteranceMetrics,
 } from "./lfm-tts.js";
 import { setRichText } from "./linkify.js";
 import { mountRelayDrawer, type RelayDrawer } from "./relay-drawer.js";
 import { encodeRelayVoice, RelayVoiceFrame } from "./relay-voice.js";
+import {
+	RELAY_VOICE_ENGINE_KEY,
+	type RelayVoiceEngine,
+	resolveRelayVoiceEngine,
+} from "./relay-voice-engine.js";
 import { type RelayChatBinding, services } from "./services.js";
 import { SpokenMarkdown } from "./spoken-markdown.js";
 import { state } from "./state.js";
@@ -57,23 +64,27 @@ const RELAY_SESSION_KEY = "acb-relay-session";
 const TRIAL_SESSION_KEY = "acb-relay-trial-stream-session";
 const TRIAL_ENGINE_KEY = "acb-relay-trial-engine";
 
-export type RelayVoiceEngine = "server4" | "lfm-tts" | "legacy";
+export type { RelayVoiceEngine } from "./relay-voice-engine.js";
 
 export function openRelay(explicitEngine?: RelayVoiceEngine, forceNew = false): void {
-	let engine: RelayVoiceEngine = "server4";
+	let engine = resolveRelayVoiceEngine(undefined, explicitEngine);
 	try {
-		if (explicitEngine) {
-			localStorage.setItem("acb-relay-voice-engine", explicitEngine);
-			engine = explicitEngine;
-		} else {
-			const saved = localStorage.getItem("acb-relay-voice-engine");
-			if (saved === "legacy" || saved === "lfm-tts" || saved === "server4") engine = saved;
-		}
+		engine = resolveRelayVoiceEngine(localStorage.getItem(RELAY_VOICE_ENGINE_KEY), explicitEngine);
+		if (explicitEngine) localStorage.setItem(RELAY_VOICE_ENGINE_KEY, explicitEngine);
 		if (forceNew) localStorage.removeItem(RELAY_SESSION_KEY);
 	} catch {
-		if (explicitEngine) engine = explicitEngine;
+		/* Private mode still honours an explicit engine; no saved chats are migrated. */
 	}
-	openVoiceTest(true, engine === "server4", false, engine === "lfm-tts", undefined, forceNew);
+	if ((explicitEngine || forceNew) && relayUi) relayUi.end();
+	openVoiceTest(
+		true,
+		engine === "server4",
+		false,
+		engine === "lfm-tts",
+		undefined,
+		forceNew,
+		engine === "kokoro",
+	);
 }
 
 export function openRelayTrial(preferLfmTts?: boolean): void {
@@ -98,6 +109,7 @@ export function openVoiceTest(
 	useLfmTts = false,
 	workerStart?: string,
 	forceNew = false,
+	useKokoroTts = false,
 ): void {
 	if (opened) {
 		relayUi?.reveal();
@@ -105,8 +117,10 @@ export function openVoiceTest(
 	}
 	const attached = relay && !streamTrial;
 	useLfmTts = relay && !localVoice && useLfmTts;
+	useKokoroTts = relay && !localVoice && !streamTrial && useKokoroTts;
+	const useSpeechTts = useLfmTts || useKokoroTts;
 	streamTrial = relay && !localVoice && streamTrial;
-	const isStreamingPi = streamTrial || useLfmTts;
+	const isStreamingPi = streamTrial || useSpeechTts;
 	const sessionKey = streamTrial ? TRIAL_SESSION_KEY : RELAY_SESSION_KEY;
 	const control = relay ? "/relay" : "/voicetest";
 	const startCommand = workerStart
@@ -150,13 +164,15 @@ export function openVoiceTest(
 		"p",
 		{},
 		relay
-			? useLfmTts
-				? "Pi + Server4 LFM TTS (speech-only): local STT → full-access Pi/DeepSeek → rendered sentence-streamed LFM TTS, without LFM interpreting requests or rewriting answers. Interrupt stops speech only; Pi work continues. Recognised text and approximate unhinted-ASR played speech are saved; no raw audio archive. Active speech reserves Server4's GPU."
-				: streamTrial
-					? "Isolated trial: local STT → full-access Pi/DeepSeek → sentence-streamed Kokoro, without LFM rewriting the answer. Interrupt stops speech only; work continues. Text goes to Venice/the worker provider; no audio archive. Playback records completed speech segments; the interrupted segment's word boundary is unknown."
-					: localVoice
-						? "Server4 speech + full-access Pi Relay. Interrupt stops voice, not work. Recognised text and approximate played speech are saved; text context goes to Venice/the selected worker provider. No raw audio archive. Voice reserves Server4's GPU."
-						: "Legacy STT/Kokoro Relay with normal owner-level tools and delegation. Closing voice leaves work running; Interrupt can stop direct tools, not workers. Text/tool context go to Venice; raw audio is not saved."
+			? useKokoroTts
+				? "Pi + Server2 Kokoro (default, speech-only): local STT → Pi → synthesis-aligned Kokoro. Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Revert with /relay lfm-tts."
+				: useLfmTts
+					? "Pi + Server4 LFM TTS (speech-only): local STT → full-access Pi/DeepSeek → rendered sentence-streamed LFM TTS, without LFM interpreting requests or rewriting answers. Interrupt stops speech only; Pi work continues. Recognised text and approximate unhinted-ASR played speech are saved; no raw audio archive. Active speech reserves Server4's GPU."
+					: streamTrial
+						? "Isolated trial: local STT → full-access Pi/DeepSeek → sentence-streamed Kokoro, without LFM rewriting the answer. Interrupt stops speech only; work continues. Text goes to Venice/the worker provider; no audio archive. Playback records completed speech segments; the interrupted segment's word boundary is unknown."
+						: localVoice
+							? "Server4 speech + full-access Pi Relay. Interrupt stops voice, not work. Recognised text and approximate played speech are saved; text context goes to Venice/the selected worker provider. No raw audio archive. Voice reserves Server4's GPU."
+							: "Legacy STT/Kokoro Relay with normal owner-level tools and delegation. Closing voice leaves work running; Interrupt can stop direct tools, not workers. Text/tool context go to Venice; raw audio is not saved."
 			: "Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
@@ -226,9 +242,10 @@ export function openVoiceTest(
 			voiceButtons.push(toggleTrial);
 		} else {
 			const choices: Array<[RelayVoiceEngine, string, boolean]> = [
+				["kokoro", "Use Pi + Server2 Kokoro (default, aligned)", !useKokoroTts],
 				["lfm-tts", "Use Pi + LFM TTS (speech-only)", !useLfmTts],
 				["server4", "Use Server4 LFM voice", !localVoice],
-				["legacy", "Use legacy STT/Kokoro", localVoice || useLfmTts],
+				["legacy", "Use legacy STT/Kokoro", localVoice || useSpeechTts],
 			];
 			for (const [targetEngine, label, show] of choices) {
 				if (!show) continue;
@@ -436,8 +453,11 @@ export function openVoiceTest(
 		}
 		metrics.textContent = parts.join(" · ");
 	};
+	const createSpeechSpeaker = useKokoroTts
+		? createKokoroSpeaker
+		: (callbacks: LfmTtsSpeakerCallbacks) => new LfmTtsSpeaker(callbacks);
 	const speaker =
-		!localVoice && !useLfmTts
+		!localVoice && !useSpeechTts
 			? new ConversationSpeaker(
 					() => {
 						if (endedAt)
@@ -451,8 +471,8 @@ export function openVoiceTest(
 					fail,
 				)
 			: null;
-	const lfmSpeaker = useLfmTts
-		? new LfmTtsSpeaker({
+	const lfmSpeaker = useSpeechTts
+		? createSpeechSpeaker({
 				onStatus: (text) => {
 					if (!ending) sayStatus(text);
 				},
@@ -660,10 +680,10 @@ export function openVoiceTest(
 		} catch {
 			/* private mode */
 		}
-		if (useLfmTts) lfmSpeaker?.connect();
+		if (useSpeechTts) lfmSpeaker?.connect();
 		if (relay && (localVoice || isStreamingPi)) {
 			command(`/relay voice-context ${turnId} ${encodeRelayVoice({ text })}`);
-			if (useLfmTts && lfmSpeaker?.hasPendingReports()) {
+			if (useSpeechTts && lfmSpeaker?.hasPendingReports()) {
 				void lfmSpeaker.flushPendingReports(1_500).then(() => {
 					if (!ending && !dismissed && currentTurn === turnId) {
 						command(`/relay voice-request ${turnId} ${encodeRelayVoice({})}`);
@@ -780,7 +800,7 @@ export function openVoiceTest(
 			else {
 				stopCapture = stop;
 				sayStatus("Listening…");
-				if (useLfmTts) lfmSpeaker?.connect();
+				if (useSpeechTts) lfmSpeaker?.connect();
 			}
 		} catch (error) {
 			fail(error);
@@ -815,7 +835,7 @@ export function openVoiceTest(
 			/* private mode */
 		}
 		modal.dismiss();
-		openVoiceTest(true, localVoice, streamTrial, useLfmTts, capturedWorker, true);
+		openVoiceTest(true, localVoice, streamTrial, useLfmTts, capturedWorker, true, useKokoroTts);
 	};
 	form.onsubmit = (event) => {
 		event.preventDefault();
@@ -1024,7 +1044,7 @@ export function openVoiceTest(
 					streamSpeech(relayText);
 				}
 				streamSpeech("", true);
-				if (useLfmTts) {
+				if (useSpeechTts) {
 					if (lfmStartedUtterance === relayMessage) {
 						lfmSpeaker?.finishUtterance();
 					} else if (
@@ -1075,11 +1095,13 @@ export function openVoiceTest(
 	};
 	function showVoiceContext(event: { id: string; user?: string; heard?: string }): void {
 		link.hidden = !link.hasAttribute("href");
-		const heardLabel = useLfmTts
-			? "LFM TTS (approximately played)"
-			: streamTrial
-				? "Voice (playback evidence)"
-				: "LFM (approximately played)";
+		const heardLabel = useKokoroTts
+			? "Kokoro (synthesis-aligned played input; pronunciation not verified)"
+			: useLfmTts
+				? "LFM TTS (approximately played)"
+				: streamTrial
+					? "Voice (playback evidence)"
+					: "LFM (approximately played)";
 		for (const [field, label] of [
 			["user", "You (voice/text)"],
 			["heard", heardLabel],
@@ -1108,7 +1130,7 @@ export function openVoiceTest(
 		if (localVoice || relayMuted || ending || dismissed) return;
 		firstTextMs = relayFirstText;
 		const messageId = relayMessage;
-		if (useLfmTts) {
+		if (useSpeechTts) {
 			if (!lfmSpeaker || !messageId) return;
 			if (lfmStartedUtterance !== messageId) {
 				lfmStartedUtterance = messageId;
@@ -1129,7 +1151,9 @@ export function openVoiceTest(
 		if (!ready || !connected()) return;
 		lfmReportedIds.add(report.utterance);
 		while (lfmReportedIds.size > 40) lfmReportedIds.delete(lfmReportedIds.values().next().value!);
-		const history = formatLfmPlayedHistory(report);
+		const history = useKokoroTts
+			? formatKokoroPlayedHistory(report)
+			: formatLfmPlayedHistory(report);
 		command(`/relay voice-heard ${report.utterance} ${encodeRelayVoice({ text: history })}`);
 	}
 	const playedSegments = new Map<string, string[]>();

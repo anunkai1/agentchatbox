@@ -377,13 +377,15 @@ export function handleSlash(arg: string): void {
 			const forceNew = tokens.includes("new");
 			const engineArg = tokens.find((t) => t !== "new");
 			openRelay(
-				engineArg === "lfm-tts" || engineArg === "lfm"
-					? "lfm-tts"
-					: engineArg === "legacy"
-						? "legacy"
-						: engineArg === "server4"
-							? "server4"
-							: undefined,
+				engineArg === "kokoro" || engineArg === "kokoro-tts"
+					? "kokoro"
+					: engineArg === "lfm-tts" || engineArg === "lfm"
+						? "lfm-tts"
+						: engineArg === "legacy"
+							? "legacy"
+							: engineArg === "server4"
+								? "server4"
+								: undefined,
 				forceNew,
 			);
 			return;

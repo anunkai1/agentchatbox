@@ -1,6 +1,6 @@
 /**
- * Progressive 24 kHz PCM playback and unhinted played-prefix reporting for
- * the speech-only Server4 LFM /tts route (/experiments/lfm-voice/ws?tts=1).
+ * Shared progressive 24 kHz PCM player. Default transport: Server4 LFM /tts
+ * with unhinted ASR retention; Relay's Kokoro adapter supplies synthesis alignment.
  *
  * Transport and browser Web Audio scheduling only: Pi owns prompts, tools,
  * session state, and full formatted Markdown answers.
@@ -21,9 +21,14 @@ const MAX_UTTERANCE_SAMPLES = OUTPUT_RATE * 180;
 export interface LfmPlayedReport {
 	utterance: string;
 	playedMs: number;
+	playedSamples?: number;
 	text: string;
 	complete: boolean;
 	uncertain: boolean;
+	/** Present only for synthesis-aligned transports, never inferred by the player. */
+	alignment?: string;
+	submittedTexts?: string[];
+	issues?: string[];
 }
 
 export interface LfmUtteranceMetrics {
@@ -50,6 +55,16 @@ export class PlayedAudioClock {
 		return this.parts.some(
 			(part) => clockSeconds >= part.start && clockSeconds < part.start + part.duration,
 		);
+	}
+
+	samples(clockSeconds: number, rate = OUTPUT_RATE): number {
+		let total = 0;
+		if (!Number.isFinite(clockSeconds)) return 0;
+		for (const part of this.parts) {
+			total += Math.max(0, Math.min(part.duration, clockSeconds - part.start));
+		}
+		const samples = total * rate;
+		return Math.floor(samples + Number.EPSILON * Math.max(1, samples) * 4);
 	}
 
 	milliseconds(clockSeconds: number): number {
@@ -143,9 +158,27 @@ export interface LfmTtsSpeakerCallbacks {
 	onError: (error: unknown) => void;
 }
 
+/** Normalised player transport. LFM uses a real WebSocket; Kokoro adapts HTTP. */
+export interface TtsTransport {
+	readyState: number;
+	bufferedAmount: number;
+	onmessage: ((event: { data: string | ArrayBuffer }) => void) | null;
+	onerror: (() => void) | null;
+	onclose: (() => void) | null;
+	send(data: string): void;
+	close(): void;
+	playedPrefix?: (
+		epoch: number,
+		samples: number,
+		interrupted: boolean,
+		truncated: boolean,
+	) => Omit<LfmPlayedReport, "utterance">;
+}
+
 export class LfmTtsSpeaker {
 	private context: AudioContext | null = null;
-	private ws: WebSocket | null = null;
+	private ws: TtsTransport | null = null;
+	private alignedReporter: TtsTransport["playedPrefix"];
 	private wsReady = false;
 	private connecting = false;
 	private closed = false;
@@ -164,6 +197,7 @@ export class LfmTtsSpeaker {
 	constructor(
 		private readonly callbacks: LfmTtsSpeakerCallbacks,
 		private readonly wsUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/experiments/lfm-voice/ws?tts=1`,
+		private readonly transportOptions?: { create: () => TtsTransport; label: string },
 	) {}
 
 	private ensureAudioContext(): AudioContext {
@@ -200,9 +234,10 @@ export class LfmTtsSpeaker {
 		this.ensureAudioContext();
 		this.connecting = true;
 		const gen = ++this.connGen;
-		const socket = new WebSocket(this.wsUrl);
-		socket.binaryType = "arraybuffer";
+		const socket = (this.transportOptions?.create() ?? new WebSocket(this.wsUrl)) as TtsTransport;
+		if ("binaryType" in socket) socket.binaryType = "arraybuffer";
 		this.ws = socket;
+		this.alignedReporter = this.ws.playedPrefix?.bind(this.ws);
 
 		socket.onmessage = (event) => {
 			if (gen !== this.connGen || this.closed) return;
@@ -218,10 +253,15 @@ export class LfmTtsSpeaker {
 			}
 			const type = msg.type;
 			if (type === "starting") {
-				if (!this.active) this.callbacks.onStatus("Loading Server4 LFM TTS…");
+				if (!this.active)
+					this.callbacks.onStatus(`Loading ${this.transportOptions?.label ?? "Server4 LFM TTS"}…`);
 			} else if (type === "ready") {
 				if (msg.protocol !== 3 || msg.tts !== 1 || msg.outputRate !== OUTPUT_RATE) {
-					this.failConnection(new Error("Server4 LFM TTS protocol mismatch. Refresh ACB."));
+					this.failConnection(
+						new Error(
+							`${this.transportOptions?.label ?? "Server4 LFM TTS"} player protocol mismatch. Refresh ACB.`,
+						),
+					);
 					return;
 				}
 				this.connecting = false;
@@ -382,7 +422,14 @@ export class LfmTtsSpeaker {
 		utt.segments++;
 		utt.chars += cleaned.length;
 		// Keep each wire segment <= 380 chars to respect server protocol cap (400).
-		const safeText = cleaned.length > 380 ? cleaned.slice(0, 380) : cleaned;
+		const safeText =
+			cleaned.length > 380
+				? cleaned
+						.slice(0, 380)
+						.replace(/[\uD800-\uDBFF]$/, "")
+						.trimEnd()
+				: cleaned;
+		if (safeText !== cleaned && this.transportOptions) utt.truncated = true;
 		utt.queuedForSend.push({ seq, text: safeText });
 		this.flushSendQueue();
 	}
@@ -439,7 +486,10 @@ export class LfmTtsSpeaker {
 		const decoded = decodeFramedPcm16(data);
 		if (!decoded || decoded.epoch !== utt.epoch) return; // Strict epoch fencing!
 		let { samples } = decoded;
-		if (utt.samplesReceived >= MAX_UTTERANCE_SAMPLES) return;
+		if (utt.samplesReceived >= MAX_UTTERANCE_SAMPLES) {
+			utt.truncated = true;
+			return;
+		}
 		if (utt.samplesReceived + samples.length > MAX_UTTERANCE_SAMPLES) {
 			samples = samples.subarray(0, MAX_UTTERANCE_SAMPLES - utt.samplesReceived);
 			utt.truncated = true;
@@ -537,15 +587,33 @@ export class LfmTtsSpeaker {
 			return;
 		}
 		const finished = utt;
-		const playedMs = this.played.milliseconds(this.outputClock());
+		const clock = this.outputClock();
+		const playedMs = this.played.milliseconds(clock);
+		const playedSamples = this.played.samples(clock);
 		this.active = null;
 		this.played.reset();
 		this.nextAt = 0;
-		this.requestPlayedPrefix(finished, playedMs, false);
+		this.requestPlayedPrefix(finished, playedMs, false, playedSamples);
 		this.callbacks.onIdle();
 	}
 
-	private requestPlayedPrefix(utt: ActiveUtterance, playedMs: number, interrupted: boolean): void {
+	private requestPlayedPrefix(
+		utt: ActiveUtterance,
+		playedMs: number,
+		interrupted: boolean,
+		playedSamples?: number,
+	): void {
+		if (this.alignedReporter) {
+			const report = this.alignedReporter(
+				utt.epoch,
+				playedSamples ?? 0,
+				interrupted,
+				utt.truncated,
+			);
+			this.ws?.send(JSON.stringify({ type: interrupted ? "cancel" : "played", epoch: utt.epoch }));
+			utt.onReport({ ...report, utterance: utt.id });
+			return;
+		}
 		if (!utt.sentAny || !this.wsReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
 			utt.onReport({
 				utterance: utt.id,
@@ -591,11 +659,15 @@ export class LfmTtsSpeaker {
 	private abortActiveLocally(disconnected: boolean): void {
 		const utt = this.active;
 		if (!utt) return;
-		const playedMs = this.played.milliseconds(this.outputClock());
+		const clock = this.outputClock();
+		const playedMs = this.played.milliseconds(clock);
+		const playedSamples = this.played.samples(clock);
 		this.stopAudioNodes();
 		this.played.reset();
 		this.active = null;
-		if (disconnected) {
+		if (this.alignedReporter) {
+			this.requestPlayedPrefix(utt, playedMs, true, playedSamples);
+		} else if (disconnected) {
 			utt.onReport({
 				utterance: utt.id,
 				playedMs,

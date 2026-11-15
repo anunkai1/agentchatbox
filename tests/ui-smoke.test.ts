@@ -2802,8 +2802,86 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("defaults Relay to aligned Kokoro without Server4 and preserves explicit LFM reversion", async () => {
+		const { page } = await openPage("/");
+		const prompts: string[] = [],
+			controls: string[] = [];
+		let server4Connections = 0;
+		await page.routeWebSocket(/\/experiments\/lfm-voice\/ws\?tts=1$/, (ws) => {
+			server4Connections++;
+			ws.send(JSON.stringify({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 0 }));
+		});
+		await relayChatFixture(page, (ws) =>
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init")
+					ws.send(JSON.stringify({ type: "ready", sessionId: "kokoro-default-session" }));
+				else if (message.type === "getCapabilities")
+					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
+				else if (message.type === "prompt") {
+					prompts.push(message.text);
+					if (message.text.startsWith("/relay start"))
+						ws.send(
+							JSON.stringify({
+								type: "event",
+								event: {
+									type: "message_end",
+									message: {
+										role: "custom",
+										customType: "acb-relay",
+										details: {
+											kind: "ready",
+											model: "fixture",
+											workerModel: { provider: "venice", modelId: "fixture", thinkingLevel: "off" },
+										},
+									},
+								},
+							}),
+						);
+				} else controls.push(message.type);
+			}),
+		);
+		try {
+			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
+			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
+			expect(await dialog.locator("iframe").count()).toBe(0);
+			expect(server4Connections).toBe(0);
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBeNull();
+			await send(page, "/relay lfm-tts");
+			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.innerText()).toContain("LFM reads the replies aloud");
+			// The speech-only socket stays lazy until there is speech to synthesise.
+			expect(server4Connections).toBe(0);
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
+				"lfm-tts",
+			);
+			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
+			await send(page, "/relay");
+			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.innerText()).toContain("LFM reads the replies aloud");
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
+				"lfm-tts",
+			);
+			await send(page, "/relay kokoro");
+			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
+				"kokoro",
+			);
+			expect(controls).not.toContain("abort");
+			expect(prompts).not.toContain("/relay cancel");
+			expect(prompts.some((text) => text.startsWith("/relay stop-job"))).toBe(false);
+			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("connects Server4 voice to Relay without aborting work or trusting other windows", async () => {
 		const { page } = await openPage("/");
+		// Server4 is an explicit preserved choice, no longer the unset default.
+		await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "server4"));
 		const prompts: string[] = [],
 			controls: string[] = [],
 			inits: Record<string, unknown>[] = [];

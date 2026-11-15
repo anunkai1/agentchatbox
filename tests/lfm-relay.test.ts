@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LfmRelay, VOICE_REQUEST } from "../extensions/voice-test/lfm.js";
+import { LfmRelay, VOICE_CONTEXT, VOICE_REQUEST } from "../extensions/voice-test/lfm.js";
+import { formatKokoroPlayedHistory } from "../src/client/kokoro-tts.js";
 
 let root = "";
 beforeEach(() => {
@@ -46,6 +47,29 @@ function harness(manager = SessionManager.create(tmpdir(), root)) {
 }
 
 describe("local LFM hand-off inside Pi Relay", () => {
+	it("persists synthesis-aligned played input verbatim in data.heard, never as a new request", async () => {
+		const h = harness();
+		await h.handle("voice-context", "owner-turn", { text: "Say Relay." });
+		const heard = formatKokoroPlayedHistory({
+			utterance: "kokoro-turn",
+			playedMs: 900,
+			text: "Relay",
+			complete: false,
+			uncertain: false,
+		});
+		await h.handle("voice-heard", "kokoro-turn", { text: heard });
+		expect(
+			h.ctx.sessionManager
+				.getBranch()
+				.findLast((entry) => entry.type === "custom" && entry.customType === VOICE_CONTEXT),
+		).toMatchObject({ data: { heard } });
+		const restored = harness(SessionManager.open(h.ctx.sessionManager.getSessionFile()!));
+		restored.voice.restore(restored.ctx as never);
+		expect(restored.voice.history()).toContain("Kokoro synthesis alignment");
+		expect(restored.voice.history()).toContain("Relay");
+		expect(restored.voice.history()).not.toContain("Riley");
+		expect(restored.pi.sendUserMessage).not.toHaveBeenCalled();
+	});
 	it("persists recognised speech and played context without starting work or treating history as approval", async () => {
 		const h = harness();
 		await h.handle("voice-heard", "turn-one", { text: "" }); // Zero-audio tool call can finish before ASR.

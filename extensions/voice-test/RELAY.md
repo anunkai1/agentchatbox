@@ -26,9 +26,15 @@ integration or standing proactive mandate is installed.
    use native Pi, not the originating chat's `/cc` mode. Antigravity automation
    is deliberately unavailable under the current provider mandate: choose a
    different work model before starting a new Relay conversation.
-3. The default when unset is **Server4 LFM voice** (`acb-relay-voice-engine = "server4"`).
-   Start conversation in the embedded voice panel, allow the microphone and wait
-   for Listening; headphones help. Server4 must be awake with its GPU free.
+3. The default when unset is **Pi + Server2 Kokoro (speech-only, aligned)**
+   (`acb-relay-voice-engine = "kokoro"`, or `/relay kokoro`). Browser Silero VAD +
+   Server2 Fluid Speech Pro STT → full-access Pi → rendered `SpokenMarkdown`
+   sentences → the existing Server2 Kokoro service, with synthesis-token timings.
+   No Server4, GPU voice session or ASR listen-back is used in this mode.
+   Saved explicit `server4`, `lfm-tts` and `legacy` selections are preserved.
+   **Use Server4 LFM voice** (`"server4"`, or `/relay server4`) keeps the embedded
+   voice panel; start conversation, allow the microphone and wait for Listening.
+   Server4 must be awake with its GPU free. Headphones help in all modes.
    **Use Pi + LFM TTS (speech-only)** (`"lfm-tts"`, or `/relay lfm-tts`) uses
    local browser Silero VAD + `/api/transcribe` (Server2 Fluid Speech Pro STT) → full-access
    Pi/DeepSeek → rendered `SpokenMarkdown` sentence streaming → progressive 24 kHz
@@ -55,8 +61,8 @@ integration or standing proactive mandate is installed.
    with a persistent microphone/status strip, **Pause voice** / **Resume voice**,
    and **End voice**. Press **R** or the strip to reopen controls. There is no second transcript or text box: recognised
    speech, typed input, streamed full answers and tool activity share the normal
-   chat timeline and connection. Approximate played speech is separate, collapsible
-   evidence; it never replaces the full saved answer. Reading earlier messages does
+   chat timeline and connection. Played-speech evidence is separate and collapsible:
+   synthesis-aligned in Kokoro, approximate ASR in LFM. Neither replaces the full saved answer. Reading earlier messages does
    not pull the page away. Legacy **Interrupt** retains its existing direct-turn
    abort behaviour.
    Browser STT modes allow about 0.5 seconds of quiet before recognition. If you
@@ -77,7 +83,7 @@ integration or standing proactive mandate is installed.
    ask only when scope or destination is genuinely unclear.
 4. Talk while the worker runs. Ask for status or send further instructions.
    Worker reports wake Relay; needs-input questions come back to this chat.
-5. In **Server4 LFM voice** and **Pi + LFM TTS (speech-only)** modes, speaking
+5. In **Pi + Server2 Kokoro**, **Server4 LFM voice** and **Pi + LFM TTS (speech-only)** modes, speaking
    over a reply or **Interrupt** stops speech only: **Pi direct tools and workers
    continue**. In `Pi + LFM TTS (speech-only)`, the full formatted Markdown reply
    stays visible in chat while Server4's CPU Fluid Speech Pro transcribes only
@@ -108,7 +114,7 @@ integration or standing proactive mandate is installed.
 
 ## Formatted replies and speech
 
-Normal Relay's legacy Kokoro and Pi + LFM TTS routes both render Markdown before
+Normal Relay's aligned Kokoro, legacy Kokoro and Pi + LFM TTS routes render Markdown before
 sentence splitting. Headings, emphasis, lists and links stay formatted in the
 panel, while synthesis receives readable prose rather than literal Markdown
 markers or link destinations. Split/incomplete formatting is buffered. A later
@@ -116,6 +122,40 @@ revision to already-emitted speech stops remaining audio rather than replaying
 or guessing. Restored replies render silently; saved Pi answers are unchanged.
 This formatting behaviour does not change the legacy cancellation differences
 above or select a different voice/engine.
+
+## Kokoro synthesis-aligned playback history
+
+Relay alone uses `/api/tts/relay-stream`, which negotiates
+`X-Kokoro-Alignment: kokoro-pred-dur-v1` with the existing loopback 8181 service.
+Normal chat TTS, legacy Relay, `/voicetest`, KidStories and Lappy remain unchanged.
+Each 380-character-capped synthesis request supplies exact `submittedText`,
+24 kHz sample offsets and per-token end samples before its WAV chunks. Multiple
+requests accumulate on the same progressive player's output clock; queued or
+half-played words are not retained. Zero-play records no spoken text.
+
+`voice_context.data.heard` says **Kokoro synthesis alignment**, retains only completed
+input tokens, and explicitly says pronunciation and hearing are not verified.
+This is model-duration alignment of synthesis input, not ASR, acoustic verification
+or proof the owner heard it. Full Markdown remains in the ordinary Pi transcript.
+Truncation, missing/inconsistent mappings, missing negotiation and stream failures
+are labelled incomplete/uncertain; no proportional timing, whole-answer fallback,
+automatic resubmission or tool/worker cancellation is introduced. The interruption
+tick remains gated on actual output-clock playback.
+
+Current strict limitation: backend token text can omit meaningful punctuation
+(e.g. `$` in `It costs $5.00.` or `]` in `[code block]`). That chunk is rejected
+before playback rather than guessing a value or mapping; previously validated,
+actually played words can still be retained honestly. Read the full chat or
+explicitly select another engine. `/relay lfm-tts` is the one-step reversion;
+`/relay kokoro` returns to aligned Kokoro without changing the saved conversation.
+
+Manual check: request `Hello world.`, interrupt between the end of `Hello` and
+`world`, and inspect the collapsible played record. Only `Hello` should remain,
+labelled synthesis alignment, while the full answer and any Pi work remain intact.
+Repeat at zero playback and with an unsupported mapping: no invented words or
+confirmation. The opt-in `KOKORO_LIVE=1` test uses the deployed backend with a
+**simulated** browser output clock and verifies persisted Pi context; it does not
+claim an acoustic/headphone check.
 
 ## Isolated streaming trial
 
@@ -215,7 +255,10 @@ Existing docs are the map; live checks establish present facts.
 
 ## Audio and retention
 
-**Default:** LFM3-Audio-2B speech understanding/generation and CPU Fluid Speech Pro ONNX (`int8`)
+**Default:** Server2 STT → Pi → Kokoro synthesis-aligned speech, as detailed above;
+no Server4 voice/GPU session and no audio ASR listen-back.
+
+**Optional Server4 voice:** LFM3-Audio-2B speech understanding/generation and CPU Fluid Speech Pro ONNX (`int8`)
 run on Server4. Fluid Speech Pro separately recognises owner input for Pi and aligns actual
 output audio for approximate played-prefix history. Every owner utterance routes
 through `relay_request` to Pi (`local_chat` is disabled so LFM never guesses
@@ -236,13 +279,13 @@ native audio turn, or guarantee the last unacknowledged words were saved. The
 original Server4 conversational voice connection has 30-second input/30-turn/10-minute
 limits (separate from browser-STT Relay's two-minute input bound); ending it does not
 end Pi work. It reserves Server4's GPU: Qwen/local image work cannot coexist.
-Choose cloud work or end voice/use legacy before work needing that GPU.
+Choose cloud work or end voice/use Kokoro before work needing that GPU.
 
 **Legacy** shares `/voicetest`'s STT, Silero VAD and sentence-streamed Kokoro.
 `/voicetest` itself is unchanged. Text context/direct tools go to Venice and
 delegated context to the selected worker provider; even local voice history may
 be included in a later work turn. Existing credential/PII confirmation rules
-still apply. Raw audio is not archived. Recognised text, approximate played text,
+still apply. Raw audio is not archived. Recognised text, labelled playback evidence,
 normal Pi transcripts, checkpoints and worker reports persist in ordinary private
 sessions, with no automatic expiry; backups may retain deleted sessions. Generated
 text is not proof of playback or acoustic hearing. Closing is not a summary request.
