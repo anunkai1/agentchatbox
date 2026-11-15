@@ -3,7 +3,7 @@
  *
  * Proxies to the resident pi-stt-server daemon instead of shelling out to a
  * per-request faster-whisper process (the old path reloaded the model from
- * disk for every voice note). Engine selection (multilingual Qwen3-ASR by default)
+ * disk for every voice note). Engine selection (Fluid Speech Pro ONNX int8 by default)
  * lives inside the daemon; this router owns only which daemons to try:
  *
  *   STT_PRIMARY_URL   default http://127.0.0.1:8182 — primary pi-stt-server daemon
