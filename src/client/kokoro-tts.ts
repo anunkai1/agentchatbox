@@ -82,11 +82,8 @@ export function validateKokoroAlignment(
 		m.startSample !== offset ||
 		!Number.isSafeInteger(m.endSample) ||
 		m.endSample <= offset ||
-		m.alignmentComplete !== true ||
 		!Array.isArray(m.unalignedTokens) ||
-		m.unalignedTokens.length ||
 		!Array.isArray(m.words) ||
-		!m.words.length ||
 		typeof m.text !== "string"
 	)
 		throw new Error("Missing or unreliable Kokoro synthesis alignment");
@@ -106,18 +103,33 @@ export function validateKokoroAlignment(
 			throw new Error("Invalid Kokoro word sample range");
 		end = word.endSample;
 	}
-	if (
-		m.words
-			.map((word) => word.text + word.whitespace)
-			.join("")
-			.trim() !== m.text.trim()
-	)
-		throw new Error("Kokoro token text does not match its synthesis chunk");
 	return m;
 }
 
+/** Reconcile presentation only, never currency, numeric expansion or new words. */
+export function hasReliableKokoroWords(m: KokoroAlignment): boolean {
+	if (m.alignmentComplete !== true || m.unalignedTokens.length || !m.words.length) return false;
+	const space = (text: string) => text.replace(/\s+/gu, " ").trim();
+	const tokens = m.words.map((word) => word.text + word.whitespace).join("");
+	if (space(tokens) === space(m.text)) return true;
+	// Brackets/quotes are separators, not deletions that could fuse two words.
+	// Numeric/symbol-bearing chunks stay strict: punctuation can change a value.
+	if (/[\p{N}$%+*=<>/−-]/u.test(m.text + tokens)) return false;
+	const sequence = (text: string) =>
+		(
+			text.replace(/[[\](){}"“”]/gu, " ").match(/[\p{L}\p{M}]+(?:['’][\p{L}\p{M}]+)*|[^\s]/gu) ?? []
+		).join("\0");
+	return sequence(tokens) === sequence(m.text);
+}
+
+interface TimedChunk {
+	startSample: number;
+	endSample: number;
+	words: KokoroWord[] | null;
+}
+
 interface Ledger {
-	words: KokoroWord[];
+	chunks: TimedChunk[];
 	submitted: string[];
 	samples: number;
 	finished: boolean;
@@ -151,7 +163,7 @@ export function formatKokoroPlayedHistory(report: LfmPlayedReport): string {
 		const prefix = text
 			? `${omitted ? "[Earlier completed input words omitted] " : ""}${text}`
 			: "none";
-		return `Kokoro synthesis alignment (${report.playedMs} ms played, ${state}${report.uncertain ? "; incomplete/uncertain" : ""}${issues}): ${prefix}\nPronunciation not verified; playback is not proof the owner heard it. Only input tokens whose end sample passed the output clock are retained. ${(report.playedSamples ?? report.playedMs) <= 0 ? "No generated speech was played. " : ""}Do not assume remaining generated text was played. Tools/workers continue.`;
+		return `Kokoro synthesis alignment (${report.playedMs} ms played, ${state}${report.uncertain ? "; incomplete/uncertain" : ""}${issues}): ${prefix}\nPronunciation not verified; playback is not proof the owner heard it. Only timed input tokens whose end sample passed the output clock are retained; bracketed UNKNOWN entries describe gaps, not spoken text. ${(report.playedSamples ?? report.playedMs) <= 0 ? "No generated speech was played. " : ""}Do not assume remaining generated text was played. Tools/workers continue.`;
 	};
 	let formatted = build();
 	while (
@@ -189,7 +201,7 @@ export class KokoroTtsTransport implements TtsTransport {
 		if (msg.type === "speak") {
 			if (!ledger) {
 				ledger = {
-					words: [],
+					chunks: [],
 					submitted: [],
 					samples: 0,
 					finished: false,
@@ -223,10 +235,22 @@ export class KokoroTtsTransport implements TtsTransport {
 		if (truncated)
 			issues.push("voice input/audio truncated; full chat text was not synthesised/played");
 		const samples = Math.max(0, Math.min(playedSamples, ledger?.samples ?? 0));
+		const playedChunks = (ledger?.chunks ?? []).filter((chunk) => chunk.startSample < samples);
+		const unknown = playedChunks.filter((chunk) => chunk.words === null);
+		if (unknown.length)
+			issues.push(`words unknown for ${unknown.length} played chunk(s); no inferred words`);
+		const text = playedChunks
+			.map((chunk) =>
+				chunk.words
+					? completedKokoroWords(chunk.words, samples)
+					: `[UNKNOWN_WORDS:audio_samples=${chunk.startSample}–${Math.min(samples, chunk.endSample)}]`,
+			)
+			.filter(Boolean)
+			.join(" ");
 		return {
 			playedMs: Math.floor((samples * 1000) / RATE),
 			playedSamples: samples,
-			text: completedKokoroWords(ledger?.words ?? [], samples),
+			text,
 			complete: !interrupted && !truncated && ledger?.finished === true && !issues.length,
 			uncertain: issues.length > 0,
 			alignment: KOKORO_ALIGNMENT,
@@ -319,16 +343,17 @@ export class KokoroTtsTransport implements TtsTransport {
 						const pcm = kokoroWavPcm(frame.payload);
 						if (metadata.endSample - metadata.startSample !== pcm.length / 2)
 							throw new Error("Kokoro timing/audio sample count mismatch");
-						const previous = ledger.words.at(-1);
-						// Separate validated chunks/requests for display; never add words.
-						if (previous && !previous.whitespace) previous.whitespace = " ";
-						ledger.words.push(
-							...metadata.words.map((word) => ({
-								...word,
-								startSample: base + word.startSample,
-								endSample: base + word.endSample,
-							})),
-						);
+						ledger.chunks.push({
+							startSample: base + metadata.startSample,
+							endSample: base + metadata.endSample,
+							words: hasReliableKokoroWords(metadata)
+								? metadata.words.map((word) => ({
+										...word,
+										startSample: base + word.startSample,
+										endSample: base + word.endSample,
+									}))
+								: null,
+						});
 						remaining = remaining.slice(matchedChunk.length).trimStart();
 						offset += pcm.length / 2;
 						ledger.samples += pcm.length / 2;

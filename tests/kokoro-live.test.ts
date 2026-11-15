@@ -158,8 +158,8 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 			);
 			expect(voice.history()).toContain("900 ms played");
 			expect(pi.sendUserMessage).not.toHaveBeenCalled();
-			// Current backend omits the currency symbol from token text. Refuse
-			// that mapping rather than fabricate a monetary value in the record.
+			// Current backend omits the currency symbol. Continue audio, but never
+			// fabricate a monetary value or lose the surrounding known history.
 			speaker.close();
 			const unavailable = vi.fn();
 			let uncertain: LfmPlayedReport | undefined;
@@ -171,11 +171,49 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 			speaker.beginUtterance("unreliable-price", 0, (value) => {
 				uncertain = value;
 			});
+			const queued = audio.nodes.length;
 			speaker.enqueueSegment("It costs $5.00.");
 			speaker.finishUtterance();
-			await vi.waitFor(() => expect(unavailable).toHaveBeenCalledOnce(), { timeout: 30000 });
-			expect(uncertain).toMatchObject({ text: "", playedMs: 0, complete: false, uncertain: true });
-			expect(uncertain?.issues?.join(" ")).toContain("token text");
+			await vi.waitFor(() => expect(audio.nodes.length).toBeGreaterThan(queued), {
+				timeout: 30000,
+			});
+			audio.currentTime = audio.outputStampTime = audio.nodes.at(-1)!.startedAt + 0.9;
+			speaker.stop();
+			expect(unavailable).not.toHaveBeenCalled();
+			expect(uncertain).toMatchObject({ playedMs: 900, complete: false, uncertain: true });
+			expect(uncertain?.text).toContain("UNKNOWN_WORDS");
+			expect(uncertain?.text).not.toContain("5.00");
+			await voice.handle(
+				"voice-heard",
+				"unreliable-price",
+				encode({ text: formatKokoroPlayedHistory(uncertain!) }),
+				ctx as never,
+			);
+			expect(voice.history()).toContain("UNKNOWN_WORDS");
+			speaker.close();
+			let bracket: LfmPlayedReport | undefined;
+			speaker = new LfmTtsSpeaker(
+				{ onStatus() {}, onPlaying() {}, onIdle() {}, onError: unavailable },
+				"",
+				{ create: () => new KokoroTtsTransport(endpoint), label: "Server2 Kokoro" },
+			);
+			speaker.beginUtterance("omitted-bracket", 0, (value) => {
+				bracket = value;
+			});
+			const beforeBracket = audio.nodes.length;
+			speaker.enqueueSegment("[code block]");
+			speaker.finishUtterance();
+			await vi.waitFor(() => expect(audio.nodes.length).toBeGreaterThan(beforeBracket), {
+				timeout: 30000,
+			});
+			audio.currentTime = audio.outputStampTime = audio.nodes.at(-1)!.startedAt + 0.9;
+			speaker.stop();
+			expect(bracket).toMatchObject({
+				text: "[code",
+				uncertain: false,
+				submittedTexts: ["[code block]"],
+			});
+			expect(unavailable).not.toHaveBeenCalled();
 			expect(
 				network.every(
 					(url) =>

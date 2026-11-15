@@ -137,17 +137,24 @@ half-played words are not retained. Zero-play records no spoken text.
 input tokens, and explicitly says pronunciation and hearing are not verified.
 This is model-duration alignment of synthesis input, not ASR, acoustic verification
 or proof the owner heard it. Full Markdown remains in the ordinary Pi transcript.
-Truncation, missing/inconsistent mappings, missing negotiation and stream failures
-are labelled incomplete/uncertain; no proportional timing, whole-answer fallback,
-automatic resubmission or tool/worker cancellation is introduced. The interruption
-tick remains gated on actual output-clock playback.
+Truncation, unknown mappings, missing negotiation and stream failures are labelled
+incomplete/uncertain; no proportional timing, whole-answer fallback, automatic
+resubmission or tool/worker cancellation is introduced. The interruption tick
+remains gated on actual output-clock playback.
 
-Current strict limitation: backend token text can omit meaningful punctuation
-(e.g. `$` in `It costs $5.00.` or `]` in `[code block]`). That chunk is rejected
-before playback rather than guessing a value or mapping; previously validated,
-actually played words can still be retained honestly. Read the full chat or
-explicitly select another engine. `/relay lfm-tts` is the one-step reversion;
-`/relay kokoro` returns to aligned Kokoro without changing the saved conversation.
+Backend token text can omit punctuation even when `alignmentComplete` is true:
+`[code block]` yields `[code block`, and `It costs $5.00.` yields `It costs 5.00.`.
+Reconciliation tolerates whitespace plus decorative brackets/quotes around the
+same word sequence, but never changes number spellings, currency, signs or words.
+The record uses returned token text, never reconstructed chat/source text.
+Unreconciled or explicitly incomplete chunks still play validated PCM; only their
+actually played sample span is marked `[UNKNOWN_WORDS:audio_samples=…]`.
+Known completed tokens before and after that gap remain available; queued unknown
+chunks do not taint a prefix that has not reached them. Unknown markers are
+annotations, not claimed speech or confirmations. Invalid protocol/sample ranges,
+wrong submitted input or malformed WAV still fail safely and preserve prior
+playback evidence. Read full chat for any unknown value. `/relay lfm-tts` is the
+one-step reversion; `/relay kokoro` returns without changing the saved conversation.
 
 Manual check: request `Hello world.`, interrupt between the end of `Hello` and
 `world`, and inspect the collapsible played record. Only `Hello` should remain,
