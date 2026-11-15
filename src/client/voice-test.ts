@@ -25,6 +25,12 @@ import {
 } from "./voice.js";
 
 let opened = false;
+let voiceActive = false;
+
+/** Playback ownership, not historical Relay membership or drawer visibility. */
+export function isVoiceTestActive(): boolean {
+	return voiceActive;
+}
 let relayUi: { reveal(): void; end(): void; prepareTyped(): boolean } | null = null;
 
 export function endRelayVoice(): void {
@@ -132,6 +138,7 @@ export function openVoiceTest(
 	let sessionId = savedSession;
 	let capturedWorker: string | undefined;
 	opened = true;
+	voiceActive = true;
 	cancelVoiceRecord();
 	stopAllVoice();
 	const heading = el(
@@ -532,6 +539,7 @@ export function openVoiceTest(
 	const end = () => {
 		if (ending) return;
 		ending = true;
+		voiceActive = false;
 		releaseMic();
 		speaker?.stop();
 		lfmSpeaker?.disconnect();

@@ -128,7 +128,12 @@ import {
 } from "./voice.js";
 import { nextVoiceMode, VOICE_MODE_DESCRIPTIONS } from "./voice-mode.js";
 import { isVoiceFailureNotice, pendingReplyText, voiceableReplyStamp } from "./voice-pending.js";
-import { endRelayVoice, isVoiceTestOpen, prepareRelayTypedInput } from "./voice-test.js";
+import {
+	endRelayVoice,
+	isVoiceTestActive,
+	isVoiceTestOpen,
+	prepareRelayTypedInput,
+} from "./voice-test.js";
 import { createChatClient } from "./ws.js";
 
 // ---------------------------------------------------------------------------
@@ -424,13 +429,7 @@ let lastAutoVoicedStamp: number | null = null;
  * listened to (their Long button still works).
  */
 function autoVoiceReply(stamp: number | null): void {
-	if (
-		state.voiceMode !== "reply" ||
-		sessionSwitch ||
-		state.compaction ||
-		isVoiceTestOpen() ||
-		(state.sessionId !== null && relaySessions.has(state.sessionId))
-	)
+	if (state.voiceMode !== "reply" || sessionSwitch || state.compaction || isVoiceTestActive())
 		return;
 	if (document.visibilityState !== "visible") return;
 	if (stamp === null || stamp === lastAutoVoicedStamp) return;
