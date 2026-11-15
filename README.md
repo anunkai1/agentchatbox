@@ -28,7 +28,7 @@ Browser (vanilla DOM, no framework)
   │  WS /api/chat       — bidirectional: init handshake, prompts ↔ pi events
   │  POST /api/upload   — multipart file upload
   │  GET  /api/file    — download a regular file the owner-level agent can read
-  │  POST /api/transcribe — audio → text (Whisper)
+  │  POST /api/transcribe — audio → text (Fluid Speech Pro via pi-stt-server)
   │  POST /api/tts      — text → audio (Kokoro)
   │  GET  /api/models   — list of models with configured API keys
   │  GET  /api/sessions — list pi sessions for the server's cwd

@@ -2,7 +2,7 @@
  * Voice-note transcription endpoint.
  *
  * Proxies to the resident pi-stt-server daemon instead of shelling out to a
- * per-request faster-whisper process (the old path reloaded the model from
+ * per-request faster-whisper process (the retired path reloaded the model from
  * disk for every voice note). Engine selection (Fluid Speech Pro ONNX int8 by default)
  * lives inside the daemon; this router owns only which daemons to try:
  *
