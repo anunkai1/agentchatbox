@@ -468,14 +468,14 @@ export function openVoiceTest(
 	const command = (text: string) => {
 		if (connected()) sendWire({ type: "prompt", text });
 	};
-	const cancelAudio = () => {
+	const cancelAudio = (acknowledge = false) => {
 		pausedSpeechMessage = "";
 		if (relay && localVoice) {
 			localFrame?.interrupt();
 			return;
 		}
 		speaker?.stop();
-		lfmSpeaker?.stop();
+		lfmSpeaker?.stop(acknowledge);
 		lfmStartedUtterance = "";
 		currentTurn = "";
 		if (ready && !ending) {
@@ -718,8 +718,7 @@ export function openVoiceTest(
 		try {
 			const stop = await captureConversation(
 				() => {
-					cancelAudio();
-					lfmSpeaker?.acknowledgeInterruption();
+					cancelAudio(true);
 					sayStatus("Hearing speech — keep talking…");
 				},
 				(turn) => {
@@ -783,8 +782,7 @@ export function openVoiceTest(
 		}
 	};
 	interrupt.onclick = () => {
-		cancelAudio();
-		lfmSpeaker?.acknowledgeInterruption();
+		cancelAudio(true);
 		sayStatus(stopCapture ? "Listening…" : "Interrupted");
 	};
 	stopPi.onclick = () => {

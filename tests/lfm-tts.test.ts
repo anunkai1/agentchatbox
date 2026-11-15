@@ -128,51 +128,64 @@ describe("LFM speech-only TTS client primitives", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("acknowledges locally without TTS readiness, throttles ticks and skips locked audio", () => {
+	it("ticks only when running TTS is audible, never for idle input or pending audio", () => {
 		const speaker = new LfmTtsSpeaker(
 			{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: vi.fn() },
 			"wss://example.test/tts",
 		);
-		speaker.acknowledgeInterruption(); // No context/unlock yet.
+		speaker.stop(true);
 		expect(FakeAudioContext.instances).toHaveLength(0);
-		speaker.connect(); // No server ready message needed.
+		speaker.connect();
 		const ctx = FakeAudioContext.instances[0];
-		const now = vi.spyOn(performance, "now").mockReturnValue(100);
-		speaker.acknowledgeInterruption();
+		const ws = FakeWebSocket.instances[0];
+		ws.receiveJson({ type: "ready", protocol: 3, tts: 1, outputRate: 24_000 });
+		speaker.stop(true); // Ordinary mic speech start / idle manual Interrupt.
+		expect(ctx.nodes).toHaveLength(0);
+		speaker.beginUtterance("waiting", 0, vi.fn());
+		speaker.stop(true);
+		expect(ctx.nodes).toHaveLength(0);
+
+		const play = (id: string) => {
+			speaker.beginUtterance(id, 0, vi.fn());
+			speaker.enqueueSegment("A sentence.");
+			const begin = ws.sent.filter((msg) => msg.type === "speak").at(-1)!;
+			ws.receiveBinary(encodePcmFrame(begin.epoch as number, Array(4_800).fill(0.1)));
+		};
+		play("scheduled");
 		expect(ctx.nodes).toHaveLength(1);
-		expect(ctx.nodes[0].buffer?.duration).toBe(0.03);
-		expect(ctx.nodes[0].startedAt).toBe(ctx.currentTime);
-		speaker.stop();
-		expect(ctx.nodes[0].stopped).toBe(false);
-		expect(speaker.hasAudio).toBe(false);
-		expect(speaker.hasPendingReports()).toBe(false);
-		now.mockReturnValue(900);
-		speaker.acknowledgeInterruption();
+		speaker.stop(true); // Scheduled 25 ms ahead, not yet audible.
 		expect(ctx.nodes).toHaveLength(1);
-		now.mockReturnValue(1100);
-		speaker.acknowledgeInterruption();
-		expect(ctx.nodes).toHaveLength(2);
+		play("audible");
+		ctx.currentTime = ctx.outputStampTime = 1.1;
+		speaker.stop(true);
+		expect(ctx.nodes).toHaveLength(3); // Two TTS nodes, one tick.
+		expect(ctx.nodes[1].stopped).toBe(true);
+		expect(ctx.nodes[2].buffer?.duration).toBe(0.03);
+		expect(ctx.nodes[2].startedAt).toBe(ctx.currentTime);
+		speaker.stop(true); // Tick is not itself assistant speech.
+		expect(ctx.nodes).toHaveLength(3);
+		expect(ctx.nodes[2].stopped).toBe(false);
+		play("rapid-second-interruption");
+		ctx.currentTime = ctx.outputStampTime = 1.15;
+		speaker.stop(true);
+		expect(ctx.nodes).toHaveLength(4); // A real second barge-in is still rate-limited.
+		play("suspended");
+		ctx.currentTime = ctx.outputStampTime = 1.2;
 		ctx.state = "suspended";
-		now.mockReturnValue(2200);
-		speaker.acknowledgeInterruption();
-		expect(ctx.nodes).toHaveLength(2);
-		ctx.state = "running";
-		const create = vi.spyOn(ctx, "createBufferSource").mockImplementation(() => {
-			throw new Error("Audio unavailable");
-		});
-		expect(() => speaker.acknowledgeInterruption()).not.toThrow();
-		create.mockRestore();
-		speaker.close();
-		now.mockReturnValue(3300);
-		speaker.acknowledgeInterruption();
-		expect(ctx.nodes).toHaveLength(2);
-		now.mockRestore();
+		speaker.stop(true);
+		expect(ctx.nodes).toHaveLength(5);
 	});
 
 	it("tracks output-clock playback milliseconds across scheduled chunks", () => {
 		const clock = new PlayedAudioClock();
 		clock.add(1.0, 0.5);
 		clock.add(1.5, 0.5);
+		expect(clock.isPlaying(0.9)).toBe(false);
+		expect(clock.isPlaying(1.0)).toBe(true);
+		expect(clock.isPlaying(1.75)).toBe(true);
+		expect(clock.isPlaying(2.0)).toBe(false);
+		clock.add(3.0, 0.5);
+		expect(clock.isPlaying(2.5)).toBe(false);
 		expect(clock.milliseconds(0.9)).toBe(0);
 		expect(clock.milliseconds(1.25)).toBe(250);
 		expect(clock.milliseconds(1.75)).toBe(750);

@@ -25,6 +25,16 @@ const generate: VoiceGenerate = async function* () {
 	yield "How can I help?";
 };
 
+describe("voice interruption tick wiring", () => {
+	it("uses the same playback-gated stop for microphone and manual interruption", () => {
+		const source = readFileSync("src/client/voice-test.ts", "utf8");
+		expect(source).toContain("lfmSpeaker?.stop(acknowledge)");
+		expect(source).toMatch(/captureConversation\(\s*\(\) => \{\s*cancelAudio\(true\);/);
+		expect(source).toMatch(/interrupt.onclick = \(\) => \{\s*cancelAudio\(true\);/);
+		expect(source).not.toContain("acknowledgeInterruption()");
+	});
+});
+
 describe("voice sentence buffering", () => {
 	it("starts on complete sentences without waiting for the final response", () => {
 		const splitter = new SpokenSentences();

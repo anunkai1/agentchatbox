@@ -46,6 +46,12 @@ export class PlayedAudioClock {
 		}
 	}
 
+	isPlaying(clockSeconds: number): boolean {
+		return this.parts.some(
+			(part) => clockSeconds >= part.start && clockSeconds < part.start + part.duration,
+		);
+	}
+
 	milliseconds(clockSeconds: number): number {
 		if (!Number.isFinite(clockSeconds) || clockSeconds <= 0) return 0;
 		let total = 0;
@@ -664,7 +670,7 @@ export class LfmTtsSpeaker {
 	}
 
 	/** Local speech-detection acknowledgement, separate from TTS and heard-prefix evidence. */
-	acknowledgeInterruption(): void {
+	private acknowledgeInterruption(): void {
 		const ctx = this.context;
 		const now = performance.now();
 		// Never queue a delayed cue behind autoplay, pause or a suspended audio clock.
@@ -692,13 +698,16 @@ export class LfmTtsSpeaker {
 	}
 
 	/** Interrupt speech only; keeps Server4 TTS warm for the next utterance and never aborts Pi work. */
-	stop(): void {
+	stop(acknowledge = false): void {
+		const interruptedPlayback =
+			acknowledge && this.context?.state === "running" && this.played.isPlaying(this.outputClock());
 		if (!this.active) {
 			this.stopAudioNodes();
 			this.played.reset();
 			return;
 		}
 		this.abortActiveLocally(false);
+		if (interruptedPlayback) this.acknowledgeInterruption();
 	}
 
 	/** Release Server4 TTS WebSocket and GPU reservation (e.g. when tab hides or voice closes). */
