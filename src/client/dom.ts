@@ -88,6 +88,41 @@ const FOCUSABLE_SELECTOR = [
 	'[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
+const mountedModals: { overlay: HTMLElement; box: HTMLElement }[] = [];
+const modalBackground = new Map<HTMLElement, { inert: string | null; ariaHidden: string | null }>();
+
+/** Only the top modal stays interactive; retain pre-existing background state. */
+function syncModalBackground(): void {
+	const top = [...mountedModals].reverse().find(({ overlay }) => overlay.isConnected);
+	const background = new Set(
+		top
+			? [...document.body.children].filter(
+					(node): node is HTMLElement => node instanceof HTMLElement && node !== top.overlay,
+				)
+			: [],
+	);
+	for (const [node, previous] of modalBackground) {
+		if (background.has(node)) continue;
+		if (previous.inert === null) node.removeAttribute("inert");
+		else node.setAttribute("inert", previous.inert);
+		if (previous.ariaHidden === null) node.removeAttribute("aria-hidden");
+		else node.setAttribute("aria-hidden", previous.ariaHidden);
+		modalBackground.delete(node);
+	}
+	for (const node of background) {
+		if (!modalBackground.has(node)) {
+			modalBackground.set(node, {
+				inert: node.getAttribute("inert"),
+				ariaHidden: node.getAttribute("aria-hidden"),
+			});
+		}
+		node.setAttribute("inert", "");
+		// Older WebViews may ignore inert: the overlay blocks pointer input,
+		// focusin below contains focus, and aria-hidden hides background content.
+		if (!("inert" in HTMLElement.prototype)) node.setAttribute("aria-hidden", "true");
+	}
+}
+
 /**
  * Mount an accessible modal while keeping ACB's callers lightweight.
  * Provides dialog semantics, a close affordance, Escape/backdrop dismissal,
@@ -182,13 +217,25 @@ export function mountModal(
 		}
 	};
 
+	const onFocusIn = (event: FocusEvent) => {
+		if (isTopmost() && !box.contains(event.target as Node)) {
+			(focusable()[0] ?? box).focus();
+		}
+	};
+	const modal = { overlay, box };
 	const cleanup = () => {
 		if (cleanedUp) return;
 		cleanedUp = true;
+		const wasTopmost = mountedModals[mountedModals.length - 1] === modal;
+		mountedModals.splice(mountedModals.indexOf(modal), 1);
 		document.removeEventListener("keydown", onKeyDown);
+		document.removeEventListener("focusin", onFocusIn);
 		observer?.disconnect();
+		syncModalBackground();
 		if (!document.querySelector(".modal-overlay")) document.body.classList.remove("modal-open");
-		if (previousFocus?.isConnected) previousFocus.focus();
+		if (wasTopmost && previousFocus?.isConnected && !previousFocus.closest("[inert]")) {
+			previousFocus.focus();
+		}
 	};
 
 	document.addEventListener("keydown", onKeyDown);
@@ -198,14 +245,18 @@ export function mountModal(
 	if (!box.parentElement) overlay.append(box);
 	document.body.append(overlay);
 	document.body.classList.add("modal-open");
+	mountedModals.push(modal);
+	document.addEventListener("focusin", onFocusIn);
+	syncModalBackground();
 
 	observer = new MutationObserver(() => {
 		if (!overlay.isConnected) cleanup();
+		else syncModalBackground();
 	});
 	observer.observe(document.body, { childList: true, subtree: true });
 
 	setTimeout(() => {
-		if (!overlay.isConnected) return;
+		if (!overlay.isConnected || !isTopmost()) return;
 		const requested =
 			typeof options.initialFocus === "function" ? options.initialFocus() : options.initialFocus;
 		const firstUseful = focusable().find(

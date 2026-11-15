@@ -285,7 +285,8 @@ function renderConfirm(e: ExtensionUiRequest, respond: ExtensionUiResponder): vo
 	actions.append(yes, no);
 	box.append(actions);
 
-	setTimeout(() => yes.focus(), 0);
+	// A newly arrived question must not turn a stray Enter into approval.
+	setTimeout(() => no.focus(), 0);
 }
 
 /** Input dialog — a text field with submit. */

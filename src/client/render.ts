@@ -4092,6 +4092,7 @@ function startRename(titleEl: HTMLElement, actions: HTMLElement, s: SessionSumma
 	const input = document.createElement("input");
 	input.type = "text";
 	input.className = "session-rename-input";
+	input.setAttribute("aria-label", "Conversation name");
 	input.value = current;
 	input.placeholder = "Untitled";
 	input.maxLength = 120;
