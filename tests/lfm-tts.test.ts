@@ -128,6 +128,47 @@ describe("LFM speech-only TTS client primitives", () => {
 		vi.unstubAllGlobals();
 	});
 
+	it("acknowledges locally without TTS readiness, throttles ticks and skips locked audio", () => {
+		const speaker = new LfmTtsSpeaker(
+			{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: vi.fn() },
+			"wss://example.test/tts",
+		);
+		speaker.acknowledgeInterruption(); // No context/unlock yet.
+		expect(FakeAudioContext.instances).toHaveLength(0);
+		speaker.connect(); // No server ready message needed.
+		const ctx = FakeAudioContext.instances[0];
+		const now = vi.spyOn(performance, "now").mockReturnValue(100);
+		speaker.acknowledgeInterruption();
+		expect(ctx.nodes).toHaveLength(1);
+		expect(ctx.nodes[0].buffer?.duration).toBe(0.03);
+		expect(ctx.nodes[0].startedAt).toBe(ctx.currentTime);
+		speaker.stop();
+		expect(ctx.nodes[0].stopped).toBe(false);
+		expect(speaker.hasAudio).toBe(false);
+		expect(speaker.hasPendingReports()).toBe(false);
+		now.mockReturnValue(900);
+		speaker.acknowledgeInterruption();
+		expect(ctx.nodes).toHaveLength(1);
+		now.mockReturnValue(1100);
+		speaker.acknowledgeInterruption();
+		expect(ctx.nodes).toHaveLength(2);
+		ctx.state = "suspended";
+		now.mockReturnValue(2200);
+		speaker.acknowledgeInterruption();
+		expect(ctx.nodes).toHaveLength(2);
+		ctx.state = "running";
+		const create = vi.spyOn(ctx, "createBufferSource").mockImplementation(() => {
+			throw new Error("Audio unavailable");
+		});
+		expect(() => speaker.acknowledgeInterruption()).not.toThrow();
+		create.mockRestore();
+		speaker.close();
+		now.mockReturnValue(3300);
+		speaker.acknowledgeInterruption();
+		expect(ctx.nodes).toHaveLength(2);
+		now.mockRestore();
+	});
+
 	it("tracks output-clock playback milliseconds across scheduled chunks", () => {
 		const clock = new PlayedAudioClock();
 		clock.add(1.0, 0.5);

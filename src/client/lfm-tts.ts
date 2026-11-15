@@ -153,6 +153,7 @@ export class LfmTtsSpeaker {
 	private played = new PlayedAudioClock();
 	private finishTimer: ReturnType<typeof setTimeout> | null = null;
 	private pendingReports = new Map<number, PendingReport>();
+	private lastInterruptTickAt = -Infinity;
 
 	constructor(
 		private readonly callbacks: LfmTtsSpeakerCallbacks,
@@ -660,6 +661,34 @@ export class LfmTtsSpeaker {
 		if (this.closed) return;
 		this.paused = false;
 		this.checkPlaybackComplete();
+	}
+
+	/** Local speech-detection acknowledgement, separate from TTS and heard-prefix evidence. */
+	acknowledgeInterruption(): void {
+		const ctx = this.context;
+		const now = performance.now();
+		// Never queue a delayed cue behind autoplay, pause or a suspended audio clock.
+		if (this.closed || this.paused || !ctx || ctx.state !== "running") return;
+		if (now - this.lastInterruptTickAt < 1_000) return;
+		this.lastInterruptTickAt = now;
+		try {
+			const length = 720; // 30 ms at 24 kHz; fades at both ends to avoid clicks.
+			const samples = new Float32Array(length);
+			for (let i = 0; i < length; i++) {
+				const envelope = Math.sin((Math.PI * i) / (length - 1)) ** 2;
+				samples[i] = 0.12 * envelope * Math.sin((2 * Math.PI * 1_200 * i) / OUTPUT_RATE);
+			}
+			const buffer = ctx.createBuffer(1, length, OUTPUT_RATE);
+			buffer.copyToChannel(samples, 0);
+			const cue = ctx.createBufferSource();
+			cue.buffer = buffer;
+			cue.connect(ctx.destination);
+			cue.onended = () => cue.disconnect();
+			// Not in this.nodes or this.played: speech cancellation/history must not include the cue.
+			cue.start(ctx.currentTime);
+		} catch {
+			// Feedback is best-effort; it must never interfere with speech capture or stopping TTS.
+		}
 	}
 
 	/** Interrupt speech only; keeps Server4 TTS warm for the next utterance and never aborts Pi work. */

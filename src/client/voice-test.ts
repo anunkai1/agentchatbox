@@ -719,6 +719,7 @@ export function openVoiceTest(
 			const stop = await captureConversation(
 				() => {
 					cancelAudio();
+					lfmSpeaker?.acknowledgeInterruption();
 					sayStatus("Hearing speech — keep talking…");
 				},
 				(turn) => {
@@ -783,6 +784,7 @@ export function openVoiceTest(
 	};
 	interrupt.onclick = () => {
 		cancelAudio();
+		lfmSpeaker?.acknowledgeInterruption();
 		sayStatus(stopCapture ? "Listening…" : "Interrupted");
 	};
 	stopPi.onclick = () => {
