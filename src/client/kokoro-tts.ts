@@ -1,5 +1,13 @@
 /** Relay-only synthesis alignment transport; shared player owns the output clock. */
-import { KOKORO_ALIGNMENT, type KokoroAlignment, type KokoroWord } from "../shared/kokoro.js";
+import {
+	KOKORO_ALIGNMENT,
+	type KokoroAlignment,
+	type KokoroWord,
+	type RelaySynthesisAlignment,
+	ZONOS3_ALIGNMENT,
+	ZONOS3_SAMPLE_RATE,
+	type Zonos3Alignment,
+} from "../shared/kokoro.js";
 import {
 	type LfmPlayedReport,
 	LfmTtsSpeaker,
@@ -9,6 +17,36 @@ import {
 
 const RATE = 24_000;
 const MAX_FRAME = 12_000_000;
+
+export interface AlignedTtsConfig {
+	endpoint: string;
+	alignmentHeader: string;
+	alignmentValue: RelaySynthesisAlignment["alignment"];
+	sampleRate: RelaySynthesisAlignment["sampleRate"];
+	audioFormat: "wav" | "pcm16";
+	label: string;
+	shortLabel: string;
+}
+
+export const KOKORO_TTS_CONFIG: AlignedTtsConfig = {
+	endpoint: "/api/tts/relay-stream",
+	alignmentHeader: "X-Kokoro-Alignment",
+	alignmentValue: KOKORO_ALIGNMENT,
+	sampleRate: RATE,
+	audioFormat: "wav",
+	label: "Server2 Kokoro",
+	shortLabel: "Kokoro",
+};
+
+export const ZONOS3_TTS_CONFIG: AlignedTtsConfig = {
+	endpoint: "/api/tts/zonos-relay-stream",
+	alignmentHeader: "X-Zonos-Alignment",
+	alignmentValue: ZONOS3_ALIGNMENT,
+	sampleRate: ZONOS3_SAMPLE_RATE,
+	audioFormat: "pcm16",
+	label: "Server2 ZONOS3-Mini",
+	shortLabel: "ZONOS3-Mini",
+};
 
 /** Handles arbitrary HTTP chunk boundaries, bounded before allocating payloads. */
 export class KokoroFrames {
@@ -68,26 +106,40 @@ export function kokoroWavPcm(bytes: Uint8Array): Uint8Array {
 	return pcm;
 }
 
-export function validateKokoroAlignment(
+export function validateSynthesisAlignment<T extends RelaySynthesisAlignment>(
 	value: unknown,
 	submitted: string,
 	offset: number,
-): KokoroAlignment {
-	const m = value as KokoroAlignment | null;
+	options: {
+		alignment: T["alignment"];
+		sampleRate: T["sampleRate"];
+		minWordSample?: number;
+		allowEmptyChunk?: boolean;
+		shortLabel?: string;
+	},
+): T {
+	const m = value as T | null;
+	const label = options.shortLabel ?? "Kokoro";
+	const validEnd =
+		m &&
+		Number.isSafeInteger(m.endSample) &&
+		(options.allowEmptyChunk
+			? m.endSample > offset ||
+				(m.endSample === offset && Array.isArray(m.words) && m.words.length > 0)
+			: m.endSample > offset);
 	if (
 		!m ||
-		m.alignment !== KOKORO_ALIGNMENT ||
-		m.sampleRate !== RATE ||
+		m.alignment !== options.alignment ||
+		m.sampleRate !== options.sampleRate ||
 		m.submittedText !== submitted ||
 		m.startSample !== offset ||
-		!Number.isSafeInteger(m.endSample) ||
-		m.endSample <= offset ||
+		!validEnd ||
 		!Array.isArray(m.unalignedTokens) ||
 		!Array.isArray(m.words) ||
 		typeof m.text !== "string"
 	)
-		throw new Error("Missing or unreliable Kokoro synthesis alignment");
-	let end = offset;
+		throw new Error(`Missing or unreliable ${label} synthesis alignment`);
+	let end = options.minWordSample ?? offset;
 	for (const word of m.words) {
 		if (
 			typeof word.text !== "string" ||
@@ -100,14 +152,43 @@ export function validateKokoroAlignment(
 			word.endSample < word.startSample ||
 			word.endSample > m.endSample
 		)
-			throw new Error("Invalid Kokoro word sample range");
+			throw new Error(`Invalid ${label} word sample range`);
 		end = word.endSample;
 	}
 	return m;
 }
 
+export function validateKokoroAlignment(
+	value: unknown,
+	submitted: string,
+	offset: number,
+): KokoroAlignment {
+	return validateSynthesisAlignment<KokoroAlignment>(value, submitted, offset, {
+		alignment: KOKORO_ALIGNMENT,
+		sampleRate: RATE,
+		minWordSample: offset,
+		allowEmptyChunk: false,
+		shortLabel: "Kokoro",
+	});
+}
+
+export function validateZonosAlignment(
+	value: unknown,
+	submitted: string,
+	offset: number,
+	minWordSample = 0,
+): Zonos3Alignment {
+	return validateSynthesisAlignment<Zonos3Alignment>(value, submitted, offset, {
+		alignment: ZONOS3_ALIGNMENT,
+		sampleRate: ZONOS3_SAMPLE_RATE,
+		minWordSample,
+		allowEmptyChunk: true,
+		shortLabel: "ZONOS3-Mini",
+	});
+}
+
 /** Reconcile presentation only, never currency, numeric expansion or new words. */
-export function hasReliableKokoroWords(m: KokoroAlignment): boolean {
+export function hasReliableKokoroWords(m: RelaySynthesisAlignment): boolean {
 	if (m.alignmentComplete !== true || m.unalignedTokens.length || !m.words.length) return false;
 	const space = (text: string) => text.replace(/\s+/gu, " ").trim();
 	const tokens = m.words.map((word) => word.text + word.whitespace).join("");
@@ -151,6 +232,7 @@ export function completedKokoroWords(words: KokoroWord[], playedSamples: number)
 }
 
 export function formatKokoroPlayedHistory(report: LfmPlayedReport): string {
+	const engineLabel = report.alignment === ZONOS3_ALIGNMENT ? "ZONOS3-Mini" : "Kokoro";
 	let text = report.text.trim();
 	const build = (omitted = false) => {
 		const state = report.complete ? "completed" : "interrupted/stopped";
@@ -163,7 +245,7 @@ export function formatKokoroPlayedHistory(report: LfmPlayedReport): string {
 		const prefix = text
 			? `${omitted ? "[Earlier completed input words omitted] " : ""}${text}`
 			: "none";
-		return `Kokoro synthesis alignment (${report.playedMs} ms played, ${state}${report.uncertain ? "; incomplete/uncertain" : ""}${issues}): ${prefix}\nPronunciation not verified; playback is not proof the owner heard it. Only timed input tokens whose end sample passed the output clock are retained; bracketed UNKNOWN entries describe gaps, not spoken text. ${(report.playedSamples ?? report.playedMs) <= 0 ? "No generated speech was played. " : ""}Do not assume remaining generated text was played. Tools/workers continue.`;
+		return `${engineLabel} synthesis alignment (${report.playedMs} ms played, ${state}${report.uncertain ? "; incomplete/uncertain" : ""}${issues}): ${prefix}\nPronunciation not verified; playback is not proof the owner heard it. Only timed input tokens whose end sample passed the output clock are retained; bracketed UNKNOWN entries describe gaps, not spoken text. ${(report.playedSamples ?? report.playedMs) <= 0 ? "No generated speech was played. " : ""}Do not assume remaining generated text was played. Tools/workers continue.`;
 	};
 	let formatted = build();
 	while (
@@ -188,8 +270,15 @@ export class KokoroTtsTransport implements TtsTransport {
 	onerror: TtsTransport["onerror"] = null;
 	onclose: TtsTransport["onclose"] = null;
 	private ledgers = new Map<number, Ledger>();
-	constructor(private readonly endpoint = "/api/tts/relay-stream") {
-		queueMicrotask(() => this.emit({ type: "ready", protocol: 3, tts: 1, outputRate: RATE }));
+	private readonly config: AlignedTtsConfig;
+	constructor(configOrEndpoint: string | AlignedTtsConfig = KOKORO_TTS_CONFIG) {
+		this.config =
+			typeof configOrEndpoint === "string"
+				? { ...KOKORO_TTS_CONFIG, endpoint: configOrEndpoint }
+				: configOrEndpoint;
+		queueMicrotask(() =>
+			this.emit({ type: "ready", protocol: 3, tts: 1, outputRate: this.config.sampleRate }),
+		);
 	}
 	private emit(message: unknown): void {
 		if (this.readyState === 1) this.onmessage?.({ data: JSON.stringify(message) });
@@ -235,7 +324,11 @@ export class KokoroTtsTransport implements TtsTransport {
 		if (truncated)
 			issues.push("voice input/audio truncated; full chat text was not synthesised/played");
 		const samples = Math.max(0, Math.min(playedSamples, ledger?.samples ?? 0));
-		const playedChunks = (ledger?.chunks ?? []).filter((chunk) => chunk.startSample < samples);
+		const playedChunks = (ledger?.chunks ?? []).filter((chunk) =>
+			chunk.words !== null
+				? samples > 0 && chunk.startSample <= samples
+				: chunk.startSample < samples,
+		);
 		const unknown = playedChunks.filter((chunk) => chunk.words === null);
 		if (unknown.length)
 			issues.push(`words unknown for ${unknown.length} played chunk(s); no inferred words`);
@@ -248,12 +341,12 @@ export class KokoroTtsTransport implements TtsTransport {
 			.filter(Boolean)
 			.join(" ");
 		return {
-			playedMs: Math.floor((samples * 1000) / RATE),
+			playedMs: Math.floor((samples * 1000) / this.config.sampleRate),
 			playedSamples: samples,
 			text,
 			complete: !interrupted && !truncated && ledger?.finished === true && !issues.length,
 			uncertain: issues.length > 0,
-			alignment: KOKORO_ALIGNMENT,
+			alignment: this.config.alignmentValue,
 			submittedTexts: [...(ledger?.submitted ?? [])],
 			issues,
 		};
@@ -265,10 +358,10 @@ export class KokoroTtsTransport implements TtsTransport {
 			while (ledger.queue.length && !ledger.controller.signal.aborted) {
 				const item = ledger.queue.shift()!;
 				const timeout = setTimeout(() => {
-					ledger.issues.push("Kokoro synthesis timed out");
+					ledger.issues.push(`${this.config.shortLabel} synthesis timed out`);
 					this.emit({
 						type: "error",
-						message: "Kokoro synthesis timed out; Pi tools/workers continue.",
+						message: `${this.config.shortLabel} synthesis timed out; Pi tools/workers continue.`,
 					});
 				}, 60_000);
 				try {
@@ -284,12 +377,14 @@ export class KokoroTtsTransport implements TtsTransport {
 		} catch (error) {
 			if (!ledger.controller.signal.aborted) {
 				ledger.issues.push(
-					error instanceof Error ? error.message.slice(0, 500) : "Kokoro synthesis failed",
+					error instanceof Error
+						? error.message.slice(0, 500)
+						: `${this.config.shortLabel} synthesis failed`,
 				);
 				// The shared player stops speech and snapshots its output clock.
 				this.emit({
 					type: "error",
-					message: `Kokoro speech stopped: ${ledger.issues.at(-1)}. Pi tools/workers continue.`,
+					message: `${this.config.shortLabel} speech stopped: ${ledger.issues.at(-1)}. Pi tools/workers continue.`,
 				});
 			}
 		} finally {
@@ -297,23 +392,30 @@ export class KokoroTtsTransport implements TtsTransport {
 		}
 	}
 	private async synthesize(epoch: number, ledger: Ledger, text: string): Promise<void> {
-		const response = await fetch(this.endpoint, {
+		const isPcm16 = this.config.audioFormat === "pcm16";
+		const response = await fetch(this.config.endpoint, {
 			method: "POST",
-			headers: { "Content-Type": "application/json", "X-Kokoro-Alignment": KOKORO_ALIGNMENT },
+			headers: {
+				"Content-Type": "application/json",
+				[this.config.alignmentHeader]: this.config.alignmentValue,
+			},
 			body: JSON.stringify({ text, speed: 1 }),
 			signal: ledger.controller.signal,
 		});
 		if (
 			!response.ok ||
 			!response.body ||
-			response.headers.get("X-Kokoro-Alignment") !== KOKORO_ALIGNMENT
+			response.headers.get(this.config.alignmentHeader) !== this.config.alignmentValue
 		)
-			throw new Error("Kokoro alignment negotiation failed; no ASR or whole-answer fallback");
+			throw new Error(
+				`${this.config.shortLabel} alignment negotiation failed; no ASR or whole-answer fallback`,
+			);
 		const reader = response.body.getReader();
 		const frames = new KokoroFrames();
 		const base = ledger.samples;
 		let offset = 0;
-		let metadata: KokoroAlignment | undefined;
+		let wordOffset = 0;
+		let metadata: RelaySynthesisAlignment | undefined;
 		let ended = false;
 		let remaining = text.replace(/\s+/g, " ").trim();
 		let matchedChunk = "";
@@ -323,55 +425,110 @@ export class KokoroTtsTransport implements TtsTransport {
 				if (done) break;
 				if (ledger.controller.signal.aborted) return;
 				for (const frame of frames.push(value)) {
-					if (ended) throw new Error("Kokoro data after END");
+					if (ended) throw new Error(`${this.config.shortLabel} data after END`);
 					if (frame.type === 2) {
-						if (metadata) throw new Error("Kokoro metadata without matching audio");
-						metadata = validateKokoroAlignment(
+						if (metadata)
+							throw new Error(`${this.config.shortLabel} metadata without matching audio`);
+						metadata = validateSynthesisAlignment(
 							JSON.parse(new TextDecoder().decode(frame.payload)),
 							text,
 							offset,
+							{
+								alignment: this.config.alignmentValue,
+								sampleRate: this.config.sampleRate,
+								minWordSample: isPcm16 ? wordOffset : offset,
+								allowEmptyChunk: isPcm16,
+								shortLabel: this.config.shortLabel,
+							},
 						);
+						if (metadata.words.length > 0) {
+							wordOffset = metadata.words[metadata.words.length - 1].endSample;
+						}
 						matchedChunk = metadata.text.replace(/\s+/g, " ").trim();
-						if (
+						if (matchedChunk === "") {
+							if (!isPcm16 || metadata.words.length > 0 || metadata.text !== "")
+								throw new Error(
+									`${this.config.shortLabel} chunk does not match complete submitted input words`,
+								);
+						} else if (
 							!remaining.startsWith(matchedChunk) ||
 							(remaining.length > matchedChunk.length && !/\s/.test(remaining[matchedChunk.length]))
-						)
-							throw new Error("Kokoro chunk does not match complete submitted input words");
+						) {
+							throw new Error(
+								`${this.config.shortLabel} chunk does not match complete submitted input words`,
+							);
+						}
 						if (offset === 0) ledger.submitted.push(metadata.submittedText);
 					} else if (frame.type === 1) {
-						if (!metadata) throw new Error("Kokoro audio missing word timings");
-						const pcm = kokoroWavPcm(frame.payload);
+						if (!metadata) throw new Error(`${this.config.shortLabel} audio missing word timings`);
+						let pcm: Uint8Array;
+						if (isPcm16) {
+							if (frame.payload.length % 2 !== 0)
+								throw new Error(
+									`${this.config.shortLabel} must return mono ${this.config.sampleRate} Hz PCM16`,
+								);
+							pcm = frame.payload;
+						} else {
+							pcm = kokoroWavPcm(frame.payload);
+						}
 						if (metadata.endSample - metadata.startSample !== pcm.length / 2)
-							throw new Error("Kokoro timing/audio sample count mismatch");
-						ledger.chunks.push({
-							startSample: base + metadata.startSample,
-							endSample: base + metadata.endSample,
-							words: hasReliableKokoroWords(metadata)
+							throw new Error(`${this.config.shortLabel} timing/audio sample count mismatch`);
+						const emptyPcm16Block =
+							isPcm16 &&
+							metadata.text === "" &&
+							metadata.words.length === 0 &&
+							metadata.alignmentComplete === true &&
+							metadata.unalignedTokens.length === 0;
+						const reliableWords: KokoroWord[] | null = emptyPcm16Block
+							? []
+							: hasReliableKokoroWords(metadata)
 								? metadata.words.map((word) => ({
 										...word,
 										startSample: base + word.startSample,
 										endSample: base + word.endSample,
 									}))
-								: null,
-						});
-						remaining = remaining.slice(matchedChunk.length).trimStart();
-						offset += pcm.length / 2;
-						ledger.samples += pcm.length / 2;
+								: null;
+						if (pcm.length === 0) {
+							const prev = ledger.chunks.at(-1);
+							if (reliableWords !== null && prev && prev.words !== null) {
+								prev.words.push(...reliableWords);
+							} else {
+								ledger.chunks.push({
+									startSample: base + metadata.startSample,
+									endSample: base + metadata.endSample,
+									words: reliableWords,
+								});
+							}
+						} else {
+							ledger.chunks.push({
+								startSample: base + metadata.startSample,
+								endSample: base + metadata.endSample,
+								words: reliableWords,
+							});
+							offset += pcm.length / 2;
+							ledger.samples += pcm.length / 2;
+							const bytes = new Uint8Array(4 + pcm.length);
+							new DataView(bytes.buffer).setUint32(0, epoch, false);
+							bytes.set(pcm, 4);
+							this.onmessage?.({ data: bytes.buffer });
+						}
+						if (matchedChunk) remaining = remaining.slice(matchedChunk.length).trimStart();
 						metadata = undefined;
-						const bytes = new Uint8Array(4 + pcm.length);
-						new DataView(bytes.buffer).setUint32(0, epoch, false);
-						bytes.set(pcm, 4);
-						this.onmessage?.({ data: bytes.buffer });
+						matchedChunk = "";
 					} else if (frame.type === 0 && frame.payload.length === 0 && !metadata) {
 						ended = true;
 					} else if (frame.type === 128) {
-						throw new Error(new TextDecoder().decode(frame.payload) || "Kokoro synthesis failed");
-					} else throw new Error("Unknown/incomplete Kokoro alignment stream frame");
+						throw new Error(
+							new TextDecoder().decode(frame.payload) ||
+								`${this.config.shortLabel} synthesis failed`,
+						);
+					} else
+						throw new Error(`Unknown/incomplete ${this.config.shortLabel} alignment stream frame`);
 				}
 			}
 			frames.finish();
 			if (!ended || !offset || remaining)
-				throw new Error("Truncated/incomplete Kokoro synthesis input or stream");
+				throw new Error(`Truncated/incomplete ${this.config.shortLabel} synthesis input or stream`);
 		} finally {
 			await reader.cancel().catch(() => {});
 			reader.releaseLock();
@@ -386,7 +543,15 @@ export class KokoroTtsTransport implements TtsTransport {
 
 export function createKokoroSpeaker(callbacks: LfmTtsSpeakerCallbacks): LfmTtsSpeaker {
 	return new LfmTtsSpeaker(callbacks, "", {
-		create: () => new KokoroTtsTransport(),
-		label: "Server2 Kokoro",
+		create: () => new KokoroTtsTransport(KOKORO_TTS_CONFIG),
+		label: KOKORO_TTS_CONFIG.label,
+	});
+}
+
+export function createZonosSpeaker(callbacks: LfmTtsSpeakerCallbacks): LfmTtsSpeaker {
+	return new LfmTtsSpeaker(callbacks, "", {
+		create: () => new KokoroTtsTransport(ZONOS3_TTS_CONFIG),
+		label: ZONOS3_TTS_CONFIG.label,
+		outputRate: ZONOS3_TTS_CONFIG.sampleRate,
 	});
 }

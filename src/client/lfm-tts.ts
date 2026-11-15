@@ -194,11 +194,23 @@ export class LfmTtsSpeaker {
 	private pendingReports = new Map<number, PendingReport>();
 	private lastInterruptTickAt = -Infinity;
 
+	private readonly outputRate: number;
+	private readonly prerollTarget: number;
+	private readonly maxUtteranceSamples: number;
+
 	constructor(
 		private readonly callbacks: LfmTtsSpeakerCallbacks,
 		private readonly wsUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/experiments/lfm-voice/ws?tts=1`,
-		private readonly transportOptions?: { create: () => TtsTransport; label: string },
-	) {}
+		private readonly transportOptions?: {
+			create: () => TtsTransport;
+			label: string;
+			outputRate?: number;
+		},
+	) {
+		this.outputRate = transportOptions?.outputRate ?? OUTPUT_RATE;
+		this.prerollTarget = Math.round(this.outputRate * 0.1);
+		this.maxUtteranceSamples = this.outputRate * 180;
+	}
 
 	private ensureAudioContext(): AudioContext {
 		if (!this.context) {
@@ -256,7 +268,7 @@ export class LfmTtsSpeaker {
 				if (!this.active)
 					this.callbacks.onStatus(`Loading ${this.transportOptions?.label ?? "Server4 LFM TTS"}…`);
 			} else if (type === "ready") {
-				if (msg.protocol !== 3 || msg.tts !== 1 || msg.outputRate !== OUTPUT_RATE) {
+				if (msg.protocol !== 3 || msg.tts !== 1 || msg.outputRate !== this.outputRate) {
 					this.failConnection(
 						new Error(
 							`${this.transportOptions?.label ?? "Server4 LFM TTS"} player protocol mismatch. Refresh ACB.`,
@@ -486,12 +498,12 @@ export class LfmTtsSpeaker {
 		const decoded = decodeFramedPcm16(data);
 		if (!decoded || decoded.epoch !== utt.epoch) return; // Strict epoch fencing!
 		let { samples } = decoded;
-		if (utt.samplesReceived >= MAX_UTTERANCE_SAMPLES) {
+		if (utt.samplesReceived >= this.maxUtteranceSamples) {
 			utt.truncated = true;
 			return;
 		}
-		if (utt.samplesReceived + samples.length > MAX_UTTERANCE_SAMPLES) {
-			samples = samples.subarray(0, MAX_UTTERANCE_SAMPLES - utt.samplesReceived);
+		if (utt.samplesReceived + samples.length > this.maxUtteranceSamples) {
+			samples = samples.subarray(0, this.maxUtteranceSamples - utt.samplesReceived);
 			utt.truncated = true;
 		}
 		utt.samplesReceived += samples.length;
@@ -502,7 +514,7 @@ export class LfmTtsSpeaker {
 		if (!utt.startedPlayback) {
 			utt.preroll.push(samples);
 			utt.prerollSamples += samples.length;
-			if (utt.prerollSamples >= PREROLL_SAMPLES || utt.serverDone) {
+			if (utt.prerollSamples >= this.prerollTarget || utt.serverDone) {
 				this.flushPreroll(true);
 			}
 			return;
@@ -513,7 +525,7 @@ export class LfmTtsSpeaker {
 	private flushPreroll(force = false): void {
 		const utt = this.active;
 		if (!utt || utt.prerollSamples === 0) return;
-		if (!force && utt.prerollSamples < PREROLL_SAMPLES && !utt.serverDone) return;
+		if (!force && utt.prerollSamples < this.prerollTarget && !utt.serverDone) return;
 		const merged = new Float32Array(utt.prerollSamples);
 		let offset = 0;
 		for (const chunk of utt.preroll) {
@@ -531,7 +543,7 @@ export class LfmTtsSpeaker {
 		if (!this.paused && ctx.state === "suspended") {
 			void ctx.resume().catch(() => {});
 		}
-		const buffer = ctx.createBuffer(1, samples.length, OUTPUT_RATE);
+		const buffer = ctx.createBuffer(1, samples.length, this.outputRate);
 		buffer.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
 		const node = ctx.createBufferSource();
 		node.buffer = buffer;
@@ -589,7 +601,7 @@ export class LfmTtsSpeaker {
 		const finished = utt;
 		const clock = this.outputClock();
 		const playedMs = this.played.milliseconds(clock);
-		const playedSamples = this.played.samples(clock);
+		const playedSamples = this.played.samples(clock, this.outputRate);
 		this.active = null;
 		this.played.reset();
 		this.nextAt = 0;
@@ -661,7 +673,7 @@ export class LfmTtsSpeaker {
 		if (!utt) return;
 		const clock = this.outputClock();
 		const playedMs = this.played.milliseconds(clock);
-		const playedSamples = this.played.samples(clock);
+		const playedSamples = this.played.samples(clock, this.outputRate);
 		this.stopAudioNodes();
 		this.played.reset();
 		this.active = null;

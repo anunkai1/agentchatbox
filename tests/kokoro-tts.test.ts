@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	completedKokoroWords,
 	createKokoroSpeaker,
+	createZonosSpeaker,
 	formatKokoroPlayedHistory,
 	hasReliableKokoroWords,
 	KokoroFrames,
@@ -12,7 +13,7 @@ import {
 	DEFAULT_RELAY_VOICE_ENGINE,
 	resolveRelayVoiceEngine,
 } from "../src/client/relay-voice-engine.js";
-import { KOKORO_ALIGNMENT } from "../src/shared/kokoro.js";
+import { KOKORO_ALIGNMENT, ZONOS3_ALIGNMENT, ZONOS3_SAMPLE_RATE } from "../src/shared/kokoro.js";
 
 // Captured from the deployed Python backend, not estimated/divided in the client.
 const metadata = {
@@ -118,6 +119,7 @@ class AudioContext {
 	baseLatency = 0;
 	destination = {};
 	nodes: AudioNode[] = [];
+	createdRates: number[] = [];
 	constructor() {
 		AudioContext.instances.push(this);
 	}
@@ -125,6 +127,7 @@ class AudioContext {
 		return { performanceTime: 100, contextTime: this.outputStampTime };
 	}
 	createBuffer(_channels: number, length: number, rate: number) {
+		this.createdRates.push(rate);
 		return { duration: length / rate, copyToChannel() {} };
 	}
 	createBufferSource() {
@@ -508,12 +511,195 @@ describe("Kokoro Relay transport and shared playback clock", () => {
 	});
 });
 
+describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
+	beforeEach(() => {
+		AudioContext.instances = [];
+		vi.stubGlobal("AudioContext", AudioContext);
+		vi.stubGlobal("WebSocket", NoServer4Socket);
+		vi.stubGlobal("navigator", {});
+	});
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+	function pcm16(samples: number): Uint8Array {
+		return new Uint8Array(samples * 2);
+	}
+	function zonosResponse(parts: Uint8Array[]): Response {
+		return new Response(
+			new ReadableStream({
+				start(controller) {
+					for (const part of parts) {
+						for (const piece of [part.slice(0, 3), part.slice(3, 9), part.slice(9)])
+							if (piece.length) controller.enqueue(piece);
+					}
+					controller.close();
+				},
+			}),
+			{ headers: { "X-Zonos-Alignment": ZONOS3_ALIGNMENT } },
+		);
+	}
+	function zonosHarness() {
+		const reports: LfmPlayedReport[] = [];
+		const error = vi.fn();
+		const speaker = createZonosSpeaker({
+			onStatus: vi.fn(),
+			onPlaying: vi.fn(),
+			onIdle: vi.fn(),
+			onError: error,
+		});
+		const begin = (text = "Hello world.") => {
+			speaker.beginUtterance("turn-z", 0, (report) => reports.push(report));
+			speaker.enqueueSegment(text);
+			speaker.finishUtterance();
+		};
+		return { speaker, reports, error, begin, clock: () => AudioContext.instances[0] };
+	}
+
+	it("handles incremental empty-word chunks, cross-chunk word boundaries, and causal interruption at 44.1 kHz", async () => {
+		const submitted = "Hello world.";
+		// Chunk 1: [0, 8820) — early audio before first word completes (text="", words=[])
+		// Chunk 2: [8820, 26460) — word "Hello " starts at 0 (< chunk2.startSample) and ends at 17640
+		// Chunk 3: [26460, 44100) — word "world." ends at 44100
+		const m1 = {
+			alignment: ZONOS3_ALIGNMENT,
+			sampleRate: ZONOS3_SAMPLE_RATE,
+			submittedText: submitted,
+			text: "",
+			startSample: 0,
+			endSample: 8820,
+			alignmentComplete: true,
+			unalignedTokens: [],
+			words: [],
+		};
+		const m2 = {
+			alignment: ZONOS3_ALIGNMENT,
+			sampleRate: ZONOS3_SAMPLE_RATE,
+			submittedText: submitted,
+			text: "Hello ",
+			startSample: 8820,
+			endSample: 26460,
+			alignmentComplete: true,
+			unalignedTokens: [],
+			words: [{ text: "Hello", whitespace: " ", startSample: 0, endSample: 17640 }],
+		};
+		const m3 = {
+			alignment: ZONOS3_ALIGNMENT,
+			sampleRate: ZONOS3_SAMPLE_RATE,
+			submittedText: submitted,
+			text: "world.",
+			startSample: 26460,
+			endSample: 44100,
+			alignmentComplete: true,
+			unalignedTokens: [],
+			words: [{ text: "world.", whitespace: "", startSample: 17640, endSample: 44100 }],
+		};
+		const fetch = vi.fn(async () =>
+			zonosResponse([
+				meta(m1),
+				frame(1, pcm16(8820)),
+				meta(m2),
+				frame(1, pcm16(17640)),
+				meta(m3),
+				frame(1, pcm16(17640)),
+				frame(0),
+			]),
+		);
+		vi.stubGlobal("fetch", fetch);
+
+		const h = zonosHarness();
+		h.begin(submitted);
+		await vi.waitFor(() => expect(h.clock().nodes.length).toBeGreaterThanOrEqual(2));
+		expect(fetch.mock.calls[0]).toMatchObject([
+			"/api/tts/zonos-relay-stream",
+			{
+				headers: { "X-Zonos-Alignment": ZONOS3_ALIGNMENT },
+				body: JSON.stringify({ text: submitted, speed: 1 }),
+			},
+		]);
+		const ctx = h.clock();
+		expect(ctx.createdRates).toContain(44_100);
+		// Interrupt at 0.50 s = 22050 samples (past "Hello" @ 17640, before "world." @ 44100)
+		ctx.currentTime = ctx.outputStampTime = ctx.nodes[0].startedAt + 0.5;
+		h.speaker.stop(true);
+		expect(h.error).not.toHaveBeenCalled();
+		expect(h.reports[0]).toMatchObject({
+			playedMs: 500,
+			playedSamples: 22050,
+			text: "Hello",
+			complete: false,
+			uncertain: false,
+			alignment: ZONOS3_ALIGNMENT,
+			submittedTexts: [submitted],
+		});
+		expect(formatKokoroPlayedHistory(h.reports[0])).toContain(
+			"ZONOS3-Mini synthesis alignment (500 ms played",
+		);
+		h.speaker.close();
+	});
+
+	it("flushes EOF tail words with zero-length PCM16 frames cleanly on full playback", async () => {
+		const submitted = "Hello world.";
+		const m1 = {
+			alignment: ZONOS3_ALIGNMENT,
+			sampleRate: ZONOS3_SAMPLE_RATE,
+			submittedText: submitted,
+			text: "Hello ",
+			startSample: 0,
+			endSample: 22050,
+			alignmentComplete: true,
+			unalignedTokens: [],
+			words: [{ text: "Hello", whitespace: " ", startSample: 0, endSample: 17640 }],
+		};
+		const mTail = {
+			alignment: ZONOS3_ALIGNMENT,
+			sampleRate: ZONOS3_SAMPLE_RATE,
+			submittedText: submitted,
+			text: "world.",
+			startSample: 22050,
+			endSample: 22050,
+			alignmentComplete: true,
+			unalignedTokens: [],
+			words: [{ text: "world.", whitespace: "", startSample: 17640, endSample: 22050 }],
+		};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				zonosResponse([
+					meta(m1),
+					frame(1, pcm16(22050)),
+					meta(mTail),
+					frame(1, pcm16(0)),
+					frame(0),
+				]),
+			),
+		);
+		const h = zonosHarness();
+		h.begin(submitted);
+		await vi.waitFor(() => expect(h.clock().nodes).toHaveLength(1));
+		const ctx = h.clock();
+		ctx.currentTime = ctx.outputStampTime = ctx.nodes[0].startedAt + 0.5;
+		ctx.nodes[0].onended?.();
+		expect(h.error).not.toHaveBeenCalled();
+		expect(h.reports[0]).toMatchObject({
+			playedMs: 500,
+			playedSamples: 22050,
+			text: "Hello world.",
+			complete: true,
+			uncertain: false,
+			alignment: ZONOS3_ALIGNMENT,
+		});
+		h.speaker.close();
+	});
+});
+
 describe("Relay engine preference", () => {
 	it("defaults to Kokoro without migrating explicit saved selections, and switches back in one step", () => {
 		expect(DEFAULT_RELAY_VOICE_ENGINE).toBe("kokoro");
 		expect(resolveRelayVoiceEngine(null)).toBe("kokoro");
-		for (const saved of ["lfm-tts", "legacy", "server4"] as const)
+		for (const saved of ["zonos3", "lfm-tts", "legacy", "server4"] as const)
 			expect(resolveRelayVoiceEngine(saved)).toBe(saved);
+		expect(resolveRelayVoiceEngine("kokoro", "zonos3")).toBe("zonos3");
+		expect(resolveRelayVoiceEngine("zonos3", "kokoro")).toBe("kokoro");
 		expect(resolveRelayVoiceEngine("kokoro", "lfm-tts")).toBe("lfm-tts");
 		expect(resolveRelayVoiceEngine("lfm-tts", "kokoro")).toBe("kokoro");
 	});

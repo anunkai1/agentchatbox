@@ -379,13 +379,15 @@ export function handleSlash(arg: string): void {
 			openRelay(
 				engineArg === "kokoro" || engineArg === "kokoro-tts"
 					? "kokoro"
-					: engineArg === "lfm-tts" || engineArg === "lfm"
-						? "lfm-tts"
-						: engineArg === "legacy"
-							? "legacy"
-							: engineArg === "server4"
-								? "server4"
-								: undefined,
+					: engineArg === "zonos3" || engineArg === "zonos" || engineArg === "zonos3-mini"
+						? "zonos3"
+						: engineArg === "lfm-tts" || engineArg === "lfm"
+							? "lfm-tts"
+							: engineArg === "legacy"
+								? "legacy"
+								: engineArg === "server4"
+									? "server4"
+									: undefined,
 				forceNew,
 			);
 			return;

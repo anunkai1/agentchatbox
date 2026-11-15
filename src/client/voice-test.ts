@@ -4,7 +4,11 @@ import { RELAY_MESSAGE, type RelayEvent } from "../shared/relay.js";
 import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js";
 import { transcribeAudio } from "./api.js";
 import { el, mountModal, uuid } from "./dom.js";
-import { createKokoroSpeaker, formatKokoroPlayedHistory } from "./kokoro-tts.js";
+import {
+	createKokoroSpeaker,
+	createZonosSpeaker,
+	formatKokoroPlayedHistory,
+} from "./kokoro-tts.js";
 import {
 	formatLfmPlayedHistory,
 	type LfmPlayedReport,
@@ -84,6 +88,7 @@ export function openRelay(explicitEngine?: RelayVoiceEngine, forceNew = false): 
 		undefined,
 		forceNew,
 		engine === "kokoro",
+		engine === "zonos3",
 	);
 }
 
@@ -110,6 +115,7 @@ export function openVoiceTest(
 	workerStart?: string,
 	forceNew = false,
 	useKokoroTts = false,
+	useZonosTts = false,
 ): void {
 	if (opened) {
 		relayUi?.reveal();
@@ -118,7 +124,9 @@ export function openVoiceTest(
 	const attached = relay && !streamTrial;
 	useLfmTts = relay && !localVoice && useLfmTts;
 	useKokoroTts = relay && !localVoice && !streamTrial && useKokoroTts;
-	const useSpeechTts = useLfmTts || useKokoroTts;
+	useZonosTts = relay && !localVoice && !streamTrial && !useKokoroTts && useZonosTts;
+	const useAlignedTts = useKokoroTts || useZonosTts;
+	const useSpeechTts = useLfmTts || useAlignedTts;
 	streamTrial = relay && !localVoice && streamTrial;
 	const isStreamingPi = streamTrial || useSpeechTts;
 	const sessionKey = streamTrial ? TRIAL_SESSION_KEY : RELAY_SESSION_KEY;
@@ -164,15 +172,17 @@ export function openVoiceTest(
 		"p",
 		{},
 		relay
-			? useKokoroTts
-				? "Pi + Server2 Kokoro (default, speech-only): local STT → Pi → synthesis-aligned Kokoro. Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Revert with /relay lfm-tts."
-				: useLfmTts
-					? "Pi + Server4 LFM TTS (speech-only): local STT → full-access Pi/DeepSeek → rendered sentence-streamed LFM TTS, without LFM interpreting requests or rewriting answers. Interrupt stops speech only; Pi work continues. Recognised text and approximate unhinted-ASR played speech are saved; no raw audio archive. Active speech reserves Server4's GPU."
-					: streamTrial
-						? "Isolated trial: local STT → full-access Pi/DeepSeek → sentence-streamed Kokoro, without LFM rewriting the answer. Interrupt stops speech only; work continues. Text goes to Venice/the worker provider; no audio archive. Playback records completed speech segments; the interrupted segment's word boundary is unknown."
-						: localVoice
-							? "Server4 speech + full-access Pi Relay. Interrupt stops voice, not work. Recognised text and approximate played speech are saved; text context goes to Venice/the selected worker provider. No raw audio archive. Voice reserves Server4's GPU."
-							: "Legacy STT/Kokoro Relay with normal owner-level tools and delegation. Closing voice leaves work running; Interrupt can stop direct tools, not workers. Text/tool context go to Venice; raw audio is not saved."
+			? useZonosTts
+				? "Pi + Server2 ZONOS3-Mini (aligned, speech-only): local STT → Pi → synthesis-aligned ZONOS3-Mini (Savannah). Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Revert with /relay kokoro."
+				: useKokoroTts
+					? "Pi + Server2 Kokoro (default, speech-only): local STT → Pi → synthesis-aligned Kokoro. Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Revert with /relay lfm-tts."
+					: useLfmTts
+						? "Pi + Server4 LFM TTS (speech-only): local STT → full-access Pi/DeepSeek → rendered sentence-streamed LFM TTS, without LFM interpreting requests or rewriting answers. Interrupt stops speech only; Pi work continues. Recognised text and approximate unhinted-ASR played speech are saved; no raw audio archive. Active speech reserves Server4's GPU."
+						: streamTrial
+							? "Isolated trial: local STT → full-access Pi/DeepSeek → sentence-streamed Kokoro, without LFM rewriting the answer. Interrupt stops speech only; work continues. Text goes to Venice/the worker provider; no audio archive. Playback records completed speech segments; the interrupted segment's word boundary is unknown."
+							: localVoice
+								? "Server4 speech + full-access Pi Relay. Interrupt stops voice, not work. Recognised text and approximate played speech are saved; text context goes to Venice/the selected worker provider. No raw audio archive. Voice reserves Server4's GPU."
+								: "Legacy STT/Kokoro Relay with normal owner-level tools and delegation. Closing voice leaves work running; Interrupt can stop direct tools, not workers. Text/tool context go to Venice; raw audio is not saved."
 			: "Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
@@ -243,6 +253,7 @@ export function openVoiceTest(
 		} else {
 			const choices: Array<[RelayVoiceEngine, string, boolean]> = [
 				["kokoro", "Use Pi + Server2 Kokoro (default, aligned)", !useKokoroTts],
+				["zonos3", "Use Pi + ZONOS3-Mini (fast, aligned)", !useZonosTts],
 				["lfm-tts", "Use Pi + LFM TTS (speech-only)", !useLfmTts],
 				["server4", "Use Server4 LFM voice", !localVoice],
 				["legacy", "Use legacy STT/Kokoro", localVoice || useSpeechTts],
@@ -324,13 +335,15 @@ export function openVoiceTest(
 		el(
 			"p",
 			{ class: "voice-test-overview" },
-			useLfmTts
-				? "Talk naturally. Pi handles your requests; LFM reads the replies aloud."
-				: localVoice
-					? "LFM handles the local conversation. Pi handles tools and delegated work."
-					: relay
-						? "Talk naturally. Pi handles your requests; Kokoro reads the replies aloud."
-						: "Try a conversation with DeepSeek. This test cannot use tools or do work.",
+			useZonosTts
+				? "Talk naturally. Pi handles your requests; ZONOS3-Mini reads the replies aloud."
+				: useLfmTts
+					? "Talk naturally. Pi handles your requests; LFM reads the replies aloud."
+					: localVoice
+						? "LFM handles the local conversation. Pi handles tools and delegated work."
+						: relay
+							? "Talk naturally. Pi handles your requests; Kokoro reads the replies aloud."
+							: "Try a conversation with DeepSeek. This test cannot use tools or do work.",
 		),
 		model,
 		workerModel,
@@ -453,9 +466,11 @@ export function openVoiceTest(
 		}
 		metrics.textContent = parts.join(" · ");
 	};
-	const createSpeechSpeaker = useKokoroTts
-		? createKokoroSpeaker
-		: (callbacks: LfmTtsSpeakerCallbacks) => new LfmTtsSpeaker(callbacks);
+	const createSpeechSpeaker = useZonosTts
+		? createZonosSpeaker
+		: useKokoroTts
+			? createKokoroSpeaker
+			: (callbacks: LfmTtsSpeakerCallbacks) => new LfmTtsSpeaker(callbacks);
 	const speaker =
 		!localVoice && !useSpeechTts
 			? new ConversationSpeaker(
@@ -835,7 +850,16 @@ export function openVoiceTest(
 			/* private mode */
 		}
 		modal.dismiss();
-		openVoiceTest(true, localVoice, streamTrial, useLfmTts, capturedWorker, true, useKokoroTts);
+		openVoiceTest(
+			true,
+			localVoice,
+			streamTrial,
+			useLfmTts,
+			capturedWorker,
+			true,
+			useKokoroTts,
+			useZonosTts,
+		);
 	};
 	form.onsubmit = (event) => {
 		event.preventDefault();
@@ -1095,13 +1119,15 @@ export function openVoiceTest(
 	};
 	function showVoiceContext(event: { id: string; user?: string; heard?: string }): void {
 		link.hidden = !link.hasAttribute("href");
-		const heardLabel = useKokoroTts
-			? "Kokoro (synthesis-aligned played input; pronunciation not verified)"
-			: useLfmTts
-				? "LFM TTS (approximately played)"
-				: streamTrial
-					? "Voice (playback evidence)"
-					: "LFM (approximately played)";
+		const heardLabel = useZonosTts
+			? "ZONOS3-Mini (synthesis-aligned played input; pronunciation not verified)"
+			: useKokoroTts
+				? "Kokoro (synthesis-aligned played input; pronunciation not verified)"
+				: useLfmTts
+					? "LFM TTS (approximately played)"
+					: streamTrial
+						? "Voice (playback evidence)"
+						: "LFM (approximately played)";
 		for (const [field, label] of [
 			["user", "You (voice/text)"],
 			["heard", heardLabel],
@@ -1151,7 +1177,7 @@ export function openVoiceTest(
 		if (!ready || !connected()) return;
 		lfmReportedIds.add(report.utterance);
 		while (lfmReportedIds.size > 40) lfmReportedIds.delete(lfmReportedIds.values().next().value!);
-		const history = useKokoroTts
+		const history = useAlignedTts
 			? formatKokoroPlayedHistory(report)
 			: formatLfmPlayedHistory(report);
 		command(`/relay voice-heard ${report.utterance} ${encodeRelayVoice({ text: history })}`);

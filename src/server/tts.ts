@@ -17,7 +17,7 @@
  */
 
 import express, { type Request, type Response, type Router } from "express";
-import { KOKORO_ALIGNMENT } from "../shared/kokoro.js";
+import { KOKORO_ALIGNMENT, ZONOS3_ALIGNMENT } from "../shared/kokoro.js";
 import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
 
@@ -113,6 +113,9 @@ const KOKORO_BASE =
 	process.env.KOKORO_TTS_URL ||
 	`http://${process.env.KOKORO_HOST || "127.0.0.1"}:${process.env.KOKORO_PORT || "8181"}`;
 const KOKORO_DEFAULT_VOICE = process.env.KOKORO_VOICE || "af_heart";
+const ZONOS_RELAY_BASE =
+	process.env.ZONOS_RELAY_TTS_URL ||
+	`http://${process.env.ZONOS_RELAY_HOST || "127.0.0.1"}:${process.env.ZONOS_RELAY_PORT || "8184"}`;
 
 export function createTtsRouter(): Router {
 	const router = express.Router();
@@ -150,19 +153,32 @@ export function createTtsRouter(): Router {
 	 * server stays the transport layer; the browser owns chunked playback.
 	 */
 	router.post(
-		["/stream", "/relay-stream"],
+		["/stream", "/relay-stream", "/zonos-relay-stream"],
 		asyncHandler(async (req: Request, res: Response) => {
-			// Relay-only opt-in pipe; ordinary chat streaming never changes format.
-			const aligned = req.path === "/relay-stream";
+			// Relay-only opt-in pipes; ordinary chat streaming never changes format.
+			const zonosRelay = req.path === "/zonos-relay-stream";
+			const kokoroAligned = req.path === "/relay-stream";
 			const parsed = parseTtsBody(req);
 			if ("error" in parsed) {
 				res.status(parsed.status).json({ error: parsed.error });
 				return;
 			}
 			const { text, voice, speed } = parsed;
+			const upstreamBase = zonosRelay ? ZONOS_RELAY_BASE : KOKORO_BASE;
+			const engineName = zonosRelay ? "zonos-relay" : "kokoro";
+			const alignHeader = zonosRelay
+				? "X-Zonos-Alignment"
+				: kokoroAligned
+					? "X-Kokoro-Alignment"
+					: undefined;
+			const alignValue = zonosRelay
+				? ZONOS3_ALIGNMENT
+				: kokoroAligned
+					? KOKORO_ALIGNMENT
+					: undefined;
 
 			// Abort upstream the moment the browser goes away (stop button,
-			// navigation) so pi-voice-server stops spending CPU on chunks no one
+			// navigation) so the voice server stops spending CPU on chunks no one
 			// will hear. res 'close' also fires on normal completion, where
 			// aborting an already-finished fetch is a harmless no-op.
 			const clientGone = new AbortController();
@@ -178,19 +194,23 @@ export function createTtsRouter(): Router {
 
 			let upstream: globalThis.Response;
 			try {
-				upstream = await fetch(`${KOKORO_BASE}/tts/stream`, {
+				upstream = await fetch(`${upstreamBase}/tts/stream`, {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",
-						...(aligned ? { "X-Kokoro-Alignment": KOKORO_ALIGNMENT } : {}),
+						...(alignHeader && alignValue ? { [alignHeader]: alignValue } : {}),
 					},
-					body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed }),
+					body: JSON.stringify(
+						zonosRelay
+							? { text, ...(voice ? { voice } : {}), speed }
+							: { text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed },
+					),
 					signal: clientGone.signal,
 				});
 			} catch (e) {
 				if (timedOut) {
 					res.status(504).json({
-						error: `kokoro tts/stream produced no first chunk within ${STREAM_TTFB_TIMEOUT_MS}ms at ${KOKORO_BASE}`,
+						error: `${engineName} tts/stream produced no first chunk within ${STREAM_TTFB_TIMEOUT_MS}ms at ${upstreamBase}`,
 					});
 					return;
 				}
@@ -198,7 +218,9 @@ export function createTtsRouter(): Router {
 				// report to, and writing to a dead socket is pointless.
 				if (clientGone.signal.aborted) return;
 				const message = e instanceof Error ? e.message : String(e);
-				res.status(502).json({ error: `kokoro tts unreachable at ${KOKORO_BASE}: ${message}` });
+				res
+					.status(502)
+					.json({ error: `${engineName} tts unreachable at ${upstreamBase}: ${message}` });
 				return;
 			} finally {
 				clearTimeout(ttfbTimer);
@@ -208,20 +230,20 @@ export function createTtsRouter(): Router {
 			if (!upstream.ok || !upstream.body) {
 				const errText = await upstream.text().catch(() => "");
 				res.status(502).json({
-					error: `kokoro tts/stream upstream ${upstream.status}: ${errText.slice(0, 300)}`,
+					error: `${engineName} tts/stream upstream ${upstream.status}: ${errText.slice(0, 300)}`,
 				});
 				return;
 			}
 
-			if (aligned) {
-				if (upstream.headers.get("X-Kokoro-Alignment") !== KOKORO_ALIGNMENT) {
+			if (alignHeader && alignValue) {
+				if (upstream.headers.get(alignHeader) !== alignValue) {
 					clientGone.abort();
-					res
-						.status(502)
-						.json({ error: "Kokoro synthesis alignment unavailable; no speech fallback" });
+					res.status(502).json({
+						error: `${zonosRelay ? "ZONOS3-Mini" : "Kokoro"} synthesis alignment unavailable; no speech fallback`,
+					});
 					return;
 				}
-				res.setHeader("X-Kokoro-Alignment", KOKORO_ALIGNMENT);
+				res.setHeader(alignHeader, alignValue);
 			}
 			res.setHeader("Content-Type", "application/octet-stream");
 			res.setHeader("Cache-Control", "no-store");
