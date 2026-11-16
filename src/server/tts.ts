@@ -328,44 +328,65 @@ export function createTtsRouter(): Router {
 
 // ── Ordinary read-aloud: bounded synthesis + WAV transport ─────────
 
+const ZONOS_CHUNK_MAX_CHARS = 440;
+
+/**
+ * Split ordinary read-aloud text into bounded requests for ZONOS3-Mini:
+ * disable the Kokoro-era 36-char first-clause split (Zonos already streams
+ * prefix audio within one request) and pack consecutive sentences up to the
+ * per-generation budget so short replies stay in one continuous synthesis.
+ */
+export function splitZonosReadAloud(text: string): string[] {
+	const splitter = new SpokenSentences(false);
+	const chunks: string[] = [];
+	let packed = "";
+	for (let offset = 0; offset < text.length; offset += 220) {
+		const sentences = splitter.push(text.slice(offset, offset + 220), offset + 220 >= text.length);
+		for (const sentence of sentences) {
+			if (packed && packed.length + 1 + sentence.length <= ZONOS_CHUNK_MAX_CHARS) {
+				packed = `${packed} ${sentence}`;
+			} else {
+				if (packed) chunks.push(packed);
+				packed = sentence;
+			}
+		}
+	}
+	if (packed) chunks.push(packed);
+	return chunks;
+}
+
 async function* synthZonosPcm(
 	text: string,
 	speed: number,
 	controller: AbortController,
 ): AsyncGenerator<Uint8Array> {
-	// Feed the existing sentence splitter incrementally so even a huge sentence
-	// cannot overflow Zonos's per-generation context/audio budget.
-	const splitter = new SpokenSentences();
-	for (let offset = 0; offset < text.length; offset += 220) {
-		const sentences = splitter.push(text.slice(offset, offset + 220), offset + 220 >= text.length);
-		for (const sentence of sentences) {
-			controller.signal.throwIfAborted();
-			const timer = setTimeout(
-				() => controller.abort(new Error("Zonos first-chunk timeout")),
-				STREAM_TTFB_TIMEOUT_MS,
-			);
-			let upstream: globalThis.Response;
-			try {
-				upstream = await fetch(`${ZONOS_RELAY_BASE}/tts/stream`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json", "X-Zonos-Alignment": ZONOS3_ALIGNMENT },
-					body: JSON.stringify({ text: sentence, voice: "Savannah", speed }),
-					signal: controller.signal,
-				});
-			} finally {
-				clearTimeout(timer);
-			}
-			if (!upstream.ok)
-				throw new Error(
-					`zonos3 tts upstream ${upstream.status}: ${(await upstream.text()).slice(0, 300)}`,
-				);
-			// Without this opt-in Zonos returns raw float32, not framed PCM16.
-			if (upstream.headers.get("X-Zonos-Alignment") !== ZONOS3_ALIGNMENT) {
-				await upstream.body?.cancel();
-				throw new Error("ZONOS3-Mini PCM stream negotiation unavailable; no speech fallback");
-			}
-			yield* zonosPcm(upstream);
+	for (const chunk of splitZonosReadAloud(text)) {
+		controller.signal.throwIfAborted();
+		const timer = setTimeout(
+			() => controller.abort(new Error("Zonos first-chunk timeout")),
+			STREAM_TTFB_TIMEOUT_MS,
+		);
+		let upstream: globalThis.Response;
+		try {
+			upstream = await fetch(`${ZONOS_RELAY_BASE}/tts/stream`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "X-Zonos-Alignment": ZONOS3_ALIGNMENT },
+				body: JSON.stringify({ text: chunk, voice: "Savannah", speed }),
+				signal: controller.signal,
+			});
+		} finally {
+			clearTimeout(timer);
 		}
+		if (!upstream.ok)
+			throw new Error(
+				`zonos3 tts upstream ${upstream.status}: ${(await upstream.text()).slice(0, 300)}`,
+			);
+		// Without this opt-in Zonos returns raw float32, not framed PCM16.
+		if (upstream.headers.get("X-Zonos-Alignment") !== ZONOS3_ALIGNMENT) {
+			await upstream.body?.cancel();
+			throw new Error("ZONOS3-Mini PCM stream negotiation unavailable; no speech fallback");
+		}
+		yield* zonosPcm(upstream);
 	}
 }
 

@@ -13,6 +13,7 @@ import {
 	voicePayload,
 } from "../extensions/voice-test/lib.js";
 import { projectTranscript } from "../src/client/project.js";
+import { SpokenMarkdown } from "../src/client/spoken-markdown.js";
 import {
 	listPiSessions,
 	readPiSessionMessages,
@@ -57,6 +58,13 @@ describe("voice sentence buffering", () => {
 		expect(
 			splitter.push("the service is running, with all locks free. Next sentence.", true),
 		).toEqual(["and the service is running, with all locks free.", "Next sentence."]);
+	});
+	it("waits for a full sentence when earlyFirstClause is disabled for ZONOS3-Mini", () => {
+		const speech = new SpokenMarkdown(false);
+		expect(speech.push("I checked the Server4 status for you, and ")).toEqual([]);
+		expect(speech.push("the service is running. ", false)).toEqual([
+			"I checked the Server4 status for you, and the service is running.",
+		]);
 	});
 	it("bounds chunks when the model writes a long unpunctuated reply", () => {
 		expect(new SpokenSentences().push("word ".repeat(70)).every((text) => text.length <= 220)).toBe(

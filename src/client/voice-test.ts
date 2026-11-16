@@ -370,7 +370,7 @@ export function openVoiceTest(
 	let extensionAvailable = false;
 	let startSent = false;
 	let currentTurn = "";
-	let relaySpeech = new SpokenMarkdown();
+	let relaySpeech = new SpokenMarkdown(!useZonosTts);
 	let relayMessage = "";
 	let lfmStartedUtterance = "";
 	let restoredReply: HTMLElement | null = null;
@@ -1029,7 +1029,7 @@ export function openVoiceTest(
 				relayPauseSkipped = voicePaused && Boolean(pausedSpeechMessage);
 				if (voicePaused && !pausedSpeechMessage) pausedSpeechMessage = relayMessage;
 				relayText = "";
-				relaySpeech = new SpokenMarkdown();
+				relaySpeech = new SpokenMarkdown(!useZonosTts);
 				relayFirstText = 0;
 				if (!relayPauseSkipped) lfmStartedUtterance = "";
 				if (!isStreamingPi) relayMuted = false;

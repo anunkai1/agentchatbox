@@ -7,6 +7,8 @@ export class SpokenMarkdown {
 	private source = "";
 	private emitted = "";
 
+	constructor(private readonly earlyFirstClause = true) {}
+
 	push(delta: string, final = false): string[] {
 		this.source += delta;
 		if (!final && this.incomplete()) return [];
@@ -18,7 +20,7 @@ export class SpokenMarkdown {
 			);
 		}
 		const tail = text.slice(this.emitted.length);
-		const chunks = new SpokenSentences(!this.emitted).push(
+		const chunks = new SpokenSentences(this.earlyFirstClause && !this.emitted).push(
 			tail + (/\s$/.test(this.source) ? " " : ""),
 			final,
 		);

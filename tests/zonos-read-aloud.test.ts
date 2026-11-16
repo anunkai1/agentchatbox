@@ -107,7 +107,22 @@ describe("ordinary ZONOS3-Mini read-aloud", () => {
 		expect(bytes.subarray(end + 5).toString()).toContain("before its END frame");
 	});
 
-	it("bounds long replies into sequential synthesis requests without dropping prose", async () => {
+	it("packs consecutive sentences without splitting the opening comma into one request", async () => {
+		const upstream = vi.fn(async () => response());
+		vi.stubGlobal("fetch", upstream);
+		const text =
+			"I checked the Server4 status for you, and the service is running. Everything looks fine. Ready when you are.";
+		const result = await post("/stream", { text });
+		expect(result.status).toBe(200);
+		await result.arrayBuffer();
+		expect(upstream).toHaveBeenCalledTimes(1);
+		const body = JSON.parse(
+			(upstream.mock.calls[0] as unknown as [string, RequestInit])[1].body as string,
+		);
+		expect(body.text).toBe(text);
+	});
+
+	it("bounds long replies into packed sequential synthesis requests without dropping prose", async () => {
 		const upstream = vi.fn(async () => response());
 		vi.stubGlobal("fetch", upstream);
 		const text = "A long reply should retain all of its words without exceeding the model budget. "
@@ -121,6 +136,7 @@ describe("ordinary ZONOS3-Mini read-aloud", () => {
 				JSON.parse((call as unknown as [string, RequestInit])[1].body as string).text as string,
 		);
 		expect(submitted.length).toBeGreaterThan(1);
+		expect(submitted.length).toBeLessThan(15);
 		expect(submitted.every((part) => part.length <= 440)).toBe(true);
 		expect(submitted.join(" ")).toBe(text);
 	});
