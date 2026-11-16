@@ -29,8 +29,13 @@ vi.mock("../src/server/session-registry.js", () => ({
 		statusFrames?: Map<string, unknown>;
 	}) => session.busy || session.streaming || session.statusFrames?.has("claude-progress"),
 }));
+const getProject = vi.hoisted(() => vi.fn((): Record<string, unknown> | undefined => undefined));
 vi.mock("../src/server/chat.js", () => ({ broadcastSessions }));
-vi.mock("../src/server/projects.js", () => ({ listProjects: () => [] }));
+vi.mock("../src/server/projects.js", () => ({
+	GLOBAL_PROJECT_ID: "global",
+	getProject,
+	listProjects: () => [],
+}));
 
 const { createInternalSessionsRouter } = await import("../src/server/internal-sessions.js");
 const { config } = await import("../src/server/config.js");
@@ -170,12 +175,43 @@ describe("/api/internal", () => {
 		expect(registry.releaseUnattached).toHaveBeenCalledWith(resumed);
 	});
 
-	it("exposes the authenticated process incarnation and live sessions", async () => {
+	it("exposes the authenticated process incarnation, live sessions, and configured ACB defaultModel", async () => {
+		getProject.mockReturnValueOnce(undefined);
 		const response = await fetch(`${base}/api/internal/sessions`, {
 			headers: { authorization: `Bearer ${config.internalToken}` },
 		});
 		expect(await response.json()).toEqual({ bootId: config.bootId, sessions: [] });
 		expect((await fetch(`${base}/api/internal/sessions`)).status).toBe(404);
+
+		getProject.mockReturnValueOnce({
+			id: "global",
+			name: "Global",
+			icon: "🌐",
+			cwd: folder,
+			defaultProvider: "antigravity-acp",
+			defaultModelId: "gemini-4-hydrogen",
+			defaultThinkingLevel: "high",
+		});
+		const settingsFile = join(root, "pi-settings.json");
+		writeFileSync(
+			settingsFile,
+			JSON.stringify({
+				modelThinkingLevels: { "antigravity-acp/gemini-4-hydrogen": "xhigh" },
+			}),
+		);
+		vi.stubEnv("AGENTCHATBOX_PI_SETTINGS_FILE", settingsFile);
+		const withDefault = await fetch(`${base}/api/internal/sessions`, {
+			headers: { authorization: `Bearer ${config.internalToken}` },
+		});
+		expect(await withDefault.json()).toEqual({
+			bootId: config.bootId,
+			sessions: [],
+			defaultModel: {
+				provider: "antigravity-acp",
+				modelId: "gemini-4-hydrogen",
+				thinkingLevel: "xhigh",
+			},
+		});
 	});
 
 	it("deduplicates a conditional continuation across repeated requests", async () => {

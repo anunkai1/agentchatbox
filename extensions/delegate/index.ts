@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import Type from "typebox";
+import { readModelThinking } from "../../src/server/model-thinking.js";
+import { THINKING_LEVELS, type ThinkingLevel } from "../../src/shared/thinking.js";
 import { transportStoppedSince } from "../../src/shared/transport-state.js";
 import {
 	AcbSessions,
@@ -120,14 +122,32 @@ export default function registerDelegate(
 		};
 	}
 
-	function pickModel(ctx: ExtensionContext, name: string, thinkingLevel: string): ModelChoice {
+	function validateThinking(level: string): ThinkingLevel {
+		if (!THINKING_LEVELS.includes(level as ThinkingLevel)) {
+			throw new Error(`unknown thinking level "${level}"`);
+		}
+		return level as ThinkingLevel;
+	}
+
+	function pickModel(
+		ctx: ExtensionContext,
+		name: string,
+		fallbackThinking: string,
+		explicitThinking?: string,
+	): ModelChoice {
 		const slash = name.indexOf("/");
 		const model =
 			(slash > 0
 				? ctx.modelRegistry.find(name.slice(0, slash), name.slice(slash + 1))
 				: undefined) ?? resolveModelToken(name, ctx.modelRegistry.getAvailable());
 		if (!model) throw new Error(`unknown model "${name}"`);
-		return { provider: model.provider, modelId: model.id, thinkingLevel };
+		return {
+			provider: model.provider,
+			modelId: model.id,
+			thinkingLevel: explicitThinking
+				? validateThinking(explicitThinking)
+				: (readModelThinking(model.provider, model.id) ?? fallbackThinking),
+		};
 	}
 
 	/** The Claude Code model this chat is in (/cc on), asked of claude-delegate. */
@@ -155,7 +175,7 @@ export default function registerDelegate(
 			...DISPATCH_GUIDANCE,
 			cwdGuidance(),
 			BRIEF_GUIDANCE,
-			"The worker's report arrives here as a new message. Omit model unless the owner specified one; workers inherit this chat's model and thinking level.",
+			"The worker's report arrives here as a new message. Omit model and thinkingLevel unless the owner specified one; workers use ACB's default model (or this chat's model if unset).",
 		].join(" "),
 		promptGuidelines: [...DISPATCH_GUIDANCE, BRIEF_GUIDANCE],
 		parameters: Type.Object({
@@ -165,6 +185,9 @@ export default function registerDelegate(
 			model: Type.Optional(
 				Type.String({ description: "provider/model-id, only if the owner asked for a model" }),
 			),
+			thinkingLevel: Type.Optional(
+				Type.String({ description: "Thinking level, only if the owner asked for one" }),
+			),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const parentModel = currentModel(ctx);
@@ -173,16 +196,24 @@ export default function registerDelegate(
 			const named = params.model?.toLowerCase();
 			const claude =
 				sticky && (!named || CLAUDE_MODES.includes(named)) ? (named ?? sticky) : undefined;
+			let workerModel: ModelChoice;
+			if (params.model && !claude) {
+				workerModel = pickModel(ctx, params.model, parentModel.thinkingLevel, params.thinkingLevel);
+			} else if (claude) {
+				workerModel = parentModel;
+			} else {
+				const base = (await acb.defaultModel?.()) ?? parentModel;
+				workerModel = params.thinkingLevel
+					? { ...base, thinkingLevel: validateThinking(params.thinkingLevel) }
+					: base;
+			}
 			const record = await startWorker(acb, {
 				title: params.title,
 				task: params.task,
 				cwd: params.cwd,
 				parentSessionId: sessionId(ctx),
 				parentModel,
-				workerModel:
-					params.model && !claude
-						? pickModel(ctx, params.model, parentModel.thinkingLevel)
-						: parentModel,
+				workerModel,
 				claude,
 			});
 			return {

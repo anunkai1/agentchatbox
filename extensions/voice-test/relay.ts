@@ -217,10 +217,6 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 			if (params.action !== "status" && !ownerTurn)
 				throw new Error("Worker reports cannot authorise new actions; ask the owner");
 			if (params.action === "start") {
-				if (state.workerModel.provider === "antigravity-acp")
-					throw new Error(
-						"Antigravity automation is not enabled. Choose another ACB model before starting a new Relay conversation.",
-					);
 				if (state.workerId || state.starting)
 					throw new Error(
 						"This conversation already has a job or an uncertain start. Inspect status; do not submit again.",

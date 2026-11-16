@@ -7,6 +7,7 @@
  * Run with `node cli.mjs …`: the launcher loads TypeScript through local tsx.
  */
 import { readFileSync } from "node:fs";
+import { readModelThinking } from "../../src/server/model-thinking.ts";
 import {
 	AcbSessions,
 	BRIEF_GUIDANCE,
@@ -31,7 +32,7 @@ const HELP = `Delegate work to worker chats (ordinary ACB chats that report back
   ${CLI} message <worker id> < message
   ${CLI} status [words]
 
-start: workers run in Claude Code with this chat's model unless --model names another.
+start: workers run in Claude Code in /cc chats, or use ACB's default model unless --model names another.
 --${cwdGuidance()}
 After starting, give the owner the link and end your turn: the worker's report arrives in this chat.
 
@@ -73,17 +74,26 @@ async function main(args: string[]): Promise<string> {
 				? CLAUDE_MODES.includes(model.toLowerCase())
 					? model.toLowerCase()
 					: undefined
-				: env("ACB_CLAUDE_MODE");
+				: process.env.ACB_CLAUDE_MODE || undefined;
 			const [provider, ...rest] = (model && !claude ? model : "").split("/");
+			const modelId = rest.join("/");
+			const workerModel =
+				provider && modelId
+					? {
+							provider,
+							modelId,
+							thinkingLevel: readModelThinking(provider, modelId) ?? parentModel.thinkingLevel,
+						}
+					: claude
+						? parentModel
+						: ((await acb.defaultModel()) ?? parentModel);
 			const record = await startWorker(acb, {
 				title,
 				task,
 				cwd,
 				parentSessionId: env("ACB_CHAT_ID"),
 				parentModel,
-				workerModel: provider
-					? { provider, modelId: rest.join("/"), thinkingLevel: parentModel.thinkingLevel }
-					: parentModel,
+				workerModel,
 				claude,
 			});
 			return `Worker started: ${chatLink(record.title, record.id)} in ${record.cwd} (${workerLabel(record)}). Worker id: ${record.id}`;

@@ -37,7 +37,7 @@ const MODELS = [
 	{ provider: "openai", id: "gpt-6.1-sol" },
 ];
 
-function harness() {
+function harness(defaultModel?: { provider: string; modelId: string; thinkingLevel: string }) {
 	const tools = new Map<string, Tool>();
 	const events = new Map<string, Handler>();
 	const commands = new Map<string, Handler>();
@@ -71,6 +71,7 @@ function harness() {
 	const acb = {
 		create: vi.fn(async () => `worker-${++nextId}`),
 		prompt: vi.fn(async () => {}),
+		defaultModel: vi.fn(async () => defaultModel),
 	};
 	const telegram = vi.fn();
 	registerDelegate(pi as never, acb as never, telegram);
@@ -88,9 +89,12 @@ function harness() {
 }
 
 let recordsDir: string;
+let settingsFile: string;
 beforeEach(() => {
 	recordsDir = mkdtempSync(join(tmpdir(), "acb-delegations-"));
+	settingsFile = join(recordsDir, "pi-settings.json");
 	vi.stubEnv("ACB_DELEGATIONS_DIR", recordsDir);
+	vi.stubEnv("AGENTCHATBOX_PI_SETTINGS_FILE", settingsFile);
 });
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -185,6 +189,72 @@ describe("delegate extension", () => {
 			provider: "anthropic",
 			modelId: "claude-sonnet-5-5",
 			thinkingLevel: "high",
+		});
+	});
+
+	it("uses ACB's default model for workers while keeping parentModel for reporting", async () => {
+		const acbDefault = {
+			provider: "antigravity-acp",
+			modelId: "gemini-4-hydrogen",
+			thinkingLevel: "high",
+		};
+		const h = harness(acbDefault);
+		h.pi.getThinkingLevel = () => "off";
+		await h.tools
+			.get("delegate")!
+			.execute(
+				"call",
+				{ title: "Fix seed", task: "Fix it", cwd: tmpdir() },
+				undefined,
+				undefined,
+				h.ctx("parent-1"),
+			);
+		expect(h.acb.create).toHaveBeenCalledWith(tmpdir(), acbDefault);
+		expect(readDelegation("worker-1")).toMatchObject({
+			parentModel: { provider: "openai", modelId: "gpt-6.1-sol", thinkingLevel: "off" },
+			workerModel: acbDefault,
+		});
+	});
+
+	it("uses the target model's saved thinking level and allows explicit thinkingLevel override", async () => {
+		writeFileSync(
+			settingsFile,
+			JSON.stringify({ modelThinkingLevels: { "anthropic/claude-sonnet-5-5": "low" } }),
+		);
+		const h = harness({
+			provider: "antigravity-acp",
+			modelId: "gemini-4-hydrogen",
+			thinkingLevel: "high",
+		});
+		h.pi.getThinkingLevel = () => "off";
+		await h.tools
+			.get("delegate")!
+			.execute(
+				"call",
+				{ title: "T1", task: "t", cwd: tmpdir(), model: "sonnet" },
+				undefined,
+				undefined,
+				h.ctx("parent-1"),
+			);
+		expect(h.acb.create.mock.calls[0][1]).toEqual({
+			provider: "anthropic",
+			modelId: "claude-sonnet-5-5",
+			thinkingLevel: "low",
+		});
+
+		await h.tools
+			.get("delegate")!
+			.execute(
+				"call",
+				{ title: "T2", task: "t", cwd: tmpdir(), thinkingLevel: "xhigh" },
+				undefined,
+				undefined,
+				h.ctx("parent-1"),
+			);
+		expect(h.acb.create.mock.calls[1][1]).toEqual({
+			provider: "antigravity-acp",
+			modelId: "gemini-4-hydrogen",
+			thinkingLevel: "xhigh",
 		});
 	});
 

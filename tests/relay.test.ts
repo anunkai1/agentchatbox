@@ -141,6 +141,10 @@ describe("Relay full-access agent and tracked worker", () => {
 		const h = harness(); await h.command("start anthropic/chosen-worker medium"); h.owner(); await h.run(START);
 		expect(h.acb.create).toHaveBeenCalledWith(tmpdir(), { provider: "anthropic", modelId: "chosen-worker", thinkingLevel: "medium" });
 	});
+	it("allows antigravity-acp workers captured for Relay", async () => {
+		const h = harness(); await h.command("start antigravity-acp/gemini-4-hydrogen high"); h.owner(); await h.run(START);
+		expect(h.acb.create).toHaveBeenCalledWith(tmpdir(), { provider: "antigravity-acp", modelId: "gemini-4-hydrogen", thinkingLevel: "high" });
+	});
 	it("does not retry uncertain follow-ups even under a new tool call after restart", async () => {
 		const h = harness(); await h.command("start"); h.owner(); await h.run(START);
 		h.acb.prompt.mockRejectedValue(new Error("uncertain delivery"));

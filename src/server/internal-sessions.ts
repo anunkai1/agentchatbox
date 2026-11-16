@@ -24,7 +24,8 @@ import { recordTransportStop, transportStoppedSince } from "../shared/transport-
 import { asyncHandler } from "./async-handler.js";
 import { broadcastSessions } from "./chat.js";
 import { config } from "./config.js";
-import { listProjects } from "./projects.js";
+import { readModelThinking } from "./model-thinking.js";
+import { GLOBAL_PROJECT_ID, getProject, listProjects } from "./projects.js";
 import { PromptReceipts } from "./prompt-receipts.js";
 import { findSessionCwd } from "./session-list.js";
 import { isWorking, registry } from "./session-registry.js";
@@ -65,6 +66,21 @@ function modelFields(body: Record<string, unknown>) {
 	};
 }
 
+function globalDefaultModel():
+	| { provider: string; modelId: string; thinkingLevel: ThinkingLevel }
+	| undefined {
+	const global = getProject(GLOBAL_PROJECT_ID);
+	if (!global?.defaultProvider || !global.defaultModelId) return undefined;
+	return {
+		provider: global.defaultProvider,
+		modelId: global.defaultModelId,
+		thinkingLevel:
+			readModelThinking(global.defaultProvider, global.defaultModelId) ??
+			global.defaultThinkingLevel ??
+			"medium",
+	};
+}
+
 export function createInternalSessionsRouter(): Router {
 	const router = Router();
 	router.use(requireToken);
@@ -72,7 +88,12 @@ export function createInternalSessionsRouter(): Router {
 	const receipts = new PromptReceipts(origin, config.bootId);
 
 	router.get("/sessions", (_req, res) => {
-		res.json({ bootId: config.bootId, sessions: registry.statusSnapshot() });
+		const defaultModel = globalDefaultModel();
+		res.json({
+			bootId: config.bootId,
+			sessions: registry.statusSnapshot(),
+			...(defaultModel ? { defaultModel } : {}),
+		});
 	});
 
 	router.post(

@@ -409,6 +409,22 @@ export class AcbSessions {
 		return data.sessions.find((session) => session.sessionId === sessionId) ?? null;
 	}
 
+	async defaultModel(): Promise<ModelChoice | undefined> {
+		if (!this.available) return undefined;
+		try {
+			const response = await fetch(`${this.baseUrl}/api/internal/sessions`, {
+				headers: { authorization: `Bearer ${this.token}` },
+				signal: AbortSignal.timeout(5_000),
+			});
+			if (!response.ok) return undefined;
+			const data = (await response.json()) as { defaultModel?: ModelChoice };
+			const model = data.defaultModel;
+			return model?.provider && model.modelId && model.thinkingLevel ? model : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
 	private async post(path: string, body: unknown): Promise<unknown> {
 		if (!this.available) throw new Error("delegation only works in ACB chats");
 		const response = await fetch(`${this.baseUrl}${path}`, {
@@ -426,6 +442,7 @@ export class AcbSessions {
 export interface WorkerClient {
 	create(cwd: string, model: ModelChoice): Promise<string>;
 	prompt(sessionId: string, message: string, model: ModelChoice): Promise<void>;
+	defaultModel?(): Promise<ModelChoice | undefined>;
 }
 
 /**

@@ -16,9 +16,12 @@ status, full folder path, last update and parent/worker links.
   independently/concurrently where appropriate. Keep tightly dependent work
   together. Give the owner all session links and end the turn **after all
   dispatches**, without waiting or polling for completion.
-- Workers inherit the current model and thinking level unless the owner specifies
-  a model. No additional worker limit, repository lock or one-worker-per-repo rule
-  is introduced; ACB's existing live-session capacity still applies.
+- Workers use ACB's configured default model (falling back to the current chat's
+  model and thinking level when unset), unless the owner specifies a model or
+  thinking level (or `/cc on` is active). When an explicit model is named
+  without a thinking level, its saved per-model thinking level is used if set.
+  No additional worker limit, repository lock or one-worker-per-repo rule is
+  introduced; ACB's existing live-session capacity still applies.
 
 ## Brief template
 

@@ -16,8 +16,22 @@ beforeAll(async () => {
 		let raw = "";
 		req.on("data", (chunk) => (raw += chunk));
 		req.on("end", () => {
-			requests.push({ url: req.url ?? "", body: JSON.parse(raw) });
 			res.setHeader("content-type", "application/json");
+			if (req.method === "GET" && req.url === "/api/internal/sessions") {
+				res.end(
+					JSON.stringify({
+						bootId: "b-1",
+						sessions: [],
+						defaultModel: {
+							provider: "antigravity-acp",
+							modelId: "gemini-4-hydrogen",
+							thinkingLevel: "high",
+						},
+					}),
+				);
+				return;
+			}
+			requests.push({ url: req.url ?? "", body: JSON.parse(raw) });
 			res.end(
 				JSON.stringify(req.url === "/api/internal/sessions" ? { sessionId: "w-1" } : { ok: true }),
 			);
@@ -32,6 +46,7 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 function run(
 	args: string[],
 	input: string,
+	extraEnv: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; code: number }> {
 	return new Promise((resolve) => {
 		const child = execFile(
@@ -49,6 +64,7 @@ function run(
 					ACB_CHAT_MODEL: "openai/gpt-6.1-sol",
 					ACB_CHAT_THINKING: "high",
 					ACB_CLAUDE_MODE: "opus",
+					...extraEnv,
 				},
 			},
 			(error, stdout, stderr) =>
@@ -99,5 +115,20 @@ describe("delegate CLI (Claude Code's way to delegate)", () => {
 		const out = await run(["message", "nope"], "x");
 		expect(out.code).not.toBe(0);
 		expect(out.stderr).toContain("no worker with id nope");
+	});
+
+	it("uses ACB defaultModel when ACB_CLAUDE_MODE is unset", async () => {
+		requests.length = 0;
+		const out = await run(
+			["start", "--title", "Default model check", "--cwd", tmpdir()],
+			"The brief",
+			{ ACB_CLAUDE_MODE: "", ACB_CHAT_THINKING: "off" },
+		);
+		expect(out.code, out.stderr).toBe(0);
+		expect(requests[0].body).toMatchObject({
+			provider: "antigravity-acp",
+			modelId: "gemini-4-hydrogen",
+			thinkingLevel: "high",
+		});
 	});
 });

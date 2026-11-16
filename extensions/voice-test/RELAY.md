@@ -23,9 +23,7 @@ integration or standing proactive mandate is installed.
    work** for the original conversational LFM engine) and a separate **Delegated
    work** model/thinking line. Conversation uses
    `venice/deepseek-v4-1-flash-1017`; work uses the captured ACB selection. Workers
-   use native Pi, not the originating chat's `/cc` mode. Antigravity automation
-   is deliberately unavailable under the current provider mandate: choose a
-   different work model before starting a new Relay conversation.
+   use native Pi, not the originating chat's `/cc` mode.
 3. The default when unset is **Pi + Server2 ZONOS3-Mini (speech-only, aligned)**
    (`acb-relay-voice-engine = "zonos3"`, or `/relay zonos3`). Browser Silero VAD +
    Server2 Fluid Speech Pro STT → full-access Pi → rendered `SpokenMarkdown`
