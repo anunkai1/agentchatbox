@@ -26,6 +26,13 @@ export interface AlignedTtsConfig {
 	audioFormat: "wav" | "pcm16";
 	label: string;
 	shortLabel: string;
+	/**
+	 * When true the engine honours a synthesis `speed` multiplier, so the request
+	 * carries the footer picker's value instead of a fixed 1. Zonos has no native
+	 * speed, but its relay maps the value onto the checkpoint's speaking-rate
+	 * condition, so leaving this unset would keep Relay at one fixed pace.
+	 */
+	speedParam?: boolean;
 }
 
 export const KOKORO_TTS_CONFIG: AlignedTtsConfig = {
@@ -46,6 +53,7 @@ export const ZONOS3_TTS_CONFIG: AlignedTtsConfig = {
 	audioFormat: "pcm16",
 	label: "Server2 ZONOS3-Mini",
 	shortLabel: "ZONOS3-Mini",
+	speedParam: true,
 };
 
 /** Handles arbitrary HTTP chunk boundaries, bounded before allocating payloads. */
@@ -271,11 +279,18 @@ export class KokoroTtsTransport implements TtsTransport {
 	onclose: TtsTransport["onclose"] = null;
 	private ledgers = new Map<number, Ledger>();
 	private readonly config: AlignedTtsConfig;
-	constructor(configOrEndpoint: string | AlignedTtsConfig = KOKORO_TTS_CONFIG) {
+	/**
+	 * Synthesis speed for every chunk of this speaker, captured once at
+	 * construction so a picker change mid-answer cannot mix paces within one
+	 * spoken turn.
+	 */
+	private readonly speed: number;
+	constructor(configOrEndpoint: string | AlignedTtsConfig = KOKORO_TTS_CONFIG, speed = 1) {
 		this.config =
 			typeof configOrEndpoint === "string"
 				? { ...KOKORO_TTS_CONFIG, endpoint: configOrEndpoint }
 				: configOrEndpoint;
+		this.speed = this.config.speedParam ? speed : 1;
 		queueMicrotask(() =>
 			this.emit({ type: "ready", protocol: 3, tts: 1, outputRate: this.config.sampleRate }),
 		);
@@ -399,7 +414,7 @@ export class KokoroTtsTransport implements TtsTransport {
 				"Content-Type": "application/json",
 				[this.config.alignmentHeader]: this.config.alignmentValue,
 			},
-			body: JSON.stringify({ text, speed: 1 }),
+			body: JSON.stringify({ text, speed: this.speed }),
 			signal: ledger.controller.signal,
 		});
 		if (
@@ -548,9 +563,9 @@ export function createKokoroSpeaker(callbacks: LfmTtsSpeakerCallbacks): LfmTtsSp
 	});
 }
 
-export function createZonosSpeaker(callbacks: LfmTtsSpeakerCallbacks): LfmTtsSpeaker {
+export function createZonosSpeaker(callbacks: LfmTtsSpeakerCallbacks, speed = 1): LfmTtsSpeaker {
 	return new LfmTtsSpeaker(callbacks, "", {
-		create: () => new KokoroTtsTransport(ZONOS3_TTS_CONFIG),
+		create: () => new KokoroTtsTransport(ZONOS3_TTS_CONFIG, speed),
 		label: ZONOS3_TTS_CONFIG.label,
 		outputRate: ZONOS3_TTS_CONFIG.sampleRate,
 	});
