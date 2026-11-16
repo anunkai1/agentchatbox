@@ -60,6 +60,9 @@ youtube-*.png
 yt-*.png
 tmp_*.png
 
+# Scratch directory for one-off generated assets; nothing in the repo reads it.
+tmp/
+
 # Search index (regeneratable from pi session JSONL)
 data/
 
