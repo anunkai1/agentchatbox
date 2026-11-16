@@ -1136,7 +1136,13 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				"Voice",
 			);
 			await page.locator(".settings-row").filter({ hasText: "Speech speed" }).click();
-			expect(await page.getByRole("dialog", { name: "TTS speech speed" }).isVisible()).toBe(true);
+			const speedDialog = page.getByRole("dialog", { name: "TTS speech speed" });
+			expect(await speedDialog.isVisible()).toBe(true);
+			expect(await speedDialog.locator(".model-name").allInnerTexts()).toEqual([
+				"1×",
+				"1.25×",
+				"1.4×",
+			]);
 			await page.getByRole("button", { name: "Close", exact: true }).click();
 			await page.getByRole("button", { name: "Open settings", exact: true }).click();
 			await page.locator(".settings-advanced-summary").click();

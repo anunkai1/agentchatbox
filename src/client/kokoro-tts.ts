@@ -301,7 +301,7 @@ export class KokoroTtsTransport implements TtsTransport {
 	private resolveUtteranceSpeed(): number {
 		if (!this.config.speedParam) return 1;
 		const raw = this.getSpeed();
-		return Number.isFinite(raw) ? Math.min(2, Math.max(0.5, raw)) : 1;
+		return Number.isFinite(raw) ? Math.min(1.4, Math.max(0.5, raw)) : 1;
 	}
 	private emit(message: unknown): void {
 		if (this.readyState === 1) this.onmessage?.({ data: JSON.stringify(message) });

@@ -692,7 +692,7 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 	});
 
 	it("snapshots Zonos speed per utterance, clamps out-of-range values, and applies changes on the next turn", async () => {
-		let speed = 1.5;
+		let speed = 1.25;
 		const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
 			const { text } = JSON.parse(String(init?.body)) as { text: string };
 			const m = {
@@ -719,28 +719,28 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 		speaker.enqueueSegment("First.");
 		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
 		// Changing speed mid-turn must not affect later chunks in the same turn.
-		speed = 2.0;
+		speed = 1.4;
 		speaker.enqueueSegment("Second.");
 		speaker.finishUtterance();
 		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
 		expect(JSON.parse(String((fetch.mock.calls[0][1] as RequestInit).body))).toEqual({
 			text: "First.",
-			speed: 1.5,
+			speed: 1.25,
 		});
 		expect(JSON.parse(String((fetch.mock.calls[1][1] as RequestInit).body))).toEqual({
 			text: "Second.",
-			speed: 1.5,
+			speed: 1.25,
 		});
 
-		// Next turn picks up the updated speed; out-of-range values clamp to [0.5, 2].
-		speed = 3.5;
+		// Next turn picks up the updated speed; out-of-range values clamp to [0.5, 1.4].
+		speed = 1.5;
 		speaker.beginUtterance("turn-2", 0, vi.fn());
 		speaker.enqueueSegment("Third.");
 		speaker.finishUtterance();
 		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
 		expect(JSON.parse(String((fetch.mock.calls[2][1] as RequestInit).body))).toEqual({
 			text: "Third.",
-			speed: 2,
+			speed: 1.4,
 		});
 
 		speed = Number.NaN;

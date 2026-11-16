@@ -166,12 +166,12 @@ function declarePlaybackAudioSession(): void {
 }
 
 /**
- * Speed to ask the engine for, clamped to what it accepts. The picker only
- * offers 1–2x, so this only matters for a persisted pref from an older build or
- * a hand-edited one — which would otherwise come back as a 400.
+ * Speed to ask the engine for, clamped to [0.5, 1.4]. ZONOS3-Mini starts
+ * swallowing words above 1.4x, so persisted 1.5x/2x prefs from older builds
+ * are clamped here as well.
  */
 function clampSynthSpeed(rate: number): number {
-	return Math.min(2, Math.max(0.5, rate));
+	return Math.min(1.4, Math.max(0.5, rate));
 }
 
 /**

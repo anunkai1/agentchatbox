@@ -119,9 +119,13 @@ describe("Zonos voice preferences", () => {
 		expect(state.ttsVoice).toBeNull();
 		expect(state.ttsSpeed).toBe(1.4);
 		state.sessionId = "zonos-session";
-		storage.setItem("acb:prefs:zonos-session", JSON.stringify({ ttsVoice: "Savannah" }));
+		storage.setItem(
+			"acb:prefs:zonos-session",
+			JSON.stringify({ ttsVoice: "Savannah", ttsSpeed: 2 }),
+		);
 		applySessionPrefs();
 		expect(state.ttsVoice).toBe("Savannah");
+		expect(state.ttsSpeed).toBe(1.4);
 	});
 });
 

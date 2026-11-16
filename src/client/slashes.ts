@@ -1164,7 +1164,7 @@ export function openThinkPicker(): void {
 }
 
 export function openSpeedPicker(): void {
-	const speeds = [1, 1.25, 1.4, 1.5, 2];
+	const speeds = [1, 1.25, 1.4];
 	const { overlay, box } = openModal("TTS speech speed");
 	for (const rate of speeds) {
 		const row = el("div", { class: "model-row" });

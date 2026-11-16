@@ -126,7 +126,7 @@ export function applySessionPrefs(): void {
 				: prefs.ttsVoice;
 	}
 	if (typeof prefs.ttsSpeed === "number" && Number.isFinite(prefs.ttsSpeed)) {
-		state.ttsSpeed = prefs.ttsSpeed;
+		state.ttsSpeed = Math.min(1.4, Math.max(0.5, prefs.ttsSpeed));
 	}
 
 	const display = loadDisplayDefaults();
