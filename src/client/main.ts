@@ -90,9 +90,7 @@ import {
 	openModelPicker,
 	openOverflowMenu,
 	openPinnedModelPicker,
-	openSpeedPicker,
 	openThinkPicker,
-	openVoicePicker,
 	renderSessionsIntoPicker,
 	resetChatState,
 	setChatControls,
@@ -1714,8 +1712,6 @@ async function boot(): Promise<void> {
 		openModelPicker,
 		openPinnedModelPicker,
 		openThinkPicker,
-		openVoicePicker,
-		openSpeedPicker,
 		openOverflowMenu,
 		handleVoiceRecord,
 		cancelVoiceRecord,
@@ -2341,7 +2337,6 @@ async function boot(): Promise<void> {
 				state.ttsVoice = null;
 				saveSessionPrefs();
 			}
-			state.ttsSpeedParam = h.ttsSpeedParam ?? false;
 			state.voiceRewriteModel = h.voiceRewriteModel ?? null;
 			state.whisperModel = h.whisperModel ?? null;
 			state.imageModel = h.imageModel ?? null;

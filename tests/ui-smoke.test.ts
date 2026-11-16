@@ -1123,7 +1123,6 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 						ttsEngine: "zonos3",
 						ttsVoice: "Savannah",
 						ttsVoices: ["Savannah"],
-						ttsSpeedParam: true,
 					}),
 				}),
 			);

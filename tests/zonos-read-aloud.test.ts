@@ -39,14 +39,17 @@ const post = (path: string, body: unknown = { text: "Hello.", voice: "af_heart",
 	});
 
 describe("ordinary ZONOS3-Mini read-aloud", () => {
-	it("wraps progressive PCM as WAV frames, ignores old Kokoro voices and forwards synthesis speed", async () => {
+	it("forwards progressive PCM16 frames directly, ignores old Kokoro voices and forwards synthesis speed", async () => {
 		const upstream = vi.fn(async () => response());
 		vi.stubGlobal("fetch", upstream);
 		const result = await post("/stream");
 		expect(result.status).toBe(200);
 		expect(result.headers.get("X-Zonos-Alignment")).toBeNull();
+		expect(result.headers.get("X-Audio-Format")).toBe("pcm16");
+		expect(result.headers.get("X-Audio-Sample-Rate")).toBe("44100");
+		expect(result.headers.get("X-Audio-Channels")).toBe("1");
 		expect(Buffer.from(await result.arrayBuffer())).toEqual(
-			Buffer.concat([audioFrame(1, pcmWav(pcm)), audioFrame(0)]),
+			Buffer.concat([audioFrame(1, pcm), audioFrame(0)]),
 		);
 		const [url, init] = upstream.mock.calls[0] as unknown as [string, RequestInit];
 		expect(url).toContain("8184/tts/stream");
@@ -102,7 +105,7 @@ describe("ordinary ZONOS3-Mini read-aloud", () => {
 		);
 		const result = await post("/stream");
 		const bytes = Buffer.from(await result.arrayBuffer());
-		const end = audioFrame(1, pcmWav(pcm)).length;
+		const end = audioFrame(1, pcm).length;
 		expect(bytes[end]).toBe(0x80);
 		expect(bytes.subarray(end + 5).toString()).toContain("before its END frame");
 	});

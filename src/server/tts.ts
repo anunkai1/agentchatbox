@@ -2,19 +2,18 @@
  * TTS endpoint.
  *
  * Ordinary chat uses ZONOS3-Mini at http://127.0.0.1:8184 (neutral Savannah).
- * Its progressive PCM frames are wrapped as WAVs for the existing browser player.
+ * Streaming /api/tts/stream forwards progressive mono 44.1 kHz PCM16 frames
+ * directly; whole-blob /api/tts returns one WAV.
  * Explicit Relay Kokoro/Zonos pipes keep their original contracts.
  *
- * Two routes, same contract to the browser:
+ * Two routes to the browser:
  *   POST /api/tts        { text, voice?, speed? } → audio/wav (whole blob)
- *   POST /api/tts/stream { text, voice?, speed? } → binary frame stream (chunked)
+ *   POST /api/tts/stream { text, voice?, speed? } → binary frame stream (PCM16)
  *   GET  /api/tts/voices { default, available: string[] }
- *
- * The browser never knows the engine — it just plays the WAV / frames.
  */
 
 import express, { type Request, type Response, type Router } from "express";
-import { KOKORO_ALIGNMENT, ZONOS3_ALIGNMENT } from "../shared/kokoro.js";
+import { KOKORO_ALIGNMENT, ZONOS3_ALIGNMENT, ZONOS3_SAMPLE_RATE } from "../shared/kokoro.js";
 import { SpokenSentences } from "../shared/spoken-sentences.js";
 import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
@@ -59,9 +58,7 @@ const MAX_SPEED = 2;
  * cap, speed range) in one place.
  *
  * `speed` is a synthesis parameter, not a playback rate: Zonos conditions its
- * speaking rate; Kokoro scales phoneme durations. The browser asks for it when
- * /api/health advertises ttsSpeedParam, and then leaves Web Audio's playbackRate
- * at 1 — resampling the rate shifts pitch up instead.
+ * speaking rate; Kokoro scales phoneme durations.
  */
 type TtsInput = { text: string; voice: string | undefined; speed: number };
 export function parseTtsBody(req: Request): TtsInput | { error: string; status: number } {
@@ -150,11 +147,14 @@ export function createTtsRouter(): Router {
 			const controller = new AbortController();
 			res.on("close", () => controller.abort());
 			res.setHeader("Content-Type", "application/octet-stream");
+			res.setHeader("X-Audio-Format", "pcm16");
+			res.setHeader("X-Audio-Sample-Rate", String(ZONOS3_SAMPLE_RATE));
+			res.setHeader("X-Audio-Channels", "1");
 			res.setHeader("Cache-Control", "no-store");
 			res.setHeader("X-Accel-Buffering", "no");
 			try {
 				for await (const pcm of synthZonosPcm(parsed.text, parsed.speed, controller)) {
-					if (!res.write(audioFrame(0x01, pcmWav(pcm)))) await waitForDrain(res);
+					if (!res.write(audioFrame(0x01, pcm))) await waitForDrain(res);
 				}
 				res.end(audioFrame(0x00));
 			} catch (error) {

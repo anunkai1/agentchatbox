@@ -1782,12 +1782,6 @@ export function refreshStatus(): void {
 	// title attribute for hover-tooltips.
 	mp.textContent = modelLabel;
 	mp.title = `Model (/model) — current id: ${state.currentModelId ?? "…"}`;
-	const tp = $<HTMLButtonElement>("#think-picker");
-	tp.textContent = `think: ${state.currentThinking}`;
-	const vp = $<HTMLButtonElement>("#voice-picker");
-	vp.textContent = `voice: ${state.ttsVoice ?? "default"}`;
-	const sp = $<HTMLButtonElement>("#speed-picker");
-	sp.textContent = `speed: ${state.ttsSpeed}×`;
 }
 
 /**
@@ -2184,8 +2178,6 @@ export interface ShellHandlers {
 	openModelPicker: () => void;
 	openPinnedModelPicker?: () => void;
 	openThinkPicker: () => void;
-	openVoicePicker: () => void;
-	openSpeedPicker: () => void;
 	openOverflowMenu: () => void;
 	/** Toggle Voice mode from the header pill (mirrors the Settings row). */
 	toggleVoiceMode: () => void;
@@ -2534,42 +2526,6 @@ export function renderShell(): void {
 			},
 			"…",
 		),
-		// The hidden pickers still exist in the DOM so refreshStatus() can
-		// update them; they're just visually hidden via the .picker-hidden
-		// class. The overflow menu gives the user access to all of them.
-		el(
-			"button",
-			{
-				class: "picker-btn picker-hidden",
-				id: "think-picker",
-				type: "button",
-				title: "Thinking (/think)",
-				"aria-label": "Choose thinking level",
-			},
-			"think: …",
-		),
-		el(
-			"button",
-			{
-				class: "picker-btn picker-hidden",
-				id: "voice-picker",
-				type: "button",
-				title: "TTS voice",
-				"aria-label": "Choose text-to-speech voice",
-			},
-			"voice: …",
-		),
-		el(
-			"button",
-			{
-				class: "picker-btn picker-hidden",
-				id: "speed-picker",
-				type: "button",
-				title: "TTS speech speed",
-				"aria-label": "Choose text-to-speech speed",
-			},
-			"speed: …",
-		),
 		// Right-side single icon-button that opens the overflow menu
 		// where every option lives. Wrench glyph signals "settings" and
 		// replaces the old sparkle "API ↗" treatment.
@@ -2856,9 +2812,6 @@ export function renderShell(): void {
 		void shellHandlers?.handleDrop(e);
 	});
 	$("#model-picker").addEventListener("click", () => shellHandlers?.openModelPicker());
-	$("#think-picker").addEventListener("click", () => shellHandlers?.openThinkPicker());
-	$("#voice-picker").addEventListener("click", () => shellHandlers?.openVoicePicker());
-	$("#speed-picker").addEventListener("click", () => shellHandlers?.openSpeedPicker());
 
 	// Desktop: sidebar open by default. Mobile: collapsed.
 	if (window.innerWidth <= 720) toggleSidebar(true);

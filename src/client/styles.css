@@ -898,12 +898,6 @@ body.sidebar-resizing iframe {
 	display: none;
 }
 
-/* Pills hidden on all screen sizes — accessible via the overflow menu. */
-.picker-hidden {
-	/* biome-ignore lint/complexity/noImportantStyles: forced hide — must override any inline/block display from JS toggle states so the pill only ever appears via the overflow menu. */
-	display: none !important;
-}
-
 /* Voice mode cycles Off / V / V+. Active modes use the brand gradient. */
 .header-voice {
 	display: inline-flex;

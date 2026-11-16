@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sessionExists, streamSynthesizeSpeech } from "../src/client/api.js";
+import { sessionExists, streamSynthesizeAudio, streamSynthesizeSpeech } from "../src/client/api.js";
+import { decodePcm16Samples } from "../src/client/voice.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -127,5 +128,95 @@ describe("streamSynthesizeSpeech", () => {
 			body: JSON.stringify({ text: "hello", voice: "af_heart", speed: 1.25 }),
 			signal: undefined,
 		});
+	});
+
+	it("yields raw PCM16 frames directly when X-Audio-Format is pcm16", async () => {
+		const pcm1 = new Uint8Array([0, 0, 255, 127]);
+		const pcm2 = new Uint8Array([0, 128, 0, 0]);
+		const bytes = new Uint8Array([
+			...frame(0x01, pcm1),
+			...frame(0x01, new Uint8Array()),
+			...frame(0x01, pcm2),
+			...frame(0x00, new Uint8Array()),
+		]);
+		const res = bodyOf(bytes) as unknown as { headers: Headers };
+		res.headers = new Headers({
+			"X-Audio-Format": "pcm16",
+			"X-Audio-Sample-Rate": "44100",
+			"X-Audio-Channels": "1",
+		});
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(res));
+		const out: Array<{ kind: string; sampleRate?: number; pcm?: number[] }> = [];
+		for await (const chunk of streamSynthesizeAudio("hi")) {
+			out.push(
+				chunk.kind === "pcm16"
+					? { kind: chunk.kind, sampleRate: chunk.sampleRate, pcm: [...chunk.pcm] }
+					: { kind: chunk.kind },
+			);
+		}
+		expect(out).toEqual([
+			{ kind: "pcm16", sampleRate: 44100, pcm: [0, 0, 255, 127] },
+			{ kind: "pcm16", sampleRate: 44100, pcm: [0, 128, 0, 0] },
+		]);
+	});
+
+	it("falls back to WAV frames when X-Audio-Format is absent", async () => {
+		const bytes = new Uint8Array([
+			...frame(0x01, new Uint8Array([1, 2, 3])),
+			...frame(0x00, new Uint8Array()),
+		]);
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bodyOf(bytes)));
+		const out: Array<{ kind: string; bytes?: number[] }> = [];
+		for await (const chunk of streamSynthesizeAudio("hi")) {
+			out.push(
+				chunk.kind === "wav"
+					? { kind: chunk.kind, bytes: [...new Uint8Array(await chunk.blob.arrayBuffer())] }
+					: { kind: chunk.kind },
+			);
+		}
+		expect(out).toEqual([{ kind: "wav", bytes: [1, 2, 3] }]);
+	});
+
+	it("rejects invalid PCM16 stream headers or odd-length PCM16 payloads", async () => {
+		const badHeaders = bodyOf(frame(0x00, new Uint8Array())) as unknown as { headers: Headers };
+		badHeaders.headers = new Headers({
+			"X-Audio-Format": "pcm16",
+			"X-Audio-Sample-Rate": "0",
+			"X-Audio-Channels": "1",
+		});
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(badHeaders));
+		await expect(async () => {
+			for await (const _ of streamSynthesizeAudio("hi")) {
+				/* nothing */
+			}
+		}).rejects.toThrow(/PCM16 audio headers/);
+
+		const oddPcm = bodyOf(
+			new Uint8Array([...frame(0x01, new Uint8Array([1, 2, 3])), ...frame(0x00, new Uint8Array())]),
+		) as unknown as { headers: Headers };
+		oddPcm.headers = new Headers({
+			"X-Audio-Format": "pcm16",
+			"X-Audio-Sample-Rate": "44100",
+			"X-Audio-Channels": "1",
+		});
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oddPcm));
+		await expect(async () => {
+			for await (const _ of streamSynthesizeAudio("hi")) {
+				/* nothing */
+			}
+		}).rejects.toThrow(/incomplete sample/);
+	});
+});
+
+describe("decodePcm16Samples", () => {
+	it("converts little-endian Int16 PCM bytes (including unaligned slices) to [-1, 1) Float32", () => {
+		const padded = new Uint8Array([99, 0, 0, 0, 128, 255, 127]);
+		const slice = padded.subarray(1); // offset 1: unaligned byteOffset
+		const samples = decodePcm16Samples(slice);
+		expect(samples.length).toBe(3);
+		expect(samples[0]).toBe(0);
+		expect(samples[1]).toBe(-1);
+		expect(samples[2]).toBeCloseTo(32767 / 32768, 6);
+		expect(() => decodePcm16Samples(new Uint8Array([1, 2, 3]))).toThrow(/incomplete sample/);
 	});
 });

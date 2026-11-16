@@ -338,12 +338,6 @@ app.get(
 			ttsReason: tts.available ? undefined : tts.reason,
 			ttsVoice: tts.voice,
 			ttsVoices: TTS_VOICES.available,
-			// This build's /api/tts and /api/tts/stream accept an optional `speed`,
-			// which the TTS engine applies during synthesis (natural pitch), unlike
-			// Web Audio's playbackRate. The browser sends a speed — and leaves its own
-			// rate at 1 — only when this is set, so a stale page against an older
-			// server keeps working instead of double-applying.
-			ttsSpeedParam: true,
 			// Configured spoken-rewrite model override (pi-voice-reply extension).
 			// Surfaced so the browser banner can name the model actually generating
 			// the spoken text instead of the (often different) session model. Raw

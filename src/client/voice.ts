@@ -17,7 +17,13 @@ import {
 	MAX_PROMPT_IMAGE_TOTAL_BYTES,
 	MAX_PROMPT_IMAGES,
 } from "../shared/limits.js";
-import { streamSynthesizeSpeech, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
+import {
+	streamSynthesizeAudio,
+	streamSynthesizeSpeech,
+	synthesizeSpeech,
+	transcribeAudio,
+	uploadFile,
+} from "./api.js";
 import { $ } from "./dom.js";
 import { MIC_ICON, REC_ICON, SPEAK_ICON, STOP_ICON } from "./icons.js";
 import { markdownToSpeechText } from "./markdown.js";
@@ -134,17 +140,22 @@ let chunks: Chunk[] = [];
 let slots: Slot[] = [];
 let barTimer: ReturnType<typeof setInterval> | null = null;
 
-/**
- * Playback rate Web Audio applies to the current utterance, and the speed the
- * current utterance was synthesized at (undefined = engine default). Exactly one
- * of the two does the speeding up: when the server takes a `speed`
- * (state.ttsSpeedParam), the engine stretches the audio itself — it scales
- * phoneme durations, so the voice keeps its natural pitch — and the rate stays 1;
- * otherwise we resample with Web Audio's playbackRate, which has no
- * pitch-preserving mode and so raises the pitch (audibly, at the 1.25x default).
- */
-let activePlaybackRate = 1;
-let activeSynthSpeed: number | undefined;
+/** Synthesis speed passed to the TTS server for the current utterance. */
+let activeSynthSpeed = 1;
+
+const PCM_BATCH_SECONDS = 0.12;
+
+/** Convert little-endian mono PCM16 bytes into Web Audio Float32 samples. */
+export function decodePcm16Samples(pcm: Uint8Array): Float32Array {
+	if (pcm.byteLength % 2 !== 0) throw new Error("PCM16 chunk has an incomplete sample");
+	const count = pcm.byteLength / 2;
+	const samples = new Float32Array(count);
+	const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+	for (let i = 0; i < count; i++) {
+		samples[i] = view.getInt16(i * 2, true) / 32768;
+	}
+	return samples;
+}
 
 /**
  * True once the current utterance's stream has closed, i.e. no more chunks
@@ -248,15 +259,7 @@ export async function speakText(text: string, label = "TTS"): Promise<void> {
 		? `${label} · synthesizing via ${engine} (${voice})…`
 		: `${label} · synthesizing via ${engine}…`;
 	showVoiceStatus(synthHead, ttsPreview(spoken));
-	// Decide who does the speeding up for this utterance (see the state comment
-	// on ttsSpeedParam): the engine when it takes a speed, else Web Audio's rate.
-	if (state.ttsSpeedParam) {
-		activeSynthSpeed = clampSynthSpeed(state.ttsSpeed);
-		activePlaybackRate = 1;
-	} else {
-		activeSynthSpeed = undefined;
-		activePlaybackRate = state.ttsSpeed;
-	}
+	activeSynthSpeed = clampSynthSpeed(state.ttsSpeed);
 	// Mark the initiating button as "synthesizing…" so the user sees a
 	// spinner during the (potentially long) TTS round-trip, then flip to
 	// the playing (⏹) state once audio actually starts. Auto-speak calls
@@ -301,12 +304,10 @@ export async function speakText(text: string, label = "TTS"): Promise<void> {
 }
 
 /**
- * Streaming playback: pull synthesized chunks from /api/tts/stream and put each
- * one on the Web Audio timeline as it arrives, so sound starts after the FIRST
- * chunk instead of after the whole message has been synthesized — a long reply
- * costs one chunk of latency rather than all of them. Chunks are decoded in
- * arrival order and scheduled back-to-back, preserving Zonos's contiguous PCM
- * fragments without trimming their natural pauses.
+ * Streaming playback: pull synthesized audio from /api/tts/stream and place it
+ * on the Web Audio timeline as it arrives. Zonos streams raw mono PCM16 frames,
+ * which are batched to ~120 ms and written directly into an AudioBuffer without
+ * per-frame WAV wrapping or decodeAudioData overhead.
  */
 async function playStreamed(
 	spoken: string,
@@ -315,19 +316,64 @@ async function playStreamed(
 ): Promise<void> {
 	const ctx = await ensureAudioRunning();
 	let scheduled = false;
+	let pendingPcm: Float32Array[] = [];
+	let pendingSamples = 0;
+	let pendingRate = 0;
+
+	const flushPcm = (): void => {
+		if (gen !== speakGeneration || pendingSamples === 0 || !pendingRate) {
+			pendingPcm = [];
+			pendingSamples = 0;
+			return;
+		}
+		const merged =
+			pendingPcm.length === 1
+				? pendingPcm[0]!
+				: (() => {
+						const out = new Float32Array(pendingSamples);
+						let offset = 0;
+						for (const part of pendingPcm) {
+							out.set(part, offset);
+							offset += part.length;
+						}
+						return out;
+					})();
+		const rate = pendingRate;
+		pendingPcm = [];
+		pendingSamples = 0;
+		const buffer = ctx.createBuffer(1, merged.length, rate);
+		buffer.getChannelData(0).set(merged);
+		scheduleDecodedBuffer(ctx, gen, buffer);
+		scheduled = true;
+	};
+
 	try {
-		for await (const wav of streamSynthesizeSpeech(
+		for await (const frame of streamSynthesizeAudio(
 			spoken,
 			state.ttsVoice ?? undefined,
 			controller.signal,
 			activeSynthSpeed,
 		)) {
 			if (gen !== speakGeneration) return; // stopped or superseded mid-stream
-			await scheduleChunk(ctx, gen, wav);
-			scheduled = true;
+			if (frame.kind === "pcm16") {
+				if (pendingRate && pendingRate !== frame.sampleRate) flushPcm();
+				pendingRate = frame.sampleRate;
+				const samples = decodePcm16Samples(frame.pcm);
+				pendingPcm.push(samples);
+				pendingSamples += samples.length;
+				if (pendingSamples >= Math.round(frame.sampleRate * PCM_BATCH_SECONDS)) {
+					flushPcm();
+				}
+			} else {
+				flushPcm();
+				await scheduleChunk(ctx, gen, frame.blob);
+				scheduled = true;
+			}
 		}
+		flushPcm();
 	} catch (err) {
 		if (err instanceof DOMException && err.name === "AbortError") throw err;
+		flushPcm();
 		if (scheduled || liveNodes.length > 0) {
 			// Audio is already playing. Let what we have play out rather than
 			// cutting the user off mid-sentence, but say the reply is truncated.
@@ -373,24 +419,23 @@ async function ensureAudioRunning(): Promise<AudioContext> {
 	return ctx;
 }
 
-/**
- * Decode one synthesized WAV fragment and place it on the timeline immediately
- * after the previous one. Decoding is awaited in stream order, so chunks are
- * always scheduled in playback order even though decodeAudioData's promises can
- * settle out of order.
- */
+/** Decode one WAV blob and place it on the timeline (used by whole-blob fallback). */
 async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise<void> {
 	const decoded = await ctx.decodeAudioData(await wav.arrayBuffer());
 	if (gen !== speakGeneration) return; // superseded while decoding
+	scheduleDecodedBuffer(ctx, gen, decoded);
+}
+
+/** Place an AudioBuffer onto the shared utterance timeline in arrival order. */
+function scheduleDecodedBuffer(ctx: AudioContext, gen: number, decoded: AudioBuffer): void {
+	if (gen !== speakGeneration) return;
 	// These are contiguous Zonos decode fragments, not padded Kokoro sentences.
 	// Trimming each fragment would delete natural pauses and cut word boundaries.
-	const offset = 0;
-	const duration = decoded.duration;
 	const chunk: Chunk = {
 		buffer: decoded,
-		offset,
+		offset: 0,
 		start: bufferedSeconds(chunks),
-		play: duration / activePlaybackRate,
+		play: decoded.duration,
 	};
 	chunks.push(chunk);
 	placeChunk(ctx, gen, chunk, 0);
@@ -414,7 +459,6 @@ async function scheduleChunk(ctx: AudioContext, gen: number, wav: Blob): Promise
 function placeChunk(ctx: AudioContext, gen: number, chunk: Chunk, skip: number): void {
 	const node = ctx.createBufferSource();
 	node.buffer = chunk.buffer;
-	node.playbackRate.value = activePlaybackRate;
 	node.connect(ctx.destination);
 	const playSeconds = chunk.play - skip;
 	// Start where the previous chunk ends. If synthesis fell behind playback the
@@ -422,7 +466,7 @@ function placeChunk(ctx: AudioContext, gen: number, chunk: Chunk, skip: number):
 	// audio clock would silently skip).
 	const startAt = chunkStartTime(ctx.currentTime, TTS_SCHEDULE_LEAD, nextStartAt);
 	// Stop at the scheduled boundary (also used when seeking within a fragment).
-	node.start(startAt, chunk.offset + skip * activePlaybackRate);
+	node.start(startAt, chunk.offset + skip);
 	node.stop(startAt + playSeconds);
 	nextStartAt = startAt + playSeconds;
 	liveNodes.push(node);

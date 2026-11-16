@@ -156,10 +156,6 @@ export interface HealthInfo {
 	ttsVoice?: string;
 	/** Available TTS voice ids advertised by this server. */
 	ttsVoices?: string[];
-	/** This server's /api/tts and /api/tts/stream accept an optional `speed`,
-	 * which the engine applies during synthesis (natural pitch). When absent
-	 * (older server) the client falls back to resampling playbackRate. */
-	ttsSpeedParam?: boolean;
 	/** Configured spoken-rewrite model override from /api/health
 	 * ("provider/modelId"), used so the TTS banner names the model actually
 	 * doing the rewrite, not the session model. */
@@ -215,8 +211,7 @@ export async function getModels(): Promise<ModelInfo[]> {
  *
  * `speed` is forwarded to the engine as a synthesis parameter (ZONOS3-Mini
  * conditions speaking rate; Kokoro scales phoneme durations, keeping the
- * voice's natural pitch) and is only sent when /api/health advertises
- * ttsSpeedParam; otherwise omit it and let the caller resample via playbackRate.
+ * voice's natural pitch).
  */
 export async function synthesizeSpeech(
 	text: string,
@@ -238,36 +233,24 @@ export async function synthesizeSpeech(
 }
 
 /**
- * Largest single stream frame we will accept. One frame is one synthesized WAV
+ * Largest single stream frame we will accept. One frame is one synthesized
  * chunk, so a header past this is a broken or hostile upstream rather than a
  * long chunk. The length field is a uint32, so without this check `ensure()`
  * below would happily try to buffer up to 4 GB on one bogus header.
  */
 const MAX_FRAME_BYTES = 10 * 1024 * 1024;
 
-/**
- * Streaming TTS via /api/tts/stream. Yields one WAV Blob per synthesized
- * text chunk, in playback order, the instant each is ready — so the caller
- * can start playing the first chunk while later chunks are still being
- * synthesized. This is what makes long voice replies feel responsive
- * instead of stalling for seconds on end before the first sound.
- *
- * The body is a binary frame stream (one frame per chunk):
- *   [1 byte type][uint32 LE length N][N bytes payload]
- *     0x01 DATA → payload = a complete WAV file for one chunk
- *     0x00 END  → clean end of stream
- *     0x80 ERR  → payload = UTF-8 error message
- *
- * Throws on a non-OK HTTP status (caller falls back to synthesizeSpeech), on an
- * ERR frame arriving mid-stream, or when the body closes without an END frame. `speed` behaves as in synthesizeSpeech.
- */
-export async function* streamSynthesizeSpeech(
+export type StreamAudioFrame =
+	| { kind: "pcm16"; sampleRate: number; pcm: Uint8Array }
+	| { kind: "wav"; blob: Blob };
+
+async function openAudioFrameStream(
 	text: string,
-	voice?: string,
-	signal?: AbortSignal,
-	speed?: number,
-	endpoint = "/api/tts/stream",
-): AsyncGenerator<Blob> {
+	voice: string | undefined,
+	signal: AbortSignal | undefined,
+	speed: number | undefined,
+	endpoint: string,
+): Promise<{ headers?: Headers; frames: AsyncGenerator<Uint8Array<ArrayBuffer>> }> {
 	const res = await fetch(`${BASE}${endpoint}`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -281,55 +264,103 @@ export async function* streamSynthesizeSpeech(
 	if (!res.body) throw new Error("tts stream: empty response body");
 
 	const reader = res.body.getReader();
-	// Sliding byte buffer: we may receive partial frames or several frames
-	// coalesced in one network chunk, so we accumulate and parse on demand.
-	let buf = new Uint8Array(0);
-	const append = (chunk: Uint8Array): void => {
-		const next = new Uint8Array(buf.length + chunk.length);
-		next.set(buf, 0);
-		next.set(chunk, buf.length);
-		buf = next;
-	};
-	const ensure = async (n: number): Promise<boolean> => {
-		while (buf.length < n) {
-			const { done, value } = await reader.read();
-			if (done) return false;
-			if (value) append(value);
-		}
-		return true;
-	};
-	try {
-		while (true) {
-			// Closing without an END frame is a broken stream, not a finished one:
-			// returning quietly would play a truncated reply with no error.
-			if (!(await ensure(5))) throw new Error("tts stream ended before its END frame");
-			const type = buf[0]!;
-			const len = (buf[1]! | (buf[2]! << 8) | (buf[3]! << 16) | (buf[4]! << 24)) >>> 0;
-			if (len > MAX_FRAME_BYTES) {
-				throw new Error(
-					`tts stream frame too large: ${len} bytes (max ${MAX_FRAME_BYTES}) — upstream protocol error`,
-				);
+	async function* readFrames(): AsyncGenerator<Uint8Array<ArrayBuffer>> {
+		// Sliding byte buffer: we may receive partial frames or several frames
+		// coalesced in one network chunk, so we accumulate and parse on demand.
+		let buf = new Uint8Array(0);
+		const append = (chunk: Uint8Array): void => {
+			const next = new Uint8Array(buf.length + chunk.length);
+			next.set(buf, 0);
+			next.set(chunk, buf.length);
+			buf = next;
+		};
+		const ensure = async (n: number): Promise<boolean> => {
+			while (buf.length < n) {
+				const { done, value } = await reader.read();
+				if (done) return false;
+				if (value) append(value);
 			}
-			if (!(await ensure(5 + len))) throw new Error("tts stream ended mid-frame");
-			const payload = buf.subarray(5, 5 + len);
-			buf = buf.subarray(5 + len);
-			if (type === 0x01) {
-				// Detach into its own buffer so the Blob owns it independently of
-				// our read buffer (which keeps growing as more frames arrive).
-				yield new Blob([payload.slice()], { type: "audio/wav" });
-			} else if (type === 0x80) {
-				throw new Error(new TextDecoder().decode(payload) || "tts stream error");
-			} else if (type === 0x00) {
-				return; // END
-			}
-			// Unknown frame types are skipped (forward-compatible).
-		}
-	} finally {
+			return true;
+		};
 		try {
-			reader.releaseLock();
-		} catch {
-			/* already released */
+			while (true) {
+				// Closing without an END frame is a broken stream, not a finished one:
+				// returning quietly would play a truncated reply with no error.
+				if (!(await ensure(5))) throw new Error("tts stream ended before its END frame");
+				const type = buf[0]!;
+				const len = (buf[1]! | (buf[2]! << 8) | (buf[3]! << 16) | (buf[4]! << 24)) >>> 0;
+				if (len > MAX_FRAME_BYTES) {
+					throw new Error(
+						`tts stream frame too large: ${len} bytes (max ${MAX_FRAME_BYTES}) — upstream protocol error`,
+					);
+				}
+				if (!(await ensure(5 + len))) throw new Error("tts stream ended mid-frame");
+				const payload = buf.subarray(5, 5 + len);
+				buf = buf.subarray(5 + len);
+				if (type === 0x01) {
+					yield payload.slice();
+				} else if (type === 0x80) {
+					throw new Error(new TextDecoder().decode(payload) || "tts stream error");
+				} else if (type === 0x00) {
+					return; // END
+				}
+				// Unknown frame types are skipped (forward-compatible).
+			}
+		} finally {
+			try {
+				reader.releaseLock();
+			} catch {
+				/* already released */
+			}
 		}
+	}
+	return { headers: res.headers, frames: readFrames() };
+}
+
+/**
+ * Streaming TTS via /api/tts/stream (raw mono PCM16 frames from Zonos, or WAV
+ * frames when served by a legacy/mock endpoint without X-Audio-Format: pcm16).
+ */
+export async function* streamSynthesizeAudio(
+	text: string,
+	voice?: string,
+	signal?: AbortSignal,
+	speed?: number,
+	endpoint = "/api/tts/stream",
+): AsyncGenerator<StreamAudioFrame> {
+	const { headers, frames } = await openAudioFrameStream(text, voice, signal, speed, endpoint);
+	const format = headers?.get("X-Audio-Format");
+	if (format === "pcm16") {
+		const sampleRate = Number(headers?.get("X-Audio-Sample-Rate"));
+		const channels = headers?.get("X-Audio-Channels");
+		if (!Number.isInteger(sampleRate) || sampleRate <= 0 || channels !== "1") {
+			throw new Error("tts stream returned invalid PCM16 audio headers");
+		}
+		for await (const payload of frames) {
+			if (payload.length % 2 !== 0) throw new Error("tts stream PCM16 has an incomplete sample");
+			if (payload.length) yield { kind: "pcm16", sampleRate, pcm: payload };
+		}
+		return;
+	}
+	for await (const payload of frames) {
+		yield { kind: "wav", blob: new Blob([payload], { type: "audio/wav" }) };
+	}
+}
+
+/**
+ * Streaming TTS yielding one WAV Blob per frame (kept for Kokoro /voicetest
+ * and legacy WAV stream callers).
+ */
+export async function* streamSynthesizeSpeech(
+	text: string,
+	voice?: string,
+	signal?: AbortSignal,
+	speed?: number,
+	endpoint = "/api/tts/stream",
+): AsyncGenerator<Blob> {
+	const { frames } = await openAudioFrameStream(text, voice, signal, speed, endpoint);
+	for await (const payload of frames) {
+		yield new Blob([payload], { type: "audio/wav" });
 	}
 }
 
