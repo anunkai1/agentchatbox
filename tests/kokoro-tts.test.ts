@@ -693,14 +693,14 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 });
 
 describe("Relay engine preference", () => {
-	it("defaults to Kokoro without migrating explicit saved selections, and switches back in one step", () => {
-		expect(DEFAULT_RELAY_VOICE_ENGINE).toBe("kokoro");
-		expect(resolveRelayVoiceEngine(null)).toBe("kokoro");
-		for (const saved of ["zonos3", "lfm-tts", "legacy", "server4"] as const)
+	it("defaults to ZONOS3-Mini without migrating explicit saved selections, and switches back in one step", () => {
+		expect(DEFAULT_RELAY_VOICE_ENGINE).toBe("zonos3");
+		expect(resolveRelayVoiceEngine(null)).toBe("zonos3");
+		for (const saved of ["kokoro", "lfm-tts", "legacy", "server4"] as const)
 			expect(resolveRelayVoiceEngine(saved)).toBe(saved);
-		expect(resolveRelayVoiceEngine("kokoro", "zonos3")).toBe("zonos3");
 		expect(resolveRelayVoiceEngine("zonos3", "kokoro")).toBe("kokoro");
-		expect(resolveRelayVoiceEngine("kokoro", "lfm-tts")).toBe("lfm-tts");
-		expect(resolveRelayVoiceEngine("lfm-tts", "kokoro")).toBe("kokoro");
+		expect(resolveRelayVoiceEngine("kokoro", "zonos3")).toBe("zonos3");
+		expect(resolveRelayVoiceEngine("zonos3", "lfm-tts")).toBe("lfm-tts");
+		expect(resolveRelayVoiceEngine("lfm-tts", "zonos3")).toBe("zonos3");
 	});
 });

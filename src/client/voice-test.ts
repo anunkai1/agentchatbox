@@ -173,9 +173,9 @@ export function openVoiceTest(
 		{},
 		relay
 			? useZonosTts
-				? "Pi + Server2 ZONOS3-Mini (aligned, speech-only): local STT → Pi → synthesis-aligned ZONOS3-Mini (Savannah). Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Revert with /relay kokoro."
+				? "Pi + Server2 ZONOS3-Mini (default, aligned, speech-only): local STT → Pi → synthesis-aligned ZONOS3-Mini (Savannah). Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Revert with /relay kokoro or /relay lfm-tts."
 				: useKokoroTts
-					? "Pi + Server2 Kokoro (default, speech-only): local STT → Pi → synthesis-aligned Kokoro. Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Revert with /relay lfm-tts."
+					? "Pi + Server2 Kokoro (aligned, speech-only): local STT → Pi → synthesis-aligned Kokoro. Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Switch back with /relay zonos3."
 					: useLfmTts
 						? "Pi + Server4 LFM TTS (speech-only): local STT → full-access Pi/DeepSeek → rendered sentence-streamed LFM TTS, without LFM interpreting requests or rewriting answers. Interrupt stops speech only; Pi work continues. Recognised text and approximate unhinted-ASR played speech are saved; no raw audio archive. Active speech reserves Server4's GPU."
 						: streamTrial
@@ -252,8 +252,8 @@ export function openVoiceTest(
 			voiceButtons.push(toggleTrial);
 		} else {
 			const choices: Array<[RelayVoiceEngine, string, boolean]> = [
-				["kokoro", "Use Pi + Server2 Kokoro (default, aligned)", !useKokoroTts],
-				["zonos3", "Use Pi + ZONOS3-Mini (fast, aligned)", !useZonosTts],
+				["zonos3", "Use Pi + ZONOS3-Mini (default, aligned)", !useZonosTts],
+				["kokoro", "Use Pi + Server2 Kokoro (aligned)", !useKokoroTts],
 				["lfm-tts", "Use Pi + LFM TTS (speech-only)", !useLfmTts],
 				["server4", "Use Server4 LFM voice", !localVoice],
 				["legacy", "Use legacy STT/Kokoro", localVoice || useSpeechTts],

@@ -152,7 +152,9 @@ async function relayChatFixture(
 				socket.onMessage((raw) => {
 					const message = JSON.parse(String(raw));
 					if ((message.type === "prompt" || message.type === "steer") && message.requestId) {
-						socket.send(JSON.stringify({ type: "sendResult", requestId: message.requestId, accepted: true }));
+						socket.send(
+							JSON.stringify({ type: "sendResult", requestId: message.requestId, accepted: true }),
+						);
 					}
 					if (message.type === "init") {
 						socket.send(
@@ -471,7 +473,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				const message = JSON.parse(String(raw));
 				if (message.type === "prompt") {
 					prompts.push(message.text);
-					ws.send(JSON.stringify({ type: "sendResult", requestId: message.requestId, accepted: true }));
+					ws.send(
+						JSON.stringify({ type: "sendResult", requestId: message.requestId, accepted: true }),
+					);
 				}
 			});
 		});
@@ -515,7 +519,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await page.locator("#input").inputValue()).toBe("Written before ready");
 			await page.locator("#send-btn").click();
 			await expect.poll(() => prompts).toEqual(["Written before ready"]);
-			await expect.poll(() => page.evaluate(() => localStorage.getItem("acb-draft-v1:new-draft-session"))).toBeNull();
+			await expect
+				.poll(() => page.evaluate(() => localStorage.getItem("acb-draft-v1:new-draft-session")))
+				.toBeNull();
 			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:new"))).toBe(replacement);
 		} finally {
 			await page.close();
@@ -530,7 +536,16 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			socket = ws;
 			ws.onMessage((raw) => {
 				const message = JSON.parse(String(raw));
-				if (message.type === "init") ws.send(JSON.stringify({ type: "ready", sessionId: "ack-draft-session", provider: "zai", modelId: "glm-5.2", thinkingLevel: "off" }));
+				if (message.type === "init")
+					ws.send(
+						JSON.stringify({
+							type: "ready",
+							sessionId: "ack-draft-session",
+							provider: "zai",
+							modelId: "glm-5.2",
+							thinkingLevel: "off",
+						}),
+					);
 				if (message.type === "prompt" || message.type === "steer") sent.push(message);
 			});
 		});
@@ -538,36 +553,72 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.goto(`${base}/`);
 			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/ack-draft-session");
 			await page.locator("#input").fill("Keep this draft");
-			await page.locator("#file-input").setInputFiles({ name: "keep.txt", mimeType: "text/plain", buffer: Buffer.from("content") });
+			await page.locator("#file-input").setInputFiles({
+				name: "keep.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from("content"),
+			});
 			await page.getByRole("button", { name: "Remove keep.txt", exact: true }).waitFor();
 			await page.locator("#send-btn").click();
 			await expect.poll(() => sent.length).toBe(1);
 			expect(await page.locator("#input").inputValue()).toBe("Keep this draft");
 			expect(await page.locator("#input").isDisabled()).toBe(true);
-			expect(await page.evaluate(() => localStorage.getItem("acb-draft-v1:ack-draft-session"))).toBe("Keep this draft");
-			socket!.send(JSON.stringify({ type: "sendResult", requestId: sent[0].requestId, accepted: false, message: "session is switching" }));
+			expect(
+				await page.evaluate(() => localStorage.getItem("acb-draft-v1:ack-draft-session")),
+			).toBe("Keep this draft");
+			socket!.send(
+				JSON.stringify({
+					type: "sendResult",
+					requestId: sent[0].requestId,
+					accepted: false,
+					message: "session is switching",
+				}),
+			);
 			await expect.poll(() => page.locator("#input").isDisabled()).toBe(false);
 			expect(await page.locator("#input").inputValue()).toBe("Keep this draft");
-			expect(await page.getByRole("button", { name: "Remove keep.txt", exact: true }).count()).toBe(1);
+			expect(await page.getByRole("button", { name: "Remove keep.txt", exact: true }).count()).toBe(
+				1,
+			);
 			socket!.send(JSON.stringify({ type: "sessionMoving", sessionId: "ack-draft-session" }));
 			await expect.poll(() => page.locator("#input").isDisabled()).toBe(true);
 			expect(await page.locator("#input").inputValue()).toBe("Keep this draft");
-			socket!.send(JSON.stringify({ type: "ready", sessionId: "ack-draft-session", provider: "zai", modelId: "glm-5.2", thinkingLevel: "off" }));
+			socket!.send(
+				JSON.stringify({
+					type: "ready",
+					sessionId: "ack-draft-session",
+					provider: "zai",
+					modelId: "glm-5.2",
+					thinkingLevel: "off",
+				}),
+			);
 			await expect.poll(() => page.locator("#input").isDisabled()).toBe(false);
-			expect(await page.getByRole("button", { name: "Remove keep.txt", exact: true }).count()).toBe(1);
+			expect(await page.getByRole("button", { name: "Remove keep.txt", exact: true }).count()).toBe(
+				1,
+			);
 			await page.locator("#send-btn").click();
 			await expect.poll(() => sent.length).toBe(2);
 			expect(sent[1].text).toContain("[file: keep.txt]");
-			socket!.send(JSON.stringify({ type: "sendResult", requestId: sent[1].requestId, accepted: true }));
+			socket!.send(
+				JSON.stringify({ type: "sendResult", requestId: sent[1].requestId, accepted: true }),
+			);
 			await expect.poll(() => page.locator("#input").inputValue()).toBe("");
 			expect(await page.locator("#attachment-previews .attachment-preview").count()).toBe(0);
 			socket!.send(JSON.stringify({ type: "event", event: { type: "agent_start" } }));
-			await expect.poll(() => page.locator("#send-btn").getAttribute("aria-label")).toBe("Queue instruction");
+			await expect
+				.poll(() => page.locator("#send-btn").getAttribute("aria-label"))
+				.toBe("Queue instruction");
 			await page.locator("#input").fill("Change direction");
 			await page.locator("#send-btn").click();
 			await expect.poll(() => sent.length).toBe(3);
-			socket!.send(JSON.stringify({ type: "event", event: { type: "queue_update", steering: ["Change direction"] } }));
-			socket!.send(JSON.stringify({ type: "sendResult", requestId: sent[2].requestId, accepted: true }));
+			socket!.send(
+				JSON.stringify({
+					type: "event",
+					event: { type: "queue_update", steering: ["Change direction"] },
+				}),
+			);
+			socket!.send(
+				JSON.stringify({ type: "sendResult", requestId: sent[2].requestId, accepted: true }),
+			);
 			await expect.poll(() => page.locator(".row-steer").count()).toBe(1);
 			expect(await page.locator("#status-dynamic").innerText()).toContain("1 queued");
 			await page.locator("#input").fill("Possibly delivered");
@@ -576,7 +627,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await socket!.close({ code: 1001, reason: "lost acknowledgement" });
 			await expect.poll(() => page.locator("#input").isDisabled()).toBe(false);
 			expect(await page.locator("#input").inputValue()).toBe("Possibly delivered");
-			await expect.poll(() => page.locator("body").innerText()).toContain("check the chat before retrying");
+			await expect
+				.poll(() => page.locator("body").innerText())
+				.toContain("check the chat before retrying");
 			expect(sent).toHaveLength(4);
 		} finally {
 			await page.close();
@@ -2262,9 +2315,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.poll(() => dialog.locator(".relay-job").innerText())
 				.toContain("Recorded: stopped");
 			expect(cancelled).toBe(true);
-			expect(
-				await dialog.getByRole("button", { name: "New Relay conversation" }).isVisible(),
-			).toBe(true);
+			expect(await dialog.getByRole("button", { name: "New Relay conversation" }).isVisible()).toBe(
+				true,
+			);
 			await dialog.getByRole("button", { name: "New Relay conversation" }).click();
 			await expect.poll(() => inits.length).toBe(2);
 			expect(inits.at(-1)?.sessionId).toBeUndefined();
@@ -2802,7 +2855,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("defaults Relay to aligned Kokoro without Server4 and preserves explicit LFM reversion", async () => {
+	it("defaults Relay to aligned ZONOS3-Mini without Server4 and preserves explicit Kokoro/LFM reversion", async () => {
 		const { page } = await openPage("/");
 		const prompts: string[] = [],
 			controls: string[] = [];
@@ -2815,7 +2868,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			ws.onMessage((raw) => {
 				const message = JSON.parse(String(raw));
 				if (message.type === "init")
-					ws.send(JSON.stringify({ type: "ready", sessionId: "kokoro-default-session" }));
+					ws.send(JSON.stringify({ type: "ready", sessionId: "zonos3-default-session" }));
 				else if (message.type === "getCapabilities")
 					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
 				else if (message.type === "prompt") {
@@ -2844,10 +2897,16 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		try {
 			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
 			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
+			await expect.poll(() => dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
 			expect(await dialog.locator("iframe").count()).toBe(0);
 			expect(server4Connections).toBe(0);
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBeNull();
+			await send(page, "/relay kokoro");
+			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
+				"kokoro",
+			);
 			await send(page, "/relay lfm-tts");
 			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			await expect.poll(() => dialog.innerText()).toContain("LFM reads the replies aloud");
@@ -2863,11 +2922,11 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
 				"lfm-tts",
 			);
-			await send(page, "/relay kokoro");
+			await send(page, "/relay zonos3");
 			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
+			await expect.poll(() => dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
-				"kokoro",
+				"zonos3",
 			);
 			expect(controls).not.toContain("abort");
 			expect(prompts).not.toContain("/relay cancel");
