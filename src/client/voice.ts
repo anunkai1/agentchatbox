@@ -51,8 +51,8 @@ import { bindVoiceBar, updateVoiceBar } from "./voice-bar.js";
  * Soft cap on what we send to TTS. Kept just under the server's hard cap
  * (MAX_TEXT_CHARS in tts.ts, 30 000) so a normal long message never trips
  * the 413 — instead we truncate with a spoken "…message truncated" cue.
- * Kokoro itself has no text limit; this exists only to avoid synthesizing
- * absurd lengths and to keep the spoken cue inside the server's cap.
+ * This exists only to avoid synthesizing absurd lengths and to keep the
+ * spoken cue inside the server's cap.
  */
 const TTS_MAX_CHARS = 29_000;
 
@@ -207,8 +207,8 @@ function ttsPreview(spoken: string): string {
 }
 
 /**
- * Human-readable TTS engine label from /api/health (kokoro→Kokoro).
- * Falls back to "TTS" before the health probe lands or
+ * Human-readable TTS engine label from /api/health (zonos3→ZONOS3-Mini,
+ * kokoro→Kokoro). Falls back to "TTS" before the health probe lands or
  * if the server omits the engine — so the banner never lies about
  * which engine is actually configured.
  */

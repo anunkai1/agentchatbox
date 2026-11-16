@@ -2565,7 +2565,7 @@ export function renderShell(): void {
 				class: "picker-btn picker-hidden",
 				id: "speed-picker",
 				type: "button",
-				title: "TTS playback speed",
+				title: "TTS speech speed",
 				"aria-label": "Choose text-to-speech speed",
 			},
 			"speed: …",

@@ -42,7 +42,7 @@ import {
 import { registry } from "./session-registry.js";
 import { staticCacheControl } from "./static-cache.js";
 import { checkSttAvailable, createTranscribeRouter } from "./transcribe.js";
-import { checkTtsAvailable, createTtsRouter } from "./tts.js";
+import { checkTtsAvailable, createTtsRouter, TTS_VOICES } from "./tts.js";
 import { UploadStore } from "./upload-store.js";
 import { createUploadsRouter } from "./uploads.js";
 import { createUploadsServingRouter } from "./uploads-serving.js";
@@ -337,11 +337,12 @@ app.get(
 			ttsEngine: tts.engine,
 			ttsReason: tts.available ? undefined : tts.reason,
 			ttsVoice: tts.voice,
+			ttsVoices: TTS_VOICES.available,
 			// This build's /api/tts and /api/tts/stream accept an optional `speed`,
-			// which pi-voice-server applies as phoneme-duration scaling (natural
-			// pitch), unlike Web Audio's playbackRate. The browser sends a speed —
-			// and leaves its own rate at 1 — only when this is set, so a stale page
-			// against an older server keeps working instead of double-applying.
+			// which the TTS engine applies during synthesis (natural pitch), unlike
+			// Web Audio's playbackRate. The browser sends a speed — and leaves its own
+			// rate at 1 — only when this is set, so a stale page against an older
+			// server keeps working instead of double-applying.
 			ttsSpeedParam: true,
 			// Configured spoken-rewrite model override (pi-voice-reply extension).
 			// Surfaced so the browser banner can name the model actually generating

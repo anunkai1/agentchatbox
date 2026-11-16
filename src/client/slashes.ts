@@ -1,7 +1,7 @@
 /**
  * Slash commands and the modal dialogs that back them.
  *
- *   /model, /think, /voice    →  open picker
+ *   /model, /think             →  open picker
  *   /clear, /new               →  start a new chat
  *   /sessions, /resume         →  open the sessions list
  *   /copy, /export, /name, ... →  small text operations
@@ -1165,7 +1165,7 @@ export function openThinkPicker(): void {
 
 export function openSpeedPicker(): void {
 	const speeds = [1, 1.25, 1.4, 1.5, 2];
-	const { overlay, box } = openModal("TTS playback speed");
+	const { overlay, box } = openModal("TTS speech speed");
 	for (const rate of speeds) {
 		const row = el("div", { class: "model-row" });
 		row.append(el("div", { class: "model-name" }, `${rate}×`));
@@ -1519,16 +1519,21 @@ export function openModelsPanel(): void {
 			: state.ttsEngine
 				? state.ttsEngine.charAt(0).toUpperCase() + state.ttsEngine.slice(1)
 				: "TTS";
+	const canSwitchVoice = state.ttsVoices.length > 1;
 	box.append(
 		svcRow(
 			"Text-to-speech",
 			`Synthesises audio for playback & voice replies. Engine: ${engine}.`,
 			modelLine(pill("env", "set"), `voice ${ttsVoice}`),
-			hint("switch voice → ", kbd("/voice")),
-			() => {
-				overlay.remove();
-				void openVoicePicker();
-			},
+			canSwitchVoice
+				? hint("click to switch voice")
+				: hint("change → ", kbd("ZONOS_RELAY_TTS_URL")),
+			canSwitchVoice
+				? () => {
+						overlay.remove();
+						void openVoicePicker();
+					}
+				: undefined,
 		),
 	);
 
@@ -1755,18 +1760,22 @@ export function openOverflowMenu(): void {
 	}
 	mediaRows.push(voiceModeRow);
 	if (state.ttsAvailable !== false) {
+		if (state.ttsVoices.length > 1) {
+			mediaRows.push(
+				actionRow(
+					"Voice",
+					state.ttsVoice ?? "Default",
+					closeThen(() => void openVoicePicker()),
+					"Choose text-to-speech voice",
+				),
+			);
+		}
 		mediaRows.push(
 			actionRow(
-				"Voice",
-				state.ttsVoice ?? "Default",
-				closeThen(() => void openVoicePicker()),
-				"Choose text-to-speech voice",
-			),
-			actionRow(
-				"Playback speed",
+				"Speech speed",
 				`${state.ttsSpeed}×`,
 				closeThen(openSpeedPicker),
-				"Choose text-to-speech playback speed",
+				"Choose text-to-speech speaking speed",
 			),
 		);
 	}

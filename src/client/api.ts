@@ -149,14 +149,16 @@ export interface HealthInfo {
 	whisperReason?: string;
 	tts: boolean;
 	ttsReason?: string;
-	/** TTS engine id from /api/health (always "kokoro" — Piper was removed).
+	/** TTS engine id from /api/health (e.g. "zonos3").
 	 * Drives the banner label so it reflects the configured engine. */
 	ttsEngine?: string;
 	/** Server-default TTS voice. */
 	ttsVoice?: string;
+	/** Available TTS voice ids advertised by this server. */
+	ttsVoices?: string[];
 	/** This server's /api/tts and /api/tts/stream accept an optional `speed`,
-	 * which the engine applies as phoneme-duration scaling (natural pitch). When
-	 * absent (older server) the client falls back to resampling playbackRate. */
+	 * which the engine applies during synthesis (natural pitch). When absent
+	 * (older server) the client falls back to resampling playbackRate. */
 	ttsSpeedParam?: boolean;
 	/** Configured spoken-rewrite model override from /api/health
 	 * ("provider/modelId"), used so the TTS banner names the model actually
@@ -211,10 +213,10 @@ export async function getModels(): Promise<ModelInfo[]> {
  * turning them into playable audio (the renderer schedules them on a shared Web
  * Audio timeline to avoid multiple voices overlapping).
  *
- * `speed` is forwarded to the engine as a synthesis parameter (Kokoro scales
- * phoneme durations, keeping the voice's natural pitch) and is only sent when
- * /api/health advertises ttsSpeedParam; otherwise omit it and let the caller
- * resample via playbackRate.
+ * `speed` is forwarded to the engine as a synthesis parameter (ZONOS3-Mini
+ * conditions speaking rate; Kokoro scales phoneme durations, keeping the
+ * voice's natural pitch) and is only sent when /api/health advertises
+ * ttsSpeedParam; otherwise omit it and let the caller resample via playbackRate.
  */
 export async function synthesizeSpeech(
 	text: string,
@@ -237,10 +239,9 @@ export async function synthesizeSpeech(
 
 /**
  * Largest single stream frame we will accept. One frame is one synthesized WAV
- * chunk: a steady-cap chunk (~29s of 24 kHz mono) is well under 2 MB, so a
- * header past this is a broken or hostile upstream rather than a long chunk. The
- * length field is a uint32, so without this check `ensure()` below would happily
- * try to buffer up to 4 GB on one bogus header.
+ * chunk, so a header past this is a broken or hostile upstream rather than a
+ * long chunk. The length field is a uint32, so without this check `ensure()`
+ * below would happily try to buffer up to 4 GB on one bogus header.
  */
 const MAX_FRAME_BYTES = 10 * 1024 * 1024;
 

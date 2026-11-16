@@ -229,16 +229,17 @@ export interface AppState {
 	ttsAvailable: boolean | null;
 	/** Currently selected TTS voice id (user's pick; null = server default). */
 	ttsVoice: string | null;
-	/** TTS engine id from /api/health (always "kokoro" now — Piper was removed).
-	 * Surfaces the configured engine in the TTS banner instead of
-	 * a hardcoded "Kokoro". */
+	/** TTS engine id from /api/health (e.g. "zonos3").
+	 * Surfaces the configured engine in the TTS banner. */
 	ttsEngine: string | null;
 	/** Server-default TTS voice from /api/health (used as the banner label
 	 * when the user hasn't picked a specific voice). */
 	ttsDefaultVoice: string | null;
+	/** Available TTS voice ids from /api/health. */
+	ttsVoices: string[];
 	/** True when /api/health advertises ttsSpeedParam, i.e. this server's TTS
-	 * routes take a `speed` and the engine applies it by scaling phoneme
-	 * durations. The browser then asks the server for the chosen rate and leaves
+	 * routes take a `speed` and the engine applies it during synthesis (natural
+	 * pitch). The browser then asks the server for the chosen rate and leaves
 	 * Web Audio's playbackRate at 1 — resampling the rate shifts pitch up, which
 	 * is audible on the default 1.25x. False until the health probe lands (and on
 	 * a server that predates the parameter), where the old resampling is used. */
@@ -255,7 +256,7 @@ export interface AppState {
 	imageModel: { model: string; source: "override" | "env" | "default" } | null;
 	/** Whether the Gemini key is configured for pi-web-access. Display-only. */
 	geminiKey: boolean;
-	/** TTS playback rate multiplier (1.0 = normal, 2.0 = double speed). Applied
+	/** TTS speaking speed multiplier (1.0 = normal, 2.0 = double speed). Applied
 	 * by the TTS engine when ttsSpeedParam is set, otherwise by resampling the
 	 * AudioBufferSourceNode's playbackRate (which raises the pitch). */
 	ttsSpeed: number;
@@ -395,6 +396,7 @@ export const state: AppState = {
 	ttsVoice: null,
 	ttsEngine: null,
 	ttsDefaultVoice: null,
+	ttsVoices: [],
 	ttsSpeedParam: false,
 	voiceRewriteModel: null,
 	whisperModel: null,

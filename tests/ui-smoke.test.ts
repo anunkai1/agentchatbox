@@ -1109,6 +1109,47 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("hides the single-voice picker and labels TTS speech speed for ZONOS3-Mini", async () => {
+		const { page } = await openPage("/");
+		try {
+			await page.route("**/api/health", (route) =>
+				route.fulfill({
+					contentType: "application/json",
+					body: JSON.stringify({
+						status: "ok",
+						providers: ["zai"],
+						whisper: false,
+						tts: true,
+						ttsEngine: "zonos3",
+						ttsVoice: "Savannah",
+						ttsVoices: ["Savannah"],
+						ttsSpeedParam: true,
+					}),
+				}),
+			);
+			await page.reload({ waitUntil: "domcontentloaded" });
+			await page.getByRole("button", { name: "Open settings", exact: true }).click();
+			await expect
+				.poll(() => page.locator(".settings-row .overflow-label").allInnerTexts())
+				.toContain("Speech speed");
+			expect(await page.locator(".settings-row .overflow-label").allInnerTexts()).not.toContain(
+				"Voice",
+			);
+			await page.locator(".settings-row").filter({ hasText: "Speech speed" }).click();
+			expect(await page.getByRole("dialog", { name: "TTS speech speed" }).isVisible()).toBe(true);
+			await page.getByRole("button", { name: "Close", exact: true }).click();
+			await page.getByRole("button", { name: "Open settings", exact: true }).click();
+			await page.locator(".settings-advanced-summary").click();
+			await page.locator(".settings-row").filter({ hasText: "Models & services" }).click();
+			const ttsRow = page.locator(".svc-row").filter({ hasText: "Text-to-speech" });
+			expect(await ttsRow.innerText()).toContain("ZONOS3-Mini");
+			expect(await ttsRow.innerText()).toContain("voice Savannah");
+			expect(await ttsRow.evaluate((el) => el.classList.contains("svc-clickable"))).toBe(false);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it.each([
 		["Off", 0],
 		["V", 1],

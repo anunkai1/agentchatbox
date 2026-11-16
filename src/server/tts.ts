@@ -41,7 +41,8 @@ const HEALTH_CACHE_MS = 60 * 1000;
  * detector rather than a budget. Overridable so the timeout path can be
  * exercised without waiting a minute.
  */
-const STREAM_TTFB_TIMEOUT_MS = Number(process.env.KOKORO_TTFB_TIMEOUT_MS) || 60_000;
+const STREAM_TTFB_TIMEOUT_MS =
+	Number(process.env.ZONOS_TTFB_TIMEOUT_MS || process.env.KOKORO_TTFB_TIMEOUT_MS) || 60_000;
 
 type Engine = "zonos3";
 
@@ -114,6 +115,8 @@ const KOKORO_DEFAULT_VOICE = process.env.KOKORO_VOICE || "af_heart";
 const ZONOS_RELAY_BASE =
 	process.env.ZONOS_RELAY_TTS_URL ||
 	`http://${process.env.ZONOS_RELAY_HOST || "127.0.0.1"}:${process.env.ZONOS_RELAY_PORT || "8184"}`;
+
+export const TTS_VOICES = { default: "Savannah", available: ["Savannah"] };
 
 export function createTtsRouter(): Router {
 	const router = express.Router();
@@ -316,7 +319,7 @@ export function createTtsRouter(): Router {
 	router.get(
 		"/voices",
 		asyncHandler(async (_req, res) => {
-			res.json({ default: "Savannah", available: ["Savannah"] });
+			res.json(TTS_VOICES);
 		}),
 	);
 
