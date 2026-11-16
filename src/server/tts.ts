@@ -1,12 +1,9 @@
 /**
  * TTS endpoint.
  *
- * Proxies to an optional pi-voice-server service at http://127.0.0.1:8181
- * (Kokoro-82M ONNX, warm in memory, ~1.5s for a sentence on CPU). The server
- * is operated separately (https://github.com/anunkai1/pi-voice-server).
- *
- * (A legacy Piper engine path was removed 2026-07-24 — Kokoro had been the
- * sole configured engine in production for a long time; Piper was dead code.)
+ * Ordinary chat uses ZONOS3-Mini at http://127.0.0.1:8184 (neutral Savannah).
+ * Its progressive PCM frames are wrapped as WAVs for the existing browser player.
+ * Explicit Relay Kokoro/Zonos pipes keep their original contracts.
  *
  * Two routes, same contract to the browser:
  *   POST /api/tts        { text, voice?, speed? } → audio/wav (whole blob)
@@ -18,12 +15,14 @@
 
 import express, { type Request, type Response, type Router } from "express";
 import { KOKORO_ALIGNMENT, ZONOS3_ALIGNMENT } from "../shared/kokoro.js";
+import { SpokenSentences } from "../shared/spoken-sentences.js";
 import { asyncHandler } from "./async-handler.js";
 import { createCachedProbe } from "./health-cache.js";
+import { audioFrame, pcmWav, zonosPcm } from "./zonos-audio.js";
 
 /**
- * Hard cap on input length. Kokoro itself has no text limit — this exists
- * only to reject absurd/misuse-sized payloads before we spend minutes of CPU
+ * Hard cap on input length. Reject absurd/misuse-sized payloads
+ * before we spend minutes of CPU
  * synthesizing. 30k chars is ~45-60 min of audio, well past anything a real
  * voice reply produces. The client truncates just under this (TTS_MAX_CHARS
  * in voice.ts) so a normal long message never hits the 413.
@@ -44,11 +43,10 @@ const HEALTH_CACHE_MS = 60 * 1000;
  */
 const STREAM_TTFB_TIMEOUT_MS = Number(process.env.KOKORO_TTFB_TIMEOUT_MS) || 60_000;
 
-type Engine = "kokoro";
+type Engine = "zonos3";
 
 /**
- * Speed bounds for the optional `speed` field. Mirrors what pi-voice-server
- * itself accepts (lib/http-utils.mjs), so an out-of-range value is rejected here
+ * Speed bounds shared by the Zonos and Kokoro shims, so an out-of-range value is rejected here
  * with a clear message instead of surfacing as an opaque upstream 400.
  */
 const MIN_SPEED = 0.5;
@@ -59,8 +57,8 @@ const MAX_SPEED = 2;
  * Extracted so both routes apply the identical checks (non-empty text, length
  * cap, speed range) in one place.
  *
- * `speed` is a *synthesis* parameter, not a playback rate: Kokoro scales phoneme
- * durations, so the voice keeps its natural pitch. The browser asks for it when
+ * `speed` is a synthesis parameter, not a playback rate: Zonos conditions its
+ * speaking rate; Kokoro scales phoneme durations. The browser asks for it when
  * /api/health advertises ttsSpeedParam, and then leaves Web Audio's playbackRate
  * at 1 — resampling the rate shifts pitch up instead.
  */
@@ -133,13 +131,42 @@ export function createTtsRouter(): Router {
 				res.status(parsed.status).json({ error: parsed.error });
 				return;
 			}
-			const { text, voice, speed } = parsed;
-			await synthKokoro(text, voice, speed, res);
+			const { text, speed } = parsed;
+			await synthZonos(text, speed, res);
+		}),
+	);
+
+	router.post(
+		"/stream",
+		asyncHandler(async (req, res) => {
+			const parsed = parseTtsBody(req);
+			if ("error" in parsed) {
+				res.status(parsed.status).json({ error: parsed.error });
+				return;
+			}
+			const controller = new AbortController();
+			res.on("close", () => controller.abort());
+			res.setHeader("Content-Type", "application/octet-stream");
+			res.setHeader("Cache-Control", "no-store");
+			res.setHeader("X-Accel-Buffering", "no");
+			try {
+				for await (const pcm of synthZonosPcm(parsed.text, parsed.speed, controller)) {
+					if (!res.write(audioFrame(0x01, pcmWav(pcm)))) await waitForDrain(res);
+				}
+				res.end(audioFrame(0x00));
+			} catch (error) {
+				if (res.destroyed) return;
+				const message = error instanceof Error ? error.message : String(error);
+				if (!res.headersSent) res.status(502).json({ error: message });
+				else res.end(audioFrame(0x80, Buffer.from(message)));
+			} finally {
+				controller.abort();
+			}
 		}),
 	);
 
 	/**
-	 * POST /api/tts/stream
+	 * Explicit Relay/legacy streaming routes
 	 * Body: { text: string, voice?: string }
 	 * Returns: application/octet-stream — a binary frame stream (one frame
 	 * per synthesized text chunk) forwarded verbatim from pi-voice-server's
@@ -153,9 +180,8 @@ export function createTtsRouter(): Router {
 	 * server stays the transport layer; the browser owns chunked playback.
 	 */
 	router.post(
-		["/stream", "/relay-stream", "/zonos-relay-stream"],
+		["/kokoro-stream", "/relay-stream", "/zonos-relay-stream"],
 		asyncHandler(async (req: Request, res: Response) => {
-			// Relay-only opt-in pipes; ordinary chat streaming never changes format.
 			const zonosRelay = req.path === "/zonos-relay-stream";
 			const kokoroAligned = req.path === "/relay-stream";
 			const parsed = parseTtsBody(req);
@@ -290,26 +316,61 @@ export function createTtsRouter(): Router {
 	router.get(
 		"/voices",
 		asyncHandler(async (_req, res) => {
-			const list = await kokoroVoices();
-			res.json({ default: KOKORO_DEFAULT_VOICE, available: list });
+			res.json({ default: "Savannah", available: ["Savannah"] });
 		}),
 	);
 
 	return router;
 }
 
-// ── Kokoro: HTTP proxy to pi-voice-server ──────────────────────────
+// ── Ordinary read-aloud: bounded synthesis + WAV transport ─────────
 
-async function synthKokoro(
+async function* synthZonosPcm(
 	text: string,
-	voice: string | undefined,
 	speed: number,
-	res: Response,
-): Promise<void> {
+	controller: AbortController,
+): AsyncGenerator<Uint8Array> {
+	// Feed the existing sentence splitter incrementally so even a huge sentence
+	// cannot overflow Zonos's per-generation context/audio budget.
+	const splitter = new SpokenSentences();
+	for (let offset = 0; offset < text.length; offset += 220) {
+		const sentences = splitter.push(text.slice(offset, offset + 220), offset + 220 >= text.length);
+		for (const sentence of sentences) {
+			controller.signal.throwIfAborted();
+			const timer = setTimeout(
+				() => controller.abort(new Error("Zonos first-chunk timeout")),
+				STREAM_TTFB_TIMEOUT_MS,
+			);
+			let upstream: globalThis.Response;
+			try {
+				upstream = await fetch(`${ZONOS_RELAY_BASE}/tts/stream`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json", "X-Zonos-Alignment": ZONOS3_ALIGNMENT },
+					body: JSON.stringify({ text: sentence, voice: "Savannah", speed }),
+					signal: controller.signal,
+				});
+			} finally {
+				clearTimeout(timer);
+			}
+			if (!upstream.ok)
+				throw new Error(
+					`zonos3 tts upstream ${upstream.status}: ${(await upstream.text()).slice(0, 300)}`,
+				);
+			// Without this opt-in Zonos returns raw float32, not framed PCM16.
+			if (upstream.headers.get("X-Zonos-Alignment") !== ZONOS3_ALIGNMENT) {
+				await upstream.body?.cancel();
+				throw new Error("ZONOS3-Mini PCM stream negotiation unavailable; no speech fallback");
+			}
+			yield* zonosPcm(upstream);
+		}
+	}
+}
+
+async function synthZonos(text: string, speed: number, res: Response): Promise<void> {
 	// Same disconnect handling as the streaming route: this route only responds
 	// once the WHOLE utterance is synthesized, so a browser that goes away
 	// mid-synthesis (stop pressed during the fallback path, navigation) would
-	// otherwise leave Kokoro burning CPU — minutes of it, at the 30k-char cap —
+	// otherwise leave Zonos burning CPU — minutes of it, at the 30k-char cap —
 	// on audio nobody will ever hear.
 	//
 	// Deliberately no timeout alongside it: the upstream response carries every
@@ -320,63 +381,30 @@ async function synthKokoro(
 	const clientGone = new AbortController();
 	res.on("close", () => clientGone.abort());
 	try {
-		const upstream = await fetch(`${KOKORO_BASE}/tts`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ text, voice: voice ?? KOKORO_DEFAULT_VOICE, speed }),
-			signal: clientGone.signal,
-		});
-		if (!upstream.ok) {
-			const errText = (await upstream.text()).slice(0, 300);
-			res.status(502).json({
-				error: `kokoro tts upstream ${upstream.status}: ${errText}`,
-			});
-			return;
-		}
-		const wav = Buffer.from(await upstream.arrayBuffer());
+		const chunks: Uint8Array[] = [];
+		for await (const pcm of synthZonosPcm(text, speed, clientGone)) chunks.push(pcm);
+		const wav = pcmWav(Buffer.concat(chunks));
 		res.setHeader("Content-Type", "audio/wav");
 		res.setHeader("Content-Length", String(wav.length));
 		res.setHeader("Cache-Control", "no-store");
 		res.send(wav);
 	} catch (e) {
 		// An aborted fetch means the browser left; there is nobody to answer.
-		if (clientGone.signal.aborted) return;
+		if (res.destroyed) return;
 		const message = e instanceof Error ? e.message : String(e);
 		res.status(502).json({
-			error: `kokoro tts unreachable at ${KOKORO_BASE}: ${message}`,
+			error: `zonos3 tts failed at ${ZONOS_RELAY_BASE}: ${message}`,
 		});
 	}
 }
-
-/**
- * Voice list, cached like the health probe: it is static per release (28 voices),
- * while the picker can be opened repeatedly by any browser. Failures are not
- * cached — only the resolved list is — so a restarted engine repopulates on the
- * next call rather than being pinned out for the TTL.
- */
-const kokoroVoices = createCachedProbe(HEALTH_CACHE_MS, async (): Promise<string[]> => {
-	const res = await fetch(`${KOKORO_BASE}/voices`, { signal: AbortSignal.timeout(3000) });
-	if (!res.ok) throw new Error(`upstream ${res.status}`);
-	const data = (await res.json()) as { voices?: string[] };
-	return data.voices ?? [];
-});
 
 // ---------------------------------------------------------------------------
 // Health probe (used by /api/health)
 // ---------------------------------------------------------------------------
 
-export const checkTtsAvailable = createCachedProbe(HEALTH_CACHE_MS, computeTtsAvailable);
+export const checkTtsAvailable = createCachedProbe(HEALTH_CACHE_MS, checkZonosHealth);
 
-async function computeTtsAvailable(): Promise<{
-	available: boolean;
-	reason?: string;
-	voice?: string;
-	engine: Engine;
-}> {
-	return checkKokoroHealth();
-}
-
-export function kokoroHealthIsAvailable(data: {
+export function ttsHealthIsAvailable(data: {
 	modelAvailable?: boolean;
 	modelLoaded?: boolean;
 }): boolean {
@@ -387,18 +415,18 @@ export function kokoroHealthIsAvailable(data: {
 	);
 }
 
-async function checkKokoroHealth(): Promise<{
+async function checkZonosHealth(): Promise<{
 	available: boolean;
 	reason?: string;
 	voice?: string;
 	engine: Engine;
 }> {
 	try {
-		const res = await fetch(`${KOKORO_BASE}/health`, {
+		const res = await fetch(`${ZONOS_RELAY_BASE}/health`, {
 			signal: AbortSignal.timeout(3000),
 		});
 		if (!res.ok) {
-			return { engine: "kokoro", available: false, reason: `upstream ${res.status}` };
+			return { engine: "zonos3", available: false, reason: `upstream ${res.status}` };
 		}
 		const data = (await res.json()) as {
 			modelAvailable?: boolean;
@@ -407,25 +435,19 @@ async function checkKokoroHealth(): Promise<{
 			voice?: string;
 			voiceCount?: number;
 		};
-		if (!kokoroHealthIsAvailable(data)) {
-			return { engine: "kokoro", available: false, reason: "model unavailable" };
+		if (!ttsHealthIsAvailable(data)) {
+			return { engine: "zonos3", available: false, reason: "model unavailable" };
 		}
 		return {
-			engine: "kokoro",
+			engine: "zonos3",
 			available: true,
-			voice: data.voice || KOKORO_DEFAULT_VOICE,
+			voice: data.voice || "Savannah",
 		};
 	} catch (e) {
 		return {
-			engine: "kokoro",
+			engine: "zonos3",
 			available: false,
 			reason: `unreachable: ${e instanceof Error ? e.message : String(e)}`,
 		};
 	}
 }
-
-// NOTE: this module previously also hosted a Piper engine (shell out to
-// scripts/tts.py). It was removed 2026-07-24 — Kokoro had been the sole
-// configured engine in production for a long time. If a second engine is ever
-// needed again, reintroduce an `engine()` discriminator + a synth/health path
-// per engine; the route handlers above already centralize body validation.

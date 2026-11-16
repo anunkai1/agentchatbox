@@ -42,10 +42,10 @@ describe("Relay-only aligned TTS byte pipe", () => {
 		]);
 	});
 
-	it("leaves ordinary chat streaming unchanged even if a caller sends an alignment header", async () => {
+	it("preserves legacy Kokoro streaming without requesting alignment", async () => {
 		const upstream = vi.fn(async () => new Response(new Uint8Array([0, 0, 0, 0, 0])));
 		vi.stubGlobal("fetch", upstream);
-		const response = await realFetch(`${base}/api/tts/stream`, {
+		const response = await realFetch(`${base}/api/tts/kokoro-stream`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json", "X-Kokoro-Alignment": KOKORO_ALIGNMENT },
 			body: JSON.stringify({ text: "Hello." }),

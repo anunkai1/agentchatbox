@@ -2335,6 +2335,11 @@ async function boot(): Promise<void> {
 			state.ttsAvailable = h.tts ?? false;
 			state.ttsEngine = h.ttsEngine ?? null;
 			state.ttsDefaultVoice = h.ttsVoice ?? null;
+			// Kokoro voice IDs saved by older browsers are not Zonos voices.
+			if (h.ttsEngine === "zonos3" && state.ttsVoice && state.ttsVoice !== h.ttsVoice) {
+				state.ttsVoice = null;
+				saveSessionPrefs();
+			}
 			state.ttsSpeedParam = h.ttsSpeedParam ?? false;
 			state.voiceRewriteModel = h.voiceRewriteModel ?? null;
 			state.whisperModel = h.whisperModel ?? null;

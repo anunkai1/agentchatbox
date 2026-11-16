@@ -29,7 +29,7 @@ Browser (vanilla DOM, no framework)
   │  POST /api/upload   — multipart file upload
   │  GET  /api/file    — download a regular file the owner-level agent can read
   │  POST /api/transcribe — audio → text (Fluid Speech Pro via pi-stt-server)
-  │  POST /api/tts      — text → audio (Kokoro)
+  │  POST /api/tts      — text → audio (ZONOS3-Mini)
   │  GET  /api/models   — list of models with configured API keys
   │  GET  /api/sessions — list pi sessions for the server's cwd
   │  GET  /api/health   — liveness + provider list
@@ -84,7 +84,7 @@ src/
     uploads-serving.ts    # safe raster preview / forced attachment delivery
     files.ts              # /api/file (no-follow regular-file download)
     transcribe.ts         # /api/transcribe (proxies to pi-stt-server daemons)
-    tts.ts                # /api/tts (Kokoro)
+    tts.ts                # /api/tts (ZONOS3-Mini; explicit Relay engines)
     search/               # Optional semantic session search
                           #   (see "Semantic session search" below; disabled
                           #   unless explicitly enabled)
@@ -175,7 +175,7 @@ Chat-model providers are authenticated via `pi` itself: run `pi auth login <prov
 | POST   | `/api/upload`         | Multipart file upload                                  |
 | GET    | `/uploads/:filename`  | Download a previously uploaded file                    |
 | POST   | `/api/transcribe`     | Audio → text (pi-stt-server daemon chain)              |
-| POST   | `/api/tts`            | Text → audio (Kokoro)                                  |
+| POST   | `/api/tts`            | Text → audio (ZONOS3-Mini)                             |
 | GET    | `/api/health`         | `{ status, commit, providers, whisper, tts, ttsVoice }` |
 | GET    | `/api/models`         | List of available models (only configured providers)   |
 | GET    | `/api/sessions`       | List pi sessions for the server's cwd (`?cwd=<path>`)  |
@@ -345,10 +345,11 @@ Implementation: `src/server/search/`.
 
 ### Runtime dependencies
 
-agentchatbox's voice stack is split across two sibling services — together
-they decide *what* to say (pi-voice-reply) and *how* to say it (pi-voice-server):
+agentchatbox separates spoken-summary generation (`pi-voice-reply`) from local
+speech synthesis (ZONOS3-Mini for normal playback; Kokoro for explicit Relay modes):
 
-- [pi-voice-server](https://github.com/anunkai1/pi-voice-server) — minimal **Kokoro-82M** TTS HTTP server. `/api/tts` and `/api/tts/stream` proxy here for actual speech synthesis (loads one model, keeps it warm, serializes calls, streams chunks so playback starts before synthesis finishes).
+- **ZONOS3-Mini** — ordinary read-aloud (`/api/tts`, `/api/tts/stream`) uses the existing CPU streaming service on loopback `8184`, with neutral **Savannah** and synthesis speed control (quantised speaking-rate conditioning, not an exact playback multiplier). The transport wraps progressive 44.1 kHz PCM16 in WAVs; the browser preserves fragment boundaries without silence trimming and retains play/pause/stop/seek. Previously saved Kokoro voices reset to the Zonos default. Whole-WAV fallback uses the same Zonos service, not Kokoro.
+- [pi-voice-server](https://github.com/anunkai1/pi-voice-server) — **Kokoro-82M** remains available for explicit Relay alignment (`/api/tts/relay-stream`) and legacy/trial speech (`/api/tts/kokoro-stream`). Relay's engine preference and existing Zonos aligned route are unchanged.
 - [pi-voice-reply](https://github.com/anunkai1/pi-voice-reply) — `pi` extension producing spoken-summary voice replies (long listenable + short concise rewrites via the same model that produced the reply). Requested with `/voice-last` (the speak buttons and Voice mode).
 - **Notifications:** routine informational updates (image/vision progress, local-model startup, settings changes and copy/send confirmations) temporarily use the second line of the existing bottom status bar rather than covering the conversation or adding a separate block. Voice preparation has an independent entry until playback starts or is cancelled; simultaneous voice and info entries share that line. The bar keeps its original fixed two-line height in every state, with no extra idle space. Normal metadata uses both lines again when activity clears. Longer text is ellipsised; tap an activity entry for full details, including the voice preview. Warnings and errors remain above the message box until dismissed, without covering the conversation; repeated failures share one card. Blocked-send notices clear when their condition resolves. Reconnect, retry-upload and view-tool-result actions appear where supported; arbitrary agent/tool work is never automatically replayed. Automatic retry/reconnection progress stays in the footer. Notices survive a same-session reconnect but are not retained after a page reload or a session switch.
 - **Voice-note recovery:** failed transcriptions retain the audio in a session-scoped retry notice. Press **Retry transcription** to retry without re-recording. Dismissing the notice, switching chats or reloading releases it; audio is not persisted in browser storage. Notes over five minutes are rejected clearly.

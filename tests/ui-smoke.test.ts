@@ -2060,7 +2060,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		const { page } = await openPage("/");
 		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
 		const voiceCommands: string[] = [];
-		await page.route("**/api/tts/stream", (route) =>
+		await page.route("**/api/tts/kokoro-stream", (route) =>
 			route.fulfill({
 				body: Buffer.from([0, 0, 0, 0, 0]),
 				contentType: "application/octet-stream",
@@ -2190,7 +2190,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		const inits: Array<Record<string, unknown>> = [];
 		const prompts: string[] = [];
 		let cancelled = false;
-		await page.route("**/api/tts/stream", (route) =>
+		await page.route("**/api/tts/kokoro-stream", (route) =>
 			route.fulfill({
 				body: Buffer.from([0, 0, 0, 0, 0]),
 				contentType: "application/octet-stream",
@@ -2351,7 +2351,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			localStorage.setItem("acb-relay-voice-engine", "legacy");
 			localStorage.removeItem("acb-relay-session");
 		});
-		await page.route("**/api/tts/stream", (route) => {
+		await page.route("**/api/tts/kokoro-stream", (route) => {
 			tts.push(route.request().postDataJSON().text);
 			return route.fulfill({
 				body: Buffer.alloc(5),
@@ -2511,7 +2511,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		const frame = Buffer.alloc(5);
 		frame[0] = 1;
 		frame.writeUInt32LE(wav.length, 1);
-		await page.route("**/api/tts/stream", async (route) => {
+		await page.route("**/api/tts/kokoro-stream", async (route) => {
 			tts.push(route.request().postDataJSON().text);
 			await route.fulfill({
 				body: Buffer.concat([frame, wav, Buffer.alloc(5)]),

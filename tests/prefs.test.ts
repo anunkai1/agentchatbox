@@ -40,6 +40,9 @@ beforeEach(() => {
 	state.sessionId = "prefs-test-session";
 	state.showThinking = true;
 	state.showToolCalls = true;
+	state.ttsEngine = null;
+	state.ttsDefaultVoice = null;
+	state.ttsVoice = null;
 });
 
 afterEach(() => {
@@ -101,6 +104,24 @@ describe("chat display preferences", () => {
 		applySessionPrefs();
 		expect(state.showThinking).toBe(true);
 		expect(state.showToolCalls).toBe(false);
+	});
+});
+
+describe("Zonos voice preferences", () => {
+	it("discards saved Kokoro voices on session changes without changing the saved speed", () => {
+		state.ttsEngine = "zonos3";
+		state.ttsDefaultVoice = "Savannah";
+		storage.setItem(
+			"acb:prefs:prefs-test-session",
+			JSON.stringify({ ttsVoice: "af_heart", ttsSpeed: 1.4 }),
+		);
+		applySessionPrefs();
+		expect(state.ttsVoice).toBeNull();
+		expect(state.ttsSpeed).toBe(1.4);
+		state.sessionId = "zonos-session";
+		storage.setItem("acb:prefs:zonos-session", JSON.stringify({ ttsVoice: "Savannah" }));
+		applySessionPrefs();
+		expect(state.ttsVoice).toBe("Savannah");
 	});
 });
 

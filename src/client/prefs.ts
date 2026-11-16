@@ -8,7 +8,7 @@
  * user's display choice, but another device starts with the defaults.
  *
  * What's persisted here (client-owned only):
- *   - ttsVoice   (selected Kokoro voice, per session)
+ *   - ttsVoice   (selected TTS voice, per session)
  *   - ttsSpeed   (playback rate, per session)
  *   - showThinking / showToolCalls (device-local display defaults)
  *
@@ -119,7 +119,12 @@ export function applySessionPrefs(): void {
 	state.showThinking = false;
 	state.showToolCalls = false;
 	const prefs = loadPrefs(id);
-	if (typeof prefs.ttsVoice === "string") state.ttsVoice = prefs.ttsVoice;
+	if (typeof prefs.ttsVoice === "string") {
+		state.ttsVoice =
+			state.ttsEngine === "zonos3" && prefs.ttsVoice !== state.ttsDefaultVoice
+				? null
+				: prefs.ttsVoice;
+	}
 	if (typeof prefs.ttsSpeed === "number" && Number.isFinite(prefs.ttsSpeed)) {
 		state.ttsSpeed = prefs.ttsSpeed;
 	}

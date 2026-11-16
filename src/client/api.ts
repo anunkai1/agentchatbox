@@ -265,8 +265,9 @@ export async function* streamSynthesizeSpeech(
 	voice?: string,
 	signal?: AbortSignal,
 	speed?: number,
+	endpoint = "/api/tts/stream",
 ): AsyncGenerator<Blob> {
-	const res = await fetch(`${BASE}/api/tts/stream`, {
+	const res = await fetch(`${BASE}${endpoint}`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ text, voice, speed }),

@@ -1513,9 +1513,12 @@ export function openModelsPanel(): void {
 	);
 
 	const ttsVoice = state.ttsVoice ?? state.ttsDefaultVoice ?? "(unset)";
-	const engine = state.ttsEngine
-		? state.ttsEngine.charAt(0).toUpperCase() + state.ttsEngine.slice(1)
-		: "TTS";
+	const engine =
+		state.ttsEngine === "zonos3"
+			? "ZONOS3-Mini"
+			: state.ttsEngine
+				? state.ttsEngine.charAt(0).toUpperCase() + state.ttsEngine.slice(1)
+				: "TTS";
 	box.append(
 		svcRow(
 			"Text-to-speech",
