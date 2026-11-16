@@ -57,6 +57,7 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 				text: inactive
 					? "Earlier branch — not included in the current conversation."
 					: "Current branch resumes.",
+				structural: true,
 			});
 			inInactiveBranch = inactive;
 		}
@@ -179,6 +180,8 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 
 /** True when a claude-code assistant mirror sits next to the note at `index`. */
 function isMirroredByAssistant(messages: Message[], index: number): boolean {
+	const source = (messages[index] as { details?: { source?: unknown } }).details?.source;
+	if (source !== undefined && source !== "claude-delegate") return false;
 	const inactive =
 		(messages[index] as { _acbInactiveBranch?: boolean })._acbInactiveBranch === true;
 	return [messages[index - 1], messages[index + 1]].some(

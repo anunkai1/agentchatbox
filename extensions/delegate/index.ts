@@ -31,6 +31,7 @@ import {
 	startWorker,
 	telegramText,
 	workerLabel,
+	workerTelegramNote,
 	writeDelegation,
 	writeDelivered,
 } from "./lib.js";
@@ -396,6 +397,15 @@ export default function registerDelegate(
 				? notifyOwner(text)
 				: sendTelegram(text, record.parentSessionId, record.parentModel);
 		notify(telegramText(record, PUBLIC_URL));
+		pi.sendMessage(
+			{
+				customType: "note",
+				content: workerTelegramNote(record),
+				display: true,
+				details: { source: "delegate-telegram", worker: record.id, seq: record.reportSeq },
+			},
+			{ triggerTurn: false },
+		);
 		try {
 			await acb.prompt(record.parentSessionId, `/delegate report ${record.id}`, record.parentModel);
 		} catch (error) {

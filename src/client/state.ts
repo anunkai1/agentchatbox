@@ -122,7 +122,14 @@ export type PersistedMessage =
 	 * Rendered as its own markdown row. Carries no seq (custom messages
 	 * aren't `type:"message"` JSONL entries, so they have no fork ordinal).
 	 */
-	| { kind: "note"; text: string; ts?: number; relayVoiceId?: string; voicePlayback?: boolean };
+	| {
+			kind: "note";
+			text: string;
+			ts?: number;
+			relayVoiceId?: string;
+			voicePlayback?: boolean;
+			structural?: boolean;
+	  };
 
 // ---------------------------------------------------------------------------
 // In-memory app state

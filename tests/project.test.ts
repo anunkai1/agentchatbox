@@ -199,6 +199,36 @@ describe("projectTranscript", () => {
 		expect(projectTranscript([note]).map((row) => row.kind)).toEqual(["note"]);
 	});
 
+	it("keeps delegate-telegram notes even beside a Claude Code assistant mirror", () => {
+		const mirror = {
+			role: "assistant",
+			provider: "claude-code",
+			content: [{ type: "text", text: "booked" }],
+		} as unknown as Message;
+		const telly = {
+			role: "custom",
+			customType: "note",
+			content: "✅ Worker done: Book dentist\n\nbooked",
+			details: { source: "delegate-telegram", worker: "w-1", seq: 1 },
+		} as unknown as Message;
+		const out = projectTranscript([mirror, telly]);
+		expect(out.map((row) => row.kind)).toEqual(["assistant", "note"]);
+		expect(out[1]).toMatchObject({ kind: "note", text: telly.content });
+	});
+
+	it("marks inactive branch divider notes as structural", () => {
+		const out = projectTranscript([
+			{
+				role: "user",
+				content: [{ type: "text", text: "old" }],
+				_acbInactiveBranch: true,
+			} as unknown as Message,
+			user("current"),
+		]);
+		expect(out[0]).toMatchObject({ kind: "note", structural: true });
+		expect(out[2]).toMatchObject({ kind: "note", structural: true });
+	});
+
 	it("returns an empty array for an empty transcript", () => {
 		expect(projectTranscript([])).toEqual([]);
 	});

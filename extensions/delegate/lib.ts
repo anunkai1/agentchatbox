@@ -222,6 +222,17 @@ export function telegramText(record: Delegation, publicUrl: string): string {
 		.join("\n\n");
 }
 
+/** Full Telegram-style report note posted inside the worker chat itself. */
+export function workerTelegramNote(record: Delegation): string {
+	const summary = (record.summary ?? "").trim();
+	return [
+		`${STATUS_ICONS[record.status]} Worker ${STATUS_LABELS[record.status]}: ${record.title}`,
+		summary,
+	]
+		.filter(Boolean)
+		.join("\n\n");
+}
+
 export type DelegateArgs =
 	| { kind: "status" }
 	| { kind: "report"; id: string }

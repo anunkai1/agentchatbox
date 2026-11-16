@@ -3718,4 +3718,88 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1);
 		await page.close();
 	});
+
+	it("renders a working TTS speak button on delegate report notes, but not on structural dividers", async () => {
+		const { page } = await openPage("/");
+		const spokenTexts: string[] = [];
+		const wav = Buffer.alloc(44 + 4800 * 2);
+		wav.write("RIFF", 0);
+		wav.writeUInt32LE(wav.length - 8, 4);
+		wav.write("WAVE", 8);
+		wav.write("fmt ", 12);
+		wav.writeUInt32LE(16, 16);
+		wav.writeUInt16LE(1, 20);
+		wav.writeUInt16LE(1, 22);
+		wav.writeUInt32LE(24000, 24);
+		wav.writeUInt32LE(48000, 28);
+		wav.writeUInt16LE(2, 32);
+		wav.writeUInt16LE(16, 34);
+		wav.write("data", 36);
+		wav.writeUInt32LE(wav.length - 44, 40);
+		const frame = Buffer.alloc(5);
+		frame[0] = 1;
+		frame.writeUInt32LE(wav.length, 1);
+		await page.route("**/api/tts/stream", async (route) => {
+			spokenTexts.push(route.request().postDataJSON().text);
+			await route.fulfill({
+				body: Buffer.concat([frame, wav, Buffer.alloc(5)]),
+				contentType: "application/octet-stream",
+			});
+		});
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type !== "init") return;
+				ws.send(
+					JSON.stringify({
+						type: "ready",
+						sessionId: "delegate-tts-note",
+						modelId: "glm-5.2",
+						provider: "zai",
+						thinkingLevel: "off",
+					}),
+				);
+				ws.send(
+					JSON.stringify({
+						type: "transcript",
+						sessionId: "delegate-tts-note",
+						messages: [
+							{
+								role: "user",
+								content: [{ type: "text", text: "Old branch" }],
+								_acbInactiveBranch: true,
+							},
+							{
+								role: "custom",
+								customType: "note",
+								content:
+									"**Worker report** · ✅ done · [Fix page](/s/worker-1)\n\nFixed; 12 tests pass.",
+								timestamp: 1000,
+								details: { source: "delegate", worker: "worker-1" },
+							},
+						],
+					}),
+				);
+			});
+		});
+		try {
+			await page.reload();
+			await expect.poll(() => messages(page).innerText()).toContain("Fixed; 12 tests pass.");
+			const rows = page.locator(".row-note");
+			await expect.poll(() => rows.count()).toBe(3);
+			// Branch dividers ("Earlier branch…" and "Current branch resumes.") stay control-free.
+			expect(await rows.nth(0).locator(".speak-btn").count()).toBe(0);
+			expect(await rows.nth(1).locator(".speak-btn").count()).toBe(0);
+			// The delegate report note gets TTS + copy controls and streams spoken text.
+			const reportSpeak = rows.nth(2).locator(".note-actions .speak-btn");
+			expect(await reportSpeak.count()).toBe(1);
+			expect(await rows.nth(2).locator('.note-actions button[aria-label="Copy this note"]').count()).toBe(1);
+			await reportSpeak.click();
+			await expect.poll(() => spokenTexts.length).toBe(1);
+			expect(spokenTexts[0]).toContain("Worker report");
+			expect(spokenTexts[0]).toContain("Fixed; 12 tests pass.");
+		} finally {
+			await page.close();
+		}
+	});
 });

@@ -1373,10 +1373,10 @@ body.sidebar-resizing iframe {
 	flex: 1;
 	min-width: 0;
 }
-/* Extension-injected display note (e.g. /imggen's model-free image result).
- * A lightweight markdown row — same .text.markdown rendering as assistant
- * text, but with a subtle left accent so it reads as a system/extension
- * note rather than a model reply. No avatar, no voice buttons. */
+/* Extension-injected display note (e.g. /imggen's model-free image result
+ * or a delegate report). A lightweight markdown row — same .text.markdown
+ * rendering as assistant text, but with a subtle left accent so it reads as
+ * a system/extension note rather than a model reply. No avatar. */
 .row-note {
 	margin: 0.5rem 0;
 }
@@ -1981,6 +1981,25 @@ body.sidebar-resizing iframe {
 }
 .assistant-meta-actions .message-action {
 	height: 22px;
+}
+.note-meta {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 5px;
+}
+.note-meta .msg-ts {
+	margin-top: 0;
+	text-align: left;
+}
+.note-actions {
+	margin-left: auto;
+}
+.note-actions .message-action {
+	height: 22px;
+}
+.note-actions .speak-btn {
+	margin-top: 0;
 }
 /* User rows become flex column so the bubble and its single action strip
    stack neatly, with Copy and Fork sharing one line. */

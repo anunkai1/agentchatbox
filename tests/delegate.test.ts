@@ -16,6 +16,8 @@ import {
 	readDelegation,
 	resolveModelToken,
 	STATUS_NOTE,
+	telegramText,
+	workerTelegramNote,
 	writeDelegation,
 } from "../extensions/delegate/lib.js";
 
@@ -240,6 +242,16 @@ describe("delegate extension", () => {
 			modelId: "gpt-6.1-sol",
 			thinkingLevel: "high",
 		});
+		expect(h.pi.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "note",
+				content: "✅ Worker done: Fix page\n\nFixed; 12 tests pass",
+				display: true,
+				details: { source: "delegate-telegram", worker: "worker-1", seq: 1 },
+			}),
+			{ triggerTurn: false },
+		);
+		h.pi.sendMessage.mockClear();
 
 		const report = h.commands.get("delegate")!;
 		await report("report worker-1", h.ctx("someone-else"));
@@ -434,6 +446,7 @@ describe("delegate extension", () => {
 		expect(readDelegation("worker-1")?.status).toBe("stopped");
 		expect(h.acb.prompt).not.toHaveBeenCalled();
 		expect(h.telegram).not.toHaveBeenCalled();
+		expect(h.pi.sendMessage).not.toHaveBeenCalled();
 	});
 
 	it("ignores ordinary chats", async () => {
@@ -581,6 +594,15 @@ describe("delegation guidance and context reuse", () => {
 		await h.events.get("agent_settled")!({}, h.ctx("worker-1"));
 		expect(readDelegation("worker-1")).toMatchObject({ status, summary, reportSeq: 1 });
 		expect(h.telegram).toHaveBeenCalledWith(expect.stringContaining(summary));
+		expect(h.pi.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "note",
+				content: expect.stringContaining(summary),
+				details: { source: "delegate-telegram", worker: "worker-1", seq: 1 },
+			}),
+			{ triggerTurn: false },
+		);
+		h.pi.sendMessage.mockClear();
 		await h.commands.get("d")!("report worker-1", h.ctx("parent-1"));
 		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain(summary);
 		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain("do not invent missing evidence");
@@ -704,6 +726,17 @@ describe("delegate helpers", () => {
 	it("says when there is nothing to list", () => {
 		expect(formatStatusList([])).toBe("No delegations yet.");
 	});
+
+	it("keeps full summary without self-URL in workerTelegramNote", () => {
+		const longSummary = "A".repeat(750);
+		const record = saveWorker("worker-1", { status: "done", summary: longSummary });
+		const note = workerTelegramNote(record);
+		const tg = telegramText(record, "https://acb.example");
+		expect(note).toBe(`✅ Worker done: Fix journal\n\n${longSummary}`);
+		expect(note).not.toContain("/s/worker-1");
+		expect(tg).toContain("…");
+		expect(tg).toContain("https://acb.example/s/worker-1");
+	});
 });
 
 describe("delegate when the chat limit is reached", () => {
@@ -813,6 +846,15 @@ describe("Claude Code workers", () => {
 			expect.anything(),
 		);
 		expect(h.telegram).toHaveBeenCalledWith(expect.stringContaining("✅ Worker done"));
+		expect(h.pi.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "note",
+				content: "✅ Worker done: Fix page\n\nFixed the page; 12 tests pass.",
+				display: true,
+				details: { source: "delegate-telegram", worker: "worker-1", seq: 1 },
+			}),
+			{ triggerTurn: false },
+		);
 	});
 
 	it("treat a missing status line as needing the owner, and a stop as stopped", async () => {
@@ -824,10 +866,12 @@ describe("Claude Code workers", () => {
 		await vi.waitFor(() => expect(readDelegation("worker-1")?.status).toBe("needs_input"));
 		h.acb.prompt.mockClear();
 		h.telegram.mockClear();
+		h.pi.sendMessage.mockClear();
 		h.pi.events.emit("claude-delegate:run-end", { ctx: worker, cancelled: true });
 		await vi.waitFor(() => expect(readDelegation("worker-1")?.status).toBe("stopped"));
 		expect(h.acb.prompt).not.toHaveBeenCalled();
 		expect(h.telegram).not.toHaveBeenCalled();
+		expect(h.pi.sendMessage).not.toHaveBeenCalled();
 	});
 
 	it("ignore a pi run that is not the worker's own", async () => {

@@ -365,9 +365,9 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	}
 	if (m.kind === "note") {
 		// Extension-injected display note (e.g. /imggen's model-free image
-		// result). Pure markdown render — same pipeline as assistant text,
-		// but its own lightweight row (no avatar, no voice buttons). No LLM
-		// turn produced this; it's an extension surfacing content directly.
+		// result or a delegate report). Pure markdown render — same pipeline
+		// as assistant text, lightweight row (no avatar, no LLM rewrite
+		// buttons), with direct local TTS and copy controls when speakable.
 		const row = el("div", { class: "row row-note" });
 		const body = el("div", { class: "body" });
 		const text = el("div", { class: "text markdown" }, " ");
@@ -382,7 +382,35 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 					)
 				: text,
 		);
-		if (m.ts !== undefined) body.append(makeTimestampEl(m.ts));
+		const canSpeak = !m.voicePlayback && !m.structural && Boolean(m.text.trim());
+		if (m.ts !== undefined || canSpeak) {
+			const meta = el("div", { class: "note-meta" });
+			if (m.ts !== undefined) meta.append(makeTimestampEl(m.ts));
+			if (canSpeak) {
+				const actions = el("div", {
+					class: "message-actions note-actions",
+					role: "toolbar",
+					"aria-label": "Note actions",
+				});
+				actions.append(
+					makeSpeakButton(
+						() => m.text,
+						"Speak this message",
+						"message-action speak-btn",
+						"message-action-icon",
+					),
+					makeMessageActionButton("copy", "Copy this note", (button) => {
+						if (!services.copyText) return;
+						void services.copyText(m.text).then((ok) => {
+							button.classList.toggle("is-success", ok);
+							showToast(ok ? "Note copied." : "Clipboard access denied.", ok ? "info" : "error");
+						});
+					}),
+				);
+				meta.append(actions);
+			}
+			body.append(meta);
+		}
 		row.append(body);
 		return row;
 	}
