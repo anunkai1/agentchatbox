@@ -467,7 +467,7 @@ export function openVoiceTest(
 		metrics.textContent = parts.join(" · ");
 	};
 	const createSpeechSpeaker = useZonosTts
-		? (callbacks: LfmTtsSpeakerCallbacks) => createZonosSpeaker(callbacks, state.ttsSpeed)
+		? (callbacks: LfmTtsSpeakerCallbacks) => createZonosSpeaker(callbacks, () => state.ttsSpeed)
 		: useKokoroTts
 			? createKokoroSpeaker
 			: (callbacks: LfmTtsSpeakerCallbacks) => new LfmTtsSpeaker(callbacks);

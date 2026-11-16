@@ -221,6 +221,7 @@ interface Ledger {
 	chunks: TimedChunk[];
 	submitted: string[];
 	samples: number;
+	speed: number;
 	finished: boolean;
 	issues: string[];
 	controller: AbortController;
@@ -280,20 +281,27 @@ export class KokoroTtsTransport implements TtsTransport {
 	private ledgers = new Map<number, Ledger>();
 	private readonly config: AlignedTtsConfig;
 	/**
-	 * Synthesis speed for every chunk of this speaker, captured once at
-	 * construction so a picker change mid-answer cannot mix paces within one
-	 * spoken turn.
+	 * Resolves the synthesis speed once at the start of each spoken turn (epoch),
+	 * so picker changes take effect on the next turn without mixing paces mid-answer.
 	 */
-	private readonly speed: number;
-	constructor(configOrEndpoint: string | AlignedTtsConfig = KOKORO_TTS_CONFIG, speed = 1) {
+	private readonly getSpeed: () => number;
+	constructor(
+		configOrEndpoint: string | AlignedTtsConfig = KOKORO_TTS_CONFIG,
+		speed: number | (() => number) = 1,
+	) {
 		this.config =
 			typeof configOrEndpoint === "string"
 				? { ...KOKORO_TTS_CONFIG, endpoint: configOrEndpoint }
 				: configOrEndpoint;
-		this.speed = this.config.speedParam ? speed : 1;
+		this.getSpeed = typeof speed === "function" ? speed : () => speed;
 		queueMicrotask(() =>
 			this.emit({ type: "ready", protocol: 3, tts: 1, outputRate: this.config.sampleRate }),
 		);
+	}
+	private resolveUtteranceSpeed(): number {
+		if (!this.config.speedParam) return 1;
+		const raw = this.getSpeed();
+		return Number.isFinite(raw) ? Math.min(2, Math.max(0.5, raw)) : 1;
 	}
 	private emit(message: unknown): void {
 		if (this.readyState === 1) this.onmessage?.({ data: JSON.stringify(message) });
@@ -308,6 +316,7 @@ export class KokoroTtsTransport implements TtsTransport {
 					chunks: [],
 					submitted: [],
 					samples: 0,
+					speed: this.resolveUtteranceSpeed(),
 					finished: false,
 					issues: [],
 					controller: new AbortController(),
@@ -414,7 +423,7 @@ export class KokoroTtsTransport implements TtsTransport {
 				"Content-Type": "application/json",
 				[this.config.alignmentHeader]: this.config.alignmentValue,
 			},
-			body: JSON.stringify({ text, speed: this.speed }),
+			body: JSON.stringify({ text, speed: ledger.speed }),
 			signal: ledger.controller.signal,
 		});
 		if (
@@ -563,7 +572,10 @@ export function createKokoroSpeaker(callbacks: LfmTtsSpeakerCallbacks): LfmTtsSp
 	});
 }
 
-export function createZonosSpeaker(callbacks: LfmTtsSpeakerCallbacks, speed = 1): LfmTtsSpeaker {
+export function createZonosSpeaker(
+	callbacks: LfmTtsSpeakerCallbacks,
+	speed: number | (() => number) = 1,
+): LfmTtsSpeaker {
 	return new LfmTtsSpeaker(callbacks, "", {
 		create: () => new KokoroTtsTransport(ZONOS3_TTS_CONFIG, speed),
 		label: ZONOS3_TTS_CONFIG.label,

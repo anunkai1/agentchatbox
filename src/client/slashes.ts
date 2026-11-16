@@ -1164,8 +1164,6 @@ export function openThinkPicker(): void {
 }
 
 export function openSpeedPicker(): void {
-	// 1.5x is the fastest Zonos sample that still sounded unhurried; anything
-	// beyond it gets noticeably clipped, and the Kokoro path can already reach 2x.
 	const speeds = [1, 1.25, 1.4, 1.5, 2];
 	const { overlay, box } = openModal("TTS playback speed");
 	for (const rate of speeds) {

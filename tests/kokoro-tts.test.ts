@@ -690,6 +690,70 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 		});
 		h.speaker.close();
 	});
+
+	it("snapshots Zonos speed per utterance, clamps out-of-range values, and applies changes on the next turn", async () => {
+		let speed = 1.5;
+		const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+			const { text } = JSON.parse(String(init?.body)) as { text: string };
+			const m = {
+				alignment: ZONOS3_ALIGNMENT,
+				sampleRate: ZONOS3_SAMPLE_RATE,
+				submittedText: text,
+				text,
+				startSample: 0,
+				endSample: 22050,
+				alignmentComplete: true,
+				unalignedTokens: [],
+				words: [{ text, whitespace: "", startSample: 0, endSample: 22050 }],
+			};
+			return zonosResponse([meta(m), frame(1, pcm16(22050)), frame(0)]);
+		});
+		vi.stubGlobal("fetch", fetch);
+
+		const speaker = createZonosSpeaker(
+			{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: vi.fn() },
+			() => speed,
+		);
+
+		speaker.beginUtterance("turn-1", 0, vi.fn());
+		speaker.enqueueSegment("First.");
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		// Changing speed mid-turn must not affect later chunks in the same turn.
+		speed = 2.0;
+		speaker.enqueueSegment("Second.");
+		speaker.finishUtterance();
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+		expect(JSON.parse(String((fetch.mock.calls[0][1] as RequestInit).body))).toEqual({
+			text: "First.",
+			speed: 1.5,
+		});
+		expect(JSON.parse(String((fetch.mock.calls[1][1] as RequestInit).body))).toEqual({
+			text: "Second.",
+			speed: 1.5,
+		});
+
+		// Next turn picks up the updated speed; out-of-range values clamp to [0.5, 2].
+		speed = 3.5;
+		speaker.beginUtterance("turn-2", 0, vi.fn());
+		speaker.enqueueSegment("Third.");
+		speaker.finishUtterance();
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+		expect(JSON.parse(String((fetch.mock.calls[2][1] as RequestInit).body))).toEqual({
+			text: "Third.",
+			speed: 2,
+		});
+
+		speed = Number.NaN;
+		speaker.beginUtterance("turn-3", 0, vi.fn());
+		speaker.enqueueSegment("Fourth.");
+		speaker.finishUtterance();
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(4));
+		expect(JSON.parse(String((fetch.mock.calls[3][1] as RequestInit).body))).toEqual({
+			text: "Fourth.",
+			speed: 1,
+		});
+		speaker.close();
+	});
 });
 
 describe("Relay engine preference", () => {

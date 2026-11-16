@@ -82,7 +82,7 @@ describe("Relay-only aligned TTS byte pipe", () => {
 		const response = await realFetch(`${base}/api/tts/zonos-relay-stream`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ text: "Hello Zonos.", speed: 1 }),
+			body: JSON.stringify({ text: "Hello Zonos.", speed: 1.5 }),
 		});
 		expect(response.status).toBe(200);
 		expect(response.headers.get("X-Zonos-Alignment")).toBe(ZONOS3_ALIGNMENT);
@@ -93,7 +93,19 @@ describe("Relay-only aligned TTS byte pipe", () => {
 			"Content-Type": "application/json",
 			"X-Zonos-Alignment": ZONOS3_ALIGNMENT,
 		});
-		expect(JSON.parse(init.body as string)).toEqual({ text: "Hello Zonos.", speed: 1 });
+		expect(JSON.parse(init.body as string)).toEqual({ text: "Hello Zonos.", speed: 1.5 });
+	});
+
+	it("rejects out-of-range speed on /api/tts/zonos-relay-stream with 400 before calling upstream", async () => {
+		const upstream = vi.fn();
+		vi.stubGlobal("fetch", upstream);
+		const response = await realFetch(`${base}/api/tts/zonos-relay-stream`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ text: "Hello Zonos.", speed: 2.5 }),
+		});
+		expect(response.status).toBe(400);
+		expect(upstream).not.toHaveBeenCalled();
 	});
 
 	it("fails closed with 502 when ZONOS3-Mini omits alignment header", async () => {
