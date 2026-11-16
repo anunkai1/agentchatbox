@@ -87,8 +87,8 @@ function telegram(text: string, sessionId: string, model: ModelChoice): void {
 function notify(record: Delegation): void {
 	telegram(
 		telegramText(record, process.env.ACB_PUBLIC_URL ?? origin),
-		record.parentSessionId,
-		record.parentModel,
+		record.id,
+		record.workerModel,
 	);
 }
 function notifySession(record: SessionRecovery): void {

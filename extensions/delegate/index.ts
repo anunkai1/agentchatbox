@@ -391,11 +391,9 @@ export default function registerDelegate(
 		writeDelegation(record);
 		publish(ctx, record);
 		if (record.status === "stopped") return;
-		// Owner decisions belong in the delegating chat, not a detached worker.
+		// Replies to the worker's Telegram notification continue in the worker chat.
 		const notify = (text: string) =>
-			notifyOwner
-				? notifyOwner(text)
-				: sendTelegram(text, record.parentSessionId, record.parentModel);
+			notifyOwner ? notifyOwner(text) : sendTelegram(text, record.id, record.workerModel);
 		notify(telegramText(record, PUBLIC_URL));
 		pi.sendMessage(
 			{
