@@ -69,6 +69,16 @@ async function main(args: string[]): Promise<string> {
 			const task = readFileSync(0, "utf8").trim();
 			if (!title || !cwd || !task) throw new Error(`usage: ${CLI} start --title … --cwd … < brief`);
 			const model = option(args, "--model");
+			if (
+				args.includes("--model") &&
+				(!model ||
+					(!CLAUDE_MODES.includes(model.toLowerCase()) &&
+						!/^[^/\s]+\/[^/\s](?:\S*[^/\s])?$/u.test(model)))
+			) {
+				throw new Error(
+					"--model must be opus, sonnet, haiku or provider/model (no default fallback)",
+				);
+			}
 			const parentModel = chatModel();
 			const claude = model
 				? CLAUDE_MODES.includes(model.toLowerCase())

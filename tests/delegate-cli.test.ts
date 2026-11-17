@@ -117,6 +117,19 @@ describe("delegate CLI (Claude Code's way to delegate)", () => {
 		expect(out.stderr).toContain("no worker with id nope");
 	});
 
+	it("rejects incomplete explicit models instead of silently choosing a default", async () => {
+		for (const suffix of [[], ["typo"], ["provider/"], ["/model"], ["--other"]]) {
+			requests.length = 0;
+			const out = await run(
+				["start", "--title", "Invalid model", "--cwd", tmpdir(), "--model", ...suffix],
+				"The brief",
+			);
+			expect(out.code).not.toBe(0);
+			expect(out.stderr).toContain("--model must be");
+			expect(requests).toHaveLength(0);
+		}
+	});
+
 	it("uses ACB defaultModel when ACB_CLAUDE_MODE is unset", async () => {
 		requests.length = 0;
 		const out = await run(
