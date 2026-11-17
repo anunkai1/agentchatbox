@@ -11,7 +11,7 @@
  */
 import type { Message } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { projectTranscript } from "../src/client/project.js";
+import { projectDisplayNote, projectTranscript } from "../src/client/project.js";
 
 /** Helper: build a user message. */
 function user(text: string): Message {
@@ -199,7 +199,7 @@ describe("projectTranscript", () => {
 		expect(projectTranscript([note]).map((row) => row.kind)).toEqual(["note"]);
 	});
 
-	it("keeps delegate-telegram notes even beside a Claude Code assistant mirror", () => {
+	it("renders worker reports as answers even beside a Claude Code assistant mirror", () => {
 		const mirror = {
 			role: "assistant",
 			provider: "claude-code",
@@ -212,8 +212,46 @@ describe("projectTranscript", () => {
 			details: { source: "delegate-telegram", worker: "w-1", seq: 1 },
 		} as unknown as Message;
 		const out = projectTranscript([mirror, telly]);
-		expect(out.map((row) => row.kind)).toEqual(["assistant", "note"]);
-		expect(out[1]).toMatchObject({ kind: "note", text: telly.content });
+		expect(out.map((row) => row.kind)).toEqual(["assistant", "assistant"]);
+		expect(out[1]).toMatchObject({ kind: "assistant", text: telly.content, seq: 1 });
+	});
+
+	it("uses the same report projection live and on replay, without consuming a fork ordinal", () => {
+		const report = {
+			content: "✅ Worker done: Fix page\n\nChecked and fixed.",
+			timestamp: 1000,
+			details: { source: "delegate-telegram" },
+		};
+		const out = projectTranscript([
+			user("Fix page"),
+			{ role: "custom", customType: "note", ...report } as unknown as Message,
+			user("Next request"),
+		]);
+		expect(out[1]).toEqual(projectDisplayNote(report, 1));
+		expect(out[1]).toMatchObject({ kind: "assistant", seq: 1, ts: 1000, thinking: "" });
+		expect(out[2]).toMatchObject({ kind: "user", seq: 2 });
+		for (const source of ["delegate", "imggen", undefined]) {
+			expect(projectDisplayNote({ ...report, details: { source } }, 1).kind).toBe("note");
+		}
+	});
+
+	it("attaches replayed voice variants to the report rather than the preceding assistant", () => {
+		const out = projectTranscript([
+			assistant([{ type: "text", text: "Earlier answer" }]),
+			{
+				role: "custom",
+				customType: "note",
+				content: "Full report",
+				details: { source: "delegate-telegram" },
+			} as unknown as Message,
+			{
+				role: "custom",
+				customType: "voice-reply",
+				details: { short: "Spoken report" },
+			} as unknown as Message,
+		]);
+		expect(out[1]).toMatchObject({ kind: "assistant", voiceShort: "Spoken report" });
+		expect(out[0]).not.toHaveProperty("voiceShort");
 	});
 
 	it("marks inactive branch divider notes as structural", () => {

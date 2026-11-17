@@ -170,12 +170,27 @@ export function projectTranscript(messages: Message[]): PersistedMessage[] {
 			// Extension-emitted display note (e.g. /imggen image result).
 			// Reconstruct as a renderable note row (mirrors the live
 			// message_start "note" branch in main.ts).
-			const noteMsg = m as { content?: unknown; timestamp?: number };
-			const content = typeof noteMsg.content === "string" ? (noteMsg.content ?? "") : "";
-			out.push({ kind: "note", text: content, ts: noteMsg.timestamp });
+			const note = projectDisplayNote(m, seq);
+			out.push(note);
+			if (note.kind === "assistant") assistantBranches.set(note, inactive);
 		}
 	}
 	return out;
+}
+
+/** Worker reports use normal answer controls; parent status and other notes do not.
+ * Keep storage unchanged: the preceding message ordinal anchors the report's fork.
+ */
+export function projectDisplayNote(
+	message: { content?: unknown; timestamp?: number; details?: unknown },
+	seq: number,
+): PersistedMessage {
+	const text = typeof message.content === "string" ? message.content : "";
+	const ts = message.timestamp;
+	if ((message.details as { source?: unknown } | undefined)?.source === "delegate-telegram") {
+		return { kind: "assistant", text, thinking: "", ts, seq: seq || undefined };
+	}
+	return { kind: "note", text, ts };
 }
 
 /** True when a claude-code assistant mirror sits next to the note at `index`. */

@@ -3874,6 +3874,94 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		await page.close();
 	});
 
+	it("renders replayed and live worker reports with normal answer controls, leaving parent notes compact", async () => {
+		const { page } = await openPage("/");
+		const prompts: string[] = [];
+		let emitReport: (() => void) | undefined;
+		const report = {
+			role: "custom",
+			customType: "note",
+			content: "✅ Worker done: Fix page\n\nFixed and checked.",
+			timestamp: 1000,
+			details: { source: "delegate-telegram", worker: "w-1", seq: 1 },
+		};
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "prompt") prompts.push(message.text);
+				if (message.type !== "init") return;
+				ws.send(
+					JSON.stringify({
+						type: "ready",
+						sessionId: "worker-report",
+						modelId: "glm-5.2",
+						provider: "zai",
+						thinkingLevel: "off",
+					}),
+				);
+				ws.send(
+					JSON.stringify({
+						type: "transcript",
+						sessionId: "worker-report",
+						messages: [
+							{ role: "user", content: [{ type: "text", text: "Fix page" }] },
+							report,
+							{
+								...report,
+								content: "Done; read worker report",
+								details: { source: "delegate", worker: "w-1" },
+							},
+						],
+					}),
+				);
+				emitReport = () =>
+					ws.send(
+						JSON.stringify({
+							type: "event",
+							event: {
+								type: "message_start",
+								message: { ...report, content: "Live worker report", timestamp: 2000 },
+							},
+						}),
+					);
+			});
+		});
+		try {
+			await page.reload();
+			const answers = page.locator(".row-assistant");
+			await expect.poll(() => answers.count()).toBe(1);
+			await expect.poll(() => page.locator(".row-note").count()).toBe(1);
+			const checkControls = async (index: number) => {
+				const answer = answers.nth(index);
+				for (const label of [
+					"Copy this answer",
+					"Retry the previous request",
+					"Ask the agent to continue",
+					"Copy a shareable link to this chat",
+				]) {
+					expect(await answer.locator(`[aria-label="${label}"]`).count()).toBe(1);
+				}
+				expect(await answer.locator(".voice-variant-btn").count()).toBe(3);
+				expect(
+					await answer.locator('a[aria-label="Fork this conversation here"]').getAttribute("href"),
+				).toContain("worker-report");
+				expect(
+					await answer.locator(".body").evaluate((node) => getComputedStyle(node).borderLeftWidth),
+				).toBe("0px");
+			};
+			await checkControls(0);
+			emitReport!();
+			await expect.poll(() => answers.count()).toBe(2);
+			await checkControls(1);
+			expect(await page.locator(".row-note .assistant-controls").count()).toBe(0);
+			await answers.nth(0).locator('[data-voice-variant="short"]').click();
+			await expect.poll(() => prompts.length).toBe(1);
+			expect(prompts[0]).toContain('/voice-last short --match "✅ Worker done: Fix page');
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("renders a working TTS speak button on delegate report notes, but not on structural dividers", async () => {
 		const { page } = await openPage("/");
 		const spokenTexts: string[] = [];

@@ -959,6 +959,38 @@ describe("movePiSession", () => {
 });
 
 describe("forkPiSession", () => {
+	it("keeps the worker report following the fork point, but excludes subsequent messages", async () => {
+		writeSession(
+			"--home-test-project--",
+			"worker.jsonl",
+			"worker",
+			"2026-11-17T00:00:00.000Z",
+			["Fix page"],
+			[
+				JSON.stringify({
+					type: "custom_message",
+					id: "report",
+					parentId: "worker-entry-2",
+					customType: "note",
+					display: true,
+					content: "Full report",
+					details: { source: "delegate-telegram" },
+				}),
+				JSON.stringify({
+					type: "message",
+					id: "later",
+					parentId: "report",
+					message: { role: "user", content: "Later request" },
+				}),
+			],
+		);
+		const { forkPiSession, readPiSessionMessages } = await import("../src/server/session-list.js");
+		const fork = forkPiSession(cwd, "worker", 2);
+		expect(fork).not.toBeNull();
+		const replay = readPiSessionMessages(cwd, fork!);
+		expect(replay).toHaveLength(3);
+		expect(replay[2]).toMatchObject({ role: "custom", customType: "note", content: "Full report" });
+	});
 	it("copies exactly N message entries, drops the old header and ignores custom entries in the count", async () => {
 		const custom = JSON.stringify({ type: "custom_message", customType: "voice-reply" });
 		writeSession(

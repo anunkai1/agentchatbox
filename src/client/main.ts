@@ -42,7 +42,7 @@ import {
 	reloadVoiceMode,
 	saveSessionPrefs,
 } from "./prefs.js";
-import { projectTranscript } from "./project.js";
+import { projectDisplayNote, projectTranscript } from "./project.js";
 import { type DisplayChange, relayVoiceDisplay, userMessageDisplay } from "./relay-display.js";
 import {
 	appendAssistantPlaceholder,
@@ -1081,12 +1081,12 @@ function onEvent(event: Record<string, unknown>): void {
 						// reply here, but not the "Stopped" notices.
 						if (!/^[⏹⏱⚠]/.test(content)) autoVoiceReply(noteMsg.timestamp ?? liveMessageSeq);
 					} else {
-						const note = {
-							kind: "note" as const,
-							text: content,
-							ts: noteMsg.timestamp,
-						};
+						const note = projectDisplayNote({ ...noteMsg, content }, liveMessageSeq);
 						state.messages.push(note);
+						if (note.kind === "assistant") {
+							state.lastAssistantText = note.text;
+							state.lastAssistantSeq = note.seq ?? null;
+						}
 						appendNode(renderMessageNode(note));
 					}
 				}

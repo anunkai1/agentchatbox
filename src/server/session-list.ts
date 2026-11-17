@@ -1157,7 +1157,8 @@ export function forkPiSession(
 	const temp = `${newFile}.${process.pid}.tmp`;
 
 	// Stream the copy: transcripts reach 150 MiB, so never hold one in memory.
-	// Stop as soon as `count` message entries are copied.
+	// Include a worker report immediately following the cutoff message: it is
+	// displayed as that turn's answer, but stored as a custom_message.
 	const count = Math.max(0, Math.floor(messageCount));
 	const out = openSync(temp, "w");
 	try {
@@ -1176,9 +1177,19 @@ export function forkPiSession(
 					}
 				}
 				if (type === "session") return; // drop the original header
+				if (copied >= count) {
+					if (type !== "custom_message") return false;
+					try {
+						const note = JSON.parse(t);
+						if (note.customType !== "note" || note.details?.source !== "delegate-telegram")
+							return false;
+					} catch {
+						return false;
+					}
+				}
 				writeSync(out, `${t}\n`);
 				if (type === "message") copied++;
-				return copied < count;
+				return true;
 			});
 		}
 	} catch (error) {
