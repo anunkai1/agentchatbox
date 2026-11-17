@@ -770,8 +770,8 @@ export function openModelPicker(): void {
 			const row = el("div", { class: "model-row" });
 			row.dataset.modelId = m.id;
 			row.dataset.modelProvider = m.provider;
-			const info = el("div", { class: "model-row-info" });
-			const main = el("div", { class: "model-name" }, m.name ?? m.id);
+			const info = el("button", { class: "model-row-info", type: "button" });
+			const main = el("span", { class: "model-name" }, m.name ?? m.id);
 			if (m.reasoning) {
 				main.append(
 					el("span", { class: "model-badge", title: "Supports extended thinking" }, "thinking"),
@@ -789,7 +789,7 @@ export function openModelPicker(): void {
 				);
 			}
 			info.append(main);
-			info.append(el("div", { class: "model-provider" }, m.id === m.name ? "" : m.id));
+			info.append(el("span", { class: "model-provider" }, m.id === m.name ? "" : m.id));
 			row.append(info);
 
 			// Star button: set / clear the Global default for new chats.
@@ -835,9 +835,15 @@ export function openModelPicker(): void {
 			row.append(heart);
 
 			if (m.id === state.currentModelId) row.classList.add("active");
-			makeKeyboardClickable(row, () => {
+			const choose = () => {
 				selectModel(m);
 				overlay.remove();
+			};
+			info.addEventListener("click", choose);
+			// Preserve clicks in the row's padding without nesting interactive
+			// controls inside a role=button (which hides their semantics).
+			row.addEventListener("click", (event) => {
+				if (event.target === row) choose();
 			});
 			rows.append(row);
 			raw.push(row);

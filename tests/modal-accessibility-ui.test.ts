@@ -146,6 +146,24 @@ describe("modal and form accessibility", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("restores the original opener after synchronously replacing a dialog", async () => {
+		const page = await open();
+		try {
+			await page.locator("#trigger").focus();
+			await openModal(page, "first");
+			await page.evaluate(() => {
+				document.getElementById("first")!.remove();
+				(window as any).openModal("replacement");
+			});
+			await expect.poll(() => focused(page)).toBe("replacement-first");
+			await page.keyboard.press("Escape");
+			await expect.poll(() => focused(page)).toBe("trigger");
+			expect(await page.locator("#app").getAttribute("inert")).toBeNull();
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("does not steal focus or unlock the page when a lower dialog is removed first", async () => {
 		const page = await open();
 		try {

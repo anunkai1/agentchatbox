@@ -88,7 +88,7 @@ const FOCUSABLE_SELECTOR = [
 	'[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
-const mountedModals: { overlay: HTMLElement; box: HTMLElement }[] = [];
+const mountedModals: { overlay: HTMLElement; box: HTMLElement; cleanup(): void }[] = [];
 const modalBackground = new Map<HTMLElement, { inert: string | null; ariaHidden: string | null }>();
 
 /** Only the top modal stays interactive; retain pre-existing background state. */
@@ -134,6 +134,11 @@ export function mountModal(
 	box: HTMLElement,
 	options: ModalOptions = {},
 ): MountedModal {
+	// Callers may replace a dialog in the same task, before MutationObserver
+	// notices its removal. Restore its opener before capturing the new one.
+	for (const modal of [...mountedModals]) {
+		if (!modal.overlay.isConnected) modal.cleanup();
+	}
 	const previousFocus =
 		document.activeElement instanceof HTMLElement ? document.activeElement : null;
 	let dismissed = false;
@@ -222,7 +227,7 @@ export function mountModal(
 			(focusable()[0] ?? box).focus();
 		}
 	};
-	const modal = { overlay, box };
+	const modal = { overlay, box, cleanup: () => cleanup() };
 	const cleanup = () => {
 		if (cleanedUp) return;
 		cleanedUp = true;

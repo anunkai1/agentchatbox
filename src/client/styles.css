@@ -3065,6 +3065,18 @@ body.modal-open {
 	flex: 1 1 auto;
 	min-width: 0;
 }
+button.model-row-info {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+button.model-row-info .model-provider {
+	display: block;
+}
 .model-default-btn,
 .model-pin-btn {
 	flex: 0 0 auto;

@@ -1892,6 +1892,57 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("keeps command and result expansion in sync when opened during execution", async () => {
+		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
+		try {
+			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
+			await page.getByTitle("Settings", { exact: true }).click();
+			await page.getByRole("button", { name: /Tool calls/ }).click();
+			await page.getByRole("button", { name: "Done", exact: true }).click();
+			const socket = sockets.at(-1)!;
+			socket.send(
+				JSON.stringify({
+					type: "event",
+					event: {
+						type: "tool_execution_start",
+						toolName: "bash",
+						toolCallId: "expand-running",
+						args: {
+							command: "printf '%s' 'a sufficiently long command to require expansion in the card'",
+						},
+					},
+				}),
+			);
+			const card = page.locator('[data-tool-call-id="expand-running"]');
+			await card.locator(".tool-head").click();
+			expect(await card.locator(".tool-args").isVisible()).toBe(true);
+			socket.send(
+				JSON.stringify({
+					type: "event",
+					event: {
+						type: "message_start",
+						message: {
+							role: "toolResult",
+							toolCallId: "expand-running",
+							toolName: "bash",
+							content: [{ type: "text", text: "completed output" }],
+							isError: false,
+						},
+					},
+				}),
+			);
+			await expect.poll(() => card.locator(".tool-result").count()).toBe(1);
+			for (let i = 0; i < 3; i++) {
+				expect(await card.locator(".tool-args").isVisible()).toBe(
+					await card.locator(".tool-result").isVisible(),
+				);
+				await card.locator(".tool-head").click();
+			}
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("keeps stop confirmations inline but still warns about unexpected time limits", async () => {
 		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
 		try {
@@ -2197,6 +2248,43 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await dialog.getByRole("button", { name: "Close Browser voice test" }).click();
 			await send(page, "normal chat still works");
 			await expect.poll(() => messages(page).innerText()).toContain("reply 1");
+		} finally {
+			await page.close();
+		}
+	});
+
+	it.each([
+		"/voicetest",
+		"/relaytrial kokoro",
+	])("switches an attached Relay into %s without cancelling Pi work", async (command) => {
+		const { page } = await openPage("/");
+		const prompts: string[] = [];
+		await relayChatFixture(
+			page,
+			(ws) =>
+				ws.onMessage((raw) => {
+					const message = JSON.parse(String(raw));
+					if (message.type === "init")
+						ws.send(JSON.stringify({ type: "ready", sessionId: "switch-relay" }));
+					if (message.type === "prompt") prompts.push(message.text);
+				}),
+			true,
+		);
+		try {
+			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
+			await expect
+				.poll(() => page.getByRole("dialog", { name: "Relay", exact: true }).count())
+				.toBe(1);
+			await send(page, command);
+			await expect
+				.poll(() => page.getByRole("dialog", { name: "Relay", exact: true }).count())
+				.toBe(0);
+			const title =
+				command === "/voicetest" ? "Browser voice test" : "Trial A — streaming Pi voice";
+			await expect
+				.poll(() => page.getByRole("dialog", { name: title, exact: true }).count())
+				.toBe(1);
+			expect(prompts.some((text) => /^\/relay (cancel|stop)/.test(text))).toBe(false);
 		} finally {
 			await page.close();
 		}
@@ -3459,6 +3547,27 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		await page.close();
 	});
 
+	it("exposes model selection and pin/default actions as separate keyboard buttons", async () => {
+		const { page } = await openPage("/");
+		try {
+			await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
+			await page.locator("#model-picker").click();
+			const model = MODELS.at(-1)!;
+			await page.getByRole("searchbox", { name: "Filter models" }).fill(model.id);
+			const row = page.locator(`.model-row[data-model-id="${model.id}"]`).last();
+			expect(await row.getAttribute("role")).toBeNull();
+			expect(await row.locator(":scope > button").count()).toBe(3);
+			const choose = row.locator("button.model-row-info");
+			expect(await choose.locator("button").count()).toBe(0);
+			await choose.focus();
+			await page.keyboard.press("Enter");
+			await expect.poll(() => page.locator(".model-picker-box").count()).toBe(0);
+			await expect.poll(() => page.locator("#model-picker").innerText()).toContain(model.name);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("pins beyond five models even when saved pins are unavailable, and preserves them on reload", async () => {
 		const { page } = await openPage("/");
 		const pin = (model: { id: string; provider: string }) => ({
@@ -3839,7 +3948,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			// The delegate report note gets TTS + copy controls and streams spoken text.
 			const reportSpeak = rows.nth(2).locator(".note-actions .speak-btn");
 			expect(await reportSpeak.count()).toBe(1);
-			expect(await rows.nth(2).locator('.note-actions button[aria-label="Copy this note"]').count()).toBe(1);
+			expect(
+				await rows.nth(2).locator('.note-actions button[aria-label="Copy this note"]').count(),
+			).toBe(1);
 			await reportSpeak.click();
 			await expect.poll(() => spokenTexts.length).toBe(1);
 			expect(spokenTexts[0]).toContain("Worker report");

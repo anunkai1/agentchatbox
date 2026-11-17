@@ -1030,12 +1030,12 @@ function mountToolHead(
 		// Clicking anywhere on the head (including the chevron button,
 		// whose click bubbles up) flips the expanded body. The download
 		// link stops its own propagation, so it stays a real link.
-		head.addEventListener("click", () => {
+		head.onclick = () => {
 			const open = body.classList.toggle("hidden");
 			toggle.textContent = open ? "▸" : "▾";
 			toggle.title = open ? "Show full command" : "Hide";
 			head.classList.toggle("tool-head-open", !open);
-		});
+		};
 		card.append(head);
 		card.append(body);
 		return;
@@ -1072,12 +1072,17 @@ function appendToolResult(card: HTMLElement, result: string, isError: boolean): 
 	);
 	const anchor = head.querySelector<HTMLElement>(".tool-download") ?? toggle;
 	head.insertBefore(status, anchor);
-	head.addEventListener("click", () => {
-		const expanded = resultNode.classList.toggle("tool-result-collapsed") === false;
+	const argsNode = card.querySelector<HTMLElement>(".tool-args");
+	const setExpanded = (expanded: boolean) => {
+		argsNode?.classList.toggle("hidden", !expanded);
+		resultNode.classList.toggle("tool-result-collapsed", !expanded);
 		toggle!.textContent = expanded ? "▾" : "▸";
 		toggle!.title = expanded ? "Hide tool details" : "Show tool details";
 		head.classList.toggle("tool-head-open", expanded);
-	});
+	};
+	setExpanded(head.classList.contains("tool-head-open"));
+	// Replace the running-card toggle: one handler owns both details sections.
+	head.onclick = () => setExpanded(!head.classList.contains("tool-head-open"));
 }
 
 function toolPathFromArgs(args: unknown): string | null {
