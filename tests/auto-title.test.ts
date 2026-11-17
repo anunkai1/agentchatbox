@@ -73,4 +73,34 @@ describe("ACB auto-title helpers", () => {
 		expect(prompt).toContain("Workspace: mavalieth");
 		expect(prompt).toContain("<user_request>\nstatus\n</user_request>");
 	});
+
+	it("ignores Relay setup entries and collects topic seed from Relay conversation turns", () => {
+		const setupEntries = [
+			{ type: "custom", customType: "acb-relay-state" },
+			{ type: "custom_message", customType: "acb-relay" },
+		];
+		expect(hasConversation(setupEntries)).toBe(false);
+
+		const entries = [
+			...setupEntries,
+			{ type: "custom", customType: "acb-relay-voice-context" },
+			{ type: "custom", customType: "acb-relay-voice-request" },
+			{
+				type: "message",
+				message: { role: "user", content: [{ type: "text", text: "Check the solar battery state" }] },
+			},
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "The battery is at 84% and charging." }],
+				},
+			},
+		];
+		expect(hasConversation(entries)).toBe(true);
+		expect(collectTitleSeed(entries)).toEqual({
+			user: "Check the solar battery state",
+			assistant: "The battery is at 84% and charging.",
+		});
+	});
 });

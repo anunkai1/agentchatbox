@@ -86,6 +86,7 @@ describe("Relay full-access agent and tracked worker", () => {
 	it("uses DeepSeek for Relay and preserves the original ACB worker model/thinking", async () => {
 		const h = harness();
 		await h.command("start");
+		expect(h.pi.setSessionName).not.toHaveBeenCalled();
 		expect(h.pi.setModel).toHaveBeenCalledWith({ provider: "venice", id: "deepseek-v4-1-flash-1017" });
 		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(h.pi.getAllTools().map((tool) => tool.name));
 		await h.command("say turn-1 Please do the read-only probe");

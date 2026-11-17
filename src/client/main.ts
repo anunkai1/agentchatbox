@@ -1094,16 +1094,22 @@ function onEvent(event: Record<string, unknown>): void {
 				// User message echoed by the server (we already showed it
 				// optimistically at send time). Stamp the matching block now
 				// that we know its JSONL ordinal.
+				const userText = extractText(e.message.content);
 				if (state.sessionId && relaySessions.has(state.sessionId))
 					paintRelayDisplay(
-						userMessageDisplay(
-							state.messages,
-							extractText(e.message.content),
-							liveMessageSeq,
-							e.message.timestamp,
-						),
+						userMessageDisplay(state.messages, userText, liveMessageSeq, e.message.timestamp),
 					);
 				else stampLastUserBlock(liveMessageSeq);
+				if (state.title === "New chat" || !state.title) {
+					const fallback = userText
+						.trim()
+						.split(/[.\n!?]/)[0]
+						.slice(0, 50);
+					if (fallback) {
+						state.title = fallback;
+						$<HTMLSpanElement>("#title").textContent = state.title;
+					}
+				}
 				noteContextMessage(e.message);
 				refreshStatus();
 			} else if (e.message.role === "toolResult") {
