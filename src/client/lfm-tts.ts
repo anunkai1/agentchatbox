@@ -13,10 +13,8 @@ function declarePlaybackAudioSession(): void {
 }
 
 const OUTPUT_RATE = 24_000;
-const PREROLL_SAMPLES = 2_400; // 100 ms @ 24 kHz balances fast first-audio with jitter protection
 const MAX_QUEUED_SEGMENTS = 40;
 const MAX_QUEUED_CHARS = 10_000;
-const MAX_UTTERANCE_SAMPLES = OUTPUT_RATE * 180;
 
 export interface LfmPlayedReport {
 	utterance: string;
@@ -420,7 +418,7 @@ export class LfmTtsSpeaker {
 		const utt = this.active;
 		if (!utt || this.closed || utt.endQueued) return;
 		const cleaned = text.trim();
-		if (!cleaned || !/[A-Za-z0-9]/.test(cleaned)) return;
+		if (!cleaned || (!this.transportOptions && !/[A-Za-z0-9]/.test(cleaned))) return;
 		if (utt.segments >= MAX_QUEUED_SEGMENTS || utt.chars + cleaned.length > MAX_QUEUED_CHARS) {
 			utt.truncated = true;
 			utt.endQueued = true;
@@ -453,6 +451,7 @@ export class LfmTtsSpeaker {
 		if (utt.segments === 0 && utt.queuedForSend.length === 0) {
 			// Nothing speakable was emitted (e.g. code-only or empty turn).
 			this.active = null;
+			this.requestPlayedPrefix(utt, 0, false, 0);
 			this.callbacks.onIdle();
 			return;
 		}

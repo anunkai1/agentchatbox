@@ -348,10 +348,12 @@ export class KokoroTtsTransport implements TtsTransport {
 		if (truncated)
 			issues.push("voice input/audio truncated; full chat text was not synthesised/played");
 		const samples = Math.max(0, Math.min(playedSamples, ledger?.samples ?? 0));
-		const playedChunks = (ledger?.chunks ?? []).filter((chunk) =>
-			chunk.words !== null
-				? samples > 0 && chunk.startSample <= samples
-				: chunk.startSample < samples,
+		const playedChunks = (ledger?.chunks ?? []).filter(
+			(chunk) =>
+				samples > 0 &&
+				(chunk.words !== null || chunk.startSample === chunk.endSample
+					? chunk.startSample <= samples
+					: chunk.startSample < samples),
 		);
 		const unknown = playedChunks.filter((chunk) => chunk.words === null);
 		if (unknown.length)

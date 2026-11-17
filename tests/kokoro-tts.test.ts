@@ -637,7 +637,10 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 		h.speaker.close();
 	});
 
-	it("flushes EOF tail words with zero-length PCM16 frames cleanly on full playback", async () => {
+	it.each([
+		true,
+		false,
+	])("accounts for EOF tail words with reliable=%s on full playback", async (reliable) => {
 		const submitted = "Hello world.";
 		const m1 = {
 			alignment: ZONOS3_ALIGNMENT,
@@ -657,7 +660,7 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 			text: "world.",
 			startSample: 22050,
 			endSample: 22050,
-			alignmentComplete: true,
+			alignmentComplete: reliable,
 			unalignedTokens: [],
 			words: [{ text: "world.", whitespace: "", startSample: 17640, endSample: 22050 }],
 		};
@@ -683,11 +686,33 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 		expect(h.reports[0]).toMatchObject({
 			playedMs: 500,
 			playedSamples: 22050,
-			text: "Hello world.",
-			complete: true,
-			uncertain: false,
+			text: reliable ? "Hello world." : "Hello [UNKNOWN_WORDS:audio_samples=22050–22050]",
+			complete: reliable,
+			uncertain: !reliable,
 			alignment: ZONOS3_ALIGNMENT,
 		});
+		h.speaker.close();
+	});
+
+	it("submits non-Latin text to aligned engines rather than silently dropping it", async () => {
+		const submitted = "Привет.";
+		const m = {
+			alignment: ZONOS3_ALIGNMENT,
+			sampleRate: ZONOS3_SAMPLE_RATE,
+			submittedText: submitted,
+			text: submitted,
+			startSample: 0,
+			endSample: 22050,
+			alignmentComplete: true,
+			unalignedTokens: [],
+			words: [{ text: submitted, whitespace: "", startSample: 0, endSample: 22050 }],
+		};
+		const fetch = vi.fn(async () => zonosResponse([meta(m), frame(1, pcm16(22050)), frame(0)]));
+		vi.stubGlobal("fetch", fetch);
+		const h = zonosHarness();
+		h.begin(submitted);
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+		expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).text).toBe(submitted);
 		h.speaker.close();
 	});
 

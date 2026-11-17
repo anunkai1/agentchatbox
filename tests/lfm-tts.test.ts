@@ -176,6 +176,26 @@ describe("LFM speech-only TTS client primitives", () => {
 		expect(ctx.nodes).toHaveLength(5);
 	});
 
+	it("reports zero playback exactly once when every segment is unspeakable", () => {
+		const onReport = vi.fn();
+		const speaker = new LfmTtsSpeaker(
+			{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: vi.fn() },
+			"wss://example.test/tts",
+		);
+		speaker.beginUtterance("empty-turn", 0, onReport);
+		speaker.enqueueSegment("...");
+		speaker.finishUtterance();
+		speaker.finishUtterance();
+		expect(onReport).toHaveBeenCalledExactlyOnceWith({
+			utterance: "empty-turn",
+			playedMs: 0,
+			text: "",
+			complete: false,
+			uncertain: false,
+		});
+		speaker.close();
+	});
+
 	it("tracks output-clock playback milliseconds across scheduled chunks", () => {
 		const clock = new PlayedAudioClock();
 		clock.add(1.0, 0.5);

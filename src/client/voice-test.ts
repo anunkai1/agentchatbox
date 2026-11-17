@@ -117,6 +117,8 @@ export function openVoiceTest(
 	useKokoroTts = false,
 	useZonosTts = false,
 ): void {
+	// An explicit test/trial request replaces attached voice controls, not Pi work.
+	if ((!relay || streamTrial) && relayUi) relayUi.end();
 	if (opened) {
 		relayUi?.reveal();
 		return;
