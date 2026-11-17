@@ -15,6 +15,7 @@ import {
 	REPORT_GUIDANCE,
 	readDelegation,
 	resolveModelToken,
+	resolveOneLiner,
 	STATUS_NOTE,
 	telegramText,
 	workerTelegramNote,
@@ -294,19 +295,25 @@ describe("delegate extension", () => {
 		expect(h.pi.appendEntry).toHaveBeenLastCalledWith("delegation", { status: "working" });
 		expect(worker.ui.setStatus).toHaveBeenLastCalledWith("delegation", "working");
 
-		await h.tools
-			.get("delegation_report")!
-			.execute(
-				"call",
-				{ status: "done", summary: "Fixed; 12 tests pass" },
-				undefined,
-				undefined,
-				worker,
-			);
+		await h.tools.get("delegation_report")!.execute(
+			"call",
+			{
+				status: "done",
+				oneLiner: "Done; 0 critical, 0 medium, 1 low issue",
+				summary: "Fixed; 12 tests pass.\nLow: minor lint note.",
+			},
+			undefined,
+			undefined,
+			worker,
+		);
 		h.acb.prompt.mockClear();
 		await h.events.get("agent_settled")!({ aborted: false }, worker);
-		expect(readDelegation("worker-1")).toMatchObject({ status: "done", reportSeq: 1 });
-		expect(h.telegram).toHaveBeenCalledWith(expect.stringContaining("Fixed; 12 tests pass"));
+		expect(readDelegation("worker-1")).toMatchObject({
+			status: "done",
+			oneLiner: "Done; 0 critical, 0 medium, 1 low issue",
+			reportSeq: 1,
+		});
+		expect(h.telegram).toHaveBeenCalledWith(expect.stringContaining("Fixed; 12 tests pass."));
 		expect(h.acb.prompt).toHaveBeenCalledWith("parent-1", "/delegate report worker-1", {
 			provider: "openai",
 			modelId: "gpt-6.1-sol",
@@ -315,7 +322,7 @@ describe("delegate extension", () => {
 		expect(h.pi.sendMessage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				customType: "note",
-				content: "✅ Worker done: Fix page\n\nFixed; 12 tests pass",
+				content: "✅ Worker done: Fix page\n\nFixed; 12 tests pass.\nLow: minor lint note.",
 				display: true,
 				details: { source: "delegate-telegram", worker: "worker-1", seq: 1 },
 			}),
@@ -330,8 +337,13 @@ describe("delegate extension", () => {
 		await report("report worker-1", h.ctx("parent-1"));
 		expect(h.pi.sendMessage).toHaveBeenCalledTimes(1);
 		expect(h.pi.sendMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ customType: "note", content: expect.stringContaining("✅ done") }),
-			{ triggerTurn: true, deliverAs: "followUp" },
+			expect.objectContaining({
+				customType: "note",
+				content:
+					"✅ **Worker completed** · [Fix page](/s/worker-1) — Done; 0 critical, 0 medium, 1 low issue · [Read report](/s/worker-1)",
+				details: { source: "delegate", worker: "worker-1" },
+			}),
+			{ triggerTurn: false },
 		);
 	});
 
@@ -651,7 +663,7 @@ describe("delegation guidance and context reuse", () => {
 	it.each([
 		"needs_input",
 		"failed",
-	] as const)("delivers a useful %s report unchanged to the parent and Telegram", async (status) => {
+	] as const)("keeps full %s report in worker and Telegram while posting a one-liner in parent", async (status) => {
 		const h = harness();
 		saveWorker("worker-1");
 		const summary =
@@ -674,8 +686,12 @@ describe("delegation guidance and context reuse", () => {
 		);
 		h.pi.sendMessage.mockClear();
 		await h.commands.get("d")!("report worker-1", h.ctx("parent-1"));
-		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain(summary);
-		expect(h.pi.sendMessage.mock.calls[0][0].content).toContain("do not invent missing evidence");
+		const parentMsg = h.pi.sendMessage.mock.calls[0][0].content as string;
+		expect(parentMsg).toContain("[Fix journal](/s/worker-1)");
+		expect(parentMsg).toContain("[Read report](/s/worker-1)");
+		expect(parentMsg).not.toContain("Evidence:");
+		expect(parentMsg).not.toContain("Open questions:");
+		expect(h.pi.sendMessage.mock.calls[0][1]).toEqual({ triggerTurn: false });
 	});
 });
 
@@ -965,10 +981,19 @@ describe("Claude Code workers", () => {
 		expect(h.pi.sendUserMessage.mock.calls[0][0]).toContain("delegation_report");
 	});
 
-	it("read the closing status line", () => {
+	it("read the closing status and optional one-liner lines", () => {
 		expect(parseStatusLine("All good.\nStatus: done")).toEqual({
 			status: "done",
 			summary: "All good.",
+		});
+		expect(
+			parseStatusLine(
+				"Full report.\n\nOne-liner: Audited auth; 1 critical, 0 medium, 2 low issues.\nStatus: done",
+			),
+		).toEqual({
+			status: "done",
+			oneLiner: "Audited auth; 1 critical, 0 medium, 2 low issues.",
+			summary: "Full report.",
 		});
 		expect(parseStatusLine("Q?\n**Status:** needs input")).toEqual({
 			status: "needs_input",
@@ -984,10 +1009,20 @@ describe("Claude Code workers", () => {
 		});
 		expect(parseStatusLine("No status here")).toEqual({ summary: "No status here" });
 	});
+
+	it("derives clean one-liners from explicit text or multi-line summaries", () => {
+		expect(resolveOneLiner("Done; 0 critical, 1 medium\nissues", "Long body")).toBe(
+			"Done; 0 critical, 1 medium issues",
+		);
+		expect(
+			resolveOneLiner(undefined, "### Result\n- Fixed login bug.\n\n### Evidence\nTests pass"),
+		).toBe("Fixed login bug.");
+		expect(resolveOneLiner(undefined, "")).toBe("");
+	});
 });
 
-describe("reports to a main chat in Claude Code mode", () => {
-	it("go to Claude Code, with the command-line way to answer the worker", async () => {
+describe("reports to a main chat in Claude Code mode and Relay mode", () => {
+	it("posts a quiet one-line note in Claude Code main chats without triggering a review turn", async () => {
 		const h = harness();
 		writeDelegation({
 			id: "worker-9",
@@ -999,7 +1034,8 @@ describe("reports to a main chat in Claude Code mode", () => {
 			workerModel: { provider: "openai", modelId: "gpt-6.1-sol", thinkingLevel: "high" },
 			claude: "opus",
 			status: "done",
-			summary: "Fixed.",
+			summary: "Fixed all routes.\nVerified with full test suite.",
+			oneLiner: "Fixed routes; 0 critical, 0 medium, 0 low issues",
 			createdAt: "2026-10-20T00:00:00.000Z",
 			updatedAt: "2026-10-20T00:00:00.000Z",
 			reportSeq: 1,
@@ -1014,27 +1050,67 @@ describe("reports to a main chat in Claude Code mode", () => {
 			runs.push(run.task);
 		});
 		await h.commands.get("delegate")!("report worker-9", h.ctx("parent-1"));
-		expect(h.pi.sendMessage).not.toHaveBeenCalled();
-		expect(runs).toHaveLength(1);
-		expect(runs[0]).toContain("Fixed.");
-		expect(runs[0]).toContain("cli.mjs message <worker id>");
-		expect(runs[0]).toContain("Worker id: worker-9");
+		expect(runs).toHaveLength(0);
+		expect(h.pi.sendMessage).toHaveBeenCalledTimes(1);
+		expect(h.pi.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "note",
+				content:
+					"✅ **Worker completed** · [Fix page](/s/worker-9) — Fixed routes; 0 critical, 0 medium, 0 low issues · [Read report](/s/worker-9)",
+				details: { source: "delegate", worker: "worker-9" },
+			}),
+			{ triggerTurn: false },
+		);
+	});
+
+	it("still wakes Relay voice sessions when a worker reports", async () => {
+		const h = harness();
+		saveWorker("worker-relay", {
+			status: "done",
+			oneLiner: "Done; 0 issues",
+			summary: "Detailed report.",
+			reportSeq: 1,
+		});
+		await h.commands.get("delegate")!(
+			"report worker-relay",
+			h.ctx("parent-1", [{ type: "custom", customType: "acb-relay-state", data: {} }]),
+		);
+		expect(h.pi.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "note",
+				details: { source: "delegate", worker: "worker-relay" },
+			}),
+			{ triggerTurn: true, deliverAs: "followUp" },
+		);
 	});
 });
-
 
 describe("worker recovery lifecycle", () => {
 	const origin = "http://127.0.0.1:3500";
 	function recoverable(id = "worker-1") {
-		return saveWorker(id, { recovery: { version: 1, origin, bootId: "boot-1", startedAt: Date.now() - 1000 } });
+		return saveWorker(id, {
+			recovery: { version: 1, origin, bootId: "boot-1", startedAt: Date.now() - 1000 },
+		});
 	}
 
 	it("enrols only new workers, then records the actual run start", async () => {
 		vi.stubEnv("ACB_INTERNAL_URL", origin);
 		vi.stubEnv("ACB_BOOT_ID", "boot-2");
 		const h = harness();
-		await h.tools.get("delegate")!.execute("call", { title: "T", task: "t", cwd: tmpdir() }, undefined, undefined, h.ctx("parent-1"));
-		expect(readDelegation("worker-1")?.recovery).toMatchObject({ version: 1, bootId: "boot-2", startedAt: 0 });
+		await h.tools
+			.get("delegate")!
+			.execute(
+				"call",
+				{ title: "T", task: "t", cwd: tmpdir() },
+				undefined,
+				undefined,
+				h.ctx("parent-1"),
+			);
+		expect(readDelegation("worker-1")?.recovery).toMatchObject({
+			version: 1,
+			bootId: "boot-2",
+			startedAt: 0,
+		});
 		await h.events.get("message_end")!({ message: { role: "user" } }, h.ctx("worker-1"));
 		expect(readDelegation("worker-1")!.recovery!.startedAt).toBeGreaterThan(0);
 		saveWorker("legacy");
@@ -1070,7 +1146,8 @@ describe("worker recovery lifecycle", () => {
 		await h.events.get("session_shutdown")!({}, h.ctx("worker-1"));
 		await h.events.get("agent_settled")!({ aborted: true }, h.ctx("worker-1"));
 		expect(readDelegation("worker-1")?.status).toBe("working");
-		const cc = recoverable("cc-worker"); writeDelegation({ ...cc, claude: "opus" });
+		const cc = recoverable("cc-worker");
+		writeDelegation({ ...cc, claude: "opus" });
 		h.pi.events.emit("claude-delegate:run-end", { ctx: h.ctx("cc-worker"), cancelled: true });
 		await new Promise((resolve) => setImmediate(resolve));
 		expect(readDelegation("cc-worker")?.status).toBe("working");
@@ -1078,7 +1155,9 @@ describe("worker recovery lifecycle", () => {
 	});
 
 	it("persists pending approval waits and does not clear them during teardown", async () => {
-		recoverable(); const h = harness(); const ctx = h.ctx("worker-1");
+		recoverable();
+		const h = harness();
+		const ctx = h.ctx("worker-1");
 		await h.events.get("ui_prompt_start")!({}, ctx);
 		expect(readDelegation("worker-1")?.recovery?.waitingForInput).toBe(true);
 		await h.events.get("session_shutdown")!({}, ctx);

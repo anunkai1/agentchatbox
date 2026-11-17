@@ -34,7 +34,7 @@ const HELP = `Delegate work to worker chats (ordinary ACB chats that report back
 
 start: workers run in Claude Code in /cc chats, or use ACB's default model unless --model names another.
 --${cwdGuidance()}
-After starting, give the owner the link and end your turn: the worker's report arrives in this chat.
+After starting, give the owner the link and end your turn: a one-line summary with a link back to the worker arrives here when it finishes.
 
 ${DISPATCH_GUIDANCE.join("\n").replaceAll("delegate_status", "status").replaceAll("delegate_message", "message")}
 

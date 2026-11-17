@@ -52,8 +52,13 @@ Existing server instructions for commits, pushes and deployment still apply.
 
 ## Reports
 
-Call `delegation_report` and end the turn. Reports should normally be under 300
-words, in this order:
+Workers keep their full report at the bottom of their own chat (`/s/<worker id>`)
+and send only a quiet one-line note (outcome + any critical/medium/low issues +
+link back to the worker session) to the main chat, without waking the main chat
+AI (except Relay voice chats, which still wake to speak the outcome aloud).
+
+Call `delegation_report` with a short `oneLiner` for the main chat and the full
+report in `summary` (normally under 300 words, in this order), then end the turn:
 
 1. **Result** — what was achieved, or the blocker/decision needed.
 2. **Evidence** — changes and checks actually run; distinguish unperformed checks.
@@ -62,21 +67,19 @@ words, in this order:
    partial work and a useful next step.
 
 Pi workers are reminded to report on every turn, including resumed turns.
-Both Pi and Claude Code accept an explicit closing `Status: done`,
-`Status: needs_input`, `Status: stopped` or `Status: failed` line. This also works
-when a worker is switched from Claude Code to Pi. A structured `delegation_report`
-takes precedence; provider errors keep their existing handling.
+Both Pi and Claude Code accept an optional closing `One-liner: ...` line and a
+closing `Status: done`, `Status: needs_input`, `Status: stopped` or
+`Status: failed` line. This also works when a worker is switched from Claude
+Code to Pi. A structured `delegation_report` takes precedence; provider errors
+keep their existing handling.
 Without either explicit report format, the conservative fallback remains
 `needs_input`; completion is never inferred from ordinary prose.
 
 `stopped` means the owner cancelled or dropped the work: it is not a failure and
 never shows as one. Like a transport stop, it is recorded, published and kept quiet
-(no Telegram, no waking the main chat). `failed` is reserved for work that broke.
-Statuses (`done`, `needs_input`, `stopped`, `failed`), parent delivery,
-sequence-based deduplication and Telegram notification behaviour are otherwise
-unchanged.
-The parent should assess the evidence against the brief, not invent missing
-results.
+(no Telegram, no main chat note). `failed` is reserved for work that broke.
+Statuses (`done`, `needs_input`, `stopped`, `failed`), sequence-based
+deduplication and Telegram notification behaviour are otherwise unchanged.
 
 ## Factual status and topic search
 
@@ -155,8 +158,8 @@ semantic progress monitoring are not part of this version.
 
 A main chat in Claude Code mode (`/cc on`) gets Claude Code workers on the same Claude model, unless the owner names another. The worker chat switches itself on with `/delegate start <id>`, so the owner's messages in it also go to Claude Code.
 
-- Claude Code cannot call pi tools, so the worker ends its last reply with `Status: done`, `Status: needs_input`, `Status: stopped` or `Status: failed`. Without that line the worker counts as needing the owner.
-- claude-delegate announces each run on `pi.events` (`claude-delegate:run-start`, `claude-delegate:run-end`), and the worker reports through the same path as a pi worker: status icon, Telegram, and waking the main chat.
-- A report for a main chat in Claude Code mode goes to Claude Code (`claude-delegate:run`), not to pi.
+- Claude Code cannot call pi tools, so the worker writes its full report in its final reply and ends with `One-liner: ...` and `Status: done`, `Status: needs_input`, `Status: stopped` or `Status: failed`. Without that `Status:` line the worker counts as needing the owner.
+- claude-delegate announces each run on `pi.events` (`claude-delegate:run-start`, `claude-delegate:run-end`), and the worker reports through the same path as a pi worker: status icon, Telegram, and a quiet one-line note in the main chat.
+- Even when the main chat is in Claude Code mode, worker reports post only the quiet one-line note + worker link without starting a Claude Code review turn.
 - Claude Code in the main chat delegates, messages workers and lists them with `node /absolute/path/to/agentchatbox/extensions/delegate/cli.mjs` (`help` explains). The launcher uses this checkout's `tsx`, so it works outside the checkout and on Node builds without native TypeScript support. claude-delegate gives it the chat's ids in `ACB_CHAT_ID`, `ACB_CHAT_MODEL`, `ACB_CHAT_THINKING` and `ACB_CLAUDE_MODE`.
 - Claude Code starts in the browser-harness workspace, so the brief tells it to work in the task's folder and read that folder's `AGENTS.md` first.

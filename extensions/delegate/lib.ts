@@ -52,6 +52,7 @@ export interface Delegation {
 	claude?: string;
 	status: DelegationStatus;
 	summary?: string;
+	oneLiner?: string;
 	createdAt: string;
 	updatedAt: string;
 	/** Bumped on every report; the parent delivers each number once. */
@@ -145,8 +146,11 @@ export const DISPATCH_GUIDANCE = [
 	"For an explicitly delegated request with independent tasks, split and dispatch them independently/concurrently where appropriate. Do not split tightly dependent work unnecessarily. After all dispatches, briefly give the owner the session links and end your turn; do not wait or poll for completion.",
 ];
 
+export const ONE_LINER_GUIDANCE =
+	"One short single-line summary for the main chat (no line breaks, under ~180 chars): state the outcome and any critical, medium, or low priority issues (e.g. 'Done; 0 critical, 1 medium, 2 low issues'). The full report stays in this worker chat.";
+
 export const REPORT_GUIDANCE =
-	"Report result first, then evidence (changes and checks actually run), then open questions; be concise, normally under 300 words. For needs_input, state the exact decision/question, relevant findings and options or a recommendation. For failed, state the blocker, partial work/checks and the next useful step. When the owner cancels or drops the work, report stopped with what exists so far; failed is only for something that actually broke. Never claim unperformed checks or guess results.";
+	"Keep the full report in this worker chat (it is not pasted into the main chat): result first, then evidence (changes and checks actually run), then open questions; be concise, normally under 300 words. For needs_input, state the exact decision/question, relevant findings and options or a recommendation. For failed, state the blocker, partial work/checks and the next useful step. When the owner cancels or drops the work, report stopped with what exists so far; failed is only for something that actually broke. Never claim unperformed checks or guess results.";
 
 export function formatStatusList(records: Delegation[], now = Date.now()): string {
 	if (records.length === 0) return "No delegations yet.";
@@ -165,14 +169,12 @@ export function buildBrief(
 	const report = record.claude
 		? [
 				`Claude Code starts in its own workspace: work in ${record.cwd}, and first read the AGENTS.md there (if any) and follow it.`,
-				"Do the task. When you stop, end your final reply with exactly one of these lines:",
-				"- `Status: done` when finished: what changed, which checks passed, anything still open;",
-				"- `Status: needs_input` when you need the owner's decision, with the question;",
-				"- `Status: failed` when you cannot finish, with the reason.",
-				"- `Status: stopped` when the owner cancels, with what exists so far.",
+				"Do the task and include your full report at the bottom of your final reply (it stays in this worker chat). End your final reply with these two lines:",
+				"- `One-liner: <one short line with outcome and any critical/medium/low issues for the main chat>`",
+				"- `Status: done` when finished, `Status: needs_input` when you need the owner's decision, `Status: failed` when you cannot finish, or `Status: stopped` when the owner cancels.",
 			]
 		: [
-				"Do the task, then call delegation_report:",
+				"Do the task. Your full report stays in this worker chat; only a one-liner and link go to the main chat. Call delegation_report with `oneLiner` (outcome + any critical/medium/low issues) and `summary` (full report):",
 				"- `done` when finished: what changed, which checks passed, anything still open;",
 				"- `needs_input` when you need the owner's decision, with the question;",
 				"- `failed` when you cannot finish, with the reason.",
@@ -195,20 +197,49 @@ export function buildBrief(
 	].join("\n");
 }
 
-/** How the reviewing chat sends a worker more work: a pi tool, or cli.ts for Claude Code. */
-const NEXT_STEP = {
-	pi: "continue the same topic with delegate_message",
-	cli: `continue the same topic with \`node ${DELEGATE_CLI_PATH} message <worker id>\` (message on stdin)`,
+const MAX_ONE_LINER = 220;
+const BARE_HEADING =
+	/^(?:#+\s*)?(?:\*{1,2}|_{1,2})?(?:result|summary|evidence|open questions)(?:\*{1,2}|_{1,2})?:?\s*$/i;
+const LEADING_LABEL = /^(?:\*{1,2}|_{1,2})?(?:result|summary)(?:\*{1,2}|_{1,2})?:\s*/i;
+
+function clipOneLiner(text: string): string {
+	const single = text.replace(/\s+/g, " ").trim();
+	if (single.length <= MAX_ONE_LINER) return single;
+	const cut = single.slice(0, MAX_ONE_LINER);
+	const space = cut.lastIndexOf(" ");
+	return `${(space > 80 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+export function resolveOneLiner(oneLiner?: string, summary?: string): string {
+	const explicit = oneLiner?.trim();
+	if (explicit) return clipOneLiner(explicit);
+	const raw = summary?.trim();
+	if (!raw) return "";
+	for (const line of raw.split(/\r?\n/)) {
+		const cleaned = line
+			.trim()
+			.replace(/^#+\s*/, "")
+			.replace(/^[-*•]\s+/, "")
+			.trim();
+		if (!cleaned || BARE_HEADING.test(cleaned)) continue;
+		return clipOneLiner(cleaned.replace(LEADING_LABEL, "") || cleaned);
+	}
+	return clipOneLiner(raw);
+}
+
+const REPORT_LABELS: Record<DelegationStatus, string> = {
+	working: "working",
+	needs_input: "needs input",
+	done: "completed",
+	failed: "failed",
+	stopped: "stopped",
 };
 
-export function formatReport(record: Delegation, via: keyof typeof NEXT_STEP = "pi"): string {
-	return [
-		`**Worker report** · ${STATUS_ICONS[record.status]} ${STATUS_LABELS[record.status]} · ${chatLink(record.title, record.id)}`,
-		"",
-		record.summary?.trim() || "(no summary)",
-		"",
-		`_This is a worker's report, not a message from the owner. Check its result and evidence against the brief; do not invent missing evidence. Then tell the owner the outcome, ${NEXT_STEP[via]}, take an already approved next step, or ask the owner a necessary question. Worker id: ${record.id}_`,
-	].join("\n");
+export function formatReport(record: Delegation): string {
+	const oneLiner = resolveOneLiner(record.oneLiner, record.summary);
+	const head = `${STATUS_ICONS[record.status]} **Worker ${REPORT_LABELS[record.status]}** · ${chatLink(record.title, record.id)}`;
+	const link = chatLink("Read report", record.id);
+	return oneLiner ? `${head} — ${oneLiner} · ${link}` : `${head} · ${link}`;
 }
 
 export function telegramText(record: Delegation, publicUrl: string): string {
@@ -327,10 +358,12 @@ export function lastAssistant(entries: readonly unknown[]): {
 }
 
 const STATUS_LINE = /^\W*status\W*[:-][\s*_`]*(done|needs[_ ]input|failed|stopped)\b.*$/gim;
+const ONE_LINER_LINE = /^\W*one[- ]?liner\W*[:-][\s*_`]*(.+)$/gim;
 
-/** A worker's explicit closing `Status: …` line, and its reply without it. */
+/** A worker's explicit closing `Status: …` (and optional `One-liner: …`) lines, and its reply without them. */
 export function parseStatusLine(text: string): {
 	status?: Exclude<DelegationStatus, "working">;
+	oneLiner?: string;
 	summary: string;
 } {
 	const matches = [...text.matchAll(STATUS_LINE)];
@@ -341,8 +374,21 @@ export function parseStatusLine(text: string): {
 		| "needs_input"
 		| "failed"
 		| "stopped";
-	const summary = `${text.slice(0, last.index)}${text.slice(last.index + last[0].length)}`.trim();
-	return { status: word, summary };
+	let stripped = `${text.slice(0, last.index)}${text.slice(last.index + last[0].length)}`;
+	const oneLiners = [...stripped.matchAll(ONE_LINER_LINE)];
+	const lastOneLiner = oneLiners.at(-1);
+	let oneLiner: string | undefined;
+	if (lastOneLiner && lastOneLiner.index !== undefined) {
+		oneLiner = lastOneLiner[1].replace(/[*_`]+$/g, "").trim() || undefined;
+		stripped = `${stripped.slice(0, lastOneLiner.index)}${stripped.slice(
+			lastOneLiner.index + lastOneLiner[0].length,
+		)}`;
+	}
+	return {
+		status: word,
+		...(oneLiner ? { oneLiner } : {}),
+		summary: stripped.trim(),
+	};
 }
 
 /** The parent records which report it has delivered apart from the worker's file. */

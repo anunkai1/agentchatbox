@@ -22,12 +22,14 @@ import {
 	listDelegations,
 	type ModelChoice,
 	messageWorker,
+	ONE_LINER_GUIDANCE,
 	parseDelegateArgs,
 	parseStatusLine,
 	REPORT_GUIDANCE,
 	readDelegation,
 	readDelivered,
 	resolveModelToken,
+	resolveOneLiner,
 	STATUS_NOTE,
 	STATUSES,
 	startWorker,
@@ -91,7 +93,7 @@ export default function registerDelegate(
 	acb = new AcbSessions(),
 	notifyOwner?: (text: string) => void,
 ): void {
-	let pendingReport: { status: DelegationStatus; summary: string } | null = null;
+	let pendingReport: { status: DelegationStatus; summary: string; oneLiner?: string } | null = null;
 	let publishedThisRun = false;
 	/** auto-continue announced it is resuming a reply cut off at the output limit. */
 	let resuming = false;
@@ -161,6 +163,12 @@ export default function registerDelegate(
 		return mode;
 	}
 
+	function isRelaySession(ctx: ExtensionContext): boolean {
+		return ctx.sessionManager
+			.getBranch()
+			.some((entry) => (entry as { customType?: string }).customType === "acb-relay-state");
+	}
+
 	/** Save the worker's status in its JSONL (the sidebar reads it) and tell ACB. */
 	function publish(ctx: ExtensionContext, record: Delegation): void {
 		pi.appendEntry("delegation", { status: record.status });
@@ -175,7 +183,7 @@ export default function registerDelegate(
 			...DISPATCH_GUIDANCE,
 			cwdGuidance(),
 			BRIEF_GUIDANCE,
-			"The worker's report arrives here as a new message. Omit model and thinkingLevel unless the owner specified one; workers use ACB's default model (or this chat's model if unset).",
+			"The worker's full report stays in its own chat; a one-line summary with a link arrives here. Omit model and thinkingLevel unless the owner specified one; workers use ACB's default model (or this chat's model if unset).",
 		].join(" "),
 		promptGuidelines: [...DISPATCH_GUIDANCE, BRIEF_GUIDANCE],
 		parameters: Type.Object({
@@ -326,7 +334,7 @@ export default function registerDelegate(
 	pi.registerTool({
 		name: REPORT_TOOL,
 		label: "Report to main chat",
-		description: `Worker chats only: report to the chat that delegated this task, then end your turn. done = finished; needs_input = you need the owner's decision; stopped = the owner cancelled the work; failed = cannot finish. ${REPORT_GUIDANCE}`,
+		description: `Worker chats only: save your full report in this worker chat and send a one-line summary to the main chat, then end your turn. done = finished; needs_input = you need the owner's decision; stopped = the owner cancelled the work; failed = cannot finish. ${REPORT_GUIDANCE}`,
 		parameters: Type.Object({
 			status: Type.Union([
 				Type.Literal("done"),
@@ -334,12 +342,18 @@ export default function registerDelegate(
 				Type.Literal("stopped"),
 				Type.Literal("failed"),
 			]),
+			oneLiner: Type.String({ description: ONE_LINER_GUIDANCE }),
 			summary: Type.String({ description: REPORT_GUIDANCE }),
 		}),
 		defaultActive: false,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			if (!self(ctx)) throw new Error("only worker chats can report");
-			pendingReport = { status: params.status, summary: params.summary };
+			const oneLiner = params.oneLiner?.trim();
+			pendingReport = {
+				status: params.status,
+				summary: params.summary,
+				...(oneLiner ? { oneLiner } : {}),
+			};
 			return {
 				content: [
 					{ type: "text", text: "Report saved; it is sent when you stop. End your turn now." },
@@ -361,7 +375,7 @@ export default function registerDelegate(
 			message: {
 				customType: "delegation-report-reminder",
 				content:
-					"This is a delegated worker chat. Before ending this turn, call delegation_report: done when finished, needs_input only for an actual owner decision, stopped when the owner cancelled the work, or failed when blocked. If the tool is unavailable, end with Status: done, Status: needs_input, Status: stopped or Status: failed. " +
+					"This is a delegated worker chat. Before ending this turn, call delegation_report with a short `oneLiner` (outcome + any critical/medium/low issues) for the main chat and your full report in `summary` (kept in this worker chat): done when finished, needs_input only for an actual owner decision, stopped when the owner cancelled the work, or failed when blocked. If the tool is unavailable, write your full report above and end with `One-liner: ...` and `Status: done|needs_input|stopped|failed`. " +
 					REPORT_GUIDANCE,
 				display: false,
 			},
@@ -398,11 +412,11 @@ export default function registerDelegate(
 		publish(ctx, record);
 	}
 
-	/** A worker run ended: record the outcome, tell the owner and wake the main chat. */
+	/** A worker run ended: record the outcome, tell the owner and send the one-liner to the main chat. */
 	async function settle(
 		ctx: ExtensionContext,
 		record: Delegation,
-		outcome: { status: DelegationStatus; summary: string },
+		outcome: { status: DelegationStatus; summary: string; oneLiner?: string },
 	): Promise<void> {
 		if (shuttingDown) return;
 		// A stop acknowledged by transport wins even if a late callback says done.
@@ -417,6 +431,9 @@ export default function registerDelegate(
 		}
 		record.status = outcome.status;
 		record.summary = outcome.summary;
+		const oneLiner = resolveOneLiner(outcome.oneLiner, outcome.summary);
+		if (oneLiner) record.oneLiner = oneLiner;
+		else delete record.oneLiner;
 		record.updatedAt = new Date().toISOString();
 		if (record.status !== "stopped") record.reportSeq++;
 		writeDelegation(record);
@@ -469,11 +486,12 @@ export default function registerDelegate(
 		// Accept the same explicit status after switching from Claude Code to
 		// Pi; never guess completion from prose such as "the work is done".
 		const parsed = parseStatusLine(last.text);
-		const outcome: { status: DelegationStatus; summary: string } = {
+		const outcome: { status: DelegationStatus; summary: string; oneLiner?: string } = {
 			status: aborted
 				? "stopped"
 				: (report?.status ?? (last.error ? "failed" : (parsed.status ?? "needs_input"))),
 			summary: report?.summary ?? last.error ?? parsed.summary,
+			oneLiner: report?.oneLiner ?? (report || last.error ? undefined : parsed.oneLiner),
 		};
 		if (!last.cutOff || report || aborted) {
 			await settle(ctx, record, outcome);
@@ -508,6 +526,7 @@ export default function registerDelegate(
 		await settle(run.ctx, record, {
 			status: run.cancelled ? "stopped" : run.error ? "failed" : (parsed.status ?? "needs_input"),
 			summary: run.error ?? parsed.summary,
+			...(run.cancelled || run.error || !parsed.oneLiner ? {} : { oneLiner: parsed.oneLiner }),
 		});
 	});
 
@@ -534,18 +553,8 @@ export default function registerDelegate(
 					if (!record || record.parentSessionId !== sessionId(ctx)) return;
 					if (record.reportSeq <= readDelivered(record.id)) return;
 					writeDelivered(record.id, record.reportSeq);
-					// In Claude Code mode the owner talks to Claude Code, so it reviews.
-					if (claudeMode()) {
-						let accepted = false;
-						pi.events.emit("claude-delegate:run", {
-							ctx,
-							task: formatReport(record, "cli"),
-							accept: () => {
-								accepted = true;
-							},
-						});
-						if (accepted) return;
-					}
+					// Relay voice chats wake on reports to speak the outcome aloud;
+					// ordinary main chats receive only a quiet one-line note + link.
 					pi.sendMessage(
 						{
 							customType: "note",
@@ -553,7 +562,9 @@ export default function registerDelegate(
 							display: true,
 							details: { source: "delegate", worker: record.id },
 						},
-						{ triggerTurn: true, deliverAs: "followUp" },
+						isRelaySession(ctx)
+							? { triggerTurn: true, deliverAs: "followUp" }
+							: { triggerTurn: false },
 					);
 					return;
 				}
