@@ -674,6 +674,53 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("does not let another chat's replay change the session selected on reconnect", async () => {
+		const { page } = await openPage("/");
+		const inits: string[] = [];
+		let socket: WebSocketRoute | undefined;
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type !== "init") return;
+				inits.push(message.sessionId);
+				socket = ws;
+				ws.send(
+					JSON.stringify({
+						type: "ready",
+						sessionId: SEEDED_ID,
+						provider: "zai",
+						modelId: "glm-5.2",
+						thinkingLevel: "off",
+					}),
+				);
+			});
+		});
+		try {
+			await page.goto(`${base}/s/${SEEDED_ID}`);
+			await expect.poll(() => inits).toEqual([SEEDED_ID]);
+			const replay = (sessionId: string, text: string) =>
+				socket!.send(
+					JSON.stringify({
+						type: "transcript",
+						sessionId,
+						messages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
+					}),
+				);
+			replay(SEEDED_ID, "Correct chat history");
+			await expect.poll(() => messages(page).innerText()).toContain("Correct chat history");
+			await page.locator("#input").fill("Keep this draft in this chat");
+			replay("unrelated-session", "Wrong chat history");
+			await socket!.close({ code: 1001 });
+			await expect.poll(() => inits).toEqual([SEEDED_ID, SEEDED_ID]);
+			expect(await messages(page).innerText()).toContain("Correct chat history");
+			expect(await messages(page).innerText()).not.toContain("Wrong chat history");
+			expect(await page.locator("#input").inputValue()).toBe("Keep this draft in this chat");
+			expect(new URL(page.url()).pathname).toBe(`/s/${SEEDED_ID}`);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("opens an ask link as a new-session draft without submitting it", async () => {
 		const question = "Tell me more about this";
 		const { page } = await openPage(`/?ask=${encodeURIComponent(question)}`);

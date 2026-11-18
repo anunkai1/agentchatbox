@@ -2095,21 +2095,18 @@ async function boot(): Promise<void> {
 	// matches what's on screen — avoids a flicker + scroll jump every
 	// time the mobile WS drops and reconnects.
 	chatClient.onTranscript((sessionId, messages) => {
+		// `ready` binds the view. A replay must never switch the selected
+		// chat or change the session id sent on the next reconnect.
+		if (!mainReady || state.sessionId !== sessionId) return;
 		if (messages.some((message) => (message as { customType?: string }).customType === "acb-relay"))
 			relaySessions.add(sessionId);
 		const projected = projectTranscript(messages);
-		const sameSession = state.sessionId === sessionId;
 		const sameLength = state.messages.length === projected.length;
 		const lastMatches =
 			sameLength &&
 			(state.messages.length === 0 ||
 				JSON.stringify(state.messages[state.messages.length - 1]) ===
 					JSON.stringify(projected[projected.length - 1]));
-		state.sessionId = sessionId;
-		setNoticeSession(sessionId);
-		applySessionPrefs();
-		syncDisplayPreferences();
-		syncCurrentSessionTitle(sidebarSessionsForCache);
 		state.messages = projected;
 		// Seed the live message ordinal from the replayed transcript so
 		// subsequently streamed messages continue with correct JSONL
@@ -2121,7 +2118,7 @@ async function boot(): Promise<void> {
 		// Only nuke + rebuild the DOM if something actually changed.
 		// On a background reconnect for the same session this is a no-op,
 		// preserving scroll position and avoiding a flicker.
-		if (sameSession && sameLength && lastMatches) return;
+		if (lastMatches) return;
 		// The transcript renderer currently rebuilds the shell. Restore the
 		// authoritative sidebar snapshot immediately afterward; otherwise a
 		// fast listSessions response rendered before this transcript is wiped

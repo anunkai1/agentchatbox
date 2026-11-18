@@ -735,6 +735,13 @@ async function replaceSession(
 			registry.attach(old, ws);
 			throw err;
 		}
+		if (old.sessionId !== next.sessionId) {
+			log.info("browser switched chat", {
+				fromSessionId: old.sessionId,
+				toSessionId: next.sessionId,
+				action: init.sessionId ? "resumeSession" : "newSession",
+			});
+		}
 		// Viewing another thread need not cancel work in the previous one.
 		// Existing callers retain their explicit replacement semantics by default.
 		if (!preservePrevious) registry.kill(old);

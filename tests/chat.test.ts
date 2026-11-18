@@ -26,18 +26,27 @@ process.env.AGENTCHATBOX_ALLOW_MISSING_WS_ORIGIN = "1";
 
 type AnyMsg = { type: string; [k: string]: unknown };
 
+function fakeSessionArg(defaultId: string): string {
+	return `session="${defaultId}"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--session" ]; then session="$2"; shift; fi
+  shift
+done`;
+}
+
 const ECHO_SCRIPT = `#!/usr/bin/env bash
 # Fake pi that responds to any prompt with a canned event stream.
 # Reads JSONL commands from stdin, writes one NDJSON line per event.
 # Responds to get_state with a canned sessionId — matches real pi
 # behavior (rpc mode does NOT emit a "session" line on startup; the
 # session id only comes out of get_state's response).
+${fakeSessionArg("test-session-001")}
 sleep 0.05
 while IFS= read -r line; do
   type="$(echo "$line" | jq -r '.type // ""')"
   case "$type" in
     "get_state")
-      echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"test-session-001\\",\\"messageCount\\":0}}"
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"$session\\",\\"messageCount\\":0}}"
       ;;
     "prompt")
       echo "{\\"type\\":\\"response\\",\\"command\\":\\"prompt\\",\\"success\\":true}"
@@ -60,17 +69,18 @@ while IFS= read -r line; do
 done
 `;
 
-const ACK_SCRIPT = `#!/usr/bin/env bash
+const ackScript = (honourResume = true) => `#!/usr/bin/env bash
 # Fake pi that responds to get_state with a sessionId and acks
 # everything else. Used by tests that don't need a full event
 # stream (e.g. listSessions is a server-side read; pi is only
 # there to satisfy the spawn).
+${honourResume ? fakeSessionArg("test-session-002") : 'session="test-session-002"'}
 sleep 0.05
 while IFS= read -r line; do
   type="$(echo "$line" | jq -r '.type // ""')"
   case "$type" in
     "get_state")
-      echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"test-session-002\\",\\"messageCount\\":0}}"
+      echo "{\\"type\\":\\"response\\",\\"command\\":\\"get_state\\",\\"success\\":true,\\"data\\":{\\"sessionId\\":\\"$session\\",\\"messageCount\\":0}}"
       ;;
     *)
       echo "{\\"type\\":\\"response\\",\\"command\\":\\"$type\\",\\"success\\":true}"
@@ -564,7 +574,7 @@ function makeFakePi(
 		behavior === "echo"
 			? ECHO_SCRIPT
 			: behavior === "ack"
-				? ACK_SCRIPT
+				? ackScript()
 				: behavior === "steer-race"
 					? STEER_RACE_SCRIPT
 					: behavior === "track"
@@ -1457,6 +1467,43 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			expect(Date.now() - started).toBeLessThan(1000);
 		} finally {
 			close();
+		}
+	});
+
+	it("rejects a resumed Pi which reports a different chat ID", async () => {
+		writeFileSync(fakePiPath!, ackScript(false), { mode: 0o755 });
+		const { mountChatWs } = await import("../src/server/chat.js");
+		const { registry } = await import("../src/server/session-registry.js");
+		const { sessionsDirFor } = await import("../src/server/session-list.js");
+		const cwd = "/tmp";
+		const dir = sessionsDirFor(cwd);
+		const sessionId = "requested-session-001";
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			join(dir, `2026-11-18T00-00-00-000Z_${sessionId}.jsonl`),
+			`${JSON.stringify({ type: "session", version: 3, id: sessionId, cwd })}\n`,
+		);
+		mountChatWs(server!);
+
+		const original = await connectClient();
+		const resumed = await connectClient();
+		try {
+			const init = { type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" };
+			original.ws.send(JSON.stringify(init));
+			expect((await original.inbox.waitFor(1))[0]).toMatchObject({
+				type: "ready",
+				sessionId: "test-session-002",
+			});
+			const live = registry.liveFor("test-session-002");
+			resumed.ws.send(JSON.stringify({ ...init, sessionId }));
+			expect((await resumed.inbox.waitFor(1))[0]).toMatchObject({
+				type: "error",
+				message: expect.stringContaining("different chat than requested"),
+			});
+			expect(registry.liveFor("test-session-002")).toBe(live);
+		} finally {
+			resumed.close();
+			original.close();
 		}
 	});
 

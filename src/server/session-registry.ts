@@ -779,6 +779,19 @@ class SessionRegistry {
 			const data = line.data as { sessionId?: string } | undefined;
 			const id = String(data?.sessionId ?? "");
 			if (id) {
+				if (session.init.sessionId && id !== session.init.sessionId) {
+					// A resume must prove it opened the requested chat, not just any chat.
+					// Do not overwrite a live registry entry or replay another transcript.
+					log.warn("pi resumed an unexpected session", {
+						requestedSessionId: session.init.sessionId,
+						actualSessionId: id,
+					});
+					const message = "pi opened a different chat than requested; reconnect to try again";
+					deliver(session.ws, { type: "error", message });
+					for (const waiter of session.readyWaiters.splice(0)) waiter.reject(new Error(message));
+					this.kill(session);
+					return;
+				}
 				session.sessionId = id;
 				session.ready = true;
 				this.pending.delete(session);
