@@ -2750,7 +2750,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			});
 		});
 		try {
-			await send(page, "/relaytrial");
+			await send(page, "/relaytrial kokoro");
 			let dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
 			await expect.poll(() => dialog.innerText()).toContain("Ready —");
 			expect(inits[0].sessionId).toBeUndefined();
@@ -2805,11 +2805,17 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				"Greeting The first streamed sentence is ready.",
 			]);
 			expect(prompts).not.toContain("/relay cancel");
+			await page.evaluate(() => localStorage.setItem("acb-relay-trial-engine", "lfm-tts"));
 			await send(page, "/relaytrial");
 			dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
 			await expect
 				.poll(() => dialog.getByRole("log").innerText())
 				.toContain("Saved, not replayed.");
+			expect(await dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-trial-engine"))).toBe(
+				"zonos3",
+			);
+			expect(await dialog.getByRole("button", { name: /LFM|Server4/ }).count()).toBe(0);
 			expect(inits.at(-1)?.sessionId).toBe("stream-trial-session");
 			expect(tts).toHaveLength(2);
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-session"))).toBe(
@@ -2826,217 +2832,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("stages Pi + Server4 LFM speech-only TTS in /relaytrial with Markdown rendering and speech-only interruption", async () => {
-		const { page } = await openPage("/");
-		const prompts: string[] = [],
-			controls: string[] = [],
-			ttsWsReceived: Array<Record<string, unknown>> = [],
-			contexts = new Map<string, string>();
-		let kokoroCalls = 0;
-		let native: (event: object) => void = () => {};
-		const makePcmFrame = (epoch: number, sampleCount: number): Buffer => {
-			const buf = Buffer.alloc(4 + sampleCount * 2);
-			buf.writeUInt32BE(epoch, 0);
-			for (let i = 0; i < sampleCount; i++) {
-				buf.writeInt16LE(Math.round(6000 * Math.sin(i * 0.08)), 4 + i * 2);
-			}
-			return buf;
-		};
-		await page.route("**/api/tts/**", (route) => {
-			kokoroCalls++;
-			return route.abort();
-		});
-		await page.evaluate(() => {
-			localStorage.setItem("acb-relay-session", "keep-production-session");
-			localStorage.setItem("acb-relay-voice-engine", "server4");
-		});
-		await page.routeWebSocket(/\/experiments\/lfm-voice\/ws\?tts=1$/, (ws) => {
-			ws.send(JSON.stringify({ type: "starting" }));
-			ws.send(
-				JSON.stringify({
-					type: "ready",
-					protocol: 3,
-					tts: 1,
-					outputRate: 24000,
-					loadMs: 740,
-				}),
-			);
-			ws.onMessage((raw) => {
-				const m = JSON.parse(String(raw)) as Record<string, unknown>;
-				ttsWsReceived.push(m);
-				if (m.type === "speak" && m.seq === 0) {
-					const epoch = Number(m.epoch);
-					ws.send(JSON.stringify({ type: "first_pcm", epoch, seq: 0, ttsFirstPcmMs: 58 }));
-					ws.send(makePcmFrame(epoch, 24000)); // 1.0s progressive 24 kHz PCM (> 240ms preroll)
-					ws.send(makePcmFrame(epoch, 24000)); // another 1.0s
-				} else if (m.type === "end") {
-					ws.send(
-						JSON.stringify({
-							type: "utterance_done",
-							epoch: m.epoch,
-							utterance: m.utterance,
-							truncated: false,
-						}),
-					);
-				} else if (m.type === "cancel") {
-					ws.send(
-						JSON.stringify({
-							type: "played_prefix",
-							epoch: m.epoch,
-							utterance: m.utterance,
-							playedMs: m.played_ms,
-							text: "Deployment Check First",
-							complete: false,
-							uncertain: false,
-						}),
-					);
-				} else if (m.type === "played") {
-					ws.send(
-						JSON.stringify({
-							type: "played_prefix",
-							epoch: m.epoch,
-							utterance: m.utterance,
-							playedMs: m.played_ms,
-							text: "Confirmed amber forty two.",
-							complete: true,
-							uncertain: false,
-						}),
-					);
-				}
-			});
-		});
-		let turnCount = 0;
-		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
-			native = (event) => ws.send(JSON.stringify({ type: "event", event }));
-			const custom = (details: object) =>
-				native({
-					type: "message_end",
-					message: { role: "custom", customType: "acb-relay", details },
-				});
-			ws.onMessage((raw) => {
-				const m = JSON.parse(String(raw));
-				if (m.type === "init") {
-					ws.send(JSON.stringify({ type: "ready", sessionId: "lfm-trial-session" }));
-				} else if (m.type === "getCapabilities") {
-					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
-				} else if (m.type === "prompt") {
-					prompts.push(m.text);
-					if (m.text.startsWith("/relay start")) {
-						custom({
-							kind: "ready",
-							model: "venice/deepseek-v4-1-flash-1017",
-							workerModel: { provider: "venice", modelId: "fixture", thinkingLevel: "off" },
-						});
-					}
-					const [, action, id, encoded] = m.text.split(" ");
-					if (action === "voice-context") {
-						const text = JSON.parse(Buffer.from(encoded, "base64url").toString()).text;
-						contexts.set(id, text);
-						custom({ kind: "voice_context", id, user: text });
-					}
-					if (action === "voice-heard") {
-						const text = JSON.parse(Buffer.from(encoded, "base64url").toString()).text;
-						custom({ kind: "voice_context", id, heard: text });
-					}
-					if (action === "voice-request") {
-						turnCount++;
-						native({ type: "message_end", message: { role: "user", content: contexts.get(id) } });
-						native({ type: "message_start", message: { role: "assistant" } });
-						if (turnCount === 1) {
-							// Stream Markdown WITHOUT message_end yet to prove progressive sentence streaming!
-							native({
-								type: "message_update",
-								assistantMessageEvent: {
-									type: "text_delta",
-									delta:
-										"### Deployment Check\n\n**First sentence plays immediately.**\n\n- Bullet item stays formatted in chat. ",
-								},
-							});
-						} else {
-							native({
-								type: "message_update",
-								assistantMessageEvent: {
-									type: "text_delta",
-									delta: "Confirmed amber forty two.",
-								},
-							});
-							native({
-								type: "message_end",
-								message: { role: "assistant", content: "Confirmed amber forty two." },
-							});
-						}
-					}
-				} else controls.push(m.type);
-			});
-		});
-		try {
-			await send(page, "/relaytrial");
-			let dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("Ready —");
-			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
-			await dialog.getByRole("button", { name: "Use LFM TTS (speech-only)", exact: true }).click();
-			dialog = page.getByRole("dialog", { name: "Trial A — streaming Pi voice", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("LFM reads the replies aloud");
-			expect(await dialog.locator("iframe").count()).toBe(0);
-
-			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Check status");
-			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
-
-			// Progressive sentence sent to /ws?tts=1 with stripped Markdown while HTML heading/bold/list render in log:
-			await expect
-				.poll(() => ttsWsReceived.filter((m) => m.type === "speak").length)
-				.toBeGreaterThanOrEqual(1);
-			expect(ttsWsReceived.find((m) => m.type === "speak")?.text).toBe(
-				"Deployment Check First sentence plays immediately.",
-			);
-			await expect
-				.poll(() => dialog.locator(".voice-test-transcript .markdown h3").innerText())
-				.toBe("Deployment Check");
-			expect(await dialog.locator(".voice-test-transcript .markdown ul li").count()).toBe(1);
-			await expect
-				.poll(() => dialog.locator(".voice-test-status").innerText())
-				.toContain("Speaking");
-			await expect
-				.poll(() => dialog.locator(".voice-test-metrics").innerText())
-				.toContain("Server4 native 58 ms");
-			await page.waitForTimeout(120);
-
-			// Stop speaking mid-speech: sends cancel, records unhinted played prefix, never aborts Pi!
-			await dialog.getByRole("button", { name: "Stop speaking", exact: true }).click();
-			await expect.poll(() => ttsWsReceived.some((m) => m.type === "cancel")).toBe(true);
-			expect(Number(ttsWsReceived.find((m) => m.type === "cancel")?.played_ms)).toBeGreaterThan(0);
-			await expect.poll(() => prompts.some((p) => p.startsWith("/relay voice-heard "))).toBe(true);
-			const heardCmd = prompts.find((p) => p.startsWith("/relay voice-heard "))!;
-			const heardText = JSON.parse(
-				Buffer.from(heardCmd.split(" ")[3], "base64url").toString(),
-			).text;
-			expect(heardText).toContain("Deployment Check First");
-			expect(heardText).toContain("Remaining generated text in chat was NOT played.");
-			expect(controls).not.toContain("abort");
-			expect(prompts).not.toContain("/relay cancel");
-			expect(kokoroCalls).toBe(0);
-
-			// Follow-up utterance runs on epoch 2 cleanly and production Relay preferences remain untouched:
-			await dialog.getByRole("textbox", { name: "Relay message" }).fill("Confirm amber 42");
-			await dialog.getByRole("button", { name: "Send text", exact: true }).click();
-			await expect
-				.poll(() => ttsWsReceived.some((m) => m.type === "speak" && m.epoch === 2))
-				.toBe(true);
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-session"))).toBe(
-				"keep-production-session",
-			);
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
-				"server4",
-			);
-			await dialog
-				.getByRole("button", { name: "Close Trial A — streaming Pi voice", exact: true })
-				.click();
-		} finally {
-			await page.close();
-		}
-	});
-
-	it("defaults Relay to aligned ZONOS3-Mini without Server4 and preserves explicit Kokoro/LFM reversion", async () => {
+	it("defaults Relay to aligned ZONOS3-Mini, migrates retired preferences and preserves Kokoro", async () => {
 		const { page } = await openPage("/");
 		const prompts: string[] = [],
 			controls: string[] = [];
@@ -3088,21 +2884,17 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
 				"kokoro",
 			);
-			await send(page, "/relay lfm-tts");
-			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("LFM reads the replies aloud");
-			// The speech-only socket stays lazy until there is speech to synthesise.
-			expect(server4Connections).toBe(0);
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
-				"lfm-tts",
-			);
 			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
 			await send(page, "/relay");
-			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("LFM reads the replies aloud");
+			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
+			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
+			await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "lfm-tts"));
+			await send(page, "/relay");
+			await expect.poll(() => dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
-				"lfm-tts",
+				"zonos3",
 			);
+			expect(server4Connections).toBe(0);
 			await send(page, "/relay zonos3");
 			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			await expect.poll(() => dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
@@ -3118,220 +2910,50 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("connects Server4 voice to Relay without aborting work or trusting other windows", async () => {
-		const { page } = await openPage("/");
-		// Server4 is an explicit preserved choice, no longer the unset default.
-		await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "server4"));
-		const prompts: string[] = [],
-			controls: string[] = [],
-			inits: Record<string, unknown>[] = [];
-		let ttsCalls = 0;
-		await page.route("**/api/tts/**", (route) => {
-			ttsCalls++;
-			return route.abort();
-		});
-		await page.route("**/experiments/lfm-voice/**", (route) =>
-			route.fulfill({
-				contentType: "text/html",
-				body: `<!doctype html><body>Local voice fixture<script>
-		window.received=[];window.addEventListener('message',e=>{if(e.source!==parent||e.origin!==location.origin)return;received.push(e.data);if(e.data.type==='configure')document.body.dataset.ready='yes';});
-		parent.postMessage({source:'lfm-relay',type:'loaded'},location.origin);
-		</script>`,
-			}),
-		);
-		await relayChatFixture(page, (ws) => {
-			const native = (event: object) => ws.send(JSON.stringify({ type: "event", event }));
-			const custom = (details: object) =>
-				native({
-					type: "message_end",
-					message: { role: "custom", customType: "acb-relay", details },
-				});
-			ws.onMessage((raw) => {
-				const message = JSON.parse(String(raw));
-				if (message.type === "init") {
-					inits.push(message);
-					ws.send(JSON.stringify({ type: "ready", sessionId: "local-relay-session" }));
-				} else if (message.type === "getCapabilities")
-					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
-				else if (message.type === "prompt") {
-					prompts.push(message.text);
-					if (message.text.startsWith("/relay start"))
-						custom({
-							kind: "ready",
-							model: "venice/deepseek-v4-1-flash-1017",
-							workerModel: { provider: "openai", modelId: "fixture", thinkingLevel: "high" },
-							voice: { protocol: 1, instructions: "Fixture", tools: [] },
-						});
-					if (message.text.startsWith("/relay voice-config "))
-						custom({
-							kind: "voice_config",
-							config: { protocol: 1, instructions: "Refreshed", tools: [] },
-						});
-					if (message.text.startsWith("/relay voice-context "))
-						custom({ kind: "voice_context", id: "voice-one", user: "Inspect the fixture." });
-					if (message.text.startsWith("/relay voice-request ")) {
-						native({ type: "message_start", message: { role: "assistant" } });
-						native({
-							type: "message_update",
-							assistantMessageEvent: { type: "text_delta", delta: "The fixture says amber." },
-						});
-						native({
-							type: "message_end",
-							message: { role: "assistant", content: "The fixture says amber." },
-						});
-						custom({ kind: "voice_result", id: "voice-one", text: "The fixture says amber." });
-					}
-				} else controls.push(message.type);
-			});
-		});
-		try {
-			await page.setViewportSize({ width: 390, height: 844 });
-			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
-			const dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			const frame = page.frameLocator('iframe[title="Server4 Relay voice"]');
-			await expect.poll(() => frame.locator("body").getAttribute("data-ready")).toBe("yes");
-			expect(await dialog.getAttribute("aria-modal")).toBe("false");
-			await page.locator("#input").focus();
-			expect(await page.locator("#input").evaluate((node) => document.activeElement === node)).toBe(
-				true,
-			);
-			await frame
-				.locator("body")
-				.evaluate(() =>
-					parent.postMessage({ source: "lfm-relay", type: "refresh" }, location.origin),
-				);
-			await expect
-				.poll(() =>
-					frame
-						.locator("body")
-						.evaluate(() => (window as any).received.at(-1)?.config?.instructions),
-				)
-				.toBe("Refreshed");
-			await page.evaluate(() =>
-				window.postMessage(
-					{ source: "lfm-relay", type: "relay_request", id: "forged" },
-					location.origin,
-				),
-			);
-			await frame.locator("body").evaluate(() => {
-				parent.postMessage(
-					{
-						source: "lfm-relay",
-						type: "relay_context",
-						id: "voice-one",
-						text: "Inspect the fixture.",
-					},
-					location.origin,
-				);
-				parent.postMessage(
-					{ source: "lfm-relay", type: "relay_request", id: "voice-one" },
-					location.origin,
-				);
-			});
-			await expect.poll(() => messages(page).innerText()).toContain("The fixture says amber");
-			await expect
-				.poll(() =>
-					frame
-						.locator("body")
-						.evaluate(
-							() => (window as any).received.filter((m: any) => m.type === "result").length,
-						),
-				)
-				.toBe(1);
-			expect(prompts.some((p) => p.includes("forged"))).toBe(false);
-			expect(prompts.filter((p) => p.startsWith("/relay voice-request "))).toHaveLength(1);
-			await dialog.getByRole("button", { name: "Stop speaking", exact: true }).click();
-			await expect
-				.poll(() =>
-					frame
-						.locator("body")
-						.evaluate(() => (window as any).received.some((m: any) => m.type === "interrupt")),
-				)
-				.toBe(true);
-			expect(controls).not.toContain("abort");
-			expect(ttsCalls).toBe(0);
-			await dialog.getByRole("button", { name: "Stop current Pi turn", exact: true }).click();
-			await expect.poll(() => controls.filter((type) => type === "abort")).toEqual(["abort"]);
-			expect(await dialog.locator(".voice-test-status").innerText()).toContain(
-				"Explicit stop requested for the current Pi turn",
-			);
-			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
-			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
-			expect(inits).toHaveLength(1);
-			expect(new URL(page.url()).pathname).toBe("/s/local-relay-session");
-			expect(prompts.filter((p) => p.startsWith("/relay voice-request "))).toHaveLength(1);
-			await page.getByRole("button", { name: "Voice settings & details" }).click();
-			await page.getByRole("button", { name: "Use legacy STT/Kokoro", exact: true }).click();
-			expect(inits).toHaveLength(1);
-			expect(await page.locator(".relay-local-voice").count()).toBe(0);
-			expect(await page.getByRole("button", { name: "Stop current Pi turn" }).count()).toBe(0);
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
-				"legacy",
-			);
-			expect(prompts).not.toContain("/relay cancel");
-			await page.getByRole("button", { name: "Close Relay", exact: true }).click();
-		} finally {
-			await page.close();
-		}
-	});
-
-	it("exposes Pi + LFM TTS (speech-only) in regular Relay without migrating saved sessions or overflowing mobile", async () => {
+	it("migrates Server4 voice without changing the chat, replays no history and fits mobile", async () => {
 		const { page } = await openPage("/");
 		let finishReply = () => {};
 		const inits: Array<Record<string, unknown>> = [],
 			prompts: string[] = [],
-			ttsWs: Array<Record<string, unknown>> = [];
+			ttsRequests: string[] = [];
 		await page.evaluate(() => {
 			localStorage.setItem("acb-relay-session", "saved-relay-session");
 			localStorage.setItem("acb-relay-voice-engine", "server4");
 		});
-		await page.route("**/experiments/lfm-voice/**", (route) =>
-			route.fulfill({
-				contentType: "text/html",
-				body: "<!doctype html><body>Server4 bridge fixture</body>",
-			}),
-		);
-		await page.routeWebSocket(/\/experiments\/lfm-voice\/ws\?tts=1$/, (ws) => {
-			ws.send(
-				JSON.stringify({
-					type: "ready",
-					protocol: 3,
-					tts: 1,
-					outputRate: 24000,
-					loadMs: 0,
-				}),
-			);
-			ws.onMessage((raw) => {
-				const m = JSON.parse(String(raw)) as Record<string, unknown>;
-				ttsWs.push(m);
-				if (m.type === "speak") {
-					const epoch = Number(m.epoch);
-					const buf = Buffer.alloc(4 + 4800 * 2);
-					buf.writeUInt32BE(epoch, 0);
-					ws.send(JSON.stringify({ type: "first_pcm", epoch, seq: m.seq, ttsFirstPcmMs: 52 }));
-					ws.send(buf);
-				} else if (m.type === "end") {
-					ws.send(
-						JSON.stringify({
-							type: "utterance_done",
-							epoch: m.epoch,
-							utterance: m.utterance,
-							truncated: false,
-						}),
-					);
-				} else if (m.type === "played") {
-					ws.send(
-						JSON.stringify({
-							type: "played_prefix",
-							epoch: m.epoch,
-							utterance: m.utterance,
-							playedMs: m.played_ms,
-							text: "Ready on mobile.",
-							complete: true,
-							uncertain: false,
-						}),
-					);
-				}
+		await page.route("**/api/tts/zonos-relay-stream*", (route) => {
+			const { text } = route.request().postDataJSON() as { text: string };
+			ttsRequests.push(text);
+			const samples = 8820;
+			const frame = (type: number, payload: Buffer) => {
+				const header = Buffer.alloc(5);
+				header[0] = type;
+				header.writeUInt32LE(payload.length, 1);
+				return Buffer.concat([header, payload]);
+			};
+			const words = text.split(" ").map((word, i, all) => ({
+				text: word,
+				whitespace: i < all.length - 1 ? " " : "",
+				startSample: i * 1000,
+				endSample: (i + 1) * 1000,
+			}));
+			const meta = {
+				alignment: "zonos3-probe-v1",
+				sampleRate: 44100,
+				submittedText: text,
+				text,
+				startSample: 0,
+				endSample: samples,
+				alignmentComplete: true,
+				unalignedTokens: [],
+				words,
+			};
+			return route.fulfill({
+				headers: { "X-Zonos-Alignment": "zonos3-probe-v1" },
+				body: Buffer.concat([
+					frame(2, Buffer.from(JSON.stringify(meta))),
+					frame(1, Buffer.alloc(samples * 2)),
+					frame(0, Buffer.alloc(0)),
+				]),
 			});
 		});
 		await relayChatFixture(page, (ws) => {
@@ -3370,7 +2992,6 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 							kind: "ready",
 							model: "venice/deepseek-v4-1-flash-1017",
 							workerModel: { provider: "venice", modelId: "fixture", thinkingLevel: "off" },
-							voice: { protocol: 1, instructions: "Fixture", tools: [] },
 						});
 					} else if (m.text === "Ping" || m.text.startsWith("/relay voice-request ")) {
 						native({ type: "message_end", message: { role: "user", content: "Ping" } });
@@ -3391,42 +3012,23 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		try {
 			await page.setViewportSize({ width: 390, height: 844 });
 			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
-			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			const dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			await expect.poll(() => inits.length).toBe(1);
-			// Default saved "server4" preference is respected, not silently migrated:
-			expect(await dialog.locator('iframe[title="Server4 Relay voice"]').count()).toBe(1);
-			expect(ttsWs).toHaveLength(0);
-
-			// The primary screen explains responsibilities without exposing engine switches:
-			await expect
-				.poll(() => dialog.locator(".voice-test-model").first().innerText())
-				.toContain("Pi work: DeepSeek Flash · thinking off");
-			expect(await dialog.getByRole("button", { name: "Cancel work job" }).isVisible()).toBe(false);
-			expect(
-				await dialog
-					.getByRole("button", { name: "Use Pi + LFM TTS (speech-only)", exact: true })
-					.isVisible(),
-			).toBe(false);
+			expect(inits[0].sessionId).toBe("saved-relay-session");
+			expect(new URL(page.url()).pathname).toBe("/s/saved-relay-session");
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
+				"zonos3",
+			);
 			const settings = dialog.getByRole("button", { name: "Voice settings & details" });
 			expect(await settings.getAttribute("aria-expanded")).toBe("false");
 			await settings.focus();
 			await page.keyboard.press("Enter");
 			expect(await settings.getAttribute("aria-expanded")).toBe("true");
-
-			// Explicitly choose Pi + LFM TTS (speech-only); saved session ID is preserved, history is not spoken:
-			await dialog
-				.getByRole("button", { name: "Use Pi + LFM TTS (speech-only)", exact: true })
-				.click();
-			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			expect(inits).toHaveLength(1);
-			expect(inits[0].sessionId).toBe("saved-relay-session");
-			expect(new URL(page.url()).pathname).toBe("/s/saved-relay-session");
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
-				"lfm-tts",
-			);
+			expect(await dialog.getByRole("button", { name: /LFM|Server4/ }).count()).toBe(0);
+			await settings.click();
 			await expect.poll(() => dialog.innerText()).toContain("Ready —");
 			expect(await dialog.locator("iframe").count()).toBe(0);
-			expect(ttsWs).toHaveLength(0); // Saved history is never replayed to Server4 TTS!
+			expect(ttsRequests).toHaveLength(0); // Saved history is never replayed.
 			expect(await dialog.locator(".voice-test-model").first().innerText()).toBe(
 				"Answers & tools: DeepSeek Flash · thinking off",
 			);
@@ -3445,7 +3047,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
 			expect(
 				await dialog
-					.getByRole("button", { name: "Use Server4 LFM voice", exact: true })
+					.getByRole("button", { name: "Use Pi + Server2 Kokoro (aligned)", exact: true })
 					.isVisible(),
 			).toBe(true);
 			expect(
@@ -3491,20 +3093,24 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 
 			await page.locator("#input").fill("Ping");
 			await page.locator("#send-btn").click();
-			await expect.poll(() => ttsWs.some((m) => m.type === "speak")).toBe(true);
+			await expect.poll(() => ttsRequests.length > 0).toBe(true);
 			// The normal composer scrolls to our own input; later model updates
 			// must not yank us away after we choose to read older messages.
 			await messages(page).evaluate((node) => {
 				node.scrollTop = 0;
 			});
 			finishReply();
-			expect(ttsWs.find((m) => m.type === "speak")?.text).toBe("Ready on mobile.");
+			expect(ttsRequests[0]).toBe("Ready on mobile.");
 			await expect
 				.poll(() =>
 					prompts.some((p) => {
 						if (!p.startsWith("/relay voice-heard ")) return false;
 						const decoded = JSON.parse(Buffer.from(p.split(" ")[3], "base64url").toString()).text;
-						return decoded.includes("playback completed") && decoded.includes("Ready on mobile.");
+						return (
+							decoded.includes("ZONOS3-Mini synthesis alignment") &&
+							decoded.includes("ms played, completed") &&
+							decoded.includes("Ready on mobile.")
+						);
 					}),
 				)
 				.toBe(true);
@@ -3749,9 +3355,6 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		const requests: Route[] = [];
 		const contexts: string[] = [];
 		const controls: string[] = [];
-		await page.routeWebSocket(/\/experiments\/lfm-voice\/ws\?tts=1$/, (ws) => {
-			ws.send(JSON.stringify({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 0 }));
-		});
 		await page.route("**/api/transcribe", (route) => {
 			requests.push(route);
 		});
@@ -3815,7 +3418,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			);
 		};
 		try {
-			await send(page, "/relay lfm-tts");
+			await send(page, "/relay zonos3");
 			const dialog = page.locator("#relay-voice-panel");
 			await expect.poll(() => dialog.locator(".voice-test-status").innerText()).toContain("Ready");
 			await page.evaluate(() =>

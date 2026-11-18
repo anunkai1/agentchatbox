@@ -381,13 +381,9 @@ export function handleSlash(arg: string): void {
 					? "kokoro"
 					: engineArg === "zonos3" || engineArg === "zonos" || engineArg === "zonos3-mini"
 						? "zonos3"
-						: engineArg === "lfm-tts" || engineArg === "lfm"
-							? "lfm-tts"
-							: engineArg === "legacy"
-								? "legacy"
-								: engineArg === "server4"
-									? "server4"
-									: undefined,
+						: engineArg === "legacy"
+							? "legacy"
+							: undefined,
 				forceNew,
 			);
 			return;
@@ -395,10 +391,10 @@ export function handleSlash(arg: string): void {
 		case "relaytrial": {
 			const engineArg = rest.trim().toLowerCase();
 			openRelayTrial(
-				engineArg === "lfm" || engineArg === "lfm-tts"
-					? true
-					: engineArg === "kokoro"
-						? false
+				engineArg === "kokoro"
+					? "kokoro"
+					: engineArg === "zonos3" || engineArg === "zonos" || engineArg === "zonos3-mini"
+						? "zonos3"
 						: undefined,
 			);
 			return;

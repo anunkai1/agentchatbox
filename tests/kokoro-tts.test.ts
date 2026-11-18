@@ -8,7 +8,7 @@ import {
 	KokoroFrames,
 	validateKokoroAlignment,
 } from "../src/client/kokoro-tts.js";
-import { type LfmPlayedReport, PlayedAudioClock } from "../src/client/lfm-tts.js";
+import { type PcmPlayedReport, PlayedAudioClock } from "../src/client/pcm-tts.js";
 import {
 	DEFAULT_RELAY_VOICE_ENGINE,
 	resolveRelayVoiceEngine,
@@ -151,7 +151,7 @@ class NoServer4Socket {
 }
 
 function harness() {
-	const reports: LfmPlayedReport[] = [];
+	const reports: PcmPlayedReport[] = [];
 	const error = vi.fn();
 	const speaker = createKokoroSpeaker({
 		onStatus: vi.fn(),
@@ -539,7 +539,7 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 		);
 	}
 	function zonosHarness() {
-		const reports: LfmPlayedReport[] = [];
+		const reports: PcmPlayedReport[] = [];
 		const error = vi.fn();
 		const speaker = createZonosSpeaker({
 			onStatus: vi.fn(),
@@ -785,11 +785,10 @@ describe("Relay engine preference", () => {
 	it("defaults to ZONOS3-Mini without migrating explicit saved selections, and switches back in one step", () => {
 		expect(DEFAULT_RELAY_VOICE_ENGINE).toBe("zonos3");
 		expect(resolveRelayVoiceEngine(null)).toBe("zonos3");
-		for (const saved of ["kokoro", "lfm-tts", "legacy", "server4"] as const)
+		for (const saved of ["kokoro", "legacy", "zonos3"] as const)
 			expect(resolveRelayVoiceEngine(saved)).toBe(saved);
-		expect(resolveRelayVoiceEngine("zonos3", "kokoro")).toBe("kokoro");
-		expect(resolveRelayVoiceEngine("kokoro", "zonos3")).toBe("zonos3");
-		expect(resolveRelayVoiceEngine("zonos3", "lfm-tts")).toBe("lfm-tts");
-		expect(resolveRelayVoiceEngine("lfm-tts", "zonos3")).toBe("zonos3");
+		for (const saved of ["lfm-tts", "server4"])
+			expect(resolveRelayVoiceEngine(saved)).toBe("zonos3");
+		expect(resolveRelayVoiceEngine("lfm-tts", "kokoro")).toBe("kokoro");
 	});
 });

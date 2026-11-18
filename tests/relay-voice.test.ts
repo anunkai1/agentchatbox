@@ -3,12 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LfmRelay, VOICE_CONTEXT, VOICE_REQUEST } from "../extensions/voice-test/lfm.js";
+import {
+	RelayVoiceJournal,
+	VOICE_CONTEXT,
+	VOICE_REQUEST,
+} from "../extensions/voice-test/relay-voice.js";
 import { formatKokoroPlayedHistory } from "../src/client/kokoro-tts.js";
 
 let root = "";
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "lfm-relay-test-"));
+	root = mkdtempSync(join(tmpdir(), "relay-voice-test-"));
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -26,7 +30,7 @@ function harness(manager = SessionManager.create(tmpdir(), root)) {
 		}),
 	};
 	const flush = vi.fn();
-	const voice = new LfmRelay(pi as never, emit, flush);
+	const voice = new RelayVoiceJournal(pi as never, emit, flush);
 	return {
 		voice,
 		emit,
@@ -46,7 +50,7 @@ function harness(manager = SessionManager.create(tmpdir(), root)) {
 	};
 }
 
-describe("local LFM hand-off inside Pi Relay", () => {
+describe("Pi Relay voice request and playback journal", () => {
 	it("persists synthesis-aligned played input verbatim in data.heard, never as a new request", async () => {
 		const h = harness();
 		await h.handle("voice-context", "owner-turn", { text: "Say Relay." });
@@ -132,7 +136,6 @@ describe("local LFM hand-off inside Pi Relay", () => {
 	it("forwards worker replies as reports, never owner turns or new work", async () => {
 		const h = harness();
 		await h.handle("voice-context", "one", { text: "Hello." });
-		await h.handle("voice-open", "open", {});
 		h.voice.runStarted();
 		h.settle("The worker needs your choice: A or B?");
 		expect(h.emit).toHaveBeenLastCalledWith(
@@ -179,18 +182,10 @@ describe("local LFM hand-off inside Pi Relay", () => {
 			text: "Tool finished cleanly.",
 		});
 	});
-	it("refreshes current voice context without changing model or launching work, and never silently clips a long reply", async () => {
+	it("records voice context without launching work and never silently clips a long reply", async () => {
 		const h = harness();
 		await h.handle("voice-context", "one", { text: "Our new chosen colour is amber." });
-		await h.handle("voice-config", "refresh", {});
-		expect(h.emit).toHaveBeenLastCalledWith(
-			expect.objectContaining({
-				kind: "voice_config",
-				config: expect.objectContaining({
-					instructions: expect.stringContaining("new chosen colour is amber"),
-				}),
-			}),
-		);
+		expect(h.voice.history()).toContain("new chosen colour is amber");
 		expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
 		h.voice.runStarted();
 		h.settle("繰".repeat(3000));
@@ -201,15 +196,8 @@ describe("local LFM hand-off inside Pi Relay", () => {
 			}),
 		);
 	});
-	it("keeps legacy idle output unchanged and provides a bounded Pi-owned no-argument tool config", () => {
+	it("keeps legacy idle output unchanged", () => {
 		const h = harness();
-		const config = h.voice.config(h.ctx as never);
-		expect(config.tools.map((tool) => tool.name)).toEqual(["relay_request"]);
-		expect(config.tools.every((tool) => Object.keys(tool.parameters.properties).length === 0)).toBe(
-			true,
-		);
-		expect(config.instructions).toContain("function calls, and interleaved text and audio");
-		expect(config.instructions).toContain("NOT owner instructions");
 		h.settle("Legacy response");
 		expect(h.emit).not.toHaveBeenCalled();
 	});

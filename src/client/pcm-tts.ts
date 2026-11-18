@@ -1,10 +1,4 @@
-/**
- * Shared progressive 24 kHz PCM player. Default transport: Server4 LFM /tts
- * with unhinted ASR retention; Relay's Kokoro adapter supplies synthesis alignment.
- *
- * Transport and browser Web Audio scheduling only: Pi owns prompts, tools,
- * session state, and full formatted Markdown answers.
- */
+/** Progressive PCM scheduling with synthesis-aligned playback evidence. */
 
 function declarePlaybackAudioSession(): void {
 	if (typeof navigator === "undefined") return;
@@ -16,7 +10,7 @@ const OUTPUT_RATE = 24_000;
 const MAX_QUEUED_SEGMENTS = 40;
 const MAX_QUEUED_CHARS = 10_000;
 
-export interface LfmPlayedReport {
+export interface PcmPlayedReport {
 	utterance: string;
 	playedMs: number;
 	playedSamples?: number;
@@ -29,7 +23,7 @@ export interface LfmPlayedReport {
 	issues?: string[];
 }
 
-export interface LfmUtteranceMetrics {
+export interface PcmUtteranceMetrics {
 	coldLoadMs: number | null;
 	ttsFirstPcmServerMs: number | null;
 	ttsFirstPcmClientMs: number | null;
@@ -89,34 +83,6 @@ export function decodeFramedPcm16(
 	return { epoch, samples };
 }
 
-export function formatLfmPlayedHistory(report: LfmPlayedReport): string {
-	let text = report.text.trim();
-	const build = (omitted = false): string => {
-		const body = text ? `${omitted ? "[Earlier played words omitted] " : ""}${text}` : "none";
-		const dot = /[.!?]$/.test(body) ? "" : ".";
-		if (report.playedMs <= 0) {
-			return "LFM TTS approximate played speech (0 ms, interrupted before playback): none. Generated text in chat was NOT played.";
-		}
-		if (report.uncertain) {
-			const stateLabel = report.complete ? "completed" : "interrupted";
-			return `LFM TTS approximate played speech (${report.playedMs} ms, ${stateLabel}; partial unhinted ASR, exact word boundary uncertain): ${body}${dot} Do not assume remaining generated text was heard.`;
-		}
-		if (!report.complete) {
-			return `LFM TTS approximate played speech (${report.playedMs} ms, interrupted; unhinted ASR, not verbatim): ${body}${dot} Remaining generated text in chat was NOT played.`;
-		}
-		return `LFM TTS approximate played speech (${report.playedMs} ms, playback completed; unhinted ASR, not verbatim): ${body}${dot}`;
-	};
-	let formatted = build(false);
-	while (
-		formatted.length > 16_000 ||
-		new TextEncoder().encode(JSON.stringify({ text: formatted })).length > 17_000
-	) {
-		text = text.slice(1024).trim();
-		formatted = build(true);
-	}
-	return formatted;
-}
-
 interface ActiveUtterance {
 	epoch: number;
 	id: string;
@@ -134,29 +100,19 @@ interface ActiveUtterance {
 	preroll: Float32Array[];
 	prerollSamples: number;
 	startedPlayback: boolean;
-	metrics: LfmUtteranceMetrics;
-	onReport: (report: LfmPlayedReport) => void;
+	metrics: PcmUtteranceMetrics;
+	onReport: (report: PcmPlayedReport) => void;
 }
 
-interface PendingReport {
-	utterance: string;
-	playedMs: number;
-	interrupted: boolean;
-	fallbackText: string;
-	onReport: (report: LfmPlayedReport) => void;
-	resolveWait: () => void;
-	timer: ReturnType<typeof setTimeout>;
-}
-
-export interface LfmTtsSpeakerCallbacks {
+export interface PcmTtsSpeakerCallbacks {
 	onStatus: (text: string) => void;
-	onPlaying: (metrics: LfmUtteranceMetrics) => void;
-	onMetrics?: (metrics: LfmUtteranceMetrics) => void;
+	onPlaying: (metrics: PcmUtteranceMetrics) => void;
+	onMetrics?: (metrics: PcmUtteranceMetrics) => void;
 	onIdle: () => void;
 	onError: (error: unknown) => void;
 }
 
-/** Normalised player transport. LFM uses a real WebSocket; Kokoro adapts HTTP. */
+/** Local adapter between HTTP synthesis streams and the PCM player. */
 export interface TtsTransport {
 	readyState: number;
 	bufferedAmount: number;
@@ -165,18 +121,18 @@ export interface TtsTransport {
 	onclose: (() => void) | null;
 	send(data: string): void;
 	close(): void;
-	playedPrefix?: (
+	playedPrefix: (
 		epoch: number,
 		samples: number,
 		interrupted: boolean,
 		truncated: boolean,
-	) => Omit<LfmPlayedReport, "utterance">;
+	) => Omit<PcmPlayedReport, "utterance">;
 }
 
-export class LfmTtsSpeaker {
+export class PcmTtsSpeaker {
 	private context: AudioContext | null = null;
 	private ws: TtsTransport | null = null;
-	private alignedReporter: TtsTransport["playedPrefix"];
+	private alignedReporter?: TtsTransport["playedPrefix"];
 	private wsReady = false;
 	private connecting = false;
 	private closed = false;
@@ -189,7 +145,6 @@ export class LfmTtsSpeaker {
 	private nextAt = 0;
 	private played = new PlayedAudioClock();
 	private finishTimer: ReturnType<typeof setTimeout> | null = null;
-	private pendingReports = new Map<number, PendingReport>();
 	private lastInterruptTickAt = -Infinity;
 
 	private readonly outputRate: number;
@@ -197,15 +152,14 @@ export class LfmTtsSpeaker {
 	private readonly maxUtteranceSamples: number;
 
 	constructor(
-		private readonly callbacks: LfmTtsSpeakerCallbacks,
-		private readonly wsUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/experiments/lfm-voice/ws?tts=1`,
-		private readonly transportOptions?: {
+		private readonly callbacks: PcmTtsSpeakerCallbacks,
+		private readonly transportOptions: {
 			create: () => TtsTransport;
 			label: string;
 			outputRate?: number;
 		},
 	) {
-		this.outputRate = transportOptions?.outputRate ?? OUTPUT_RATE;
+		this.outputRate = transportOptions.outputRate ?? OUTPUT_RATE;
 		this.prerollTarget = Math.round(this.outputRate * 0.1);
 		this.maxUtteranceSamples = this.outputRate * 180;
 	}
@@ -244,10 +198,9 @@ export class LfmTtsSpeaker {
 		this.ensureAudioContext();
 		this.connecting = true;
 		const gen = ++this.connGen;
-		const socket = (this.transportOptions?.create() ?? new WebSocket(this.wsUrl)) as TtsTransport;
-		if ("binaryType" in socket) socket.binaryType = "arraybuffer";
+		const socket = this.transportOptions.create();
 		this.ws = socket;
-		this.alignedReporter = this.ws.playedPrefix?.bind(this.ws);
+		this.alignedReporter = socket.playedPrefix.bind(socket);
 
 		socket.onmessage = (event) => {
 			if (gen !== this.connGen || this.closed) return;
@@ -263,14 +216,11 @@ export class LfmTtsSpeaker {
 			}
 			const type = msg.type;
 			if (type === "starting") {
-				if (!this.active)
-					this.callbacks.onStatus(`Loading ${this.transportOptions?.label ?? "Server4 LFM TTS"}…`);
+				if (!this.active) this.callbacks.onStatus(`Loading ${this.transportOptions.label}…`);
 			} else if (type === "ready") {
 				if (msg.protocol !== 3 || msg.tts !== 1 || msg.outputRate !== this.outputRate) {
 					this.failConnection(
-						new Error(
-							`${this.transportOptions?.label ?? "Server4 LFM TTS"} player protocol mismatch. Refresh ACB.`,
-						),
+						new Error(`${this.transportOptions.label} player protocol mismatch. Refresh ACB.`),
 					);
 					return;
 				}
@@ -304,35 +254,20 @@ export class LfmTtsSpeaker {
 					this.flushPreroll(true);
 					this.checkPlaybackComplete();
 				}
-			} else if (type === "played_prefix") {
-				const ep = typeof msg.epoch === "number" ? msg.epoch : -1;
-				const pending = this.pendingReports.get(ep);
-				if (!pending) return;
-				this.pendingReports.delete(ep);
-				clearTimeout(pending.timer);
-				const serverText = typeof msg.text === "string" ? msg.text : "";
-				pending.onReport({
-					utterance: pending.utterance,
-					playedMs: typeof msg.playedMs === "number" ? msg.playedMs : pending.playedMs,
-					text: serverText || pending.fallbackText,
-					complete: msg.complete === true && !pending.interrupted,
-					uncertain: msg.uncertain === true,
-				});
-				pending.resolveWait();
 			} else if (type === "error") {
 				this.failConnection(
-					new Error(typeof msg.message === "string" ? msg.message : "Server4 LFM TTS failed."),
+					new Error(
+						typeof msg.message === "string"
+							? msg.message
+							: `${this.transportOptions.label} failed.`,
+					),
 				);
 			}
 		};
 
 		socket.onerror = () => {
 			if (gen !== this.connGen || this.closed) return;
-			this.failConnection(
-				new Error(
-					"Cannot reach Server4 LFM TTS. Check your login/Server4 status, or explicitly choose legacy voice.",
-				),
-			);
+			this.failConnection(new Error(`Cannot reach ${this.transportOptions.label}.`));
 		};
 
 		socket.onclose = () => {
@@ -341,14 +276,13 @@ export class LfmTtsSpeaker {
 			this.ws = null;
 			this.wsReady = false;
 			this.connecting = false;
-			this.settleAllPendingOnDisconnect();
 			if (this.active) {
-				this.abortActiveLocally(true);
+				this.abortActiveLocally();
 			}
 			if (wasActive) {
 				this.callbacks.onError(
 					new Error(
-						"Server4 LFM TTS disconnected; Pi work continues. Send or speak again to reconnect.",
+						`${this.transportOptions.label} disconnected; Pi work continues. Send or speak again to reconnect.`,
 					),
 				);
 			}
@@ -366,15 +300,14 @@ export class LfmTtsSpeaker {
 		} catch {
 			/* ignore */
 		}
-		this.settleAllPendingOnDisconnect();
-		if (this.active) this.abortActiveLocally(true);
+		if (this.active) this.abortActiveLocally();
 		this.callbacks.onError(error);
 	}
 
 	beginUtterance(
 		utteranceId: string,
 		turnStartedAt: number,
-		onReport: (report: LfmPlayedReport) => void,
+		onReport: (report: PcmPlayedReport) => void,
 	): void {
 		if (this.closed) return;
 		if (this.active) {
@@ -418,7 +351,7 @@ export class LfmTtsSpeaker {
 		const utt = this.active;
 		if (!utt || this.closed || utt.endQueued) return;
 		const cleaned = text.trim();
-		if (!cleaned || (!this.transportOptions && !/[A-Za-z0-9]/.test(cleaned))) return;
+		if (!cleaned) return;
 		if (utt.segments >= MAX_QUEUED_SEGMENTS || utt.chars + cleaned.length > MAX_QUEUED_CHARS) {
 			utt.truncated = true;
 			utt.endQueued = true;
@@ -431,16 +364,12 @@ export class LfmTtsSpeaker {
 		const seq = utt.nextSeq++;
 		utt.segments++;
 		utt.chars += cleaned.length;
-		// Keep each wire segment <= 380 chars to respect server protocol cap (400).
-		const safeText =
-			cleaned.length > 380
-				? cleaned
-						.slice(0, 380)
-						.replace(/[\uD800-\uDBFF]$/, "")
-						.trimEnd()
-				: cleaned;
-		if (safeText !== cleaned && this.transportOptions) utt.truncated = true;
-		utt.queuedForSend.push({ seq, text: safeText });
+		const bounded = cleaned
+			.slice(0, 380)
+			.replace(/[\uD800-\uDBFF]$/, "")
+			.trimEnd();
+		if (bounded !== cleaned) utt.truncated = true;
+		utt.queuedForSend.push({ seq, text: bounded });
 		this.flushSendQueue();
 	}
 
@@ -451,7 +380,7 @@ export class LfmTtsSpeaker {
 		if (utt.segments === 0 && utt.queuedForSend.length === 0) {
 			// Nothing speakable was emitted (e.g. code-only or empty turn).
 			this.active = null;
-			this.requestPlayedPrefix(utt, 0, false, 0);
+			this.reportPlayback(utt, 0, false, 0);
 			this.callbacks.onIdle();
 			return;
 		}
@@ -604,70 +533,27 @@ export class LfmTtsSpeaker {
 		this.active = null;
 		this.played.reset();
 		this.nextAt = 0;
-		this.requestPlayedPrefix(finished, playedMs, false, playedSamples);
+		this.reportPlayback(finished, playedMs, false, playedSamples);
 		this.callbacks.onIdle();
 	}
 
-	private requestPlayedPrefix(
+	private reportPlayback(
 		utt: ActiveUtterance,
 		playedMs: number,
 		interrupted: boolean,
-		playedSamples?: number,
+		samples: number,
 	): void {
-		if (this.alignedReporter) {
-			const report = this.alignedReporter(
-				utt.epoch,
-				playedSamples ?? 0,
-				interrupted,
-				utt.truncated,
-			);
-			this.ws?.send(JSON.stringify({ type: interrupted ? "cancel" : "played", epoch: utt.epoch }));
-			utt.onReport({ ...report, utterance: utt.id });
-			return;
-		}
-		if (!utt.sentAny || !this.wsReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-			utt.onReport({
-				utterance: utt.id,
-				playedMs,
-				text: "",
-				complete: false,
-				uncertain: playedMs > 0,
-			});
-			return;
-		}
-		const timer = setTimeout(() => {
-			const pending = this.pendingReports.get(utt.epoch);
-			if (!pending) return;
-			this.pendingReports.delete(utt.epoch);
-			pending.onReport({
-				utterance: pending.utterance,
-				playedMs: pending.playedMs,
-				text: pending.fallbackText,
-				complete: false,
-				uncertain: pending.playedMs > 0,
-			});
-			pending.resolveWait();
-		}, 4_000);
-		this.pendingReports.set(utt.epoch, {
-			utterance: utt.id,
+		const report = this.alignedReporter?.(utt.epoch, samples, interrupted, utt.truncated) ?? {
 			playedMs,
-			interrupted,
-			fallbackText: "",
-			onReport: utt.onReport,
-			resolveWait: () => {},
-			timer,
-		});
-		this.ws.send(
-			JSON.stringify({
-				type: interrupted ? "cancel" : "played",
-				epoch: utt.epoch,
-				utterance: utt.id,
-				played_ms: playedMs,
-			}),
-		);
+			text: "",
+			complete: false,
+			uncertain: playedMs > 0,
+		};
+		this.ws?.send(JSON.stringify({ type: interrupted ? "cancel" : "played", epoch: utt.epoch }));
+		utt.onReport({ ...report, utterance: utt.id });
 	}
 
-	private abortActiveLocally(disconnected: boolean): void {
+	private abortActiveLocally(): void {
 		const utt = this.active;
 		if (!utt) return;
 		const clock = this.outputClock();
@@ -676,61 +562,11 @@ export class LfmTtsSpeaker {
 		this.stopAudioNodes();
 		this.played.reset();
 		this.active = null;
-		if (this.alignedReporter) {
-			this.requestPlayedPrefix(utt, playedMs, true, playedSamples);
-		} else if (disconnected) {
-			utt.onReport({
-				utterance: utt.id,
-				playedMs,
-				text: "",
-				complete: false,
-				uncertain: playedMs > 0,
-			});
-		} else {
-			this.requestPlayedPrefix(utt, playedMs, true);
-		}
-	}
-
-	private settleAllPendingOnDisconnect(): void {
-		for (const [ep, pending] of this.pendingReports) {
-			clearTimeout(pending.timer);
-			this.pendingReports.delete(ep);
-			pending.onReport({
-				utterance: pending.utterance,
-				playedMs: pending.playedMs,
-				text: pending.fallbackText,
-				complete: false,
-				uncertain: pending.playedMs > 0,
-			});
-			pending.resolveWait();
-		}
-	}
-
-	hasPendingReports(): boolean {
-		return this.pendingReports.size > 0;
+		this.reportPlayback(utt, playedMs, true, playedSamples);
 	}
 
 	get hasAudio(): boolean {
 		return Boolean(this.active) || this.nodes.size > 0;
-	}
-
-	/** Wait briefly (bounded) for any in-flight played-prefix report before dispatching a follow-up turn. */
-	async flushPendingReports(timeoutMs = 2_000): Promise<void> {
-		if (this.pendingReports.size === 0) return;
-		const waiters = [...this.pendingReports.values()].map(
-			(entry) =>
-				new Promise<void>((resolve) => {
-					const prev = entry.resolveWait;
-					entry.resolveWait = () => {
-						prev();
-						resolve();
-					};
-				}),
-		);
-		await Promise.race([
-			Promise.all(waiters),
-			new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-		]);
 	}
 
 	/** Freeze the output clock and scheduled PCM; incoming audio keeps its existing bounds. */
@@ -780,7 +616,7 @@ export class LfmTtsSpeaker {
 		}
 	}
 
-	/** Interrupt speech only; keeps Server4 TTS warm for the next utterance and never aborts Pi work. */
+	/** Interrupt speech only; keeps the local transport available and never aborts Pi work. */
 	stop(acknowledge = false): void {
 		const interruptedPlayback =
 			acknowledge && this.context?.state === "running" && this.played.isPlaying(this.outputClock());
@@ -789,19 +625,18 @@ export class LfmTtsSpeaker {
 			this.played.reset();
 			return;
 		}
-		this.abortActiveLocally(false);
+		this.abortActiveLocally();
 		if (interruptedPlayback) this.acknowledgeInterruption();
 	}
 
-	/** Release Server4 TTS WebSocket and GPU reservation (e.g. when tab hides or voice closes). */
+	/** Release the local synthesis transport (e.g. when tab hides or voice closes). */
 	disconnect(): void {
 		if (this.active) {
-			this.abortActiveLocally(true);
+			this.abortActiveLocally();
 		} else {
 			this.stopAudioNodes();
 			this.played.reset();
 		}
-		this.settleAllPendingOnDisconnect();
 		this.connGen++;
 		this.wsReady = false;
 		this.connecting = false;

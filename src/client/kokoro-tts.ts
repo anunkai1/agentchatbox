@@ -9,11 +9,11 @@ import {
 	type Zonos3Alignment,
 } from "../shared/kokoro.js";
 import {
-	type LfmPlayedReport,
-	LfmTtsSpeaker,
-	type LfmTtsSpeakerCallbacks,
+	type PcmPlayedReport,
+	PcmTtsSpeaker,
+	type PcmTtsSpeakerCallbacks,
 	type TtsTransport,
-} from "./lfm-tts.js";
+} from "./pcm-tts.js";
 
 const RATE = 24_000;
 const MAX_FRAME = 12_000_000;
@@ -240,7 +240,7 @@ export function completedKokoroWords(words: KokoroWord[], playedSamples: number)
 	return text.trim();
 }
 
-export function formatKokoroPlayedHistory(report: LfmPlayedReport): string {
+export function formatKokoroPlayedHistory(report: PcmPlayedReport): string {
 	const engineLabel = report.alignment === ZONOS3_ALIGNMENT ? "ZONOS3-Mini" : "Kokoro";
 	let text = report.text.trim();
 	const build = (omitted = false) => {
@@ -342,7 +342,7 @@ export class KokoroTtsTransport implements TtsTransport {
 		playedSamples: number,
 		interrupted: boolean,
 		truncated: boolean,
-	): Omit<LfmPlayedReport, "utterance"> {
+	): Omit<PcmPlayedReport, "utterance"> {
 		const ledger = this.ledgers.get(epoch);
 		const issues = [...(ledger?.issues ?? [])];
 		if (truncated)
@@ -567,18 +567,18 @@ export class KokoroTtsTransport implements TtsTransport {
 	}
 }
 
-export function createKokoroSpeaker(callbacks: LfmTtsSpeakerCallbacks): LfmTtsSpeaker {
-	return new LfmTtsSpeaker(callbacks, "", {
+export function createKokoroSpeaker(callbacks: PcmTtsSpeakerCallbacks): PcmTtsSpeaker {
+	return new PcmTtsSpeaker(callbacks, {
 		create: () => new KokoroTtsTransport(KOKORO_TTS_CONFIG),
 		label: KOKORO_TTS_CONFIG.label,
 	});
 }
 
 export function createZonosSpeaker(
-	callbacks: LfmTtsSpeakerCallbacks,
+	callbacks: PcmTtsSpeakerCallbacks,
 	speed: number | (() => number) = 1,
-): LfmTtsSpeaker {
-	return new LfmTtsSpeaker(callbacks, "", {
+): PcmTtsSpeaker {
+	return new PcmTtsSpeaker(callbacks, {
 		create: () => new KokoroTtsTransport(ZONOS3_TTS_CONFIG, speed),
 		label: ZONOS3_TTS_CONFIG.label,
 		outputRate: ZONOS3_TTS_CONFIG.sampleRate,

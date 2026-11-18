@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	decodeFramedPcm16,
-	formatLfmPlayedHistory,
-	type LfmPlayedReport,
-	LfmTtsSpeaker,
+	type PcmPlayedReport,
+	PcmTtsSpeaker,
 	PlayedAudioClock,
-} from "../src/client/lfm-tts.js";
+} from "../src/client/pcm-tts.js";
 
 function encodePcmFrame(epoch: number, samples: number[]): ArrayBuffer {
 	const buf = new ArrayBuffer(4 + samples.length * 2);
@@ -81,21 +80,30 @@ class FakeAudioContext {
 	destination = {};
 }
 
-class FakeWebSocket {
+class FakeTransport {
 	static OPEN = 1;
 	static CLOSED = 3;
-	static instances: FakeWebSocket[] = [];
+	static instances: FakeTransport[] = [];
 
-	readyState = FakeWebSocket.OPEN;
-	binaryType = "blob";
+	readyState = FakeTransport.OPEN;
 	bufferedAmount = 0;
 	sent: Array<Record<string, unknown>> = [];
-	onmessage: ((event: { data: unknown }) => void) | null = null;
+	onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null;
 	onerror: (() => void) | null = null;
 	onclose: (() => void) | null = null;
 
-	constructor(public readonly url: string) {
-		FakeWebSocket.instances.push(this);
+	constructor() {
+		FakeTransport.instances.push(this);
+	}
+
+	playedPrefix(_epoch: number, samples: number, interrupted: boolean, truncated: boolean) {
+		return {
+			text: samples ? "Fixture speech" : "",
+			playedMs: Math.floor(samples / 24),
+			playedSamples: samples,
+			complete: !interrupted && !truncated && samples > 0,
+			uncertain: truncated,
+		};
 	}
 
 	send(raw: string): void {
@@ -103,7 +111,7 @@ class FakeWebSocket {
 	}
 
 	close(): void {
-		this.readyState = FakeWebSocket.CLOSED;
+		this.readyState = FakeTransport.CLOSED;
 	}
 
 	receiveJson(payload: object): void {
@@ -115,12 +123,11 @@ class FakeWebSocket {
 	}
 }
 
-describe("LFM speech-only TTS client primitives", () => {
+describe("Aligned PCM synthesis player", () => {
 	beforeEach(() => {
 		FakeAudioContext.instances = [];
-		FakeWebSocket.instances = [];
+		FakeTransport.instances = [];
 		vi.stubGlobal("AudioContext", FakeAudioContext);
-		vi.stubGlobal("WebSocket", FakeWebSocket);
 		vi.stubGlobal("navigator", {});
 	});
 
@@ -129,15 +136,15 @@ describe("LFM speech-only TTS client primitives", () => {
 	});
 
 	it("ticks only when running TTS is audible, never for idle input or pending audio", () => {
-		const speaker = new LfmTtsSpeaker(
+		const speaker = new PcmTtsSpeaker(
 			{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: vi.fn() },
-			"wss://example.test/tts",
+			{ create: () => new FakeTransport(), label: "Test synth" },
 		);
 		speaker.stop(true);
 		expect(FakeAudioContext.instances).toHaveLength(0);
 		speaker.connect();
 		const ctx = FakeAudioContext.instances[0];
-		const ws = FakeWebSocket.instances[0];
+		const ws = FakeTransport.instances[0];
 		ws.receiveJson({ type: "ready", protocol: 3, tts: 1, outputRate: 24_000 });
 		speaker.stop(true); // Ordinary mic speech start / idle manual Interrupt.
 		expect(ctx.nodes).toHaveLength(0);
@@ -176,19 +183,20 @@ describe("LFM speech-only TTS client primitives", () => {
 		expect(ctx.nodes).toHaveLength(5);
 	});
 
-	it("reports zero playback exactly once when every segment is unspeakable", () => {
+	it("reports zero playback exactly once when nothing was synthesised", () => {
 		const onReport = vi.fn();
-		const speaker = new LfmTtsSpeaker(
+		const speaker = new PcmTtsSpeaker(
 			{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: vi.fn() },
-			"wss://example.test/tts",
+			{ create: () => new FakeTransport(), label: "Test synth" },
 		);
 		speaker.beginUtterance("empty-turn", 0, onReport);
-		speaker.enqueueSegment("...");
+		speaker.enqueueSegment(" ");
 		speaker.finishUtterance();
 		speaker.finishUtterance();
 		expect(onReport).toHaveBeenCalledExactlyOnceWith({
 			utterance: "empty-turn",
 			playedMs: 0,
+			playedSamples: 0,
 			text: "",
 			complete: false,
 			uncertain: false,
@@ -224,192 +232,35 @@ describe("LFM speech-only TTS client primitives", () => {
 		expect(decoded!.samples[2]).toBeCloseTo(-0.5, 3);
 	});
 
-	it("formats honest played-prefix history and bounds encoded payload bytes", () => {
-		expect(
-			formatLfmPlayedHistory({
-				utterance: "u0",
-				playedMs: 0,
-				text: "",
-				complete: false,
-				uncertain: false,
-			}),
-		).toContain("0 ms, interrupted before playback");
-
-		const interrupted = formatLfmPlayedHistory({
-			utterance: "u1",
-			playedMs: 1100,
-			text: "First sentence only",
-			complete: false,
-			uncertain: false,
-		});
-		expect(interrupted).toContain("1100 ms, interrupted; unhinted ASR, not verbatim");
-		expect(interrupted).toContain("Remaining generated text in chat was NOT played.");
-
-		const huge = formatLfmPlayedHistory({
-			utterance: "u2",
-			playedMs: 60000,
-			text: "word ".repeat(6000),
-			complete: false,
-			uncertain: true,
-		});
-		expect(huge).toContain("[Earlier played words omitted]");
-		expect(huge).toContain("exact word boundary uncertain");
-		expect(new TextEncoder().encode(JSON.stringify({ text: huge })).length).toBeLessThanOrEqual(
-			17_000,
+	it("fences stale frames when a new utterance replaces interrupted PCM", () => {
+		const onReport = vi.fn();
+		const speaker = new PcmTtsSpeaker(
+			{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: vi.fn() },
+			{ create: () => new FakeTransport(), label: "Test synth" },
 		);
-	});
-
-	it("schedules progressive PCM before utterance_done, fences stale epochs on interrupt, and flushes pending reports", async () => {
-		const statuses: string[] = [];
-		const reports: LfmPlayedReport[] = [];
-		let playingCount = 0;
-		const speaker = new LfmTtsSpeaker(
-			{
-				onStatus: (text) => statuses.push(text),
-				onPlaying: () => {
-					playingCount++;
-				},
-				onIdle: () => {},
-				onError: (err) => {
-					throw err;
-				},
-			},
-			"wss://agent.mavali.top/experiments/lfm-voice/ws?tts=1",
-		);
-
-		speaker.beginUtterance("utt-1", performance.now(), (r) => reports.push(r));
-		speaker.enqueueSegment("First sentence starts immediately.");
-		const ws = FakeWebSocket.instances[0];
-		ws.receiveJson({ type: "starting" });
-		expect(statuses).not.toContain("Error");
-		ws.receiveJson({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 740 });
-		expect(ws.sent).toEqual([
-			{
-				type: "speak",
-				epoch: 1,
-				utterance: "utt-1",
-				seq: 0,
-				text: "First sentence starts immediately.",
-			},
-		]);
-
-		// Send 6,000 samples (250 ms >= 240 ms preroll) BEFORE utterance_done:
-		// progressive playback must schedule immediately without waiting for full synthesis.
-		ws.receiveJson({ type: "first_pcm", epoch: 1, seq: 0, ttsFirstPcmMs: 58 });
-		ws.receiveBinary(encodePcmFrame(1, new Array(6000).fill(0.1)));
-		const ctx = FakeAudioContext.instances[0];
-		expect(ctx.nodes).toHaveLength(1);
-		expect(playingCount).toBe(1);
-
-		// Advance output clock by 120 ms into the scheduled buffer (starts at 1.025s -> 1.145s = 120ms), then interrupt.
-		ctx.outputStampTime = 1.145;
+		speaker.beginUtterance("old", 0, onReport);
+		const transport = FakeTransport.instances[0];
+		transport.receiveJson({ type: "ready", protocol: 3, tts: 1, outputRate: 24000 });
+		speaker.enqueueSegment("Old speech.");
+		transport.receiveBinary(encodePcmFrame(1, Array(4800).fill(0.1)));
 		speaker.stop();
-		expect(ctx.nodes[0].stopped).toBe(true);
-		expect(ws.sent.at(-1)).toEqual({
-			type: "cancel",
-			epoch: 1,
-			utterance: "utt-1",
-			played_ms: 120,
-		});
-		expect(speaker.hasPendingReports()).toBe(true);
-
-		// Stale binary frame from epoch 1 arriving after interrupt must be dropped, never scheduled.
-		ws.receiveBinary(encodePcmFrame(1, new Array(6000).fill(0.2)));
-		expect(ctx.nodes).toHaveLength(1);
-
-		const waitFlush = speaker.flushPendingReports(1000);
-		ws.receiveJson({
-			type: "played_prefix",
-			epoch: 1,
-			utterance: "utt-1",
-			playedMs: 120,
-			text: "First",
-			complete: false,
-			uncertain: false,
-		});
-		await waitFlush;
-		expect(speaker.hasPendingReports()).toBe(false);
-		expect(reports).toEqual([
-			{
-				utterance: "utt-1",
-				playedMs: 120,
-				text: "First",
-				complete: false,
-				uncertain: false,
-			},
-		]);
-
-		// Fresh follow-up utterance uses epoch 2 and completes cleanly even when shorter than preroll.
-		speaker.beginUtterance("utt-2", performance.now(), (r) => reports.push(r));
-		speaker.enqueueSegment("Short reply.");
-		speaker.finishUtterance();
-		ws.receiveBinary(encodePcmFrame(2, new Array(1200).fill(0.1))); // 50 ms (< 100 ms preroll)
-		expect(ctx.nodes).toHaveLength(1); // Still in preroll until utterance_done
-		ws.receiveJson({ type: "utterance_done", epoch: 2, utterance: "utt-2", truncated: false });
-		expect(ctx.nodes).toHaveLength(2); // Flushed on utterance_done!
-		ctx.outputStampTime = 5.0;
-		ctx.nodes[1].onended?.();
-		expect(ws.sent.at(-1)).toEqual({
-			type: "played",
-			epoch: 2,
-			utterance: "utt-2",
-			played_ms: 50,
-		});
-		ws.receiveJson({
-			type: "played_prefix",
-			epoch: 2,
-			utterance: "utt-2",
-			playedMs: 50,
-			text: "Short reply.",
-			complete: true,
-			uncertain: false,
-		});
-		expect(reports.at(-1)).toEqual({
-			utterance: "utt-2",
-			playedMs: 50,
-			text: "Short reply.",
-			complete: true,
-			uncertain: false,
-		});
-		speaker.close();
-	});
-
-	it("settles active playback as uncertain on unexpected WebSocket disconnect without throwing", () => {
-		const reports: LfmPlayedReport[] = [];
-		const errors: unknown[] = [];
-		const speaker = new LfmTtsSpeaker(
-			{
-				onStatus: () => {},
-				onPlaying: () => {},
-				onIdle: () => {},
-				onError: (err) => errors.push(err),
-			},
-			"wss://agent.mavali.top/experiments/lfm-voice/ws?tts=1",
+		expect(transport.sent.at(-1)).toEqual({ type: "cancel", epoch: 1 });
+		expect(onReport).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ utterance: "old", playedMs: 0, complete: false }),
 		);
-		speaker.beginUtterance("utt-drop", performance.now(), (r) => reports.push(r));
-		speaker.enqueueSegment("Interrupted by network drop.");
-		const ws = FakeWebSocket.instances[0];
-		ws.receiveJson({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 0 });
-		ws.receiveBinary(encodePcmFrame(1, new Array(6000).fill(0.1)));
-		FakeAudioContext.instances[0].outputStampTime = 1.125;
-		ws.onclose?.();
-		expect(errors).toHaveLength(1);
-		expect(reports).toEqual([
-			{
-				utterance: "utt-drop",
-				playedMs: 100,
-				text: "",
-				complete: false,
-				uncertain: true,
-			},
-		]);
+		speaker.beginUtterance("new", 0, vi.fn());
+		speaker.enqueueSegment("New speech.");
+		transport.receiveBinary(encodePcmFrame(1, Array(4800).fill(0.1)));
+		expect(FakeAudioContext.instances[0].nodes).toHaveLength(1);
+		transport.receiveBinary(encodePcmFrame(2, Array(4800).fill(0.1)));
+		expect(FakeAudioContext.instances[0].nodes).toHaveLength(2);
 		speaker.close();
 	});
 
 	it("suspends playback on pause without auto-resuming when new PCM arrives, then finishes after resume", async () => {
-		const reports: LfmPlayedReport[] = [];
+		const reports: PcmPlayedReport[] = [];
 		let idleCount = 0;
-		const speaker = new LfmTtsSpeaker(
+		const speaker = new PcmTtsSpeaker(
 			{
 				onStatus: () => {},
 				onPlaying: () => {},
@@ -420,7 +271,7 @@ describe("LFM speech-only TTS client primitives", () => {
 					throw err;
 				},
 			},
-			"wss://agent.mavali.top/experiments/lfm-voice/ws?tts=1",
+			{ create: () => new FakeTransport(), label: "Test synth" },
 		);
 		await speaker.pause();
 		const ctx = FakeAudioContext.instances[0];
@@ -429,7 +280,7 @@ describe("LFM speech-only TTS client primitives", () => {
 		speaker.beginUtterance("utt-paused", performance.now(), (r) => reports.push(r));
 		speaker.enqueueSegment("Spoken after resume.");
 		speaker.finishUtterance();
-		const ws = FakeWebSocket.instances[0];
+		const ws = FakeTransport.instances[0];
 		ws.receiveJson({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 0 });
 		ws.receiveBinary(encodePcmFrame(1, new Array(6000).fill(0.1)));
 		ws.receiveJson({ type: "utterance_done", epoch: 1, utterance: "utt-paused", truncated: false });
@@ -447,9 +298,10 @@ describe("LFM speech-only TTS client primitives", () => {
 		expect(ws.sent.at(-1)).toEqual({
 			type: "played",
 			epoch: 1,
-			utterance: "utt-paused",
-			played_ms: 250,
 		});
+		expect(reports).toEqual([
+			expect.objectContaining({ utterance: "utt-paused", playedSamples: 6000, complete: true }),
+		]);
 		expect(idleCount).toBe(1);
 		speaker.close();
 	});

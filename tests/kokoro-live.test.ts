@@ -6,13 +6,13 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import express from "express";
 import { expect, it, vi } from "vitest";
-import { LfmRelay, VOICE_CONTEXT } from "../extensions/voice-test/lfm.js";
+import { RelayVoiceJournal, VOICE_CONTEXT } from "../extensions/voice-test/relay-voice.js";
 import {
 	formatKokoroPlayedHistory,
 	KokoroFrames,
 	KokoroTtsTransport,
 } from "../src/client/kokoro-tts.js";
-import { type LfmPlayedReport, LfmTtsSpeaker } from "../src/client/lfm-tts.js";
+import { type PcmPlayedReport, PcmTtsSpeaker } from "../src/client/pcm-tts.js";
 import { createTtsRouter } from "../src/server/tts.js";
 import { KOKORO_ALIGNMENT } from "../src/shared/kokoro.js";
 
@@ -82,7 +82,7 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 				}
 			},
 		);
-		let speaker: LfmTtsSpeaker | undefined;
+		let speaker: PcmTtsSpeaker | undefined;
 		try {
 			const response = await fetch(endpoint, {
 				method: "POST",
@@ -100,21 +100,20 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 				startSample: 8400,
 				endSample: 15000,
 			});
-			let report: LfmPlayedReport | undefined;
+			let report: PcmPlayedReport | undefined;
 			let playing!: () => void;
 			let failed!: (error: unknown) => void;
 			const began = new Promise<void>((resolve, reject) => {
 				playing = resolve;
 				failed = reject;
 			});
-			speaker = new LfmTtsSpeaker(
+			speaker = new PcmTtsSpeaker(
 				{
 					onStatus() {},
 					onPlaying: playing,
 					onIdle() {},
 					onError: failed,
 				},
-				"",
 				{ create: () => new KokoroTtsTransport(endpoint), label: "Server2 Kokoro" },
 			);
 			speaker.beginUtterance("live-kokoro-turn", 0, (value) => {
@@ -138,7 +137,7 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 					manager.appendCustomEntry(type, structuredClone(data)),
 				sendUserMessage: vi.fn(),
 			};
-			const voice = new LfmRelay(pi as never, vi.fn(), vi.fn());
+			const voice = new RelayVoiceJournal(pi as never, vi.fn(), vi.fn());
 			const ctx = { sessionManager: manager, isIdle: () => true };
 			const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
 			await voice.handle(
@@ -162,10 +161,9 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 			// fabricate a monetary value or lose the surrounding known history.
 			speaker.close();
 			const unavailable = vi.fn();
-			let uncertain: LfmPlayedReport | undefined;
-			speaker = new LfmTtsSpeaker(
+			let uncertain: PcmPlayedReport | undefined;
+			speaker = new PcmTtsSpeaker(
 				{ onStatus() {}, onPlaying() {}, onIdle() {}, onError: unavailable },
-				"",
 				{ create: () => new KokoroTtsTransport(endpoint), label: "Server2 Kokoro" },
 			);
 			speaker.beginUtterance("unreliable-price", 0, (value) => {
@@ -191,10 +189,9 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 			);
 			expect(voice.history()).toContain("UNKNOWN_WORDS");
 			speaker.close();
-			let bracket: LfmPlayedReport | undefined;
-			speaker = new LfmTtsSpeaker(
+			let bracket: PcmPlayedReport | undefined;
+			speaker = new PcmTtsSpeaker(
 				{ onStatus() {}, onPlaying() {}, onIdle() {}, onError: unavailable },
-				"",
 				{ create: () => new KokoroTtsTransport(endpoint), label: "Server2 Kokoro" },
 			);
 			speaker.beginUtterance("omitted-bracket", 0, (value) => {

@@ -2,8 +2,8 @@
 
 This package also loads **[Relay](RELAY.md)** (`/relay`), the separate resumable
 full-access voice agent with direct tools and delegation. Relay now defaults to
-Server4 LFM speech with approximate played-prefix interruption history; Pi keeps
-work ownership, and speech interruption does not abort tools/workers. Legacy
+Server2 ZONOS3-Mini with synthesis-aligned playback evidence; Pi keeps work
+ownership, and speech interruption does not abort tools or workers. Legacy
 STT/Kokoro remains explicitly selectable. The prototype below remains unchanged
 and tool-free; its speech/cancellation description does not describe default Relay.
 

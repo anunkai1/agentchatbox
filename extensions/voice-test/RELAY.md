@@ -19,8 +19,7 @@ integration or standing proactive mandate is installed.
    and thinking selection for its tracked worker, rather than Global's default for
    newly opened chats. Relay's own direct work runs on the conversation model;
    additional workers use the normal delegation tools' model-selection behaviour.
-2. The panel shows **Answers & tools: DeepSeek Flash · thinking off** (or **Pi
-   work** for the original conversational LFM engine) and a separate **Delegated
+2. The panel shows **Answers & tools: DeepSeek Flash · thinking off** and a separate **Delegated
    work** model/thinking line. Conversation uses
    `venice/deepseek-v4-1-flash-1017`; work uses the captured ACB selection. Workers
    use native Pi, not the originating chat's `/cc` mode.
@@ -30,19 +29,12 @@ integration or standing proactive mandate is installed.
    sentences → Server2 `zonos-relay-tts` (loopback 8184, neutral `Savannah` voice,
    44.1 kHz PCM16) via `/api/tts/zonos-relay-stream` with Layer-7 word-alignment
    timings (`X-Zonos-Alignment: zonos3-probe-v1`). No Server4, GPU voice session
-   or ASR listen-back is used in this mode. Saved explicit `kokoro`, `server4`,
-   `lfm-tts` and `legacy` selections are preserved.
+   or ASR listen-back is used. Saved `kokoro` and `legacy` selections are preserved.
+   A saved retired `server4` or `lfm-tts` selection changes to `zonos3` on opening
+   voice. This updates only the device preference, not the saved conversation.
    **Use Pi + Server2 Kokoro (aligned)** (`"kokoro"`, or `/relay kokoro`)
    explicitly selects Server2 Kokoro (loopback 8181, 24 kHz) via
    `/api/tts/relay-stream` with synthesis-token timings (`kokoro-pred-dur-v1`).
-   **Use Server4 LFM voice** (`"server4"`, or `/relay server4`) keeps the embedded
-   voice panel; start conversation, allow the microphone and wait for Listening.
-   Server4 must be awake with its GPU free. Headphones help in all modes.
-   **Use Pi + LFM TTS (speech-only)** (`"lfm-tts"`, or `/relay lfm-tts`) uses
-   local browser Silero VAD + `/api/transcribe` (Server2 Fluid Speech Pro STT) → full-access
-   Pi/DeepSeek → rendered `SpokenMarkdown` sentence streaming → progressive 24 kHz
-   PCM synthesis from Server4 LFM `POST /tts` over `/experiments/lfm-voice/ws?tts=1`,
-   without LFM interpreting requests, routing tools or rewriting answers.
    **Use legacy STT/Kokoro** (`"legacy"`, or `/relay legacy`) explicitly selects
    the older speech path without Server4 GPU dependency. This device remembers
    the explicit choice without silently migrating saved sessions or falling back.
@@ -55,7 +47,7 @@ integration or standing proactive mandate is installed.
    duplicate permission requests. **Pause voice** / **Resume voice** (in
    browser-STT Relay modes and on the collapsed strip) mutes the microphone and
    suspends voice playback without discarding unsent speech or stopping Pi work.
-   Streaming/Server4 modes label speech interruption
+   Aligned ZONOS3-Mini/Kokoro modes label speech interruption
    **Stop speaking**, separate from **Stop current Pi turn** and the tracked job's
    **Cancel work job** (only shown when a tracked job exists). **End voice** /
    **Close Relay** stay usable even if connection setup fails. Controls sit in a
@@ -65,7 +57,8 @@ integration or standing proactive mandate is installed.
    and **End voice**. Press **R** or the strip to reopen controls. There is no second transcript or text box: recognised
    speech, typed input, streamed full answers and tool activity share the normal
    chat timeline and connection. Played-speech evidence is separate and collapsible:
-   synthesis-aligned in Kokoro, approximate ASR in LFM. Neither replaces the full saved answer. Reading earlier messages does
+   synthesis-aligned in ZONOS3-Mini and Kokoro. Older labelled playback evidence
+   stays as saved. None replaces the full answer. Reading earlier messages does
    not pull the page away. Legacy **Interrupt** retains its existing direct-turn
    abort behaviour.
    Browser STT modes allow about 0.5 seconds of quiet before recognition. If you
@@ -93,18 +86,11 @@ integration or standing proactive mandate is installed.
    ask only when scope or destination is genuinely unclear.
 4. Talk while the worker runs. Ask for status or send further instructions.
    Worker reports wake Relay; needs-input questions come back to this chat.
-5. In **Pi + Server2 ZONOS3-Mini**, **Pi + Server2 Kokoro**, **Server4 LFM voice** and **Pi + LFM TTS (speech-only)** modes, speaking
-   over a reply or **Interrupt** stops speech only: **Pi direct tools and workers
-   continue**. In `Pi + LFM TTS (speech-only)`, the full formatted Markdown reply
-   stays visible in chat while Server4's CPU Fluid Speech Pro transcribes only
-   the output-clock-played PCM slice with no text prompt hints (`played_prefix`),
-   recording honest approximate played speech in Pi without overwriting the saved
-   chat reply. Use **Stop current Pi turn** to explicitly abort the active Pi
-   coordinator turn; queued voice requests and delegated workers may continue, and
-   completed external effects remain. End/hide/close releases microphone and
-   Server4's GPU, not Pi work. The embedded Server4 LFM voice panel still requires
-   a deliberate restart. If using a Server4 mode, wait a few seconds for the old
-   children to exit before restarting voice; GPU contention fails explicitly.
+5. In **Pi + Server2 ZONOS3-Mini** and **Pi + Server2 Kokoro**, speaking over a
+   reply or **Stop speaking** stops speech only: Pi direct tools and workers
+   continue. **Stop current Pi turn** explicitly aborts the active Pi turn;
+   queued voice requests and workers may continue. Completed effects remain.
+   End/hide/close releases the microphone without cancelling Pi work.
    **Legacy mode differs:** its Interrupt or new speech can abort the current Pi
    direct turn, though delegated workers survive. Hiding, losing the connection,
    or stopping the microphone does not abort Pi. Closing voice or
@@ -125,7 +111,7 @@ integration or standing proactive mandate is installed.
 
 ## Formatted replies and speech
 
-Normal Relay's aligned ZONOS3-Mini, aligned Kokoro, legacy Kokoro and Pi + LFM TTS routes render Markdown before
+Normal Relay's aligned ZONOS3-Mini, aligned Kokoro, and legacy Kokoro routes render Markdown before
 sentence splitting. Headings, emphasis, lists and links stay formatted in the
 panel, while synthesis receives readable prose rather than literal Markdown
 markers or link destinations. Split/incomplete formatting is buffered. A later
@@ -169,9 +155,8 @@ Known completed tokens before and after that gap remain available; queued unknow
 chunks do not taint a prefix that has not reached them. Unknown markers are
 annotations, not claimed speech or confirmations. Invalid protocol/sample ranges,
 wrong submitted input or malformed audio still fail safely and preserve prior
-playback evidence. Read full chat for any unknown value. `/relay kokoro` or
-`/relay lfm-tts` are one-step reversions; `/relay zonos3` returns without changing
-the saved conversation.
+playback evidence. Read full chat for any unknown value. `/relay kokoro` selects the local fallback;
+`/relay zonos3` returns without changing the saved conversation.
 
 Manual check: request `Hello world.`, interrupt between the end of `Hello` and
 `world`, and inspect the collapsible played record. Only `Hello` should remain,
@@ -184,12 +169,11 @@ claim an acoustic/headphone check.
 ## Isolated streaming trial
 
 `/relaytrial` opens **Trial A — streaming Pi voice**: local STT → the same
-full-access Pi/DeepSeek Relay → sentence-streamed Kokoro (default) or **Use LFM
-TTS (speech-only)** (`/relaytrial lfm-tts`, persisted separately in
-`acb-relay-trial-engine`). It starts speech while Pi is still generating, without
-LFM interpreting the completed answer. It has its own saved session
-(`acb-relay-trial-stream-session`) and does not change the normal Relay session
-or remembered voice engine.
+full-access Pi/DeepSeek Relay → sentence-streamed **ZONOS3-Mini** (default) or
+**Kokoro** (`/relaytrial kokoro`). It begins speaking while Pi is still generating.
+Its saved choice (`acb-relay-trial-engine`) and session (`acb-relay-trial-stream-session`)
+are independent of normal Relay. A saved retired trial engine changes to ZONOS3-Mini
+on opening without changing either chat ID.
 
 The speech path renders Markdown before sentence splitting, so headings, list
 markers, emphasis and link destinations are not read as formatting characters,
@@ -203,26 +187,22 @@ Pi turn** is the explicit coordinator abort; **Cancel work job** remains separat
 After an interruption, further output from that ongoing turn stays muted until
 a new owner turn. Restored history is never replayed as speech.
 
-In Kokoro trial mode, playback evidence records segments whose scheduled audio
-finished, marking a cut segment as uncertain; it needs no Server4 GPU. In LFM
-TTS trial mode, active speech reserves Server4's GPU over `/ws?tts=1` and records
-unhinted Fluid Speech Pro approximate played words from the output-clock slice.
-Neither mode adds semantic turn detection, eliminates STT/ASR mistakes, guarantees
-voice timbre continuity across independent `/tts` calls, or proves acoustic hearing.
+Kokoro trial evidence records finished segments and marks cuts uncertain. ZONOS3-Mini
+uses the synthesis-aligned playback evidence above. Neither proves acoustic hearing.
 
 ## Ownership and persistence
 
-- `relay.ts` and `lfm.ts` own model selection, voice policy, tools and lifecycle in Pi. It uses the
+- `relay.ts` and `relay-voice.ts` own model selection, voice policy, tools and lifecycle in Pi. It uses the
   **native Pi agent loop**, normal user/assistant/tool messages and compaction,
   not a second conversation/task framework.
 - `acb-relay-state` custom entries in that same Pi session hold the captured work
   model, associated worker ID and uncertain-submission flags. Turn/action entries
   prevent repeated accepted commands. Before network side effects, checkpoints
   flush the existing session journal and its directory; there is no new database.
-- LFM recognised/typed input and approximate played speech are custom entries in
+- Recognised input and labelled playback evidence are custom entries in
   the same Pi session. The first actual utterance materialises it through the
-  guarded session-manager API without launching Pi work. Each no-argument
-  `relay_request` forwards only its separately recognised owner text, journalled
+  guarded session-manager API without launching Pi work. Each
+  `voice-request` forwards only its separately captured owner text, journalled
   and fsynced before dispatch. A queue holds up to eight requests while Pi is busy;
   completed duplicates return the stored result, pending duplicates do not repeat
   work, and unfinished journals restored after restart remain uncertain.
@@ -282,29 +262,6 @@ Existing docs are the map; live checks establish present facts.
 **Default:** Server2 STT → Pi → ZONOS3-Mini synthesis-aligned speech, as detailed above;
 no Server4 voice/GPU session and no audio ASR listen-back.
 
-**Optional Server4 voice:** LFM3-Audio-2B speech understanding/generation and CPU Fluid Speech Pro ONNX (`int8`)
-run on Server4. Fluid Speech Pro separately recognises owner input for Pi and aligns actual
-output audio for approximate played-prefix history. Every owner utterance routes
-through `relay_request` to Pi (`local_chat` is disabled so LFM never guesses
-capabilities or facts on its own). `relay_request` takes no arguments; unknown
-calls or model-written instructions are rejected. The Server4 transport has no
-work credentials or tools.
-
-Pi supplies policy/configuration over existing `/api/chat`. A same-origin,
-source-window-checked iframe carries audio through the existing authenticated
-`/experiments/lfm-voice/` transport; no new ACB listener/model endpoint. Pi results
-and worker reports return as native tool output, with further tools disabled for
-narration. Reports queue behind owner speech; they cannot authorise work. Long Pi
-answers are referred to the full saved chat rather than silently clipped for speech.
-
-Every Start refreshes bounded recent recognised/acknowledged played context and
-Pi work evidence. Reopening does not replay audio or work, reconstruct every
-native audio turn, or guarantee the last unacknowledged words were saved. The
-original Server4 conversational voice connection has 30-second input/30-turn/10-minute
-limits (separate from browser-STT Relay's two-minute input bound); ending it does not
-end Pi work. It reserves Server4's GPU: Qwen/local image work cannot coexist.
-Choose cloud work or end voice/use ZONOS3-Mini or Kokoro before work needing that GPU.
-
 **Legacy** shares `/voicetest`'s STT, Silero VAD and sentence-streamed Kokoro.
 `/voicetest` itself is unchanged. Text context/direct tools go to Venice and
 delegated context to the selected worker provider; even local voice history may
@@ -313,12 +270,11 @@ still apply. Raw audio is not archived. Recognised text, labelled playback evide
 normal Pi transcripts, checkpoints and worker reports persist in ordinary private
 sessions, with no automatic expiry; backups may retain deleted sessions. Generated
 text is not proof of playback or acoustic hearing. Closing is not a summary request.
-The standalone LFM page remains tool-free and does not save conversations.
 
 ## Checks
 
-- `tests/lfm-relay.test.ts`: voice-only saving without work, current configuration,
-  no-argument policy, request journalling/deduplication/queues, uncertain restart,
+- `tests/relay-voice.test.ts`: voice-only saving without work, request
+  journalling/deduplication/queues, uncertain restart,
   report/abort handling and explicit long-answer deferral.
 - `tests/relay.test.ts`: native-file persistence/restoration, work model selection,
   one-job identity, uncertain starts/follow-ups, duplicate turns, report authority,
@@ -328,9 +284,8 @@ The standalone LFM page remains tool-free and does not save conversations.
   cover process groups and conservative restart handling.
 - `tests/ui-smoke.test.ts`: real browser bundle with fixture wire events, separate
   socket, native streamed replies, saved history without speech/work replay,
-  resume/new conversation, explicit cancellation, local/legacy selection,
-  fresh voice configuration, source-window checks and no Pi abort/Kokoro request
-  from local Interrupt (while explicit Stop current Pi turn sends a single abort). Shared voice tests initialise
+  resume/new conversation, migration without changing chats, engine selection,
+  speech-only interruption and explicit Pi stop. Shared voice tests initialise
   actual local Silero assets with synthetic audio, never the real microphone.
 - Live functional checks should use an isolated loopback server/session/record
   store and harmless temporary fixtures; suppress test Telegram delivery. Verify
