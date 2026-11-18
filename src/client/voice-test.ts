@@ -24,6 +24,7 @@ import {
 	type RelayVoiceEngine,
 	resolveRelayVoiceEngine,
 } from "./relay-voice-engine.js";
+import { createRelayWakeLock } from "./relay-wake-lock.js";
 import { type RelayChatBinding, services } from "./services.js";
 import { SpokenMarkdown } from "./spoken-markdown.js";
 import { state } from "./state.js";
@@ -124,6 +125,9 @@ export function openVoiceTest(
 		return;
 	}
 	const attached = relay && !streamTrial;
+	// The Server4 iframe owns its own Start/Stop and must not be auto-started by ACB.
+	const foregroundRelay = attached && !localVoice;
+	const setWakeLock = foregroundRelay ? createRelayWakeLock() : undefined;
 	useLfmTts = relay && !localVoice && useLfmTts;
 	useKokoroTts = relay && !localVoice && !streamTrial && useKokoroTts;
 	useZonosTts = relay && !localVoice && !streamTrial && !useKokoroTts && useZonosTts;
@@ -371,6 +375,8 @@ export function openVoiceTest(
 	let transportReady = false;
 	let extensionAvailable = false;
 	let startSent = false;
+	let relayStarted = false;
+	let foregroundPending = foregroundRelay && document.visibilityState !== "visible";
 	let currentTurn = "";
 	let relaySpeech = new SpokenMarkdown(!useZonosTts);
 	let relayMessage = "";
@@ -385,7 +391,9 @@ export function openVoiceTest(
 	let stopCapture: ConversationCapture | null = null;
 	let sttController: AbortController | null = null;
 	let closeTimer: ReturnType<typeof setTimeout> | null = null;
-	let micPending = false;
+	let captureAttempt: AbortController | null = null;
+	let micWanted = false;
+	let retriedMic = false;
 	let voicePaused = false;
 	let pausePending = false;
 	let pausedSpeechMessage = "";
@@ -402,6 +410,8 @@ export function openVoiceTest(
 			);
 	const connected = () =>
 		attached ? Boolean(binding?.isOpen()) : socket?.readyState === WebSocket.OPEN;
+	const foregroundBlocked = () =>
+		foregroundRelay && (foregroundPending || document.visibilityState !== "visible");
 	const sendWire = (message: ClientMessage): boolean => {
 		if (
 			attached &&
@@ -418,24 +428,40 @@ export function openVoiceTest(
 			localVoice ? "Server4 voice" : (micState.textContent ?? "Microphone off"),
 		);
 	const renderMic = () => {
-		start.disabled = !ready || ending || micPending || voicePaused || pausePending;
-		pause.disabled = !ready || ending || micPending || pausePending;
+		start.disabled =
+			!ready ||
+			ending ||
+			Boolean(captureAttempt) ||
+			voicePaused ||
+			pausePending ||
+			foregroundPending;
+		pause.disabled =
+			!ready || ending || Boolean(captureAttempt) || pausePending || foregroundPending;
+		setWakeLock?.(
+			Boolean(stopCapture) &&
+				!voicePaused &&
+				!foregroundPending &&
+				!ending &&
+				document.visibilityState === "visible",
+		);
 		pause.textContent = voicePaused ? "Resume voice" : "Pause voice";
 		pause.setAttribute("aria-pressed", String(voicePaused));
 		drawer?.setPause(voicePaused, pause.disabled);
-		start.textContent = micPending
-			? "Starting microphone…"
-			: stopCapture
-				? "Stop microphone"
-				: "Start microphone";
-		start.setAttribute("aria-pressed", String(Boolean(stopCapture)));
-		micState.textContent = micPending
-			? "Microphone starting…"
-			: voicePaused && stopCapture
-				? "Microphone muted"
+		start.textContent =
+			captureAttempt && !captureAttempt.signal.aborted
+				? "Starting microphone…"
 				: stopCapture
-					? "Microphone on"
-					: "Microphone off";
+					? "Stop microphone"
+					: "Start microphone";
+		start.setAttribute("aria-pressed", String(Boolean(stopCapture)));
+		micState.textContent =
+			captureAttempt && !captureAttempt.signal.aborted
+				? "Microphone starting…"
+				: voicePaused && stopCapture
+					? "Microphone muted"
+					: stopCapture
+						? "Microphone on"
+						: "Microphone off";
 		micState.dataset.active = String(Boolean(stopCapture) && !voicePaused);
 		syncDrawer();
 	};
@@ -560,6 +586,7 @@ export function openVoiceTest(
 		stopCapture?.discard();
 	};
 	const releaseMic = () => {
+		captureAttempt?.abort();
 		discardInput();
 		stopCapture?.close();
 		stopCapture = null;
@@ -577,6 +604,7 @@ export function openVoiceTest(
 		if (ending) return;
 		ending = true;
 		voiceActive = false;
+		micWanted = false;
 		releaseMic();
 		speaker?.stop();
 		lfmSpeaker?.disconnect();
@@ -617,9 +645,36 @@ export function openVoiceTest(
 		dispose();
 		closeSocket();
 	};
+	const retireLocalSpeech = (disconnect = false) => {
+		// Retire the interrupted turn locally. Do not abort Pi or replay audio/capture.
+		currentTurn = relayMessage = lfmStartedUtterance = pausedSpeechMessage = "";
+		speaker?.stop();
+		if (disconnect) lfmSpeaker?.disconnect();
+		else lfmSpeaker?.stop();
+	};
+	const suspendForeground = () => {
+		foregroundPending = true;
+		releaseMic();
+		retireLocalSpeech(true);
+	};
 	const visibility = () => {
-		// Never leave a hidden tab listening or holding Server4's GPU; resuming needs another click.
+		if (ending) return;
+		if (foregroundRelay) {
+			if (document.visibilityState !== "visible") {
+				suspendForeground();
+				sayStatus("Microphone off while tab is hidden; Pi work continues.");
+			} else if (foregroundPending) {
+				retriedMic = false;
+				sayStatus("Restoring Relay connection…");
+				// Wait for a round trip before capturing again. If the socket died while
+				// frozen, the normal chat client's foreground watchdog reattaches it.
+				if (transportReady && connected()) sendWire({ type: "getCapabilities" });
+			}
+			return;
+		}
+		// Test/trial and the external iframe keep their existing manual restart.
 		if (document.visibilityState === "hidden") {
+			micWanted = false;
 			if (voicePaused || pausePending) {
 				voicePaused = true;
 				pauseNotice = "Paused — tab hidden; unsent speech and playback cleared.";
@@ -639,12 +694,15 @@ export function openVoiceTest(
 			closeSocket();
 		}
 	}, 20_000);
-	const watchdog = setInterval(() => {
-		if (Date.now() - lastWireAt > 45_000 && !ending) {
-			fail(new Error("Connection lost; microphone stopped. Reopen the test to continue."));
-			end();
-		}
-	}, 5_000);
+	// Attached Relay already has the chat client's liveness watchdog and reattach.
+	const watchdog = foregroundRelay
+		? undefined
+		: setInterval(() => {
+				if (Date.now() - lastWireAt > 45_000 && !ending) {
+					fail(new Error("Connection lost; microphone stopped. Reopen the test to continue."));
+					end();
+				}
+			}, 5_000);
 	window.addEventListener("pagehide", unload);
 	document.addEventListener("visibilitychange", visibility);
 	if (attached)
@@ -660,7 +718,7 @@ export function openVoiceTest(
 			reveal: () => drawer?.reveal(),
 			end: () => modal.dismiss(),
 			prepareTyped: () => {
-				if (!ready || ending || !connected()) return false;
+				if (!ready || ending || foregroundPending || !connected()) return false;
 				discardInput();
 				cancelAudio();
 				endedAt = performance.now();
@@ -713,7 +771,8 @@ export function openVoiceTest(
 	}
 
 	pause.onclick = async () => {
-		if (!ready || ending || pausePending || micPending) return;
+		if (!ready || ending || pausePending || captureAttempt || foregroundPending) return;
+		const capture = stopCapture;
 		pausePending = true;
 		const resuming = voicePaused;
 		voicePaused = !resuming;
@@ -730,43 +789,67 @@ export function openVoiceTest(
 		sayStatus(resuming ? "Resuming voice…" : pauseNotice);
 		try {
 			if (resuming) {
-				await stopCapture?.resume();
-				if (ending || dismissed || document.visibilityState === "hidden") return;
-				await Promise.all([speaker?.resume(), lfmSpeaker?.resume()]);
+				await Promise.all([capture?.resume(), speaker?.resume(), lfmSpeaker?.resume()]);
 			} else {
-				await Promise.all([stopCapture?.pause(), speaker?.pause(), lfmSpeaker?.pause()]);
+				await Promise.all([capture?.pause(), speaker?.pause(), lfmSpeaker?.pause()]);
 			}
-			if (!ending && !dismissed)
+			if (!ending && !foregroundPending)
 				sayStatus(stopCapture ? "Listening…" : "Ready — start the microphone or send text");
 		} catch (error) {
+			if (ending || foregroundPending || stopCapture !== capture) return;
 			voicePaused = true;
 			speaker?.stop();
 			lfmSpeaker?.stop();
-			await stopCapture?.pause().catch(() => {});
+			await capture?.pause().catch(() => {});
 			fail(error);
 		} finally {
 			pausePending = false;
 			renderMic();
+			void startMicrophone();
 		}
 	};
-	start.onclick = async () => {
+	start.onclick = () => {
 		if (stopCapture) {
+			micWanted = false;
 			releaseMic();
-			cancelAudio();
+			if (foregroundRelay) {
+				relayMuted = true;
+				retireLocalSpeech();
+			} else cancelAudio();
 			sayStatus("Microphone stopped");
 			return;
 		}
-		if (micPending || ending) return;
-		micPending = true;
+		micWanted = true;
+		retriedMic = false;
+		void startMicrophone();
+	};
+	async function startMicrophone(): Promise<void> {
+		if (
+			!micWanted ||
+			stopCapture ||
+			captureAttempt ||
+			!ready ||
+			!connected() ||
+			ending ||
+			voicePaused ||
+			pausePending ||
+			foregroundPending ||
+			document.visibilityState !== "visible"
+		)
+			return;
+		const attempt = new AbortController();
+		captureAttempt = attempt;
 		renderMic();
 		sayStatus("Starting microphone — allow access if asked…");
 		try {
 			const stop = await captureConversation(
 				() => {
+					if (foregroundBlocked()) return;
 					cancelAudio(true);
 					sayStatus("Hearing speech — keep talking…");
 				},
 				(turn) => {
+					if (foregroundBlocked()) return;
 					const { audio } = turn;
 					const controller = new AbortController();
 					// This replacement snapshot includes ALL unsubmitted segments.
@@ -788,6 +871,8 @@ export function openVoiceTest(
 							if (
 								controller.signal.aborted ||
 								voicePaused ||
+								foregroundPending ||
+								document.visibilityState !== "visible" ||
 								!ready ||
 								!connected() ||
 								ending ||
@@ -808,24 +893,53 @@ export function openVoiceTest(
 						});
 				},
 				(error) => {
+					micWanted = false;
 					releaseMic();
 					fail(error);
 				},
 				relay ? 120 : 30,
+				{
+					signal: attempt.signal,
+					onInterrupted: foregroundRelay
+						? () => {
+								releaseMic();
+								retireLocalSpeech();
+								if (!retriedMic && !voicePaused) {
+									retriedMic = true;
+									void startMicrophone();
+								} else if (!voicePaused) {
+									micWanted = false;
+									sayStatus("Microphone interrupted. Tap Start microphone to retry.");
+								}
+							}
+						: undefined,
+				},
 			);
-			if (ending || dismissed || document.visibilityState === "hidden") stop.close();
+			if (
+				attempt.signal.aborted ||
+				ending ||
+				!connected() ||
+				document.visibilityState !== "visible"
+			)
+				stop.close();
 			else {
 				stopCapture = stop;
 				sayStatus("Listening…");
 				if (useSpeechTts) lfmSpeaker?.connect();
+				else if (foregroundRelay) void speaker?.resume().catch(() => {});
 			}
 		} catch (error) {
-			fail(error);
+			if (!attempt.signal.aborted) {
+				micWanted = false;
+				fail(error);
+			}
 		} finally {
-			micPending = false;
+			captureAttempt = null;
 			renderMic();
+			// A foreground event may have arrived while the previous start was unwinding.
+			if (attempt.signal.aborted) void startMicrophone();
 		}
-	};
+	}
 	interrupt.onclick = () => {
 		cancelAudio(true);
 		sayStatus(stopCapture ? "Listening…" : "Interrupted");
@@ -899,9 +1013,22 @@ export function openVoiceTest(
 				closeSocket();
 				return;
 			}
-			if (transportReady && !startSent && !ending) {
-				startSent = true;
-				command(startCommand);
+			if (transportReady && !ending) {
+				if (foregroundRelay && relayStarted) {
+					ready = true;
+					interrupt.disabled = stopPi.disabled = false;
+					if (foregroundPending && document.visibilityState === "visible") {
+						foregroundPending = false;
+						// The retired message stays silent; fresh messages can speak again.
+						if (micWanted) relayMuted = false;
+						sayStatus("Ready — start the microphone or send text");
+						renderMic();
+						void startMicrophone();
+					}
+				} else if (!startSent) {
+					startSent = true;
+					command(startCommand);
+				}
 			}
 			return;
 		}
@@ -916,7 +1043,7 @@ export function openVoiceTest(
 			}
 			transportReady = true;
 			sendWire({ type: "getCapabilities" });
-			if (extensionAvailable && !startSent) {
+			if (extensionAvailable && !startSent && !(foregroundRelay && relayStarted)) {
 				startSent = true;
 				command(startCommand);
 			}
@@ -928,7 +1055,10 @@ export function openVoiceTest(
 		}
 		if (wire.type === "error") {
 			fail(new Error(wire.message));
-			releaseMic();
+			if (!foregroundRelay || !relayStarted) {
+				micWanted = false;
+				releaseMic();
+			}
 			return;
 		}
 		if (relay && wire.type === "transcript") {
@@ -964,6 +1094,7 @@ export function openVoiceTest(
 		) {
 			const event = wire.event.message.details as RelayEvent;
 			if (event.kind === "ready") {
+				if (foregroundRelay && relayStarted) return;
 				if (localVoice && event.voice) {
 					localFrame?.configure(event.voice);
 					command(`/relay voice-open ${uuid()} ${encodeRelayVoice({})}`);
@@ -1024,7 +1155,7 @@ export function openVoiceTest(
 			}
 			return;
 		}
-		if (relay && ready) {
+		if (relay && ready && !foregroundBlocked()) {
 			const event = wire.event;
 			if (event.type === "message_start" && event.message?.role === "assistant") {
 				relayMessage = uuid();
@@ -1217,7 +1348,9 @@ export function openVoiceTest(
 	function handleVoiceEvent(event: VoiceTestEvent): void {
 		if (event.kind === "ready") {
 			clearTimeout(startupTimer);
+			relayStarted = relay;
 			ready = true;
+			if (foregroundRelay && document.visibilityState === "visible") foregroundPending = false;
 			setConversationModel(event.model);
 			send.disabled = interrupt.disabled = stopPi.disabled = finish.disabled = false;
 			renderMic();
@@ -1250,6 +1383,13 @@ export function openVoiceTest(
 		clearTimeout(startupTimer);
 		ready = false;
 		startSent = transportReady = extensionAvailable = false;
+		if (foregroundRelay && !ending) {
+			suspendForeground();
+			interrupt.disabled = stopPi.disabled = true;
+			if (!failed) sayStatus("Relay disconnected; microphone off until chat reconnects.");
+			return;
+		}
+		micWanted = false;
 		releaseMic();
 		speaker?.stop();
 		lfmSpeaker?.disconnect();

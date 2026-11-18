@@ -30,7 +30,9 @@ describe("voice interruption tick wiring", () => {
 	it("uses the same playback-gated stop for microphone and manual interruption", () => {
 		const source = readFileSync("src/client/voice-test.ts", "utf8");
 		expect(source).toContain("lfmSpeaker?.stop(acknowledge)");
-		expect(source).toMatch(/captureConversation\(\s*\(\) => \{\s*cancelAudio\(true\);/);
+		expect(source).toMatch(
+			/captureConversation\(\s*\(\) => \{\s*if \(foregroundBlocked\(\)\) return;\s*cancelAudio\(true\);/,
+		);
 		expect(source).toMatch(/interrupt.onclick = \(\) => \{\s*cancelAudio\(true\);/);
 		expect(source).not.toContain("acknowledgeInterruption()");
 	});

@@ -3863,6 +3863,246 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("restores foreground ZONOS3 Relay on the same chat without replaying input or speech", async () => {
+		const vadFixture = join(tmp, "foreground-vad.ts");
+		writeFileSync(
+			vadFixture,
+			`
+			export const MicVAD = { new: async (options) => {
+				window.relayFixture.speak = () => {
+					options.onSpeechStart();
+					options.onSpeechRealStart();
+					options.onSpeechEnd(Float32Array.of(0.25));
+				};
+				return { start: async () => {}, destroy: async () => {} };
+			}};
+			export const utils = { encodeWAV: () => new ArrayBuffer(128) };
+		`,
+		);
+		const synthetic = await bundleClient(vadFixture);
+		const { page } = await openPage("/", synthetic.js);
+		const session = "foreground-relay";
+		const sockets: WebSocketRoute[] = [];
+		const inits: (string | undefined)[] = [];
+		const commands: string[] = [];
+		const asr: Route[] = [];
+		let tts = 0;
+		let heldCapabilities = 0;
+		let holdCapabilities = false;
+		const wire = (ws: WebSocketRoute, msg: object) => ws.send(JSON.stringify(msg));
+		const capabilities = (ws: WebSocketRoute) =>
+			wire(ws, { type: "capabilities", commands: [{ name: "relay" }] });
+		const event = (ws: WebSocketRoute, frame: object) => wire(ws, { type: "event", event: frame });
+		const assistant = (ws: WebSocketRoute, phase: "start" | "update" | "end", text: string) =>
+			event(ws, {
+				type: `message_${phase}`,
+				message: { role: "assistant", content: [{ type: "text", text }], timestamp: 1 },
+				...(phase === "update"
+					? { assistantMessageEvent: { type: "text_delta", delta: text, contentIndex: 0 } }
+					: {}),
+			});
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			sockets.push(ws);
+			ws.onMessage((raw) => {
+				const msg = JSON.parse(String(raw));
+				if (msg.type === "init") {
+					inits.push(msg.sessionId);
+					wire(ws, {
+						type: "ready",
+						sessionId: session,
+						isStreaming: inits.length > 1,
+						provider: "zai",
+						modelId: "glm-5.2",
+						thinkingLevel: "off",
+					});
+					if (inits.length > 1) {
+						assistant(ws, "start", "");
+						assistant(ws, "update", "Replayed part of a running turn.");
+					}
+				} else if (msg.type === "getCapabilities") {
+					if (holdCapabilities) heldCapabilities++;
+					else capabilities(ws);
+				} else if (msg.type === "prompt") {
+					commands.push(msg.text);
+					if (msg.text.startsWith("/relay start"))
+						event(ws, {
+							type: "message_end",
+							message: {
+								role: "custom",
+								customType: "acb-relay",
+								details: {
+									kind: "ready",
+									model: "fixture",
+									workerModel: { provider: "zai", modelId: "glm-5.2", thinkingLevel: "off" },
+								},
+							},
+						});
+				} else if (["abort", "resumeSession", "newSession"].includes(msg.type))
+					commands.push(msg.type);
+			});
+		});
+		await page.route("**/api/transcribe", (route) => {
+			asr.push(route);
+		});
+		await page.route("**/api/tts/zonos-relay-stream*", (route) => {
+			tts++;
+			return route.fulfill({ status: 503, body: "fixture stops before real synthesis" });
+		});
+		await page.addInitScript((id) => {
+			localStorage.setItem("acb-relay-session", id);
+			const tracks: (EventTarget & { stop(): void })[] = [];
+			const counters = { starts: 0, stops: 0, locks: 0, releases: 0 };
+			let visibility = "visible";
+			Object.defineProperty(document, "visibilityState", { get: () => visibility });
+			Object.defineProperty(navigator, "mediaDevices", {
+				value: {
+					getUserMedia: async () => {
+						counters.starts++;
+						const track = Object.assign(new EventTarget(), {
+							stop: () => {
+								counters.stops++;
+							},
+						});
+						tracks.push(track);
+						return { getTracks: () => [track] };
+					},
+				},
+			});
+			Object.defineProperty(navigator, "wakeLock", {
+				value: {
+					request: async () => {
+						counters.locks++;
+						return {
+							release: async () => {
+								counters.releases++;
+							},
+						};
+					},
+				},
+			});
+			Object.assign(window, {
+				relayFixture: {
+					counters,
+					visibility: (value: string) => {
+						visibility = value;
+						document.dispatchEvent(new Event("visibilitychange"));
+					},
+					interrupt: () => tracks.at(-1)?.dispatchEvent(new Event("ended")),
+				},
+			});
+		}, session);
+		const run = (action: string, ...args: string[]) =>
+			page.evaluate(
+				([name, params]) => {
+					// biome-ignore lint/suspicious/noExplicitAny: installed above by the synthetic browser/audio fixture.
+					const fixture = (window as any).relayFixture;
+					return typeof fixture[name] === "function" ? fixture[name](...params) : fixture[name];
+				},
+				[action, args] as const,
+			);
+		const dialog = page.locator("#relay-voice-panel");
+		const button = (name: string) => dialog.getByRole("button", { name, exact: true });
+		const mic = () => dialog.locator(".voice-test-mic-state").innerText();
+		try {
+			await page.reload();
+			await expect.poll(() => new URL(page.url()).pathname).toBe(`/s/${session}`);
+			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
+			await button("Start microphone").click();
+			await expect
+				.poll(() => run("counters"))
+				.toEqual({ starts: 1, stops: 0, locks: 1, releases: 0 });
+			await run("speak");
+			await expect.poll(() => asr.length).toBe(1);
+			await run("visibility", "hidden");
+			await expect
+				.poll(() => run("counters"))
+				.toEqual({ starts: 1, stops: 1, locks: 1, releases: 1 });
+			assistant(sockets[0], "start", "");
+			assistant(sockets[0], "update", "A reply began while hidden.");
+			await asr[0].fulfill({ json: { text: "Abandoned recognition must not dispatch" } });
+			holdCapabilities = true;
+			await run("visibility", "visible");
+			await expect.poll(() => heldCapabilities).toBe(1);
+			expect(await mic()).toBe("Microphone off");
+			capabilities(sockets[0]);
+			await expect.poll(mic).toBe("Microphone on");
+			assistant(sockets[0], "end", "A reply began while hidden.");
+			await run("interrupt");
+			await expect
+				.poll(() => run("counters"))
+				.toEqual({ starts: 3, stops: 2, locks: 3, releases: 2 });
+			expect(sockets).toHaveLength(1);
+
+			await run("visibility", "hidden");
+			await sockets[0].close();
+			await run("visibility", "visible");
+			holdCapabilities = false;
+			await expect.poll(() => inits).toEqual([undefined, session]);
+			// Let the fixture acknowledge even if the reconnect initiated before the flag changed.
+			capabilities(sockets[1]);
+			await expect.poll(mic).toBe("Microphone on");
+			assistant(sockets[1], "update", "End of the previously running turn.");
+			assistant(
+				sockets[1],
+				"end",
+				"Replayed part of a running turn. End of the previously running turn.",
+			);
+			await run("speak");
+			await expect.poll(() => asr.length).toBe(2);
+			await asr[1].fulfill({ json: { text: "New foreground speech" } });
+			await expect
+				.poll(() => commands.filter((c) => c.startsWith("/relay voice-request ")).length)
+				.toBe(1);
+			expect(tts).toBe(0);
+			const contexts = commands.filter((c) => c.startsWith("/relay voice-context "));
+			expect(contexts).toHaveLength(1);
+			expect(JSON.parse(Buffer.from(contexts[0].split(" ")[3], "base64url").toString())).toEqual({
+				text: "New foreground speech",
+			});
+			expect(commands.filter((c) => c.startsWith("/relay start"))).toHaveLength(1);
+			expect(
+				commands.filter((c) => /^(abort|resumeSession|newSession|\/relay (cancel|stop))/.test(c)),
+			).toEqual([]);
+			event(sockets[1], {
+				type: "message_end",
+				message: { role: "user", content: [{ type: "text", text: "New foreground speech" }] },
+			});
+			assistant(sockets[1], "start", "");
+			assistant(sockets[1], "update", "This is a brand new answer.");
+			assistant(sockets[1], "end", "This is a brand new answer.");
+			await expect.poll(() => tts).toBe(1);
+
+			await button("Pause voice").click();
+			await run("visibility", "hidden");
+			await run("visibility", "visible");
+			await expect.poll(() => button("Resume voice").isEnabled()).toBe(true);
+			await expect
+				.poll(() => run("counters"))
+				.toEqual({ starts: 4, stops: 4, locks: 4, releases: 4 });
+			await button("Resume voice").click();
+			await expect.poll(mic).toBe("Microphone on");
+			await button("Stop microphone").click();
+			await run("visibility", "hidden");
+			await run("visibility", "visible");
+			await expect.poll(() => button("Start microphone").isEnabled()).toBe(true);
+			await expect
+				.poll(() => run("counters"))
+				.toEqual({ starts: 5, stops: 5, locks: 5, releases: 5 });
+			await button("Start microphone").click();
+			await expect.poll(mic).toBe("Microphone on");
+			await button("End voice").click();
+			await run("visibility", "hidden");
+			await run("visibility", "visible");
+			await expect
+				.poll(() => run("counters"))
+				.toEqual({ starts: 6, stops: 6, locks: 6, releases: 6 });
+			expect(await dialog.count()).toBe(0);
+			expect(sockets).toHaveLength(2);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it("opens a stored session, with its attached picture, from its /s/<id> link", async () => {
 		const { page } = await openPage(`/s/${SEEDED_ID}`);
 		await expect.poll(() => messages(page).innerText()).toContain("stored answer");

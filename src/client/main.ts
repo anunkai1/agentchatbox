@@ -2228,6 +2228,7 @@ async function boot(): Promise<void> {
 			let target = options.sessionId;
 			let ownSwitch: SessionSwitch | null = null;
 			let closed = false;
+			let transportOpen = true;
 			const unsubscribe = chatClient.onWire((wire) => {
 				if (wire.type === "ready") {
 					const id = String(wire.sessionId ?? "");
@@ -2253,7 +2254,9 @@ async function boot(): Promise<void> {
 				} else if (bound) options.onMessage(wire);
 			});
 			const unsubscribeStatus = chatClient.onStatus((status) => {
-				if (status === "closed" || status === "stalled") options.onDisconnect();
+				const wasOpen = transportOpen;
+				transportOpen = status === "open";
+				if (wasOpen && !transportOpen) options.onDisconnect();
 			});
 			if (bound) {
 				relaySessions.add(target!);
@@ -2267,22 +2270,17 @@ async function boot(): Promise<void> {
 				if (target) chatClient.resumeSession(target, true);
 				else chatClient.newSession(undefined, true);
 			}
+			const isOpen = () =>
+				!closed &&
+				bound &&
+				mainReady &&
+				!sessionSwitch &&
+				state.sessionId === target &&
+				transportOpen;
 			return {
-				isOpen: () =>
-					!closed &&
-					bound &&
-					!sessionSwitch &&
-					state.sessionId === target &&
-					state.connectionStatus === "open",
+				isOpen,
 				send: (message) => {
-					if (
-						closed ||
-						!bound ||
-						sessionSwitch ||
-						state.sessionId !== target ||
-						state.connectionStatus !== "open"
-					)
-						return false;
+					if (!isOpen()) return false;
 					if (message.type === "prompt") return chatClient.prompt(message.text);
 					if (message.type === "abort") chatClient.abort();
 					else chatClient.getCapabilities();

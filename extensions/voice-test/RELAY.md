@@ -78,6 +78,13 @@ integration or standing proactive mandate is installed.
    its 30-second test limit.
    **Interrupt** stops output without discarding that input. Stopping/hiding/closing
    the mic clears unsent input; typed submission explicitly replaces it.
+   In browser-STT Relay modes, an active microphone requests a screen wake lock
+   while the tab is visible, if the browser and power settings allow it. Switching
+   away releases the mic and stops speech. Returning to the same open tab restores
+   a microphone that was on once the same chat is reachable. **Pause voice**,
+   **Stop microphone** and **End voice** are respected; if audio access fails, tap
+   **Start microphone** to retry. Reloading or reopening the page does not turn the
+   mic on. Background and locked-screen listening are not supported.
    The normal chat composer reaches Pi without a mic. During a thread switch it
    is temporarily disabled; the source draft is retained in its original chat.
    A clear work request authorises
@@ -95,11 +102,12 @@ integration or standing proactive mandate is installed.
    chat reply. Use **Stop current Pi turn** to explicitly abort the active Pi
    coordinator turn; queued voice requests and delegated workers may continue, and
    completed external effects remain. End/hide/close releases microphone and
-   Server4's GPU, not Pi work. Microphone capture never restarts automatically.
-   Wait a few seconds for the old children to exit before immediately restarting
-   voice; GPU contention fails explicitly.
-   **Legacy mode differs:** its Interrupt, new speech or hidden tab can abort the
-   current Pi direct turn, though delegated workers survive. Closing voice or
+   Server4's GPU, not Pi work. The embedded Server4 LFM voice panel still requires
+   a deliberate restart. If using a Server4 mode, wait a few seconds for the old
+   children to exit before restarting voice; GPU contention fails explicitly.
+   **Legacy mode differs:** its Interrupt or new speech can abort the current Pi
+   direct turn, though delegated workers survive. Hiding, losing the connection,
+   or stopping the microphone does not abort Pi. Closing voice or
    navigating away from a Relay thread leaves Pi tools and workers running:
    navigation detaches the old view without killing its Pi process.
 6. Reopen `/relay` to resume the saved conversation and associated job. The

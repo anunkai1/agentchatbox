@@ -82,6 +82,19 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
+it("stops a microphone permission result that arrives after the capture attempt was cancelled", async () => {
+	const media = Promise.withResolvers<{ getTracks: () => (typeof track)[] }>();
+	vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: () => media.promise } });
+	const attempt = new AbortController();
+	const pending = captureConversation(speech, vi.fn(), error, 120, { signal: attempt.signal });
+	attempt.abort();
+	media.resolve({ getTracks: () => [track] });
+	await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+	expect(stop).toHaveBeenCalledOnce();
+	expect(resume).not.toHaveBeenCalled();
+	expect(speech).not.toHaveBeenCalled();
+});
+
 describe("conversation input drafts", () => {
 	it("allows a natural pause and never submits a partial segment on close", async () => {
 		await begin();

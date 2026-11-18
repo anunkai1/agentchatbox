@@ -215,7 +215,7 @@ export class LfmTtsSpeaker {
 			declarePlaybackAudioSession();
 			this.context = new AudioContext();
 		}
-		if (!this.paused && this.context.state === "suspended") {
+		if (!this.paused && this.context.state !== "running") {
 			void this.context.resume().catch(this.callbacks.onError);
 		}
 		return this.context;

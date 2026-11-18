@@ -22,7 +22,10 @@ export async function captureConversation(
 	onUtterance: (turn: CapturedUtterance) => void,
 	onError: (error: unknown) => void,
 	maxInputSeconds: 30 | 120 = 30,
+	options?: { signal: AbortSignal; onInterrupted?: () => void },
 ): Promise<ConversationCapture> {
+	const signal = options?.signal;
+	signal?.throwIfAborted();
 	const stream = await navigator.mediaDevices.getUserMedia({
 		audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 	});
@@ -49,6 +52,7 @@ export async function captureConversation(
 	const close = () => {
 		if (closed) return;
 		closed = true;
+		signal?.removeEventListener("abort", close);
 		discard();
 		if (speechTimer) clearTimeout(speechTimer);
 		stream.getTracks().forEach((track) => {
@@ -58,9 +62,29 @@ export async function captureConversation(
 		void context?.close().catch(() => {});
 	};
 	try {
+		signal?.throwIfAborted();
+		signal?.addEventListener("abort", close, { once: true });
 		context = new AudioContext();
-		await context.resume();
+		if (options?.onInterrupted) {
+			// A browser can leave resume() pending until it gets another user gesture.
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				await Promise.race([
+					context.resume(),
+					new Promise<never>((_, reject) => {
+						timer = setTimeout(
+							() => reject(new Error("Audio unavailable. Tap Start microphone to retry.")),
+							4_000,
+						);
+					}),
+				]);
+			} finally {
+				clearTimeout(timer);
+			}
+		} else await context.resume();
+		signal?.throwIfAborted();
 		const { MicVAD, utils } = await import("@ricky0123/vad-web");
+		signal?.throwIfAborted();
 		let lastSound = performance.now();
 		const armSpeechTimer = () => {
 			speechStartedAt = performance.now();
@@ -97,7 +121,7 @@ export async function captureConversation(
 				},
 			});
 		};
-		vad = await MicVAD.new({
+		const nextVad = await MicVAD.new({
 			model: "v5",
 			startOnLoad: false,
 			audioContext: context,
@@ -164,15 +188,30 @@ export async function captureConversation(
 				emit();
 			},
 		});
+		if (signal?.aborted) {
+			await nextVad.destroy();
+			signal.throwIfAborted();
+		}
+		vad = nextVad;
+		await vad.start();
+		signal?.throwIfAborted();
+		const interrupted = () => {
+			if (closed) return;
+			close();
+			if (options?.onInterrupted) options.onInterrupted();
+			else onError(new Error("Microphone disconnected"));
+		};
 		for (const track of stream.getTracks()) {
-			track.addEventListener("ended", () => {
-				if (!closed) {
-					close();
-					onError(new Error("Microphone disconnected"));
-				}
+			if (track.readyState === "ended") throw new Error("Microphone disconnected");
+			track.addEventListener("ended", interrupted);
+		}
+		if (options?.onInterrupted) {
+			if (context.state !== "running")
+				throw new Error("Audio interrupted. Tap Start microphone to retry.");
+			context.addEventListener("statechange", () => {
+				if (!paused && context?.state !== "running") interrupted();
 			});
 		}
-		await vad.start();
 		return {
 			close,
 			discard,
