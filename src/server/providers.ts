@@ -36,6 +36,8 @@ export const PROVIDER_KEYS = [
 	"opencode",
 	"minimax",
 	"venice",
+	"antigravity-acp",
+	"local",
 ] as const;
 
 /**
@@ -50,7 +52,7 @@ export const PROVIDER_KEYS = [
  * probe discovers from ~/.pi/agent/models.json — see models-cache.ts. The
  * picker is purely a mirror of `pi`, no ACB-side curation.
  */
-const NON_SDK_PROVIDERS = new Set(["venice"]);
+const NON_SDK_PROVIDERS = new Set(["venice", "antigravity-acp", "local"]);
 const SDK_PROVIDER_KEYS = PROVIDER_KEYS.filter((p) => !NON_SDK_PROVIDERS.has(p));
 
 /**

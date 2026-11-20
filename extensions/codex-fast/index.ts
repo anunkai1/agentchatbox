@@ -8,9 +8,16 @@ export interface FastModeStore {
 	write(enabled: boolean): void;
 }
 
-// Native OpenAI Responses models with Fast support. This list is independent
-// of the optional Codex CLI cache, which can omit newer models such as GPT-6.1.
-const FAST_OPENAI_MODELS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]);
+// Native OpenAI Responses models with Fast support when Codex's local cache is absent.
+const FAST_OPENAI_MODELS = new Set([
+	"gpt-6-astra",
+	"gpt-6-sol",
+	"gpt-6-luna",
+	"gpt-6.1-sol",
+	"gpt-6.1-terra",
+	"gpt-6.2-astra",
+	"gpt-6.2-sol",
+]);
 
 /**
  * Models currently advertised by Codex's live catalogue with the Fast
@@ -94,7 +101,9 @@ export function registerCodexFast(
 	supportedCodexModels: ReadonlySet<string> = loadFastCodexModels(),
 ): void {
 	const supportsFast = (model: { provider: string; id: string }) =>
-		(model.provider === "openai" ? FAST_OPENAI_MODELS : supportedCodexModels).has(model.id);
+		model.provider === "openai"
+			? FAST_OPENAI_MODELS.has(model.id) || supportedCodexModels.has(model.id)
+			: supportedCodexModels.has(model.id);
 
 	pi.on("before_provider_request", (event, ctx) => {
 		const model = currentOpenAIModel(ctx);

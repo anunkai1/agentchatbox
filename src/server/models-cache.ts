@@ -21,6 +21,9 @@
  * fix is to address the underlying issue and restart.
  */
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { getModels } from "@earendil-works/pi-ai/compat";
 import {
 	supportedThinkingLevels,
@@ -252,7 +255,9 @@ export const modelsCache = new ModelsCache();
  * enumerate the user's `~/.pi/agent/models.json` here — pi does that
  * itself once it's spawned.
  */
-function pickBootProbe(): { provider: string; modelId: string } | null {
+export function pickBootProbe(
+	piAgentDir = join(homedir(), ".pi", "agent"),
+): { provider: string; modelId: string } | null {
 	for (const provider of SDK_PROVIDERS) {
 		if (!getServerApiKey(provider)) continue;
 		try {
@@ -263,6 +268,35 @@ function pickBootProbe(): { provider: string; modelId: string } | null {
 		} catch {
 			// SDK doesn't know this provider; keep scanning.
 		}
+	}
+	try {
+		const raw = JSON.parse(readFileSync(join(piAgentDir, "models.json"), "utf8")) as {
+			providers?: Record<string, { models?: Array<{ id?: unknown }> }>;
+		};
+		for (const [provider, entry] of Object.entries(raw.providers ?? {})) {
+			if (!getServerApiKey(provider)) continue;
+			const first = entry?.models?.find((m) => typeof m?.id === "string" && m.id.length > 0);
+			if (first && typeof first.id === "string") {
+				return { provider, modelId: first.id };
+			}
+		}
+	} catch {
+		// models.json optional
+	}
+	try {
+		const raw = JSON.parse(readFileSync(join(piAgentDir, "models-store.json"), "utf8")) as {
+			providers?: Record<string, { models?: Array<{ id?: unknown }> }>;
+		} & Record<string, { models?: Array<{ id?: unknown }> }>;
+		const providers = raw.providers ?? raw;
+		for (const [provider, entry] of Object.entries(providers)) {
+			if (!getServerApiKey(provider)) continue;
+			const first = entry?.models?.find((m) => typeof m?.id === "string" && m.id.length > 0);
+			if (first && typeof first.id === "string") {
+				return { provider, modelId: first.id };
+			}
+		}
+	} catch {
+		// models-store.json optional
 	}
 	return null;
 }

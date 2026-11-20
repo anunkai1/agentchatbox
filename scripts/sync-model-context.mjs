@@ -1,26 +1,12 @@
 #!/usr/bin/env node
 /**
- * Sync context windows (and a couple of related fields) in the pi
- * `models.json` override file against each provider's AUTHORITATIVE source,
- * so hand-written values can't silently go stale (the GLM-5.2 200k→1M bug).
+ * Sync context windows, output limits, pricing, and reasoning metadata in
+ * `~/.pi/agent/models.json` against Venice's live API so hand-written values
+ * cannot silently go stale.
  *
- * Run:   node scripts/sync-model-context.mjs
- *
- * What it does:
- *   - Reads ~/.pi/agent/models.json (pi's per-user model override file).
- *   - For Venice models, fetches https://api.venice.ai/api/v1/models and
- *     reconciles `contextWindow` (and, if present, `maxTokens`) to the API's
- *     `context_length` / `maxCompletionTokens`. Venice's API is the source of
- *     truth — models.json was already correct, but this keeps it that way as
- *     Venice adds/extends models.
- *   - Prints a diff of every change and writes models.json back ONLY if
- *     something changed (preserves formatting/key order otherwise).
- *
- * Scope is deliberately narrow: it only WRITES contextWindow / maxTokens for
- * providers whose API exposes them (Venice). It never deletes models, never
- * touches cost/compat/name, and never edits models it can't verify — it just
- * warns about them. Other providers (minimax direct, ollama, zai/glm-5.2)
- * are reported as "not auto-synced" so you know to verify them manually.
+ * Run:
+ *   node scripts/sync-model-context.mjs            # apply updates
+ *   node scripts/sync-model-context.mjs --dry-run  # print diffs only
  *
  * Keys are resolved from VENICE_API_KEY in the environment / .env,
  * ~/.pi/agent/auth.json, or ~/.secrets/llm/providers.env if present.
@@ -83,7 +69,45 @@ async function getJSON(url, headers = {}, timeoutMs = 15000) {
 	}
 }
 
-/** Venice: { [modelId]: { context, maxTokens } } from the live API. */
+function buildCost(pricing) {
+	if (!pricing || typeof pricing !== "object") return undefined;
+	const input = pricing.input?.usd;
+	const output = pricing.output?.usd;
+	if (typeof input !== "number" || typeof output !== "number") return undefined;
+	const cacheRead = typeof pricing.cache_input?.usd === "number" ? pricing.cache_input.usd : 0;
+	const cacheWrite = typeof pricing.cache_write?.usd === "number" ? pricing.cache_write.usd : 0;
+	const cost = { input, output, cacheRead, cacheWrite };
+	const ext = pricing.extended;
+	if (ext && typeof ext.context_token_threshold === "number") {
+		cost.tiers = [
+			{
+				inputTokensAbove: ext.context_token_threshold,
+				input: typeof ext.input?.usd === "number" ? ext.input.usd : input,
+				output: typeof ext.output?.usd === "number" ? ext.output.usd : output,
+				cacheRead: typeof ext.cache_input?.usd === "number" ? ext.cache_input.usd : cacheRead,
+				cacheWrite: typeof ext.cache_write?.usd === "number" ? ext.cache_write.usd : cacheWrite,
+			},
+		];
+	}
+	return cost;
+}
+
+function buildThinkingLevelMap(options) {
+	if (!Array.isArray(options) || options.length === 0) return undefined;
+	const opts = new Set(options);
+	const map = {
+		off: opts.has("none") ? "none" : null,
+		minimal: opts.has("minimal") ? "minimal" : null,
+		low: opts.has("low") ? "low" : null,
+		medium: opts.has("medium") ? "medium" : null,
+		high: opts.has("high") ? "high" : null,
+	};
+	if (opts.has("xhigh")) map.xhigh = "xhigh";
+	if (opts.has("max")) map.max = "max";
+	return map;
+}
+
+/** Venice: { [modelId]: { context, maxTokens, reasoning, supportsReasoningEffort, thinkingLevelMap, cost } } */
 async function veniceCatalog() {
 	if (!VENICE_KEY) throw new Error("VENICE_API_KEY not set — cannot sync Venice models");
 	const j = await getJSON("https://api.venice.ai/api/v1/models", {
@@ -91,20 +115,35 @@ async function veniceCatalog() {
 	});
 	const out = {};
 	for (const x of j.data ?? []) {
+		const spec = x.model_spec ?? {};
+		const caps = spec.capabilities ?? {};
+		const supportsReasoningEffort = caps.supportsReasoningEffort;
 		out[x.id] = {
 			context: x.context_length,
-			maxTokens: x.model_spec?.maxCompletionTokens,
+			maxTokens: spec.maxCompletionTokens,
+			reasoning: caps.supportsReasoning,
+			supportsReasoningEffort,
+			thinkingLevelMap: supportsReasoningEffort
+				? buildThinkingLevelMap(caps.reasoningEffortOptions)
+				: undefined,
+			cost: buildCost(spec.pricing),
 		};
 	}
 	return out;
 }
 
+function stableEqual(a, b) {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
 async function main() {
+	const dryRun = process.argv.includes("--dry-run") || process.argv.includes("-n");
 	const cfg = JSON.parse(readFileSync(MODELS_JSON, "utf8"));
 	const venice = await veniceCatalog();
 
 	const changes = [];
 	const veniceProvider = cfg.providers?.venice;
+	const providerDefaultEffort = veniceProvider?.compat?.supportsReasoningEffort ?? true;
 	if (!veniceProvider?.models) {
 		console.log("no venice provider/models in models.json — skipping Venice sync");
 	} else {
@@ -131,6 +170,60 @@ async function main() {
 					to: api.maxTokens,
 				});
 				m.maxTokens = api.maxTokens;
+			}
+			if (typeof api.reasoning === "boolean" && m.reasoning !== api.reasoning) {
+				changes.push({
+					id: m.id,
+					kind: "reasoning",
+					from: m.reasoning,
+					to: api.reasoning,
+				});
+				m.reasoning = api.reasoning;
+			}
+			if (typeof api.supportsReasoningEffort === "boolean") {
+				const currentEffort = m.compat?.supportsReasoningEffort ?? providerDefaultEffort;
+				if (currentEffort !== api.supportsReasoningEffort) {
+					changes.push({
+						id: m.id,
+						kind: "compat.supportsReasoningEffort",
+						from: currentEffort,
+						to: api.supportsReasoningEffort,
+					});
+					if (api.supportsReasoningEffort === providerDefaultEffort) {
+						if (m.compat) {
+							delete m.compat.supportsReasoningEffort;
+							if (Object.keys(m.compat).length === 0) delete m.compat;
+						}
+					} else {
+						m.compat = { ...m.compat, supportsReasoningEffort: api.supportsReasoningEffort };
+					}
+				}
+			}
+			if (api.supportsReasoningEffort === false && m.thinkingLevelMap !== undefined) {
+				changes.push({
+					id: m.id,
+					kind: "thinkingLevelMap",
+					from: JSON.stringify(m.thinkingLevelMap),
+					to: "removed",
+				});
+				delete m.thinkingLevelMap;
+			} else if (api.thinkingLevelMap && !stableEqual(m.thinkingLevelMap, api.thinkingLevelMap)) {
+				changes.push({
+					id: m.id,
+					kind: "thinkingLevelMap",
+					from: JSON.stringify(m.thinkingLevelMap ?? null),
+					to: JSON.stringify(api.thinkingLevelMap),
+				});
+				m.thinkingLevelMap = api.thinkingLevelMap;
+			}
+			if (api.cost && !stableEqual(m.cost, api.cost)) {
+				changes.push({
+					id: m.id,
+					kind: "cost",
+					from: JSON.stringify(m.cost ?? null),
+					to: JSON.stringify(api.cost),
+				});
+				m.cost = api.cost;
 			}
 		}
 	}
@@ -159,7 +252,9 @@ async function main() {
 
 	// Only write back if a real (non-MISSING) value changed.
 	const writes = changes.filter((c) => c.kind !== "MISSING");
-	if (writes.length > 0) {
+	if (writes.length > 0 && dryRun) {
+		console.log(`\nℹ dry-run: ${writes.length} update(s) detected, ${MODELS_JSON} left untouched`);
+	} else if (writes.length > 0) {
 		writeFileSync(MODELS_JSON, JSON.stringify(cfg, null, 2) + "\n");
 		console.log(`\n✓ wrote ${writes.length} update(s) to ${MODELS_JSON}`);
 	} else {

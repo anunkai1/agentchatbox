@@ -16,7 +16,7 @@ type Context = {
 type CommandHandler = (args: string, ctx: Context) => Promise<void>;
 type ProviderRequestHandler = (event: { payload: unknown }, ctx: Context) => unknown;
 
-function harness(initial = false) {
+function harness(initial = false, supportedCodexModels: ReadonlySet<string> = FAST_CODEX_MODELS) {
 	let enabled = initial;
 	const store: FastModeStore = {
 		read: () => enabled,
@@ -39,7 +39,7 @@ function harness(initial = false) {
 			},
 		} as never,
 		store,
-		FAST_CODEX_MODELS,
+		supportedCodexModels,
 	);
 	return {
 		get enabled() {
@@ -63,6 +63,9 @@ describe("OpenAI fast pi extension", () => {
 		"gpt-6-sol",
 		"gpt-6-luna",
 		"gpt-6.1-sol",
+		"gpt-6.1-terra",
+		"gpt-6.2-astra",
+		"gpt-6.2-sol",
 	])("supports %s on the current OpenAI provider without relying on the legacy Codex catalogue", async (id) => {
 		const h = harness(false);
 		const ctx = { ...h.codexCtx, model: { provider: "openai", id } };
@@ -71,6 +74,17 @@ describe("OpenAI fast pi extension", () => {
 		expect(h.providerRequest({ payload: { model: id, stream: true } }, ctx)).toEqual({
 			model: id,
 			stream: true,
+			service_tier: "priority",
+		});
+	});
+
+	it("also recognises priority-tier models discovered from the Codex cache on the OpenAI provider", async () => {
+		const h = harness(false, new Set(["gpt-6.3-sol"]));
+		const ctx = { ...h.codexCtx, model: { provider: "openai", id: "gpt-6.3-sol" } };
+		await h.command("on", ctx);
+		expect(h.enabled).toBe(true);
+		expect(h.providerRequest({ payload: { model: "gpt-6.3-sol" } }, ctx)).toEqual({
+			model: "gpt-6.3-sol",
 			service_tier: "priority",
 		});
 	});
