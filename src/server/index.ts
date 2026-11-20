@@ -315,6 +315,26 @@ function readImageModel(): { model: string; source: "override" | "env" | "defaul
 	return undefined;
 }
 
+/**
+ * Display the Venice video-generation extension's configured model:
+ * override file → VENICE_VIDEO_MODEL env. Read-only — ACB never writes the
+ * override (the extension's /videomodel command does).
+ */
+function readVideoModel(): { model: string; source: "override" | "env" | "default" } | undefined {
+	const overrideFile = join(process.env.HOME ?? homedir(), ".config", "acb", "video-model");
+	try {
+		if (existsSync(overrideFile)) {
+			const id = readFileSync(overrideFile, "utf8").split(/\r?\n/)[0]?.trim();
+			if (id) return { model: id, source: "override" };
+		}
+	} catch {
+		/* unreadable — fall through */
+	}
+	const envModel = process.env.VENICE_VIDEO_MODEL?.trim();
+	if (envModel) return { model: envModel, source: "env" };
+	return undefined;
+}
+
 // Health check. Reports configured provider keys, speech-to-text, local TTS,
 // and the running commit hash (so an operator can verify the live process
 // is on the expected tree via `git rev-parse HEAD`).
@@ -349,6 +369,9 @@ app.get(
 			// Resolved image-generation model when configured via override file or env.
 			// Read-only — the extension owns the override file and persistence.
 			imageModel: readImageModel(),
+			// Resolved video-generation model when configured via override file or env.
+			// Read-only — the pi-venice-video extension owns the override file.
+			videoModel: readVideoModel(),
 			// Whether the Gemini key is configured for pi-web-access (web search /
 			// fetch / YouTube transcripts). The model itself is implicit inside the
 			// extension, so we only report key presence — boolean, not a secret.

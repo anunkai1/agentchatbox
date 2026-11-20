@@ -31,6 +31,8 @@ describe("Pi-owned slash commands", () => {
 		"fast",
 		"imggen",
 		"imagemodel",
+		"videogen",
+		"videomodel",
 		"image",
 	])("discovers and forwards /%s without changing arguments", (name) => {
 		expect(SLASH_COMMANDS).not.toHaveProperty(name);

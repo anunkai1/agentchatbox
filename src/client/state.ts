@@ -195,6 +195,12 @@ export interface AppState {
 	 * extension (selectable via `/imagemodel` → ctx.ui.select relay).
 	 */
 	currentImageModelLabel: string | null;
+	/**
+	 * Human-readable label for the current video-generation model, shown
+	 * in Settings and Models & services. Updated by pi-venice-video's
+	 * notify events (selectable via `/videomodel` → ctx.ui.select relay).
+	 */
+	currentVideoModelLabel: string | null;
 	/** Display-only status labels reported by pi extensions via ctx.ui.setStatus(). */
 	extensionStatusLabels: Record<string, string>;
 	/**
@@ -247,6 +253,9 @@ export interface AppState {
 	 * until the health probe lands. Display-only mirror of the extension's
 	 * resolution chain. */
 	imageModel: { model: string; source: "override" | "env" | "default" } | null;
+	/** Resolved video-generation model + provenance from /api/health. null
+	 * until the health probe lands. Display-only mirror of pi-venice-video. */
+	videoModel: { model: string; source: "override" | "env" | "default" } | null;
 	/** Whether the Gemini key is configured for pi-web-access. Display-only. */
 	geminiKey: boolean;
 	/** TTS speaking speed multiplier (1.0 = normal, 1.4 = fastest supported),
@@ -375,6 +384,7 @@ export const state: AppState = {
 	currentModelLabel: "(no model)",
 	currentProvider: null,
 	currentImageModelLabel: null,
+	currentVideoModelLabel: null,
 	extensionStatusLabels: {},
 	currentThinking: "high",
 	showThinking: false,
@@ -392,6 +402,7 @@ export const state: AppState = {
 	voiceRewriteModel: null,
 	whisperModel: null,
 	imageModel: null,
+	videoModel: null,
 	geminiKey: false,
 	ttsSpeed: 1.25,
 	ttsInFlight: 0,

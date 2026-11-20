@@ -1202,6 +1202,130 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("surfaces Venice video model selection in Settings and Models & services via /videomodel", async () => {
+		const { page } = await openPage("/");
+		const sentPrompts: string[] = [];
+		const selectResponses: Array<{ id: string; value?: string }> = [];
+		try {
+			await page.route("**/api/health", (route) =>
+				route.fulfill({
+					contentType: "application/json",
+					body: JSON.stringify({
+						status: "ok",
+						providers: ["venice"],
+						whisper: false,
+						tts: false,
+						videoModel: { model: "minimax-h3-chili-text-to-video", source: "override" },
+					}),
+				}),
+			);
+			await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+				ws.onMessage((raw) => {
+					const message = JSON.parse(String(raw));
+					if (message.type === "init") {
+						ws.send(
+							JSON.stringify({
+								type: "ready",
+								sessionId: "video-session-001",
+								provider: "zai",
+								modelId: "glm-5.2",
+								thinkingLevel: "off",
+							}),
+						);
+					} else if (message.type === "getCapabilities") {
+						ws.send(
+							JSON.stringify({
+								type: "capabilities",
+								commands: [
+									{ name: "videomodel", source: "extension" },
+									{ name: "videogen", source: "extension" },
+								],
+							}),
+						);
+					} else if (message.type === "prompt") {
+						sentPrompts.push(message.text);
+						if (message.requestId) {
+							ws.send(
+								JSON.stringify({
+									type: "sendResult",
+									requestId: message.requestId,
+									accepted: true,
+								}),
+							);
+						}
+						if (message.text === "/videomodel") {
+							ws.send(
+								JSON.stringify({
+									type: "event",
+									event: {
+										type: "extension_ui_request",
+										id: "vid-select-1",
+										method: "select",
+										title: "Video model (current: minimax-h3-chili-text-to-video)",
+										options: [
+											"MiniMax Hailuo 2.3 Chili (minimax-h3-chili-text-to-video) — default · 768P · 4s–6s",
+											"Wan 2.6 (wan-2-6-text-to-video) — 720p/1080p · 5s–15s",
+										],
+									},
+								}),
+							);
+						}
+					} else if (message.type === "extensionUiResponse") {
+						selectResponses.push({ id: message.id, value: message.value });
+						ws.send(
+							JSON.stringify({
+								type: "event",
+								event: {
+									type: "extension_ui_request",
+									id: "vid-notify-1",
+									method: "notify",
+									message: "video model set to wan-2-6-text-to-video",
+									notifyType: "info",
+								},
+							}),
+						);
+					}
+				});
+			});
+			await page.reload({ waitUntil: "domcontentloaded" });
+			await page.getByRole("button", { name: "Open settings", exact: true }).click();
+			const videoRow = page.locator(".settings-row").filter({ hasText: "Video model" });
+			await expect
+				.poll(() => videoRow.locator(".overflow-value").innerText())
+				.toBe("minimax-h3-chili-text-to-video");
+			await videoRow.click();
+			await expect.poll(() => sentPrompts).toEqual(["/videomodel"]);
+			const picker = page.getByRole("dialog", {
+				name: "Video model (current: minimax-h3-chili-text-to-video)",
+			});
+			await expect.poll(() => picker.isVisible()).toBe(true);
+			await picker.locator(".model-row").filter({ hasText: "wan-2-6-text-to-video" }).click();
+			await expect
+				.poll(() => selectResponses)
+				.toEqual([
+					{ id: "vid-select-1", value: "Wan 2.6 (wan-2-6-text-to-video) — 720p/1080p · 5s–15s" },
+				]);
+
+			await page.getByRole("button", { name: "Open settings", exact: true }).click();
+			await expect
+				.poll(() =>
+					page
+						.locator(".settings-row")
+						.filter({ hasText: "Video model" })
+						.locator(".overflow-value")
+						.innerText(),
+				)
+				.toBe("wan-2-6-text-to-video");
+			await page.locator(".settings-advanced-summary").click();
+			await page.locator(".settings-row").filter({ hasText: "Models & services" }).click();
+			const svcRow = page.locator(".svc-row").filter({ hasText: "Video generation" });
+			expect(await svcRow.innerText()).toContain("wan-2-6-text-to-video");
+			expect(await svcRow.evaluate((el) => el.classList.contains("svc-clickable"))).toBe(true);
+		} finally {
+			await page.close();
+		}
+	});
+
 	it.each([
 		["Off", 0],
 		["V", 1],
@@ -3933,6 +4057,77 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect.poll(() => spokenTexts.length).toBe(1);
 			expect(spokenTexts[0]).toContain("Worker report");
 			expect(spokenTexts[0]).toContain("Fixed; 12 tests pass.");
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("renders /uploads video links, images, and bare paths as inline <video> players without altering inline code", async () => {
+		const { page } = await openPage("/");
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type !== "init") return;
+				ws.send(
+					JSON.stringify({
+						type: "ready",
+						sessionId: "video-inline",
+						modelId: "glm-5.2",
+						provider: "zai",
+						thinkingLevel: "off",
+					}),
+				);
+				ws.send(
+					JSON.stringify({
+						type: "transcript",
+						sessionId: "video-inline",
+						messages: [
+							{
+								role: "user",
+								content: [{ type: "text", text: "[file: clip.mp4](/uploads/user-clip.mp4)" }],
+							},
+							{
+								role: "assistant",
+								content: [
+									{
+										type: "text",
+										text:
+											"Link: [My clip](/uploads/out-1.mp4)\n\n" +
+											"Image syntax: ![Preview](/uploads/out-2.webm)\n\n" +
+											"Bare path: /uploads/out-3.mov\n\n" +
+											"Code stays code: `/uploads/in-code.mp4`",
+									},
+								],
+							},
+						],
+					}),
+				);
+			});
+		});
+		try {
+			await page.reload();
+			await expect.poll(() => page.locator(".row-assistant .markdown video").count()).toBe(3);
+			const assistantVideos = await page
+				.locator(".row-assistant .markdown video")
+				.evaluateAll((els) =>
+					els.map((el) => ({
+						src: el.getAttribute("src"),
+						controls: el.hasAttribute("controls"),
+						playsinline: el.hasAttribute("playsinline"),
+						preload: el.getAttribute("preload"),
+					})),
+				);
+			expect(assistantVideos).toEqual([
+				{ src: "/uploads/out-1.mp4", controls: true, playsinline: true, preload: "metadata" },
+				{ src: "/uploads/out-2.webm", controls: true, playsinline: true, preload: "metadata" },
+				{ src: "/uploads/out-3.mov", controls: true, playsinline: true, preload: "metadata" },
+			]);
+			expect(
+				await page.locator(".row-user .markdown video[src='/uploads/user-clip.mp4']").count(),
+			).toBe(1);
+			expect(await page.locator(".row-assistant .markdown code").innerText()).toBe(
+				"/uploads/in-code.mp4",
+			);
 		} finally {
 			await page.close();
 		}

@@ -1470,8 +1470,15 @@ function onEvent(event: Record<string, unknown>): void {
 				// even when the notify appends extra context (e.g. pi-local-image's
 				// "... — CLI prepared, GPU prepared").
 				const imgMatch = e.message.match(/image model set to (\S+)/i);
+				const vidMatch = e.message.match(/video model set to (\S+)/i);
 				if (imgMatch) {
 					state.currentImageModelLabel = imgMatch[1];
+					refreshStatus();
+				} else if (vidMatch) {
+					state.currentVideoModelLabel = vidMatch[1];
+					refreshStatus();
+				} else if (/video model reset to default/i.test(e.message)) {
+					state.currentVideoModelLabel = null;
 					refreshStatus();
 				} else if (/reset to default/i.test(e.message)) {
 					state.currentImageModelLabel = null;
@@ -2346,6 +2353,10 @@ async function boot(): Promise<void> {
 			// path below keeps it fresh after in-session picks.
 			if (state.imageModel && state.imageModel.source !== "default") {
 				state.currentImageModelLabel = state.imageModel.model;
+			}
+			state.videoModel = h.videoModel ?? null;
+			if (state.videoModel && state.videoModel.source !== "default") {
+				state.currentVideoModelLabel = state.videoModel.model;
 			}
 			state.geminiKey = h.geminiKey ?? false;
 			state.availableModels = models.map((m: ModelInfo) => ({

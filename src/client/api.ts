@@ -166,6 +166,9 @@ export interface HealthInfo {
 	 * "override" = ~/.config/acb/image-model, "env" = VENICE_IMAGE_MODEL,
 	 * "default" = DEFAULT_IMAGE_MODEL. Display-only mirror of the extension's chain. */
 	imageModel?: { model: string; source: "override" | "env" | "default" };
+	/** Resolved video-generation model (pi-venice-video), with provenance:
+	 * "override" = ~/.config/acb/video-model, "env" = VENICE_VIDEO_MODEL. */
+	videoModel?: { model: string; source: "override" | "env" | "default" };
 	/** Whether the Gemini key is configured for pi-web-access (web search /
 	 * fetch / YouTube transcripts). The model itself is implicit in the
 	 * extension, so only key presence is reported. */

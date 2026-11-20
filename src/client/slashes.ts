@@ -1455,6 +1455,42 @@ export function openModelsPanel(): void {
 		);
 	}
 
+	const hasVideoModel = (state.capabilities ?? []).some(
+		(command) => command.name === "videomodel" && command.source !== "skill",
+	);
+	const vid = state.videoModel;
+	if (hasVideoModel || vid) {
+		const vidModelRaw = state.currentVideoModelLabel ?? vid?.model ?? "extension default";
+		const vidSource =
+			state.currentVideoModelLabel && state.currentVideoModelLabel !== vid?.model
+				? "override"
+				: (vid?.source ?? "default");
+		const vidKind = vidSource === "default" ? "default" : "set";
+		box.append(
+			svcRow(
+				"Video generation",
+				"Extension-routed Venice video generation (/videomodel).",
+				modelLine(pill(vidSource, vidKind), vidModelRaw),
+				hasVideoModel ? hint("switch → ", kbd("/videomodel")) : hint("read-only config"),
+				hasVideoModel
+					? () => {
+							overlay.remove();
+							services.sendSlashCommand?.("/videomodel");
+						}
+					: undefined,
+			),
+		);
+	} else {
+		box.append(
+			svcRow(
+				"Video generation",
+				"Optional video-generation Pi extension (/videomodel).",
+				modelLine(pill("not loaded", "missing"), "unavailable"),
+				hint("install pi-venice-video to enable"),
+			),
+		);
+	}
+
 	box.append(
 		svcRow(
 			"Multimodal / vision",
@@ -1749,6 +1785,9 @@ export function openOverflowMenu(): void {
 	const hasImageModel = (state.capabilities ?? []).some(
 		(command) => command.name === "imagemodel" && command.source !== "skill",
 	);
+	const hasVideoModel = (state.capabilities ?? []).some(
+		(command) => command.name === "videomodel" && command.source !== "skill",
+	);
 	const mediaRows: HTMLElement[] = [];
 	if (hasImageModel) {
 		mediaRows.push(
@@ -1757,6 +1796,16 @@ export function openOverflowMenu(): void {
 				state.currentImageModelLabel ?? "Default",
 				closeThen(() => services.sendSlashCommand?.("/imagemodel")),
 				"Choose image-generation model",
+			),
+		);
+	}
+	if (hasVideoModel) {
+		mediaRows.push(
+			actionRow(
+				"Video model",
+				state.currentVideoModelLabel ?? "Default",
+				closeThen(() => services.sendSlashCommand?.("/videomodel")),
+				"Choose Venice video-generation model for /videogen",
 			),
 		);
 	}
