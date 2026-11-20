@@ -133,4 +133,28 @@ setTimeout(() => {}, 1000);
 			"high",
 		]);
 	});
+
+	it("passes antigravity idle/binding defaults and supports extraEnv overrides", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "agentchatbox-pi-process-env-"));
+		tempDirs.push(dir);
+		const bin = join(dir, "fake-pi-env");
+		const envFile = join(dir, "env.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash\nprintf '%s\\n%s\\n%s\\n' "$PI_ANTIGRAVITY_BINDING_IDLE_MS" "$PI_ANTIGRAVITY_MAX_BINDINGS" "$PI_ANTIGRAVITY_MODELS_REFRESH_PROBE" > ${JSON.stringify(envFile)}\nwhile IFS= read -r _line; do :; done\n`,
+			{ mode: 0o755 },
+		);
+
+		const child = spawnPi({
+			bin,
+			provider: "zai",
+			modelId: "glm-5.2",
+			cwd: dir,
+			extraEnv: { PI_ANTIGRAVITY_MODELS_REFRESH_PROBE: "1" },
+		});
+		children.push(child);
+
+		await waitForFile(envFile);
+		expect(readFileSync(envFile, "utf8").trim().split("\n")).toEqual(["90000", "2", "1"]);
+	});
 });

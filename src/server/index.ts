@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import express from "express";
+import { cleanAntigravityArtifacts } from "./antigravity-cleanup.js";
 import { asyncHandler } from "./async-handler.js";
 import { mountChatWs, shutdownChatWs } from "./chat.js";
 import { config, readPiAuth } from "./config.js";
@@ -46,6 +47,7 @@ import { checkTtsAvailable, createTtsRouter, TTS_VOICES } from "./tts.js";
 import { UploadStore } from "./upload-store.js";
 import { createUploadsRouter } from "./uploads.js";
 import { createUploadsServingRouter } from "./uploads-serving.js";
+import { safeUnref } from "./util.js";
 
 const uploadStore = new UploadStore(
 	config.uploadsDir,
@@ -512,8 +514,31 @@ const server = app.listen(config.port, config.host, () => {
 	// populates immediately (up to a 5s timeout). Failure here
 	// means /api/models returns an empty list until the next probe
 	// succeeds — check the boot log for the reason.
-	void modelsCache.ensureReady();
+	void modelsCache.ensureReady().then(() => modelsCache.refreshAntigravityModels());
+	runAntigravityMaintenance();
 });
+
+const ANTIGRAVITY_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let maintenanceTimer: ReturnType<typeof setInterval> | null = null;
+
+function runAntigravityMaintenance(): void {
+	try {
+		const cleaned = cleanAntigravityArtifacts();
+		if (cleaned.removedSessions > 0 || cleaned.removedTmpLogs > 0) {
+			log.info("antigravity cleanup complete", { ...cleaned });
+		}
+	} catch (err) {
+		log.warn("antigravity cleanup failed", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
+maintenanceTimer = setInterval(() => {
+	runAntigravityMaintenance();
+	void modelsCache.refreshAntigravityModels();
+}, ANTIGRAVITY_MAINTENANCE_INTERVAL_MS);
+safeUnref(maintenanceTimer);
 
 server.maxHeadersCount = 100;
 server.headersTimeout = 15_000;
@@ -528,6 +553,10 @@ function shutdown(reason: string, exitCode: number): void {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	log.info("shutting down", { reason, exitCode });
+	if (maintenanceTimer) {
+		clearInterval(maintenanceTimer);
+		maintenanceTimer = null;
+	}
 	shutdownChatWs();
 	server.close(() => process.exit(exitCode));
 	setTimeout(() => {

@@ -17,41 +17,64 @@
  * accounting is unaffected.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { sanitiseUsage, type UsageLike } from "./lib.js";
+import {
+	estimateMessagesTokens,
+	estimateMessageTokens,
+	reportedContextTokens,
+	type SanitiseUsageOptions,
+	sanitiseUsage,
+	type UsageLike,
+} from "./lib.js";
 
 interface MaybeUsaged {
 	role: string;
+	provider?: string;
 	usage?: UsageLike;
 }
 
 function withoutImpossibleUsage<M extends MaybeUsaged>(
 	message: M,
 	contextWindow: number | undefined,
+	options?: SanitiseUsageOptions,
 ): M | null {
 	if (!message.usage) return null;
-	const usage = sanitiseUsage(message.usage, contextWindow);
+	const usage = sanitiseUsage(message.usage, contextWindow, options);
 	return usage ? { ...message, usage } : null;
 }
 
 export default function registerUsageGuard(pi: ExtensionAPI): void {
 	pi.on("message_end", (event, ctx) => {
-		const original = event.message;
-		if (original.role !== "assistant") return;
-		const message = withoutImpossibleUsage(original, ctx.model?.contextWindow);
+		if (event.message.role !== "assistant") return;
+		const original = event.message as typeof event.message & MaybeUsaged & { model?: string };
+		const projected = ctx.sessionManager?.buildSessionProjection?.()?.messages;
+		const estimatedContextTokens = Array.isArray(projected)
+			? estimateMessagesTokens([...projected, original])
+			: undefined;
+		const message = withoutImpossibleUsage(original, ctx.model?.contextWindow, {
+			provider: original.provider,
+			estimatedContextTokens,
+		});
 		if (!message) return;
+		const reported = original.usage ? reportedContextTokens(original.usage) : 0;
 		// Rare: only providers that mis-report usage reach this line.
 		console.warn(
-			`[usage-guard] cleared impossible usage from ${original.provider}/${original.model}: ` +
-				`${original.usage.totalTokens} tokens reported for a ${ctx.model?.contextWindow}-token window`,
+			`[usage-guard] cleared inflated usage from ${original.provider}/${original.model}: ` +
+				`${reported} tokens reported (window=${ctx.model?.contextWindow}, est=${estimatedContextTokens ?? "unknown"})`,
 		);
 		return { message };
 	});
 
 	pi.on("context", (event, ctx) => {
 		let changed = false;
+		let runningEstimated = 0;
 		const messages = event.messages.map((message) => {
+			runningEstimated += estimateMessageTokens(message);
 			if (message.role !== "assistant") return message;
-			const sanitised = withoutImpossibleUsage(message, ctx.model?.contextWindow);
+			const typed = message as typeof message & MaybeUsaged;
+			const sanitised = withoutImpossibleUsage(typed, ctx.model?.contextWindow, {
+				provider: typed.provider,
+				estimatedContextTokens: runningEstimated,
+			});
 			if (!sanitised) return message;
 			changed = true;
 			return sanitised;

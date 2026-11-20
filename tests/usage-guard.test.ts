@@ -13,7 +13,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import registerUsageGuard from "../extensions/usage-guard/index.js";
-import { reportedContextTokens, sanitiseUsage } from "../extensions/usage-guard/lib.js";
+import {
+	estimateMessageTokens,
+	reportedContextTokens,
+	sanitiseUsage,
+} from "../extensions/usage-guard/lib.js";
 
 const plausible = {
 	input: 170_746,
@@ -31,6 +35,19 @@ describe("reportedContextTokens", () => {
 
 	it("falls back to the sum when totalTokens is absent or zero", () => {
 		expect(reportedContextTokens({ ...plausible, totalTokens: 0 })).toBe(4_087_626);
+	});
+});
+
+describe("estimateMessageTokens", () => {
+	it("counts images as 1200 tokens instead of raw base64 bytes", () => {
+		const msg = {
+			role: "user",
+			content: [
+				{ type: "text", text: "abcd" },
+				{ type: "image", data: "x".repeat(4_000_000), mimeType: "image/png" },
+			],
+		};
+		expect(estimateMessageTokens(msg)).toBe(1201);
 	});
 });
 
@@ -60,6 +77,38 @@ describe("sanitiseUsage", () => {
 		expect(sanitiseUsage(full, 1_000_000)).toBeNull();
 	});
 
+	it("clears below-window cumulative multi-step inflation from antigravity-acp", () => {
+		const earlyCompactionTrigger = {
+			...plausible,
+			input: 250_832,
+			output: 1_030,
+			cacheRead: 731_447,
+			totalTokens: 983_309,
+		};
+		expect(
+			sanitiseUsage(earlyCompactionTrigger, 1_000_000, {
+				provider: "antigravity-acp",
+				estimatedContextTokens: 218_912,
+			}),
+		).toMatchObject({ totalTokens: 0, cacheRead: 0, cost: plausible.cost });
+
+		// Genuine full context stays untouched so real compaction still runs.
+		expect(
+			sanitiseUsage(earlyCompactionTrigger, 1_000_000, {
+				provider: "antigravity-acp",
+				estimatedContextTokens: 850_000,
+			}),
+		).toBeNull();
+
+		// Other providers below window are untouched.
+		expect(
+			sanitiseUsage(earlyCompactionTrigger, 1_000_000, {
+				provider: "openai",
+				estimatedContextTokens: 218_912,
+			}),
+		).toBeNull();
+	});
+
 	it("does nothing without a usable window", () => {
 		expect(sanitiseUsage(plausible, undefined)).toBeNull();
 		expect(sanitiseUsage(plausible, 0)).toBeNull();
@@ -73,7 +122,7 @@ describe("sanitiseUsage", () => {
 });
 
 describe("usage-guard extension", () => {
-	function harness(contextWindow = 1_000_000) {
+	function harness(contextWindow = 1_000_000, projectedMessages?: unknown[]) {
 		const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
 		const pi = {
 			on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
@@ -82,7 +131,12 @@ describe("usage-guard extension", () => {
 			},
 		} as never;
 		registerUsageGuard(pi);
-		const ctx = { model: { contextWindow } };
+		const ctx = {
+			model: { contextWindow },
+			...(projectedMessages
+				? { sessionManager: { buildSessionProjection: () => ({ messages: projectedMessages }) } }
+				: {}),
+		};
 		return {
 			emit: (event: unknown) => handlers.get("message_end")?.(event, ctx),
 			handlers,
@@ -112,6 +166,22 @@ describe("usage-guard extension", () => {
 		const result = harness().emit(assistant(plausible)) as {
 			message: { usage: { totalTokens: number } };
 		};
+		expect(result.message.usage.totalTokens).toBe(0);
+		vi.restoreAllMocks();
+	});
+
+	it("clears inflated antigravity-acp below-window usage on message_end when transcript is small", () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const inflatedBelowWindow = {
+			...plausible,
+			input: 65_795,
+			output: 6_069,
+			cacheRead: 434_790,
+			totalTokens: 506_654,
+		};
+		const result = harness(1_000_000, [{ role: "user", content: "small prompt" }]).emit(
+			assistant(inflatedBelowWindow),
+		) as { message: { usage: { totalTokens: number } } };
 		expect(result.message.usage.totalTokens).toBe(0);
 		vi.restoreAllMocks();
 	});
@@ -153,6 +223,18 @@ describe("usage-guard context safety net", () => {
 
 	it("heals a transcript that already carries impossible usage", () => {
 		const result = harness()([{ role: "user", content: "hi" }, poisonedMessage]);
+		expect(result?.messages[1].usage?.totalTokens).toBe(0);
+	});
+
+	it("heals below-window inflated antigravity-acp messages in context replay", () => {
+		const inflatedMessage = {
+			role: "assistant",
+			provider: "antigravity-acp",
+			content: [{ type: "text", text: "ok" }],
+			stopReason: "stop",
+			usage: { ...plausible, input: 120_000, cacheRead: 480_000, totalTokens: 600_000 },
+		};
+		const result = harness()([{ role: "user", content: "hi" }, inflatedMessage]);
 		expect(result?.messages[1].usage?.totalTokens).toBe(0);
 	});
 

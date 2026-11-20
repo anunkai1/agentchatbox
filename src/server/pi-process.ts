@@ -73,6 +73,11 @@ export interface PiProcessOptions {
 	 * `--no-session` and similar flags.
 	 */
 	extraArgs?: string[];
+	/**
+	 * Optional environment overrides merged after ACB defaults. Used internally
+	 * for targeted probes such as refreshing the Antigravity model catalog.
+	 */
+	extraEnv?: Record<string, string>;
 }
 
 export interface PiProcessEvents {
@@ -182,12 +187,18 @@ export class PiProcess extends EventEmitter {
 			detached: process.platform !== "win32",
 			env: {
 				...process.env,
+				// Close idle agy_acp_server.par children promptly (~300 MB RSS each)
+				// while preserving session bindings in sessions.json for transparent
+				// loadSession resume on the next prompt.
+				PI_ANTIGRAVITY_BINDING_IDLE_MS: process.env.PI_ANTIGRAVITY_BINDING_IDLE_MS ?? "90000",
+				PI_ANTIGRAVITY_MAX_BINDINGS: process.env.PI_ANTIGRAVITY_MAX_BINDINGS ?? "2",
 				ACB_UPLOADS_DIR: config.uploadsDir,
 				// The delegate extension starts and messages other chats through
 				// this server's /api/internal routes (internal-sessions.ts).
 				ACB_INTERNAL_URL: `http://127.0.0.1:${config.port}`,
 				ACB_INTERNAL_TOKEN: config.internalToken,
 				ACB_BOOT_ID: config.bootId,
+				...opts.extraEnv,
 			},
 		});
 		this.child = child;

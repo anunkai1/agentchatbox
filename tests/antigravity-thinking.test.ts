@@ -1,11 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	CCPA_BASE_URL_ENV,
-	CCPA_PROXY_MANAGED_ENV,
-	registerAntigravityThinking,
-} from "../extensions/antigravity-thinking/index.js";
-import {
 	type CcpaThinkingProxy,
 	CONSUMER_CCPA_BASE_URL,
 	extractDiscoveredThinkingLevels,
@@ -341,7 +336,9 @@ describe("startCcpaThinkingProxy", () => {
 				res.writeHead(200, { "content-type": "application/json" });
 				res.end(
 					JSON.stringify(
-						loadCodeAssistMode === "paid" ? { paidTier: { usesGcpTos: true } } : { cloudaicompanionProject: "p" },
+						loadCodeAssistMode === "paid"
+							? { paidTier: { usesGcpTos: true } }
+							: { cloudaicompanionProject: "p" },
 					),
 				);
 				return;
@@ -405,6 +402,24 @@ describe("startCcpaThinkingProxy", () => {
 		expect(consumerGenerateHits).toBe(5);
 	});
 });
+
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	CCPA_BASE_URL_ENV,
+	CCPA_PROXY_MANAGED_ENV,
+	MODELS_REFRESH_PROBE_ENV,
+	registerAntigravityThinking,
+	registerLazyAntigravityThinking,
+} from "../extensions/antigravity-thinking/index.js";
+import {
+	ANTIGRAVITY_API,
+	ANTIGRAVITY_BASE_URL,
+	ANTIGRAVITY_PROVIDER_ID,
+	readAntigravityModelsCache,
+	writeAntigravityModelsCache,
+} from "../extensions/antigravity-thinking/models-cache.js";
 
 describe("registerAntigravityThinking lifecycle", () => {
 	function mockPi() {
@@ -486,5 +501,209 @@ describe("registerAntigravityThinking lifecycle", () => {
 		await shutdown();
 		expect(env[CCPA_BASE_URL_ENV]).toBe("http://127.0.0.1:39999");
 		expect(env[CCPA_PROXY_MANAGED_ENV]).toBe("1");
+	});
+});
+
+describe("registerLazyAntigravityThinking & models-cache", () => {
+	function makeTempCacheFile(): string {
+		const dir = mkdtempSync(join(tmpdir(), "acb-agy-cache-"));
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		return join(dir, "models-cache.json");
+	}
+
+	function harness() {
+		const handlers = new Map<
+			string,
+			Array<(event: unknown, ctx: unknown) => Promise<void> | void>
+		>();
+		const registered: Array<{
+			providerId?: string;
+			config?: Record<string, unknown>;
+			provider?: Record<string, unknown>;
+		}> = [];
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => Promise<void> | void) {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			registerProvider(
+				providerOrId: string | Record<string, unknown>,
+				config?: Record<string, unknown>,
+			) {
+				if (typeof providerOrId === "string") {
+					registered.push({ providerId: providerOrId, config });
+				} else {
+					registered.push({ provider: providerOrId });
+				}
+			},
+		};
+		const emit = async (eventName: string, event: unknown, ctx: unknown) => {
+			for (const handler of handlers.get(eventName) ?? []) {
+				await handler(event, ctx);
+			}
+		};
+		return { pi: pi as never, emit, registered };
+	}
+
+	it("does not start the thinking proxy on non-Gemini sessions and activates lazily on switch", async () => {
+		const cachePath = makeTempCacheFile();
+		const env: NodeJS.ProcessEnv = {};
+		let starts = 0;
+		let closes = 0;
+		const { pi, emit } = harness();
+
+		const handle = registerLazyAntigravityThinking(pi, {
+			env,
+			cachePath,
+			argv: ["node", "pi", "--offline"],
+			startProxy: async () => {
+				starts += 1;
+				return {
+					url: "http://127.0.0.1:46666",
+					discoveredLevels: new Map(),
+					close: async () => {
+						closes += 1;
+					},
+				};
+			},
+		});
+
+		expect(starts).toBe(0);
+		expect(handle.isStarted()).toBe(false);
+
+		// Non-Gemini session_start + before_agent_start: zero proxies started.
+		await emit(
+			"session_start",
+			{ type: "session_start", reason: "startup" },
+			{ model: { provider: "venice" } },
+		);
+		await emit(
+			"before_agent_start",
+			{ type: "before_agent_start" },
+			{ model: { provider: "venice" } },
+		);
+		expect(starts).toBe(0);
+		expect(env[CCPA_BASE_URL_ENV]).toBeUndefined();
+
+		// Switching mid-session to antigravity-acp starts exactly one proxy.
+		await emit(
+			"model_select",
+			{ type: "model_select", model: { provider: "antigravity-acp" } },
+			{},
+		);
+		await emit(
+			"before_agent_start",
+			{ type: "before_agent_start" },
+			{ model: { provider: "antigravity-acp" } },
+		);
+		expect(starts).toBe(1);
+		expect(handle.isStarted()).toBe(true);
+		expect(env[CCPA_BASE_URL_ENV]).toBe("http://127.0.0.1:46666");
+
+		await emit("session_shutdown", { type: "session_shutdown" }, {});
+		expect(closes).toBe(1);
+		expect(env[CCPA_BASE_URL_ENV]).toBeUndefined();
+	});
+
+	it("loads cached antigravity models into native provider on startup and refreshes on probe", async () => {
+		const cachePath = makeTempCacheFile();
+		const sampleModel = {
+			id: "gemini-5-alpha",
+			name: "Gemini 5 Alpha",
+			reasoning: true,
+			thinkingLevelMap: { low: "gemini-5-alpha-low", high: "gemini-5-alpha-high" },
+			input: ["text", "image"],
+			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 65_536,
+		};
+
+		// 1. Refresh probe populates cache without overlaying old cache.
+		const envProbe: NodeJS.ProcessEnv = { [MODELS_REFRESH_PROBE_ENV]: "1" };
+		const probeHarness = harness();
+		let refreshOpts: Record<string, unknown> | undefined;
+		registerLazyAntigravityThinking(probeHarness.pi, {
+			env: envProbe,
+			cachePath,
+			startProxy: async () => ({
+				url: "http://127.0.0.1:47777",
+				discoveredLevels: new Map(),
+				close: async () => {},
+			}),
+		});
+		expect(probeHarness.registered).toHaveLength(0);
+
+		await probeHarness.emit(
+			"session_start",
+			{ type: "session_start", reason: "startup" },
+			{
+				model: { provider: "zai" },
+				modelRegistry: {
+					refresh: async (opts: Record<string, unknown>) => {
+						refreshOpts = opts;
+						return { aborted: false, errors: new Map() };
+					},
+					getModelsOfType: (type: string, provider?: string) =>
+						type === "chat" && provider === ANTIGRAVITY_PROVIDER_ID ? [sampleModel] : [],
+				},
+			},
+		);
+		expect(refreshOpts).toMatchObject({ providers: [ANTIGRAVITY_PROVIDER_ID], allowNetwork: true });
+		expect(readAntigravityModelsCache(cachePath)).toHaveLength(1);
+		expect(JSON.parse(readFileSync(cachePath, "utf8")).models[0].id).toBe("gemini-5-alpha");
+
+		// 2. Subsequent offline child wraps native provider synchronously while preserving auth/stream.
+		const sharedSym = Symbol.for("pi-antigravity-acp:runtime");
+		const slots = globalThis as Record<symbol, unknown>;
+		const prevShared = slots[sharedSym];
+		let liveModels = [{ id: "fallback-model", provider: ANTIGRAVITY_PROVIDER_ID }];
+		const fakeStream = () => "stream-ok";
+		const fakeAuth = { oauth: { name: "Google" } };
+		slots[sharedSym] = {
+			provider: {
+				id: ANTIGRAVITY_PROVIDER_ID,
+				name: "Google Antigravity (ACP)",
+				auth: fakeAuth,
+				streamSimple: fakeStream,
+				getModels: () => liveModels,
+			},
+		};
+		cleanups.push(() => {
+			if (prevShared === undefined) delete slots[sharedSym];
+			else slots[sharedSym] = prevShared;
+		});
+
+		const offlineHarness = harness();
+		registerLazyAntigravityThinking(offlineHarness.pi, {
+			env: {},
+			cachePath,
+			argv: ["node", "pi", "--offline"],
+		});
+		expect(offlineHarness.registered).toHaveLength(1);
+		const wrapped = offlineHarness.registered[0]?.provider as {
+			id: string;
+			auth: unknown;
+			streamSimple: unknown;
+			getModels: () => Array<{ id: string; provider: string; baseUrl: string; api: string }>;
+		};
+		expect(wrapped.id).toBe(ANTIGRAVITY_PROVIDER_ID);
+		expect(wrapped.auth).toBe(fakeAuth);
+		expect(wrapped.streamSimple).toBe(fakeStream);
+		expect(wrapped.getModels()).toEqual([
+			{
+				...sampleModel,
+				provider: ANTIGRAVITY_PROVIDER_ID,
+				api: ANTIGRAVITY_API,
+				baseUrl: ANTIGRAVITY_BASE_URL,
+			},
+		]);
+
+		// If a later refresh publishes a new array, getModels() seamlessly yields the fresh models.
+		liveModels = [{ id: "gemini-6-live", provider: ANTIGRAVITY_PROVIDER_ID }];
+		expect(wrapped.getModels().map((m) => m.id)).toEqual(["gemini-6-live"]);
+
+		// Idempotent write skips rewrite when models haven't changed.
+		expect(writeAntigravityModelsCache([sampleModel], cachePath)).toBe(false);
 	});
 });

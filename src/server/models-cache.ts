@@ -27,7 +27,7 @@ import {
 	type ThinkingLevel,
 	type ThinkingLevelMap,
 } from "../shared/thinking.js";
-import { config, getServerApiKey } from "./config.js";
+import { config, getServerApiKey, readPiAuth } from "./config.js";
 import { log } from "./logger.js";
 import type { PiProcess } from "./pi-process.js";
 import { spawnPi } from "./pi-process.js";
@@ -50,6 +50,7 @@ class ModelsCache {
 	private models: AvailableModel[] = [];
 	/** Single in-flight probe; concurrent callers await the same promise. */
 	private inflight: Promise<void> | null = null;
+	private antigravityRefreshInflight: Promise<void> | null = null;
 
 	/** Current cached list. Empty until the first successful probe. */
 	get(): readonly AvailableModel[] {
@@ -72,6 +73,50 @@ class ModelsCache {
 	}
 
 	/**
+	 * Refresh the Antigravity ACP model list in the background when
+	 * authenticated, persisting any newly discovered Gemini models for
+	 * `--offline` pi spawns and updating this in-memory picker cache.
+	 */
+	async refreshAntigravityModels(timeoutMs = 20_000): Promise<void> {
+		if (!readPiAuth().has("antigravity-acp")) return;
+		if (this.antigravityRefreshInflight) return this.antigravityRefreshInflight;
+		this.antigravityRefreshInflight = this.runAntigravityRefresh(timeoutMs).finally(() => {
+			this.antigravityRefreshInflight = null;
+		});
+		return this.antigravityRefreshInflight;
+	}
+
+	private async runAntigravityRefresh(timeoutMs: number): Promise<void> {
+		const start = pickBootProbe();
+		if (!start || !getServerApiKey(start.provider)) return;
+		try {
+			const result = await this.queryAvailableModels(start, timeoutMs, {
+				extraArgs: ["--no-session"],
+				extraEnv: { PI_ANTIGRAVITY_MODELS_REFRESH_PROBE: "1" },
+			});
+			if (result.length === 0) return;
+			const previousAgy = this.models
+				.filter((m) => m.provider === "antigravity-acp")
+				.map((m) => m.id)
+				.join(",");
+			const nextAgy = result
+				.filter((m) => m.provider === "antigravity-acp")
+				.map((m) => m.id)
+				.join(",");
+			this.models = result;
+			if (nextAgy !== previousAgy) {
+				log.info("antigravity models cache updated", {
+					models: nextAgy ? nextAgy.split(",") : [],
+				});
+			}
+		} catch (err) {
+			log.warn("antigravity models background refresh failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	/**
 	 * Spawn a one-shot `pi` child, ask for the model list, cache the
 	 * result. The child is killed (SIGTERM, escalating to SIGKILL after
 	 * 2s) once we have what we need or the timeout fires.
@@ -89,15 +134,39 @@ class ModelsCache {
 			return;
 		}
 
+		try {
+			const result = await this.queryAvailableModels(start, timeoutMs, {
+				extraArgs: ["--no-session"],
+			});
+			this.models = result;
+			log.info("models cache populated from pi", {
+				count: result.length,
+				probeProvider: start.provider,
+				probeModel: start.modelId,
+			});
+		} catch (err) {
+			log.error("models cache probe failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	private async queryAvailableModels(
+		start: { provider: string; modelId: string },
+		timeoutMs: number,
+		opts?: { extraArgs?: string[]; extraEnv?: Record<string, string> },
+	): Promise<AvailableModel[]> {
 		const pi: PiProcess = spawnPi({
 			bin: config.piBin,
 			provider: start.provider,
 			modelId: start.modelId,
 			cwd: config.piCwd,
+			extraArgs: opts?.extraArgs,
+			extraEnv: opts?.extraEnv,
 		});
 
 		try {
-			const result = await new Promise<AvailableModel[]>((resolve, reject) => {
+			return await new Promise<AvailableModel[]>((resolve, reject) => {
 				const timer = setTimeout(() => {
 					reject(new Error(`get_available_models timed out after ${timeoutMs}ms`));
 				}, timeoutMs);
@@ -157,17 +226,6 @@ class ModelsCache {
 				// get_state response in the background, which we ignore
 				// (it doesn't match our command filter above).
 				pi.send({ type: "get_available_models" });
-			});
-
-			this.models = result;
-			log.info("models cache populated from pi", {
-				count: result.length,
-				probeProvider: start.provider,
-				probeModel: start.modelId,
-			});
-		} catch (err) {
-			log.error("models cache probe failed", {
-				error: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
 			try {
