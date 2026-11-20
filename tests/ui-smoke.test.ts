@@ -1261,10 +1261,11 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 										type: "extension_ui_request",
 										id: "vid-select-1",
 										method: "select",
-										title: "Video model (current: minimax-h3-chili-text-to-video)",
+										title: "Venice video model (current: minimax-h3-chili-text-to-video)",
 										options: [
-											"MiniMax Hailuo 2.3 Chili (minimax-h3-chili-text-to-video) — default · 768P · 4s–6s",
-											"Wan 2.6 (wan-2-6-text-to-video) — 720p/1080p · 5s–15s",
+											"── Venice (API, paid) ──",
+											"MiniMax H3 Chili (minimax-h3-chili-text-to-video) — default · uncensored · 768P · 4s–15s — Venice",
+											"Wan 2.6 (wan-2-6-text-to-video) — 720p/1080p · 5s–15s — Venice",
 										],
 									},
 								}),
@@ -1279,7 +1280,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 									type: "extension_ui_request",
 									id: "vid-notify-1",
 									method: "notify",
-									message: "video model set to wan-2-6-text-to-video",
+									message: "video model set to wan-2-6-text-to-video (Venice)",
 									notifyType: "info",
 								},
 							}),
@@ -1287,6 +1288,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					}
 				});
 			});
+			await page.setViewportSize({ width: 360, height: 800 });
 			await page.reload({ waitUntil: "domcontentloaded" });
 			await page.getByRole("button", { name: "Open settings", exact: true }).click();
 			const videoRow = page.locator(".settings-row").filter({ hasText: "Video model" });
@@ -1296,14 +1298,30 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await videoRow.click();
 			await expect.poll(() => sentPrompts).toEqual(["/videomodel"]);
 			const picker = page.getByRole("dialog", {
-				name: "Video model (current: minimax-h3-chili-text-to-video)",
+				name: "Venice video model (current: minimax-h3-chili-text-to-video)",
 			});
 			await expect.poll(() => picker.isVisible()).toBe(true);
+			expect(await picker.locator(".ext-ui-separator").innerText()).toMatch(/VENICE \(API, PAID\)/i);
+			const firstModel = picker.locator(".model-row").first();
+			expect(await firstModel.locator(".ext-ui-row-title").innerText()).toBe(
+				"MiniMax H3 Chili (minimax-h3-chili-text-to-video)",
+			);
+			expect(await firstModel.locator(".ext-ui-row-meta").innerText()).toBe(
+				"default · uncensored · 768P · 4s–15s",
+			);
+			expect(await firstModel.locator(".ext-ui-provider--venice").innerText()).toBe("Venice");
+			const titleClipped = await firstModel
+				.locator(".ext-ui-row-title")
+				.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+			expect(titleClipped).toBe(false);
 			await picker.locator(".model-row").filter({ hasText: "wan-2-6-text-to-video" }).click();
 			await expect
 				.poll(() => selectResponses)
 				.toEqual([
-					{ id: "vid-select-1", value: "Wan 2.6 (wan-2-6-text-to-video) — 720p/1080p · 5s–15s" },
+					{
+						id: "vid-select-1",
+						value: "Wan 2.6 (wan-2-6-text-to-video) — 720p/1080p · 5s–15s — Venice",
+					},
 				]);
 
 			await page.getByRole("button", { name: "Open settings", exact: true }).click();

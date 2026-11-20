@@ -4039,13 +4039,23 @@ button.model-row-info .model-provider {
 .ext-ui-list .model-row:hover {
 	background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 }
-/* Model name (the part before the trailing " — <provider>" tag). */
+/* Model name (the part before the trailing " — <provider>" tag). Wraps cleanly
+   so long model names + IDs remain readable on narrow mobile screens. */
 .ext-ui-row-label {
 	flex: 1 1 auto;
 	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	line-height: 1.35;
+}
+.ext-ui-row-title {
+	font-size: 13.5px;
+	font-weight: 500;
+}
+.ext-ui-row-meta {
+	font-size: 11.5px;
+	color: var(--text-muted);
+	margin-top: 2px;
 }
 /* Provider tag rendered as a tinted right-aligned pill so the provider
    is scannable at a glance instead of blending into the row text.

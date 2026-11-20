@@ -108,10 +108,11 @@ function providerClass(tag: string): string {
 }
 
 /**
- * Build one option row. Model rows split "Name (id) — provider tag" on the
- * last em-dash segment so the provider renders as a right-aligned tinted
- * badge; separator rows render as a divider header. The row carries its
- * index into `filtered` via `data-idx` so keyboard nav can toggle `.active`.
+ * Build one option row. Model rows split "Name (id) — [meta — ]provider tag"
+ * on the last em-dash segment so the provider renders as a right-aligned tinted
+ * badge, and an optional earlier em-dash renders as a muted metadata subline;
+ * separator rows render as a divider header. The row carries its index into
+ * `filtered` via `data-idx` so keyboard nav can toggle `.active`.
  */
 function buildOptionRow(opt: string, idx: number, active: boolean): HTMLElement {
 	if (isSeparatorRow(opt)) {
@@ -127,7 +128,21 @@ function buildOptionRow(opt: string, idx: number, active: boolean): HTMLElement 
 	}
 	const row = el("div", { class: `model-row${active ? " active" : ""}` });
 	row.dataset.idx = String(idx);
-	row.append(el("span", { class: "ext-ui-row-label", text: label }));
+	const metaIdx = label.indexOf(" \u2014 ");
+	if (metaIdx >= 0) {
+		const title = label.slice(0, metaIdx);
+		const meta = label.slice(metaIdx + 3);
+		row.append(
+			el(
+				"div",
+				{ class: "ext-ui-row-label" },
+				el("div", { class: "ext-ui-row-title", text: title }),
+				el("div", { class: "ext-ui-row-meta", text: meta }),
+			),
+		);
+	} else {
+		row.append(el("span", { class: "ext-ui-row-label", text: label }));
+	}
 	if (tag) row.append(el("span", { class: `ext-ui-provider ${providerClass(tag)}`, text: tag }));
 	return row;
 }
