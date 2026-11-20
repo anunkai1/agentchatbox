@@ -22,9 +22,21 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { AUTH_FILE, KEY_DIR, PRIMARY_LABEL, readVeniceKeys, type VeniceKey } from "./keys.js";
+import {
+	AUTH_FILE,
+	defaultAuthFile,
+	defaultKeyDir,
+	KEY_DIR,
+	PRIMARY_LABEL,
+	readVeniceKeys,
+	type VeniceKey,
+} from "./keys.js";
 
 export const STATE_FILE = join(homedir(), ".secrets", "llm", "venice-pool", "state.json");
+
+export function defaultStateFile(): string {
+	return process.env.ACB_VENICE_POOL_STATE_FILE?.trim() || STATE_FILE;
+}
 export const VENICE_HOST = "api.venice.ai";
 /** Callers set this header to keep their own key (balance probes, key tests). */
 export const SOLO_HEADER = "x-acb-venice-solo";
@@ -95,9 +107,9 @@ export class KeyPool {
 	private readonly stateFile: string;
 
 	constructor(options: KeyPoolOptions = {}) {
-		this.authFile = options.authFile ?? AUTH_FILE;
-		this.keyDir = options.keyDir ?? KEY_DIR;
-		this.stateFile = options.stateFile ?? STATE_FILE;
+		this.authFile = options.authFile ?? defaultAuthFile();
+		this.keyDir = options.keyDir ?? defaultKeyDir();
+		this.stateFile = options.stateFile ?? defaultStateFile();
 	}
 
 	/** Pooled keys, primary first; a key repeated in two slots is used once. */

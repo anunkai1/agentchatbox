@@ -39,6 +39,35 @@ describe("key discovery", () => {
 			{ label: "key2", key: "backup-key" },
 		]);
 	});
+
+	it("respects ACB_VENICE_* path overrides for isolated runners", () => {
+		const box = sandbox();
+		const prev = {
+			auth: process.env.ACB_VENICE_AUTH_FILE,
+			keys: process.env.ACB_VENICE_KEY_DIR,
+			state: process.env.ACB_VENICE_POOL_STATE_FILE,
+		};
+		process.env.ACB_VENICE_AUTH_FILE = box.authFile;
+		process.env.ACB_VENICE_KEY_DIR = box.keyDir;
+		process.env.ACB_VENICE_POOL_STATE_FILE = box.stateFile;
+		try {
+			expect(readVeniceKeys()).toEqual([
+				{ label: "venice", key: "primary-key" },
+				{ label: "key2", key: "backup-key" },
+			]);
+			const pool = new KeyPool();
+			pool.markFailure("venice", 402, undefined);
+			expect(pool.candidates().map((key) => key.label)).toEqual(["key2"]);
+			expect(JSON.parse(readFileSync(box.stateFile, "utf8")).failures.venice.status).toBe(402);
+		} finally {
+			if (prev.auth === undefined) delete process.env.ACB_VENICE_AUTH_FILE;
+			else process.env.ACB_VENICE_AUTH_FILE = prev.auth;
+			if (prev.keys === undefined) delete process.env.ACB_VENICE_KEY_DIR;
+			else process.env.ACB_VENICE_KEY_DIR = prev.keys;
+			if (prev.state === undefined) delete process.env.ACB_VENICE_POOL_STATE_FILE;
+			else process.env.ACB_VENICE_POOL_STATE_FILE = prev.state;
+		}
+	});
 });
 
 describe("refusal window", () => {

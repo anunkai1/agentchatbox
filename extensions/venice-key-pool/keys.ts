@@ -15,6 +15,14 @@ export const RATE_LIMITS_URL = "https://api.venice.ai/api/v1/api_keys/rate_limit
 export const AUTH_FILE = join(homedir(), ".secrets", "llm", "pi-auth.json");
 export const KEY_DIR = join(homedir(), ".secrets", "llm", "venice-keys");
 
+export function defaultAuthFile(): string {
+	return process.env.ACB_VENICE_AUTH_FILE?.trim() || AUTH_FILE;
+}
+
+export function defaultKeyDir(): string {
+	return process.env.ACB_VENICE_KEY_DIR?.trim() || KEY_DIR;
+}
+
 /** Label of pi's own stored credential; extra slots use their filename. */
 export const PRIMARY_LABEL = "venice";
 
@@ -31,7 +39,10 @@ export interface VeniceBalance {
 }
 
 /** pi's stored venice credential first, then extra key slots, in filename order. */
-export function readVeniceKeys(authFile = AUTH_FILE, keyDir = KEY_DIR): VeniceKey[] {
+export function readVeniceKeys(
+	authFile = defaultAuthFile(),
+	keyDir = defaultKeyDir(),
+): VeniceKey[] {
 	const keys: VeniceKey[] = [];
 	try {
 		const stored = JSON.parse(readFileSync(authFile, "utf8")) as {
