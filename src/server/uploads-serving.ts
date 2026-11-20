@@ -38,6 +38,47 @@ export function safeInlineRasterMime(name: string, header: Buffer): string | nul
 	return null;
 }
 
+/** Return a browser-safe video MIME only when extension and magic agree. */
+export function safeInlineVideoMime(name: string, header: Buffer): string | null {
+	const ext = extname(name).toLowerCase();
+	if (ext === ".mp4" && header.length >= 12) {
+		const boxSize = header.readUInt32BE(0);
+		if (
+			(boxSize >= 8 || boxSize === 0 || boxSize === 1) &&
+			header.subarray(4, 8).toString("ascii") === "ftyp"
+		) {
+			const brand = header.subarray(8, 12).toString("ascii");
+			if (brand !== "qt  " && brand !== "avif" && brand !== "avis") return "video/mp4";
+		}
+	}
+	if (ext === ".mov" && header.length >= 8) {
+		const boxSize = header.readUInt32BE(0);
+		const atom = header.subarray(4, 8).toString("ascii");
+		if (boxSize >= 8 || boxSize === 0 || boxSize === 1) {
+			if (
+				atom === "ftyp" &&
+				header.length >= 12 &&
+				header.subarray(8, 12).toString("ascii") === "qt  "
+			) {
+				return "video/quicktime";
+			}
+			if (["moov", "mdat", "wide", "free", "skip"].includes(atom)) {
+				return "video/quicktime";
+			}
+		}
+	}
+	if (
+		ext === ".webm" &&
+		header.length >= 4 &&
+		header.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))
+	) {
+		const ascii = header.toString("latin1");
+		if (ascii.includes("matroska") && !ascii.includes("webm")) return null;
+		return "video/webm";
+	}
+	return null;
+}
+
 /**
  * Inline MIME for an upload, or null to force a download. SVG is shown
  * inline too: in an <img> browsers never run its scripts, and when opened
@@ -45,13 +86,37 @@ export function safeInlineRasterMime(name: string, header: Buffer): string | nul
  */
 export function safeInlineMime(name: string, header: Buffer): string | null {
 	if (extname(name).toLowerCase() === ".svg") return "image/svg+xml";
-	return safeInlineRasterMime(name, header);
+	return safeInlineRasterMime(name, header) ?? safeInlineVideoMime(name, header);
+}
+
+export type ParsedByteRange = { start: number; end: number } | "unsatisfiable" | null;
+
+/** Parse a single RFC 9110 byte range header (`bytes=start-end`, `bytes=start-`, `bytes=-suffix`). */
+export function parseByteRange(rangeHeader: string | undefined, size: number): ParsedByteRange {
+	if (!rangeHeader) return null;
+	const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+	if (!match) return null;
+	const [, startStr, endStr] = match;
+	if (!startStr && !endStr) return null;
+	if (size <= 0) return "unsatisfiable";
+	if (!startStr) {
+		const suffix = Number(endStr);
+		if (!Number.isSafeInteger(suffix) || suffix <= 0) return "unsatisfiable";
+		return { start: Math.max(0, size - suffix), end: size - 1 };
+	}
+	const start = Number(startStr);
+	const end = endStr === "" ? size - 1 : Math.min(Number(endStr), size - 1);
+	if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= size || start > end) {
+		return "unsatisfiable";
+	}
+	return { start, end };
 }
 
 /**
  * Serve uploads without ever executing user-controlled active content on the
- * application origin. Valid raster images and sandboxed SVGs are inline for
- * previews; every other format is an octet-stream attachment.
+ * application origin. Valid raster images, videos, and sandboxed SVGs are inline
+ * for previews; every other format is an octet-stream attachment. Supports HTTP
+ * Range requests so inline <video> playback and seeking work.
  */
 export function createUploadsServingRouter(): Router {
 	const router = express.Router();
@@ -79,11 +144,11 @@ export function createUploadsServingRouter(): Router {
 					res.status(404).json({ error: "upload not found" });
 					return;
 				}
-				const header = Buffer.alloc(16);
+				const header = Buffer.alloc(64);
 				const { bytesRead } = await handle.read(header, 0, header.length, 0);
 				const mime = safeInlineMime(name, header.subarray(0, bytesRead));
+				res.setHeader("Accept-Ranges", "bytes");
 				res.setHeader("Cache-Control", "private, max-age=3600");
-				res.setHeader("Content-Length", String(stat.size));
 				res.setHeader(
 					"Content-Security-Policy",
 					"sandbox; default-src 'none'; style-src 'unsafe-inline'",
@@ -96,6 +161,37 @@ export function createUploadsServingRouter(): Router {
 				} else {
 					res.setHeader("Content-Type", "application/octet-stream");
 					res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+				}
+
+				const parsedRange = parseByteRange(req.get("range"), stat.size);
+				if (parsedRange === "unsatisfiable") {
+					await handle.close();
+					res.status(416);
+					res.setHeader("Content-Range", `bytes */${stat.size}`);
+					res.end();
+					return;
+				}
+				if (parsedRange) {
+					const { start, end } = parsedRange;
+					res.status(206);
+					res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
+					res.setHeader("Content-Length", String(end - start + 1));
+					if (req.method === "HEAD") {
+						await handle.close();
+						res.end();
+						return;
+					}
+					await pipeline(handle.createReadStream({ autoClose: true, start, end }), res).catch(
+						() => {},
+					);
+					return;
+				}
+
+				res.setHeader("Content-Length", String(stat.size));
+				if (req.method === "HEAD" || stat.size === 0) {
+					await handle.close();
+					res.end();
+					return;
 				}
 				// pipeline() destroys the file stream (closing its descriptor) when the
 				// client aborts; a bare .pipe() would leak it until garbage collection.

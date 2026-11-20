@@ -1507,7 +1507,8 @@ body.sidebar-resizing iframe {
 	padding: 0.35em 0.6em;
 	text-align: left;
 }
-.body .text.markdown img {
+.body .text.markdown img,
+.body .text.markdown video {
 	max-width: 100%;
 	height: auto;
 }
