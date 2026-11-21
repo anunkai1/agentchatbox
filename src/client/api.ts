@@ -210,9 +210,7 @@ export async function getModels(): Promise<ModelInfo[]> {
  * turning them into playable audio (the renderer schedules them on a shared Web
  * Audio timeline to avoid multiple voices overlapping).
  *
- * `speed` is forwarded to the engine as a synthesis parameter (ZONOS3-Mini
- * conditions speaking rate; Kokoro scales phoneme durations, keeping the
- * voice's natural pitch).
+ * `speed` conditions ZONOS3-Mini's speaking rate; it is not a playback multiplier.
  */
 export async function synthesizeSpeech(
 	text: string,
@@ -246,15 +244,13 @@ export type StreamAudioFrame =
 
 async function openAudioFrameStream(
 	text: string,
-	voice: string | undefined,
 	signal: AbortSignal | undefined,
 	speed: number | undefined,
-	endpoint: string,
 ): Promise<{ headers?: Headers; frames: AsyncGenerator<Uint8Array<ArrayBuffer>> }> {
-	const res = await fetch(`${BASE}${endpoint}`, {
+	const res = await fetch(`${BASE}/api/tts/stream`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ text, voice, speed }),
+		body: JSON.stringify({ text, speed }),
 		signal,
 	});
 	if (!res.ok) {
@@ -326,13 +322,7 @@ export async function* streamSynthesizeAudio(
 	signal?: AbortSignal,
 	speed?: number,
 ): AsyncGenerator<StreamAudioFrame> {
-	const { headers, frames } = await openAudioFrameStream(
-		text,
-		undefined,
-		signal,
-		speed,
-		"/api/tts/stream",
-	);
+	const { headers, frames } = await openAudioFrameStream(text, signal, speed);
 	const format = headers?.get("X-Audio-Format");
 	if (format === "pcm16") {
 		const sampleRate = Number(headers?.get("X-Audio-Sample-Rate"));
@@ -348,23 +338,6 @@ export async function* streamSynthesizeAudio(
 	}
 	for await (const payload of frames) {
 		yield { kind: "wav", blob: new Blob([payload], { type: "audio/wav" }) };
-	}
-}
-
-/**
- * Streaming TTS yielding one WAV Blob per frame (kept for Kokoro /voicetest
- * and legacy WAV stream callers).
- */
-export async function* streamSynthesizeSpeech(
-	text: string,
-	voice?: string,
-	signal?: AbortSignal,
-	speed?: number,
-	endpoint = "/api/tts/stream",
-): AsyncGenerator<Blob> {
-	const { frames } = await openAudioFrameStream(text, voice, signal, speed, endpoint);
-	for await (const payload of frames) {
-		yield new Blob([payload], { type: "audio/wav" });
 	}
 }
 

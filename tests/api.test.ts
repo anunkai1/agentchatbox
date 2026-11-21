@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sessionExists, streamSynthesizeAudio, streamSynthesizeSpeech } from "../src/client/api.js";
+import { sessionExists, streamSynthesizeAudio } from "../src/client/api.js";
 import { decodePcm16Samples } from "../src/client/voice.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -14,16 +14,13 @@ describe("sessionExists", () => {
 });
 
 /**
- * streamSynthesizeSpeech — the /api/tts/stream frame parser.
- *
- * The body is a binary frame stream ([1 byte type][uint32 LE length][payload])
- * and the client only ever sees what the local pi-voice-server sends, but the
- * parser is the one place where a malformed length field could make the browser
+ * The /api/tts/stream body is a binary frame stream ([1 byte type][uint32 LE length][payload]).
+ * The parser is the one place where a malformed length field could make the browser
  * buffer gigabytes, so its framing rules are pinned here: partial reads must be
  * reassembled, DATA frames yield in order, END ends cleanly, ERR raises, and an
  * absurd frame length is refused instead of allocated.
  */
-describe("streamSynthesizeSpeech", () => {
+describe("streamSynthesizeAudio", () => {
 	/** Build a frame: [type][uint32 LE length][payload]. */
 	function frame(type: number, payload: Uint8Array): Uint8Array {
 		const out = new Uint8Array(5 + payload.length);
@@ -63,8 +60,9 @@ describe("streamSynthesizeSpeech", () => {
 		]);
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bodyOf(bytes)));
 		const chunks: number[][] = [];
-		for await (const blob of streamSynthesizeSpeech("hi")) {
-			chunks.push([...new Uint8Array(await blob.arrayBuffer())]);
+		for await (const chunk of streamSynthesizeAudio("hi")) {
+			if (chunk.kind !== "wav") throw new Error("Expected WAV fixture");
+			chunks.push([...new Uint8Array(await chunk.blob.arrayBuffer())]);
 		}
 		expect(chunks).toEqual([
 			[1, 2, 3],
@@ -73,24 +71,16 @@ describe("streamSynthesizeSpeech", () => {
 	});
 
 	it("raises the upstream's message on an ERR frame", async () => {
-		const bytes = frame(0x80, new TextEncoder().encode("kokoro exploded"));
+		const bytes = frame(0x80, new TextEncoder().encode("synthesis failed"));
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bodyOf(bytes)));
-		await expect(async () => {
-			for await (const _ of streamSynthesizeSpeech("hi")) {
-				/* nothing */
-			}
-		}).rejects.toThrow("kokoro exploded");
+		await expect(streamSynthesizeAudio("hi").next()).rejects.toThrow("synthesis failed");
 	});
 
 	it("refuses an oversized frame length instead of buffering it", async () => {
 		// 4 GiB - 1: the largest a uint32 length field can claim.
 		const header = new Uint8Array([0x01, 0xff, 0xff, 0xff, 0xff]);
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bodyOf(header)));
-		await expect(async () => {
-			for await (const _ of streamSynthesizeSpeech("hi")) {
-				/* nothing */
-			}
-		}).rejects.toThrow(/frame too large/);
+		await expect(streamSynthesizeAudio("hi").next()).rejects.toThrow(/frame too large/);
 	});
 
 	it("raises when the stream stops without an END frame (a truncated reply)", async () => {
@@ -98,8 +88,9 @@ describe("streamSynthesizeSpeech", () => {
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bodyOf(bytes)));
 		const chunks: number[][] = [];
 		await expect(async () => {
-			for await (const blob of streamSynthesizeSpeech("hi")) {
-				chunks.push([...new Uint8Array(await blob.arrayBuffer())]);
+			for await (const chunk of streamSynthesizeAudio("hi")) {
+				if (chunk.kind !== "wav") throw new Error("Expected WAV fixture");
+				chunks.push([...new Uint8Array(await chunk.blob.arrayBuffer())]);
 			}
 		}).rejects.toThrow(/END frame/);
 		// The chunk that did arrive was still delivered before the error.
@@ -109,23 +100,17 @@ describe("streamSynthesizeSpeech", () => {
 	it("raises when the stream stops in the middle of a frame", async () => {
 		const bytes = frame(0x01, new Uint8Array([1, 2, 3])).subarray(0, 7);
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bodyOf(bytes)));
-		await expect(async () => {
-			for await (const _ of streamSynthesizeSpeech("hi")) {
-				/* nothing */
-			}
-		}).rejects.toThrow(/mid-frame/);
+		await expect(streamSynthesizeAudio("hi").next()).rejects.toThrow(/mid-frame/);
 	});
 
-	it("sends text, voice and speed in the request body", async () => {
+	it("sends text and speed in the request body", async () => {
 		const fetchMock = vi.fn().mockResolvedValue(bodyOf(frame(0x00, new Uint8Array())));
 		vi.stubGlobal("fetch", fetchMock);
-		for await (const _ of streamSynthesizeSpeech("hello", "af_heart", undefined, 1.25)) {
-			/* nothing */
-		}
+		await streamSynthesizeAudio("hello", undefined, 1.25).next();
 		expect(fetchMock).toHaveBeenCalledWith("/api/tts/stream", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ text: "hello", voice: "af_heart", speed: 1.25 }),
+			body: JSON.stringify({ text: "hello", speed: 1.25 }),
 			signal: undefined,
 		});
 	});

@@ -9,6 +9,7 @@ import { expect, it, vi } from "vitest";
 import { RelayVoiceJournal, VOICE_CONTEXT } from "../extensions/voice-test/relay-voice.js";
 import {
 	formatKokoroPlayedHistory,
+	KOKORO_TTS_CONFIG,
 	KokoroFrames,
 	KokoroTtsTransport,
 } from "../src/client/kokoro-tts.js";
@@ -26,6 +27,10 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 		const server = createServer(app);
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/tts/relay-stream`;
+		const transport = {
+			create: () => new KokoroTtsTransport({ ...KOKORO_TTS_CONFIG, endpoint }),
+			label: "Server2 Kokoro",
+		};
 		const originalFetch = globalThis.fetch;
 		const network: string[] = [];
 		vi.stubGlobal("fetch", ((input, init) => {
@@ -114,7 +119,7 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 					onIdle() {},
 					onError: failed,
 				},
-				{ create: () => new KokoroTtsTransport(endpoint), label: "Server2 Kokoro" },
+				transport,
 			);
 			speaker.beginUtterance("live-kokoro-turn", 0, (value) => {
 				report = value;
@@ -164,7 +169,7 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 			let uncertain: PcmPlayedReport | undefined;
 			speaker = new PcmTtsSpeaker(
 				{ onStatus() {}, onPlaying() {}, onIdle() {}, onError: unavailable },
-				{ create: () => new KokoroTtsTransport(endpoint), label: "Server2 Kokoro" },
+				transport,
 			);
 			speaker.beginUtterance("unreliable-price", 0, (value) => {
 				uncertain = value;
@@ -192,7 +197,7 @@ it.runIf(process.env.KOKORO_LIVE === "1")(
 			let bracket: PcmPlayedReport | undefined;
 			speaker = new PcmTtsSpeaker(
 				{ onStatus() {}, onPlaying() {}, onIdle() {}, onError: unavailable },
-				{ create: () => new KokoroTtsTransport(endpoint), label: "Server2 Kokoro" },
+				transport,
 			);
 			speaker.beginUtterance("omitted-bracket", 0, (value) => {
 				bracket = value;

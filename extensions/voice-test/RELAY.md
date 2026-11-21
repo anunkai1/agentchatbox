@@ -146,11 +146,12 @@ confirmation.
 ## Isolated streaming trial
 
 `/relaytrial` opens **Trial A — streaming Pi voice**: local STT → the same
-full-access Pi/DeepSeek Relay → sentence-streamed **ZONOS3-Mini** (default) or
-**Kokoro** (`/relaytrial kokoro`). It begins speaking while Pi is still generating.
-Its saved choice (`acb-relay-trial-engine`) and session (`acb-relay-trial-stream-session`)
-are independent of normal Relay. A saved retired trial engine changes to ZONOS3-Mini
-on opening without changing either chat ID.
+full-access Pi/DeepSeek Relay → sentence-streamed **ZONOS3-Mini** only. It begins
+speaking while Pi is still generating. Its saved choice (`acb-relay-trial-engine`)
+and session (`acb-relay-trial-stream-session`) are independent of normal Relay.
+Retired engine arguments such as `/relaytrial kokoro` are rejected without
+opening a session, and any saved retired trial engine (`kokoro`, `lfm-tts`,
+`server4`, etc.) migrates to `zonos3` on opening without changing either chat ID.
 
 The speech path renders Markdown before sentence splitting, so headings, list
 markers, emphasis and link destinations are not read as formatting characters,
@@ -164,12 +165,14 @@ Pi turn** is the explicit coordinator abort; **Cancel work job** remains separat
 After an interruption, further output from that ongoing turn stays muted until
 a new owner turn. Restored history is never replayed as speech.
 
-The Kokoro trial shares `/api/tts/kokoro-stream` (sentence WAVs) with `/voicetest`.
-Its evidence records finished segments and marks cuts uncertain; ZONOS3-Mini uses
-aligned evidence. Neither proves acoustic hearing. The separate aligned Kokoro
-proxy (`/api/tts/relay-stream`, `X-Kokoro-Alignment: kokoro-pred-dur-v1`) remains for
-backend verification, not as a selectable engine in either drawer. The opt-in
-`KOKORO_LIVE=1` test uses it with a simulated output clock and verifies saved Pi context.
+Both `/relaytrial` and `/voicetest` now use `/api/tts/zonos-relay-stream`
+(ZONOS3-Mini synthesis-aligned 44.1 kHz PCM16). The Kokoro proxies
+(`/api/tts/kokoro-stream` and aligned `/api/tts/relay-stream` with
+`X-Kokoro-Alignment: kokoro-pred-dur-v1`) remain in `src/server/tts.ts` for
+backend verification (`pi-voice-server`'s consumer verifier) and external
+compatibility, not as selectable engines in any ACB drawer. The opt-in
+`KOKORO_LIVE=1` test uses `/api/tts/relay-stream` with a simulated output clock
+and verifies saved Pi context.
 
 ## Ownership and persistence
 

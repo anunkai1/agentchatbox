@@ -4,8 +4,8 @@
  * Ordinary chat uses ZONOS3-Mini at http://127.0.0.1:8184 (neutral Savannah).
  * Streaming /api/tts/stream forwards progressive mono 44.1 kHz PCM16 frames
  * directly; whole-blob /api/tts returns one WAV.
- * Relay uses aligned Zonos. The Kokoro routes serve isolated voice tests/trials
- * (WAV stream) and backend verification (aligned stream).
+ * Relay, trial and voice test use aligned Zonos. The two Kokoro proxies retain
+ * their contracts for external backend verification and older clients.
  *
  * Two routes to the browser:
  *   POST /api/tts        { text, voice?, speed? } → audio/wav (whole blob)
@@ -185,9 +185,8 @@ export function createTtsRouter(): Router {
 
 	/**
 	 * Forward the backend's framed stream without interpreting audio or timing.
-	 * Normal Relay only uses /zonos-relay-stream. /kokoro-stream serves the
-	 * isolated trial and voice test; /relay-stream preserves the aligned Kokoro
-	 * contract used by pi-voice-server's consumer verifier.
+	 * All current browser voice modes use /zonos-relay-stream here. Keep
+	 * /kokoro-stream and /relay-stream for pi-voice-server's consumer verifier.
 	 */
 	router.post(
 		["/kokoro-stream", "/relay-stream", "/zonos-relay-stream"],

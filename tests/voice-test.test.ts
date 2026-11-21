@@ -29,7 +29,7 @@ const generate: VoiceGenerate = async function* () {
 describe("voice interruption tick wiring", () => {
 	it("uses the same playback-gated stop for microphone and manual interruption", () => {
 		const source = readFileSync("src/client/voice-test.ts", "utf8");
-		expect(source).toContain("pcmSpeaker?.stop(acknowledge)");
+		expect(source).toContain("pcmSpeaker.stop(acknowledge)");
 		expect(source).toMatch(
 			/captureConversation\(\s*\(\) => \{\s*if \(foregroundBlocked\(\)\) return;\s*cancelAudio\(true\);/,
 		);

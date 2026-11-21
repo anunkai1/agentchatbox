@@ -4,6 +4,7 @@ import {
 	createZonosSpeaker,
 	formatKokoroPlayedHistory,
 	hasReliableKokoroWords,
+	KOKORO_TTS_CONFIG,
 	KokoroFrames,
 	KokoroTtsTransport,
 	validateKokoroAlignment,
@@ -151,7 +152,7 @@ function harness() {
 	const error = vi.fn();
 	const speaker = new PcmTtsSpeaker(
 		{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: error },
-		{ create: () => new KokoroTtsTransport(), label: "Server2 Kokoro" },
+		{ create: () => new KokoroTtsTransport(KOKORO_TTS_CONFIG), label: "Server2 Kokoro" },
 	);
 	const begin = (text = "Hello world.") => {
 		speaker.beginUtterance("turn-one", 0, (report) => reports.push(report));

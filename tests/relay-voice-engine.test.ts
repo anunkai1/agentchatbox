@@ -1,8 +1,5 @@
 import { expect, it, vi } from "vitest";
-import {
-	migrateRelayVoicePreference,
-	readTrialVoicePreference,
-} from "../src/client/relay-voice-engine.js";
+import { migrateVoicePreference } from "../src/client/relay-voice-engine.js";
 
 const relay = "acb-relay-voice-engine";
 const trial = "acb-relay-trial-engine";
@@ -30,39 +27,50 @@ it.each([
 		[relaySession]: "relay-id",
 		[trialSession]: "trial-id",
 	});
-	migrateRelayVoicePreference(storage);
+	migrateVoicePreference("relay", storage);
 	expect(storage.setItem.mock.calls).toEqual([[relay, "zonos3"]]);
-	expect(readTrialVoicePreference(undefined, storage)).toBe("kokoro");
+	expect(storage.getItem(trial)).toBe("kokoro");
 	expect(storage.getItem(relaySession)).toBe("relay-id");
 	expect(storage.getItem(trialSession)).toBe("trial-id");
 });
 
-it("does not write an unset or already current Relay preference", () => {
-	for (const storage of [preferences({}), preferences({ [relay]: "zonos3" })]) {
-		migrateRelayVoicePreference(storage);
-		expect(storage.setItem).not.toHaveBeenCalled();
+it.each([
+	"kokoro",
+	"legacy",
+	"server4",
+	"lfm-tts",
+	"unexpected",
+])("migrates saved Trial A %s to ZONOS without touching Relay or session preferences", (saved) => {
+	const storage = preferences({
+		[relay]: "kokoro",
+		[trial]: saved,
+		[relaySession]: "relay-id",
+		[trialSession]: "trial-id",
+	});
+	migrateVoicePreference("trial", storage);
+	expect(storage.setItem.mock.calls).toEqual([[trial, "zonos3"]]);
+	expect(storage.getItem(relay)).toBe("kokoro");
+	expect(storage.getItem(relaySession)).toBe("relay-id");
+	expect(storage.getItem(trialSession)).toBe("trial-id");
+});
+
+it("does not write an unset or already current preference", () => {
+	for (const mode of ["relay", "trial"] as const) {
+		const key = mode === "relay" ? relay : trial;
+		for (const storage of [preferences({}), preferences({ [key]: "zonos3" })]) {
+			migrateVoicePreference(mode, storage);
+			expect(storage.setItem).not.toHaveBeenCalled();
+		}
 	}
 });
 
-it("switches or migrates the trial independently of normal Relay", () => {
-	const storage = preferences({ [relay]: "kokoro", [trial]: "server4" });
-	expect(readTrialVoicePreference(undefined, storage)).toBe("zonos3");
-	expect(readTrialVoicePreference("kokoro", storage)).toBe("kokoro");
-	expect(readTrialVoicePreference(undefined, storage)).toBe("kokoro");
-	expect(storage.setItem.mock.calls).toEqual([
-		[trial, "zonos3"],
-		[trial, "kokoro"],
-	]);
-	expect(storage.getItem(relay)).toBe("kokoro");
-});
-
-it("tolerates unavailable storage without selecting a different normal engine", () => {
+it("tolerates unavailable storage without throwing", () => {
 	const storage = {
 		getItem: () => "kokoro",
 		setItem: () => {
 			throw new Error("Read-only");
 		},
 	};
-	expect(() => migrateRelayVoicePreference(storage)).not.toThrow();
-	expect(readTrialVoicePreference(undefined, storage)).toBe("kokoro");
+	expect(() => migrateVoicePreference("relay", storage)).not.toThrow();
+	expect(() => migrateVoicePreference("trial", storage)).not.toThrow();
 });

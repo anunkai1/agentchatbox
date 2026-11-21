@@ -80,8 +80,8 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	// Transport-only alias. pi's acb-workflows input handler owns behavior.
 	websearch: "search the web and summarise: /websearch <query>",
 	project: "start a new chat in a project: /project <name|id>",
-	voicetest: "open the isolated browser voice-conversation test",
-	relaytrial: "trial A: isolated streaming Pi voice with ZONOS3-Mini or Kokoro",
+	voicetest: "open the isolated tool-free ZONOS3-Mini conversation test",
+	relaytrial: "trial A: isolated streaming Pi voice with ZONOS3-Mini",
 	relay: "open the resumable Relay voice coordinator with ZONOS3-Mini: /relay [new]",
 };
 
@@ -388,22 +388,18 @@ export function handleSlash(arg: string): void {
 			openRelay(forceNew);
 			return;
 		}
-		case "relaytrial": {
-			const engineArg = rest.trim().toLowerCase();
-			openRelayTrial(
-				engineArg === "kokoro"
-					? "kokoro"
-					: engineArg === "zonos3" || engineArg === "zonos" || engineArg === "zonos3-mini"
-						? "zonos3"
-						: undefined,
-			);
+		case "relaytrial":
+		case "voicetest": {
+			const engine = rest.trim().toLowerCase();
+			if (engine && !["zonos3", "zonos", "zonos3-mini"].includes(engine)) {
+				appendError(`/${cmd} only uses ZONOS3-Mini. Use /${cmd} without an engine argument.`);
+				return;
+			}
+			// UI only: the separate Pi session owns all conversation/model behaviour.
+			if (cmd === "relaytrial") openRelayTrial();
+			else openVoiceTest();
 			return;
 		}
-		case "voicetest":
-			// UI only: the separate Pi session owns all conversation/model behaviour.
-			openVoiceTest();
-			$<HTMLTextAreaElement>("#input").value = "";
-			break;
 		case "models":
 			openModelsPanel();
 			$<HTMLTextAreaElement>("#input").value = "";

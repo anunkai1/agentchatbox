@@ -17,13 +17,7 @@ import {
 	MAX_PROMPT_IMAGE_TOTAL_BYTES,
 	MAX_PROMPT_IMAGES,
 } from "../shared/limits.js";
-import {
-	streamSynthesizeAudio,
-	streamSynthesizeSpeech,
-	synthesizeSpeech,
-	transcribeAudio,
-	uploadFile,
-} from "./api.js";
+import { streamSynthesizeAudio, synthesizeSpeech, transcribeAudio, uploadFile } from "./api.js";
 import { $ } from "./dom.js";
 import { MIC_ICON, REC_ICON, SPEAK_ICON, STOP_ICON } from "./icons.js";
 import { markdownToSpeechText } from "./markdown.js";
@@ -49,7 +43,6 @@ import {
 	positionAt,
 	type Slot,
 } from "./tts-timeline.js";
-import { chunkStartTime, trimChunkSilence } from "./tts-trim.js";
 import { imageThumbnail, UploadQueue } from "./upload-queue.js";
 import { bindVoiceBar, updateVoiceBar } from "./voice-bar.js";
 
@@ -451,7 +444,7 @@ function placeChunk(ctx: AudioContext, gen: number, chunk: Chunk, skip: number):
 	// Start where the previous chunk ends. If synthesis fell behind playback the
 	// timeline has already passed, so start now rather than in the past (which the
 	// audio clock would silently skip).
-	const startAt = chunkStartTime(ctx.currentTime, TTS_SCHEDULE_LEAD, nextStartAt);
+	const startAt = Math.max(ctx.currentTime + TTS_SCHEDULE_LEAD, nextStartAt);
 	// Stop at the scheduled boundary (also used when seeking within a fragment).
 	node.start(startAt, chunk.offset + skip);
 	node.stop(startAt + playSeconds);
@@ -785,158 +778,6 @@ function setSpeakBtnState(src: unknown, state: SpeakBtnState): void {
 	} else {
 		src.innerHTML = src.dataset.idleLabel ?? SPEAK_ICON;
 		src.title = "Speak this message (local TTS)";
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Browser conversation test: isolated playback queue and speech capture.
-// Model selection/prompts stay in the Pi extension, never in this audio layer.
-// ---------------------------------------------------------------------------
-
-export class ConversationSpeaker {
-	private readonly context = new AudioContext();
-	private controller = new AbortController();
-	private nodes = new Set<AudioBufferSourceNode>();
-	private queue = Promise.resolve();
-	private nextAt = 0;
-	private started = false;
-	private paused = false;
-	private pending = 0;
-	private playback = new Set<{
-		startedAt?: number;
-		nodes: number;
-		ended: boolean;
-		audio: boolean;
-		failed: boolean;
-		report?: (complete: boolean) => void;
-	}>();
-
-	constructor(
-		private readonly onPlaying: () => void,
-		private readonly onIdle: () => void,
-		private readonly onError: (error: unknown) => void,
-	) {
-		declarePlaybackAudioSession();
-		void this.context.resume().catch(onError);
-	}
-
-	enqueue(text: string, report?: (complete: boolean) => void): void {
-		const controller = this.controller;
-		const item = {
-			nodes: 0,
-			ended: false,
-			audio: false,
-			failed: false,
-			report,
-			startedAt: undefined as number | undefined,
-		};
-		this.playback.add(item);
-		const completed = () => {
-			if (controller.signal.aborted || !item.ended || item.nodes) return;
-			this.playback.delete(item);
-			if (item.audio) item.report?.(!item.failed);
-		};
-		this.pending++;
-		this.queue = this.queue
-			.then(async () => {
-				if (controller.signal.aborted) return;
-				for await (const wav of streamSynthesizeSpeech(
-					text,
-					undefined,
-					controller.signal,
-					1,
-					"/api/tts/kokoro-stream",
-				)) {
-					const buffer = await this.context.decodeAudioData(await wav.arrayBuffer());
-					if (controller.signal.aborted) return;
-					const { offset, duration } = trimChunkSilence(buffer);
-					const node = this.context.createBufferSource();
-					node.buffer = buffer;
-					node.connect(this.context.destination);
-					const at = Math.max(this.context.currentTime + 0.04, this.nextAt);
-					node.start(at, offset, duration);
-					this.nextAt = at + duration;
-					item.startedAt ??= at;
-					item.audio = true;
-					item.nodes++;
-					this.nodes.add(node);
-					if (!this.started) {
-						this.started = true;
-						this.onPlaying();
-					}
-					node.onended = () => {
-						this.nodes.delete(node);
-						node.disconnect();
-						item.nodes--;
-						completed();
-						this.checkIdle();
-					};
-				}
-			})
-			.catch((error: unknown) => {
-				item.failed = true;
-				if (!controller.signal.aborted) this.onError(error);
-			})
-			.finally(() => {
-				if (controller !== this.controller) return;
-				item.ended = true;
-				completed();
-				this.pending--;
-				this.checkIdle();
-			});
-	}
-
-	get hasAudio(): boolean {
-		return this.pending > 0 || this.nodes.size > 0;
-	}
-
-	async pause(): Promise<void> {
-		this.paused = true;
-		await this.context.suspend();
-	}
-
-	async resume(): Promise<void> {
-		await this.context.resume();
-		this.paused = false;
-		this.checkIdle();
-	}
-
-	private checkIdle(): void {
-		if (!this.paused && !this.pending && !this.nodes.size) {
-			this.nextAt = 0;
-			this.onIdle();
-		}
-	}
-
-	stop(): void {
-		// A partial chunk has no word alignment. Report uncertainty, never mark
-		// its whole text heard or invent a word boundary from character counts.
-		for (const item of this.playback) {
-			if (item.startedAt !== undefined && this.context.currentTime > item.startedAt)
-				item.report?.(false);
-		}
-		this.playback.clear();
-		this.controller.abort();
-		this.controller = new AbortController();
-		this.queue = Promise.resolve();
-		this.pending = 0;
-		this.started = false;
-		for (const node of this.nodes) {
-			node.onended = null;
-			try {
-				node.stop();
-			} catch {
-				/* already ended */
-			}
-			node.disconnect();
-		}
-		this.nodes.clear();
-		this.nextAt = 0;
-	}
-
-	close(): void {
-		this.stop();
-		void this.context.close().catch(() => {});
 	}
 }
 

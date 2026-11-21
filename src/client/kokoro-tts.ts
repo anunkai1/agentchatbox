@@ -260,20 +260,15 @@ export class KokoroTtsTransport implements TtsTransport {
 	onmessage: TtsTransport["onmessage"] = null;
 	private closed = false;
 	private ledgers = new Map<number, Ledger>();
-	private readonly config: AlignedTtsConfig;
 	/**
 	 * Resolves the synthesis speed once at the start of each spoken turn (epoch),
 	 * so picker changes take effect on the next turn without mixing paces mid-answer.
 	 */
 	private readonly getSpeed: () => number;
 	constructor(
-		configOrEndpoint: string | AlignedTtsConfig = KOKORO_TTS_CONFIG,
+		private readonly config: AlignedTtsConfig,
 		speed: number | (() => number) = 1,
 	) {
-		this.config =
-			typeof configOrEndpoint === "string"
-				? { ...KOKORO_TTS_CONFIG, endpoint: configOrEndpoint }
-				: configOrEndpoint;
 		this.getSpeed = typeof speed === "function" ? speed : () => speed;
 		queueMicrotask(() =>
 			this.emit({ type: "ready", protocol: 3, tts: 1, outputRate: this.config.sampleRate }),

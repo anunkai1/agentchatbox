@@ -1,4 +1,5 @@
 /** Voice-test UI only. The dedicated Pi session owns the model, prompt and history. */
+import { ZONOS3_ALIGNMENT } from "../shared/kokoro.js";
 import type { ClientMessage } from "../shared/protocol.js";
 import { RELAY_MESSAGE, type RelayEvent } from "../shared/relay.js";
 import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js";
@@ -9,18 +10,13 @@ import { setRichText } from "./linkify.js";
 import type { PcmPlayedReport, PcmUtteranceMetrics } from "./pcm-tts.js";
 import { mountRelayDrawer, type RelayDrawer } from "./relay-drawer.js";
 import { encodeRelayVoice } from "./relay-voice.js";
-import {
-	migrateRelayVoicePreference,
-	readTrialVoicePreference,
-	type TrialVoiceEngine,
-} from "./relay-voice-engine.js";
+import { migrateVoicePreference } from "./relay-voice-engine.js";
 import { createRelayWakeLock } from "./relay-wake-lock.js";
 import { type RelayChatBinding, services } from "./services.js";
 import { SpokenMarkdown } from "./spoken-markdown.js";
 import { state } from "./state.js";
 import {
 	type ConversationCapture,
-	ConversationSpeaker,
 	cancelVoiceRecord,
 	captureConversation,
 	stopAllVoice,
@@ -59,12 +55,11 @@ const RELAY_SESSION_KEY = "acb-relay-session";
 const TRIAL_SESSION_KEY = "acb-relay-trial-stream-session";
 
 export function openRelay(forceNew = false): void {
-	migrateRelayVoicePreference();
 	openVoice("relay", { forceNew });
 }
 
-export function openRelayTrial(explicitEngine?: TrialVoiceEngine): void {
-	openVoice("trial", { trialEngine: readTrialVoicePreference(explicitEngine) });
+export function openRelayTrial(): void {
+	openVoice("trial");
 }
 
 export function openVoiceTest(): void {
@@ -73,11 +68,7 @@ export function openVoiceTest(): void {
 
 function openVoice(
 	mode: "relay" | "trial" | "test",
-	{
-		trialEngine = "zonos3",
-		workerStart,
-		forceNew = false,
-	}: { trialEngine?: TrialVoiceEngine; workerStart?: string; forceNew?: boolean } = {},
+	{ workerStart, forceNew = false }: { workerStart?: string; forceNew?: boolean } = {},
 ): void {
 	const attached = mode === "relay";
 	const streamTrial = mode === "trial";
@@ -88,9 +79,9 @@ function openVoice(
 		relayUi?.reveal();
 		return;
 	}
+	if (mode !== "test") migrateVoicePreference(mode);
 	const foregroundRelay = attached;
 	const setWakeLock = foregroundRelay ? createRelayWakeLock() : undefined;
-	const useZonosTts = attached || (streamTrial && trialEngine === "zonos3");
 	const sessionKey = streamTrial ? TRIAL_SESSION_KEY : RELAY_SESSION_KEY;
 	const control = relay ? "/relay" : "/voicetest";
 	const startCommand = workerStart
@@ -137,10 +128,8 @@ function openVoice(
 		"p",
 		{},
 		relay
-			? useZonosTts
-				? "Local STT → Pi → synthesis-aligned ZONOS3-Mini (Savannah). Stop speaking leaves tools and workers running. Playback evidence includes only tokens completed by the output clock; it cannot verify pronunciation or hearing. No raw audio is saved."
-				: "Isolated trial: local STT → Pi → sentence-streamed Kokoro. Interrupt stops speech only; work continues. Playback records completed speech segments; the interrupted segment’s word boundary is unknown."
-			: "Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
+			? "Local STT → Pi → synthesis-aligned ZONOS3-Mini (Savannah). Stop speaking leaves tools and workers running. Playback evidence includes only tokens completed by the output clock; it cannot verify pronunciation or hearing. No raw audio is saved."
+			: "Local speech-to-text → Venice DeepSeek → local ZONOS3-Mini (Savannah). No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
 	const model = el("p", { class: "voice-test-model" });
@@ -194,22 +183,6 @@ function openVoice(
 		"Cancel work job",
 	);
 	const newRelay = el("button", { type: "button" }, "New Relay conversation");
-	const trialSettings: HTMLElement[] = [];
-	if (streamTrial) {
-		const toggleTrial = el(
-			"button",
-			{ type: "button" },
-			useZonosTts ? "Use Kokoro TTS" : "Use ZONOS3-Mini TTS",
-		);
-		toggleTrial.onclick = () => {
-			modal.dismiss();
-			openRelayTrial(useZonosTts ? "kokoro" : "zonos3");
-		};
-		trialSettings.push(
-			el("p", {}, "Changing the trial voice closes the microphone, not Pi work."),
-			el("div", { class: "voice-test-controls" }, toggleTrial),
-		);
-	}
 	const input = el("input", {
 		type: "text",
 		placeholder: relay ? "Or type a message to Relay" : "Or type a test message",
@@ -233,7 +206,6 @@ function openVoice(
 			"Headphones help prevent echo. Replies below are generated text, not proof that every word was heard.",
 		),
 		metrics,
-		...trialSettings,
 		...(relay
 			? [
 					el(
@@ -266,11 +238,9 @@ function openVoice(
 		el(
 			"p",
 			{ class: "voice-test-overview" },
-			useZonosTts
+			relay
 				? "Talk naturally. Pi handles your requests; ZONOS3-Mini reads the replies aloud."
-				: relay
-					? "Talk naturally. Pi handles your requests; Kokoro reads the replies aloud."
-					: "Try a conversation with DeepSeek. This test cannot use tools or do work.",
+				: "Try a conversation with DeepSeek and ZONOS3-Mini. This test cannot use tools or do work.",
 		),
 		model,
 		workerModel,
@@ -299,7 +269,7 @@ function openVoice(
 	let relayStarted = false;
 	let foregroundPending = foregroundRelay && document.visibilityState !== "visible";
 	let currentTurn = "";
-	let relaySpeech = new SpokenMarkdown(!useZonosTts);
+	let relaySpeech = new SpokenMarkdown(false);
 	let relayMessage = "";
 	let pcmStartedUtterance = "";
 	let restoredReply: HTMLElement | null = null;
@@ -395,7 +365,7 @@ function openVoice(
 		if (!endedAt) return;
 		const parts = [
 			`Local STT ${sttMs.toFixed(0)} ms`,
-			`Pi first text ${firstTextMs.toFixed(0)} ms`,
+			`${relay ? "Pi" : "Model"} first text ${firstTextMs.toFixed(0)} ms`,
 		];
 		if (m.ttsFirstPcmClientMs !== null) {
 			parts.push(`TTS first PCM ${m.ttsFirstPcmClientMs.toFixed(0)} ms`);
@@ -405,51 +375,34 @@ function openVoice(
 		}
 		metrics.textContent = parts.join(" · ");
 	};
-	const speaker = !useZonosTts
-		? new ConversationSpeaker(
-				() => {
-					if (endedAt)
-						metrics.textContent = `Local STT ${sttMs.toFixed(0)} ms · model first text ${firstTextMs.toFixed(0)} ms · speech end to first audio ${(performance.now() - endedAt).toFixed(0)} ms`;
-					sayStatus("Speaking — you can interrupt");
-				},
-				() => {
-					if (!ending)
-						sayStatus(stopCapture ? "Listening…" : "Ready — start the microphone or send text");
-				},
-				fail,
-			)
-		: null;
-	const pcmSpeaker = useZonosTts
-		? createZonosSpeaker(
-				{
-					onStatus: (text) => {
-						if (!ending) sayStatus(text);
-					},
-					onPlaying: (m) => {
-						renderPcmMetrics(m);
-						if (!ending) sayStatus("Speaking — you can interrupt");
-					},
-					onMetrics: (m) => renderPcmMetrics(m),
-					onIdle: () => {
-						if (!ending && !failed)
-							sayStatus(stopCapture ? "Listening…" : "Ready — start the microphone or send text");
-					},
-					onError: (error) => {
-						relayMuted = true;
-						if (!ending)
-							sayStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
-					},
-				},
-				() => state.ttsSpeed,
-			)
-		: null;
+	const pcmSpeaker = createZonosSpeaker(
+		{
+			onStatus: (text) => {
+				if (!ending) sayStatus(text);
+			},
+			onPlaying: (m) => {
+				renderPcmMetrics(m);
+				if (!ending) sayStatus("Speaking — you can interrupt");
+			},
+			onMetrics: renderPcmMetrics,
+			onIdle: () => {
+				if (!ending && !failed && (relay || !currentTurn))
+					sayStatus(stopCapture ? "Listening…" : "Ready — start the microphone or send text");
+			},
+			onError: (error) => {
+				if (relay) relayMuted = true;
+				else currentTurn = "";
+				if (!ending) sayStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+			},
+		},
+		() => (relay ? state.ttsSpeed : 1),
+	);
 	const command = (text: string) => {
 		if (connected()) sendWire({ type: "prompt", text });
 	};
 	const cancelAudio = (acknowledge = false) => {
 		pausedSpeechMessage = "";
-		speaker?.stop();
-		pcmSpeaker?.stop(acknowledge);
+		pcmSpeaker.stop(acknowledge);
 		pcmStartedUtterance = "";
 		currentTurn = "";
 		if (ready && !ending) {
@@ -508,8 +461,7 @@ function openVoice(
 		voiceActive = false;
 		micWanted = false;
 		releaseMic();
-		speaker?.stop();
-		pcmSpeaker?.disconnect();
+		pcmSpeaker.disconnect();
 		pcmStartedUtterance = "";
 		start.disabled = send.disabled = interrupt.disabled = stopPi.disabled = true;
 		finish.disabled = !relay;
@@ -535,8 +487,7 @@ function openVoice(
 		opened = false;
 		if (attached) relayUi = null;
 		end();
-		speaker?.close();
-		pcmSpeaker?.close();
+		pcmSpeaker.close();
 		clearInterval(watchdog);
 		window.removeEventListener("pagehide", unload);
 		document.removeEventListener("visibilitychange", visibility);
@@ -548,9 +499,8 @@ function openVoice(
 	const retireLocalSpeech = (disconnect = false) => {
 		// Retire the interrupted turn locally. Do not abort Pi or replay audio/capture.
 		currentTurn = relayMessage = pcmStartedUtterance = pausedSpeechMessage = "";
-		speaker?.stop();
-		if (disconnect) pcmSpeaker?.disconnect();
-		else pcmSpeaker?.stop();
+		if (disconnect) pcmSpeaker.disconnect();
+		else pcmSpeaker.stop();
 	};
 	const suspendForeground = () => {
 		foregroundPending = true;
@@ -581,7 +531,7 @@ function openVoice(
 			}
 			releaseMic();
 			cancelAudio();
-			pcmSpeaker?.disconnect();
+			pcmSpeaker.disconnect();
 			if (!ending) sayStatus("Microphone paused while tab is hidden");
 		}
 	};
@@ -638,7 +588,7 @@ function openVoice(
 		} catch {
 			/* private mode */
 		}
-		pcmSpeaker?.connect();
+		pcmSpeaker.connect();
 		if (relay) {
 			command(`/relay voice-context ${turnId} ${encodeRelayVoice({ text })}`);
 			command(`/relay voice-request ${turnId} ${encodeRelayVoice({})}`);
@@ -653,8 +603,7 @@ function openVoice(
 		voicePaused = !resuming;
 		if (!resuming) {
 			pauseNotice = "Paused — microphone muted; Pi work continues.";
-			pausedSpeechMessage =
-				relayMessage || (pcmSpeaker?.hasAudio || speaker?.hasAudio ? currentTurn : "");
+			pausedSpeechMessage = relayMessage || (pcmSpeaker.hasAudio ? currentTurn : "");
 			sttController?.abort();
 			sttController = null; // Retain capture/VAD draft, not a stale recognition request.
 		} else {
@@ -664,17 +613,16 @@ function openVoice(
 		sayStatus(resuming ? "Resuming voice…" : pauseNotice);
 		try {
 			if (resuming) {
-				await Promise.all([capture?.resume(), speaker?.resume(), pcmSpeaker?.resume()]);
+				await Promise.all([capture?.resume(), pcmSpeaker.resume()]);
 			} else {
-				await Promise.all([capture?.pause(), speaker?.pause(), pcmSpeaker?.pause()]);
+				await Promise.all([capture?.pause(), pcmSpeaker.pause()]);
 			}
 			if (!ending && !foregroundPending)
 				sayStatus(stopCapture ? "Listening…" : "Ready — start the microphone or send text");
 		} catch (error) {
 			if (ending || foregroundPending || stopCapture !== capture) return;
 			voicePaused = true;
-			speaker?.stop();
-			pcmSpeaker?.stop();
+			pcmSpeaker.stop();
 			await capture?.pause().catch(() => {});
 			fail(error);
 		} finally {
@@ -800,7 +748,7 @@ function openVoice(
 			else {
 				stopCapture = stop;
 				sayStatus("Listening…");
-				pcmSpeaker?.connect();
+				pcmSpeaker.connect();
 			}
 		} catch (error) {
 			if (!attempt.signal.aborted) {
@@ -835,7 +783,7 @@ function openVoice(
 	};
 	newRelay.onclick = () => {
 		modal.dismiss();
-		openVoice(mode, { trialEngine, workerStart: capturedWorker, forceNew: true });
+		openVoice(mode, { workerStart: capturedWorker, forceNew: true });
 	};
 	form.onsubmit = (event) => {
 		event.preventDefault();
@@ -996,7 +944,7 @@ function openVoice(
 				relayPauseSkipped = voicePaused && Boolean(pausedSpeechMessage);
 				if (voicePaused && !pausedSpeechMessage) pausedSpeechMessage = relayMessage;
 				relayText = "";
-				relaySpeech = new SpokenMarkdown(!useZonosTts);
+				relaySpeech = new SpokenMarkdown(false);
 				relayFirstText = 0;
 				if (!relayPauseSkipped) pcmStartedUtterance = "";
 				currentTurn = relayMessage;
@@ -1034,22 +982,20 @@ function openVoice(
 					streamSpeech(relayText);
 				}
 				streamSpeech("", true);
-				if (pcmSpeaker) {
-					if (pcmStartedUtterance === relayMessage) {
-						pcmSpeaker.finishUtterance();
-					} else if (
-						(relayMuted || relayPauseSkipped) &&
-						relayText.trim() &&
-						!pcmReportedIds.has(relayMessage)
-					) {
-						recordPcmPlayback({
-							utterance: relayMessage,
-							playedMs: 0,
-							text: "",
-							complete: false,
-							uncertain: false,
-						});
-					}
+				if (pcmStartedUtterance === relayMessage) {
+					pcmSpeaker.finishUtterance();
+				} else if (
+					(relayMuted || relayPauseSkipped) &&
+					relayText.trim() &&
+					!pcmReportedIds.has(relayMessage)
+				) {
+					recordPcmPlayback({
+						utterance: relayMessage,
+						playedMs: 0,
+						text: "",
+						complete: false,
+						uncertain: false,
+					});
 				}
 				if (event.message.errorMessage)
 					handleVoiceEvent({ kind: "error", text: event.message.errorMessage });
@@ -1104,8 +1050,7 @@ function openVoice(
 			for (const text of relaySpeech.push(delta, final)) speakRelay(text);
 		} catch (error) {
 			relayMuted = true;
-			speaker?.stop();
-			pcmSpeaker?.stop();
+			pcmSpeaker.stop();
 			pcmStartedUtterance = "";
 			addText("Speech stopped", error instanceof Error ? error.message : "Read the saved answer.");
 		}
@@ -1113,55 +1058,24 @@ function openVoice(
 	function speakRelay(text: string): void {
 		if (relayMuted || ending || dismissed) return;
 		firstTextMs = relayFirstText;
-		const messageId = relayMessage;
-		if (pcmSpeaker) {
-			if (!messageId) return;
-			if (pcmStartedUtterance !== messageId) {
-				pcmStartedUtterance = messageId;
-				pcmSpeaker.beginUtterance(messageId, endedAt || performance.now(), (report) =>
-					recordPcmPlayback(report),
-				);
-			}
-			pcmSpeaker.enqueueSegment(text);
-			return;
+		if (relayMessage) speakSegment(relayMessage, text);
+	}
+	function speakSegment(id: string, text: string): void {
+		if (pcmStartedUtterance !== id) {
+			pcmStartedUtterance = id;
+			pcmSpeaker.beginUtterance(id, endedAt || performance.now(), (report) => {
+				if (relay) recordPcmPlayback(report);
+			});
 		}
-		speaker?.enqueue(
-			text,
-			streamTrial ? (complete) => recordPlayback(messageId, text, complete) : undefined,
-		);
+		pcmSpeaker.enqueueSegment(text);
 	}
 	const pcmReportedIds = new Set<string>();
 	function recordPcmPlayback(report: PcmPlayedReport): void {
 		if (!ready || !connected()) return;
 		pcmReportedIds.add(report.utterance);
 		while (pcmReportedIds.size > 40) pcmReportedIds.delete(pcmReportedIds.values().next().value!);
-		const history = formatKokoroPlayedHistory(report);
+		const history = formatKokoroPlayedHistory({ ...report, alignment: ZONOS3_ALIGNMENT });
 		command(`/relay voice-heard ${report.utterance} ${encodeRelayVoice({ text: history })}`);
-	}
-	const playedSegments = new Map<string, string[]>();
-	function recordPlayback(id: string, text: string, complete: boolean): void {
-		if (!ready || !connected()) return;
-		const played = playedSegments.get(id) ?? [];
-		if (complete) played.push(text);
-		playedSegments.set(id, played);
-		while (playedSegments.size > 20) playedSegments.delete(playedSegments.keys().next().value!);
-		let prefix = played.join(" ") || "none";
-		const uncertainty = complete
-			? ""
-			: " Interrupted during the next segment: partial playback, exact words unknown. Do not assume the remaining answer was heard.";
-		const format = (omitted = false) =>
-			`Trial A estimated completed playback segments: ${omitted ? "[Earlier completed segments omitted] " : ""}${prefix}.${uncertainty}`;
-		let history = format();
-		// Bound the encoded bridge payload, not UTF-16 characters; retain the
-		// uncertainty label even for long multilingual/control-character text.
-		while (
-			history.length > 16_000 ||
-			new TextEncoder().encode(JSON.stringify({ text: history })).length > 17_000
-		) {
-			prefix = prefix.slice(1024);
-			history = format(true);
-		}
-		command(`/relay voice-heard ${id} ${encodeRelayVoice({ text: history })}`);
 	}
 	function setConversationModel(id: string, thinking = "off"): void {
 		const name = id === "venice/deepseek-v4-1-flash-1017" ? "DeepSeek Flash" : id;
@@ -1187,9 +1101,17 @@ function openVoice(
 			row.append(`${row.childNodes.length > 1 ? " " : ""}${event.text}`);
 			if (event.turn !== currentTurn || ending || dismissed) return;
 			firstTextMs = event.firstTextMs;
-			speaker?.enqueue(event.text);
+			speakSegment(event.turn, event.text);
 		} else if (event.kind === "done") {
 			if (event.interrupted) rows.get(event.turn)?.append(" [interrupted]");
+			if (event.turn === currentTurn) {
+				currentTurn = "";
+				if (pcmStartedUtterance === event.turn) {
+					pcmStartedUtterance = "";
+					if (event.interrupted) pcmSpeaker.stop();
+					else pcmSpeaker.finishUtterance();
+				}
+			}
 		} else if (event.kind === "summary") {
 			addText("Summary", event.text);
 		} else if (event.kind === "error") {
@@ -1214,8 +1136,7 @@ function openVoice(
 		}
 		micWanted = false;
 		releaseMic();
-		speaker?.stop();
-		pcmSpeaker?.disconnect();
+		pcmSpeaker.disconnect();
 		start.disabled = send.disabled = interrupt.disabled = stopPi.disabled = true;
 		finish.disabled = !relay;
 		if (!ending && !failed)

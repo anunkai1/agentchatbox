@@ -62,7 +62,7 @@ export default function voiceTest(pi: ExtensionAPI): void {
 	}
 
 	pi.registerCommand("voicetest", {
-		description: "Browser conversation test: local STT → Venice DeepSeek V4.1 1017 → Kokoro",
+		description: "Browser conversation test: local STT → Venice DeepSeek V4.1 1017 → ZONOS3-Mini",
 		handler: async (raw, ctx) => {
 			try {
 				const [action, ...rest] = raw.trim().split(/\s+/);
