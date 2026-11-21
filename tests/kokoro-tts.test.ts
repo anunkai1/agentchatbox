@@ -1,18 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	completedKokoroWords,
-	createKokoroSpeaker,
 	createZonosSpeaker,
 	formatKokoroPlayedHistory,
 	hasReliableKokoroWords,
 	KokoroFrames,
+	KokoroTtsTransport,
 	validateKokoroAlignment,
 } from "../src/client/kokoro-tts.js";
-import { type PcmPlayedReport, PlayedAudioClock } from "../src/client/pcm-tts.js";
-import {
-	DEFAULT_RELAY_VOICE_ENGINE,
-	resolveRelayVoiceEngine,
-} from "../src/client/relay-voice-engine.js";
+import { type PcmPlayedReport, PcmTtsSpeaker, PlayedAudioClock } from "../src/client/pcm-tts.js";
 import { KOKORO_ALIGNMENT, ZONOS3_ALIGNMENT, ZONOS3_SAMPLE_RATE } from "../src/shared/kokoro.js";
 
 // Captured from the deployed Python backend, not estimated/divided in the client.
@@ -153,12 +149,10 @@ class NoServer4Socket {
 function harness() {
 	const reports: PcmPlayedReport[] = [];
 	const error = vi.fn();
-	const speaker = createKokoroSpeaker({
-		onStatus: vi.fn(),
-		onPlaying: vi.fn(),
-		onIdle: vi.fn(),
-		onError: error,
-	});
+	const speaker = new PcmTtsSpeaker(
+		{ onStatus: vi.fn(), onPlaying: vi.fn(), onIdle: vi.fn(), onError: error },
+		{ create: () => new KokoroTtsTransport(), label: "Server2 Kokoro" },
+	);
 	const begin = (text = "Hello world.") => {
 		speaker.beginUtterance("turn-one", 0, (report) => reports.push(report));
 		speaker.enqueueSegment(text);
@@ -778,17 +772,5 @@ describe("ZONOS3-Mini Relay transport at 44.1 kHz", () => {
 			speed: 1,
 		});
 		speaker.close();
-	});
-});
-
-describe("Relay engine preference", () => {
-	it("defaults to ZONOS3-Mini without migrating explicit saved selections, and switches back in one step", () => {
-		expect(DEFAULT_RELAY_VOICE_ENGINE).toBe("zonos3");
-		expect(resolveRelayVoiceEngine(null)).toBe("zonos3");
-		for (const saved of ["kokoro", "legacy", "zonos3"] as const)
-			expect(resolveRelayVoiceEngine(saved)).toBe(saved);
-		for (const saved of ["lfm-tts", "server4"])
-			expect(resolveRelayVoiceEngine(saved)).toBe("zonos3");
-		expect(resolveRelayVoiceEngine("lfm-tts", "kokoro")).toBe("kokoro");
 	});
 });

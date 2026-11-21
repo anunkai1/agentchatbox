@@ -4,22 +4,14 @@ import { RELAY_MESSAGE, type RelayEvent } from "../shared/relay.js";
 import { VOICE_TEST_MESSAGE, type VoiceTestEvent } from "../shared/voice-test.js";
 import { transcribeAudio } from "./api.js";
 import { el, mountModal, uuid } from "./dom.js";
-import {
-	createKokoroSpeaker,
-	createZonosSpeaker,
-	formatKokoroPlayedHistory,
-} from "./kokoro-tts.js";
+import { createZonosSpeaker, formatKokoroPlayedHistory } from "./kokoro-tts.js";
 import { setRichText } from "./linkify.js";
-import type { PcmPlayedReport, PcmTtsSpeakerCallbacks, PcmUtteranceMetrics } from "./pcm-tts.js";
+import type { PcmPlayedReport, PcmUtteranceMetrics } from "./pcm-tts.js";
 import { mountRelayDrawer, type RelayDrawer } from "./relay-drawer.js";
 import { encodeRelayVoice } from "./relay-voice.js";
 import {
-	RELAY_VOICE_ENGINE_KEY,
-	type RelayVoiceEngine,
-	readVoicePreference,
-	resolveRelayVoiceEngine,
-	resolveTrialVoiceEngine,
-	TRIAL_VOICE_ENGINE_KEY,
+	migrateRelayVoicePreference,
+	readTrialVoicePreference,
 	type TrialVoiceEngine,
 } from "./relay-voice-engine.js";
 import { createRelayWakeLock } from "./relay-wake-lock.js";
@@ -66,54 +58,39 @@ function messageText(message: { content?: unknown }): string {
 const RELAY_SESSION_KEY = "acb-relay-session";
 const TRIAL_SESSION_KEY = "acb-relay-trial-stream-session";
 
-export type { RelayVoiceEngine } from "./relay-voice-engine.js";
-
-export function openRelay(explicitEngine?: RelayVoiceEngine, forceNew = false): void {
-	const engine = readVoicePreference(
-		RELAY_VOICE_ENGINE_KEY,
-		resolveRelayVoiceEngine,
-		explicitEngine,
-	);
-	if (forceNew) {
-		try {
-			localStorage.removeItem(RELAY_SESSION_KEY);
-		} catch {
-			/* private mode */
-		}
-	}
-	if ((explicitEngine || forceNew) && relayUi) relayUi.end();
-	openVoiceTest(true, false, engine, undefined, forceNew);
+export function openRelay(forceNew = false): void {
+	migrateRelayVoicePreference();
+	openVoice("relay", { forceNew });
 }
 
 export function openRelayTrial(explicitEngine?: TrialVoiceEngine): void {
-	const engine = readVoicePreference(
-		TRIAL_VOICE_ENGINE_KEY,
-		resolveTrialVoiceEngine,
-		explicitEngine,
-	);
-	openVoiceTest(true, true, engine);
+	openVoice("trial", { trialEngine: readTrialVoicePreference(explicitEngine) });
 }
 
-export function openVoiceTest(
-	relay = false,
-	streamTrial = false,
-	engine: RelayVoiceEngine = "legacy",
-	workerStart?: string,
-	forceNew = false,
+export function openVoiceTest(): void {
+	openVoice("test");
+}
+
+function openVoice(
+	mode: "relay" | "trial" | "test",
+	{
+		trialEngine = "zonos3",
+		workerStart,
+		forceNew = false,
+	}: { trialEngine?: TrialVoiceEngine; workerStart?: string; forceNew?: boolean } = {},
 ): void {
-	// An explicit test/trial request replaces attached voice controls, not Pi work.
-	if ((!relay || streamTrial) && relayUi) relayUi.end();
+	const attached = mode === "relay";
+	const streamTrial = mode === "trial";
+	const relay = mode !== "test";
+	// An explicit test/trial or new thread replaces attached controls, not Pi work.
+	if (!attached || forceNew) relayUi?.end();
 	if (opened) {
 		relayUi?.reveal();
 		return;
 	}
-	const attached = relay && !streamTrial;
 	const foregroundRelay = attached;
 	const setWakeLock = foregroundRelay ? createRelayWakeLock() : undefined;
-	const useKokoroTts = attached && engine === "kokoro";
-	const useZonosTts = relay && engine === "zonos3";
-	const useSpeechTts = useKokoroTts || useZonosTts;
-	const isStreamingPi = streamTrial || useSpeechTts;
+	const useZonosTts = attached || (streamTrial && trialEngine === "zonos3");
 	const sessionKey = streamTrial ? TRIAL_SESSION_KEY : RELAY_SESSION_KEY;
 	const control = relay ? "/relay" : "/voicetest";
 	const startCommand = workerStart
@@ -123,7 +100,10 @@ export function openVoiceTest(
 			: `${control} start`;
 	let savedSession: string | null = null;
 	try {
-		if (relay && !forceNew) savedSession = localStorage.getItem(sessionKey);
+		if (relay) {
+			if (forceNew) localStorage.removeItem(sessionKey);
+			else savedSession = localStorage.getItem(sessionKey);
+		}
 	} catch {
 		/* private mode */
 	}
@@ -158,12 +138,8 @@ export function openVoiceTest(
 		{},
 		relay
 			? useZonosTts
-				? "Pi + Server2 ZONOS3-Mini (default, aligned, speech-only): local STT → Pi → synthesis-aligned ZONOS3-Mini (Savannah). Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Switch to Kokoro in voice settings."
-				: useKokoroTts
-					? "Pi + Server2 Kokoro (aligned, speech-only): local STT → Pi → synthesis-aligned Kokoro. Server4 is not needed. Interrupt stops speech only; tools/workers continue. Saved playback retains only submitted input tokens whose end sample passed the output clock; pronunciation and hearing are not verified. No raw audio archive. Switch back with /relay zonos3."
-					: streamTrial
-						? "Isolated trial: local STT → Pi → sentence-streamed Kokoro. Interrupt stops speech only; work continues. Playback records completed speech segments; the interrupted segment’s word boundary is unknown."
-						: "Legacy STT/Kokoro Relay with normal owner-level tools and delegation. Closing voice leaves work running; Interrupt can stop direct tools, not workers. Text/tool context go to Venice; raw audio is not saved."
+				? "Local STT → Pi → synthesis-aligned ZONOS3-Mini (Savannah). Stop speaking leaves tools and workers running. Playback evidence includes only tokens completed by the output clock; it cannot verify pronunciation or hearing. No raw audio is saved."
+				: "Isolated trial: local STT → Pi → sentence-streamed Kokoro. Interrupt stops speech only; work continues. Playback records completed speech segments; the interrupted segment’s word boundary is unknown."
 			: "Local speech-to-text → Venice DeepSeek → local Kokoro. No phone calls or action tools. Text goes to Venice; audio is processed locally and is not saved. The transcript is saved as a separate ACB chat.",
 	);
 	const status = el("p", { role: "status", class: "voice-test-status" }, "Connecting…");
@@ -188,7 +164,7 @@ export function openVoiceTest(
 	const interrupt = el(
 		"button",
 		{ type: "button", disabled: true },
-		relay && isStreamingPi ? "Stop speaking" : "Interrupt",
+		relay ? "Stop speaking" : "Interrupt",
 	);
 	const pause = el(
 		"button",
@@ -199,7 +175,7 @@ export function openVoiceTest(
 		"button",
 		{
 			type: "button",
-			hidden: !isStreamingPi,
+			hidden: !relay,
 			disabled: true,
 			title:
 				"Stops the current Pi turn only; queued requests and workers may continue. Completed effects remain.",
@@ -218,35 +194,21 @@ export function openVoiceTest(
 		"Cancel work job",
 	);
 	const newRelay = el("button", { type: "button" }, "New Relay conversation");
-	const voiceButtons: HTMLButtonElement[] = [];
-	if (relay) {
-		if (streamTrial) {
-			const toggleTrial = el(
-				"button",
-				{ type: "button" },
-				useZonosTts ? "Use Kokoro TTS" : "Use ZONOS3-Mini TTS",
-			);
-			toggleTrial.onclick = () => {
-				modal.dismiss();
-				openRelayTrial(useZonosTts ? "kokoro" : "zonos3");
-			};
-			voiceButtons.push(toggleTrial);
-		} else {
-			const choices: Array<[RelayVoiceEngine, string, boolean]> = [
-				["zonos3", "Use Pi + ZONOS3-Mini (default, aligned)", !useZonosTts],
-				["kokoro", "Use Pi + Server2 Kokoro (aligned)", !useKokoroTts],
-				["legacy", "Use legacy STT/Kokoro", useSpeechTts],
-			];
-			for (const [targetEngine, label, show] of choices) {
-				if (!show) continue;
-				const btn = el("button", { type: "button" }, label);
-				btn.onclick = () => {
-					modal.dismiss();
-					openRelay(targetEngine);
-				};
-				voiceButtons.push(btn);
-			}
-		}
+	const trialSettings: HTMLElement[] = [];
+	if (streamTrial) {
+		const toggleTrial = el(
+			"button",
+			{ type: "button" },
+			useZonosTts ? "Use Kokoro TTS" : "Use ZONOS3-Mini TTS",
+		);
+		toggleTrial.onclick = () => {
+			modal.dismiss();
+			openRelayTrial(useZonosTts ? "kokoro" : "zonos3");
+		};
+		trialSettings.push(
+			el("p", {}, "Changing the trial voice closes the microphone, not Pi work."),
+			el("div", { class: "voice-test-controls" }, toggleTrial),
+		);
 	}
 	const input = el("input", {
 		type: "text",
@@ -271,14 +233,9 @@ export function openVoiceTest(
 			"Headphones help prevent echo. Replies below are generated text, not proof that every word was heard.",
 		),
 		metrics,
+		...trialSettings,
 		...(relay
 			? [
-					el(
-						"p",
-						{},
-						"Changing the voice closes the microphone, not Pi work. Your saved conversation stays.",
-					),
-					el("div", { class: "voice-test-controls" }, ...voiceButtons),
 					el(
 						"p",
 						{},
@@ -299,11 +256,9 @@ export function openVoiceTest(
 	const inputHint = relay
 		? "Pause briefly to send. Up to 2 minutes per turn."
 		: "Pause briefly to send. Up to 30 seconds per test turn.";
-	const stopHint = !relay
-		? "Headphones help avoid echo."
-		: isStreamingPi
-			? "Stopping speech or closing voice leaves Pi work running."
-			: "Interrupt may stop direct Pi tools; workers keep running. Closing voice leaves work running.";
+	const stopHint = relay
+		? "Stopping speech or closing voice leaves Pi work running."
+		: "Headphones help avoid echo.";
 	const box = el(
 		"div",
 		{ class: "modal-box voice-test" },
@@ -450,10 +405,7 @@ export function openVoiceTest(
 		}
 		metrics.textContent = parts.join(" · ");
 	};
-	const createSpeechSpeaker = useZonosTts
-		? (callbacks: PcmTtsSpeakerCallbacks) => createZonosSpeaker(callbacks, () => state.ttsSpeed)
-		: createKokoroSpeaker;
-	const speaker = !useSpeechTts
+	const speaker = !useZonosTts
 		? new ConversationSpeaker(
 				() => {
 					if (endedAt)
@@ -467,26 +419,29 @@ export function openVoiceTest(
 				fail,
 			)
 		: null;
-	const pcmSpeaker = useSpeechTts
-		? createSpeechSpeaker({
-				onStatus: (text) => {
-					if (!ending) sayStatus(text);
+	const pcmSpeaker = useZonosTts
+		? createZonosSpeaker(
+				{
+					onStatus: (text) => {
+						if (!ending) sayStatus(text);
+					},
+					onPlaying: (m) => {
+						renderPcmMetrics(m);
+						if (!ending) sayStatus("Speaking — you can interrupt");
+					},
+					onMetrics: (m) => renderPcmMetrics(m),
+					onIdle: () => {
+						if (!ending && !failed)
+							sayStatus(stopCapture ? "Listening…" : "Ready — start the microphone or send text");
+					},
+					onError: (error) => {
+						relayMuted = true;
+						if (!ending)
+							sayStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+					},
 				},
-				onPlaying: (m) => {
-					renderPcmMetrics(m);
-					if (!ending) sayStatus("Speaking — you can interrupt");
-				},
-				onMetrics: (m) => renderPcmMetrics(m),
-				onIdle: () => {
-					if (!ending && !failed)
-						sayStatus(stopCapture ? "Listening…" : "Ready — start the microphone or send text");
-				},
-				onError: (error) => {
-					relayMuted = true;
-					if (!ending)
-						sayStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
-				},
-			})
+				() => state.ttsSpeed,
+			)
 		: null;
 	const command = (text: string) => {
 		if (connected()) sendWire({ type: "prompt", text });
@@ -498,10 +453,8 @@ export function openVoiceTest(
 		pcmStartedUtterance = "";
 		currentTurn = "";
 		if (ready && !ending) {
-			if (relay) {
-				relayMuted = true;
-				if (!isStreamingPi) sendWire({ type: "abort" });
-			} else command("/voicetest interrupt");
+			if (relay) relayMuted = true;
+			else command("/voicetest interrupt");
 		}
 	};
 	const addText = (label: string, text: string) => {
@@ -654,7 +607,7 @@ export function openVoiceTest(
 		drawer ??
 		mountModal(overlay, box, {
 			onDismiss: dispose,
-			initialFocus: isStreamingPi ? box : input,
+			initialFocus: relay ? box : input,
 		});
 	if (attached) {
 		relayUi = {
@@ -685,11 +638,11 @@ export function openVoiceTest(
 		} catch {
 			/* private mode */
 		}
-		if (useSpeechTts) pcmSpeaker?.connect();
-		if (relay && isStreamingPi) {
+		pcmSpeaker?.connect();
+		if (relay) {
 			command(`/relay voice-context ${turnId} ${encodeRelayVoice({ text })}`);
 			command(`/relay voice-request ${turnId} ${encodeRelayVoice({})}`);
-		} else command(`${control} say ${turnId} ${text}`);
+		} else command(`/voicetest say ${turnId} ${text}`);
 	}
 
 	pause.onclick = async () => {
@@ -847,8 +800,7 @@ export function openVoiceTest(
 			else {
 				stopCapture = stop;
 				sayStatus("Listening…");
-				if (useSpeechTts) pcmSpeaker?.connect();
-				else if (foregroundRelay) void speaker?.resume().catch(() => {});
+				pcmSpeaker?.connect();
 			}
 		} catch (error) {
 			if (!attempt.signal.aborted) {
@@ -882,13 +834,8 @@ export function openVoiceTest(
 		sayStatus("Cancelling work job…");
 	};
 	newRelay.onclick = () => {
-		try {
-			localStorage.removeItem(sessionKey);
-		} catch {
-			/* private mode */
-		}
 		modal.dismiss();
-		openVoiceTest(true, streamTrial, engine, capturedWorker, true);
+		openVoice(mode, { trialEngine, workerStart: capturedWorker, forceNew: true });
 	};
 	form.onsubmit = (event) => {
 		event.preventDefault();
@@ -979,11 +926,7 @@ export function openVoiceTest(
 			transcript.replaceChildren();
 			rows.clear();
 			for (const message of wire.messages ?? []) {
-				if (
-					isStreamingPi &&
-					message.customType === RELAY_MESSAGE &&
-					message.details?.kind === "voice_context"
-				)
+				if (message.customType === RELAY_MESSAGE && message.details?.kind === "voice_context")
 					showVoiceContext(message.details);
 				if (message.role === "user" || message.role === "assistant") {
 					const text = messageText(message);
@@ -1013,12 +956,11 @@ export function openVoiceTest(
 				workerModel.title = `${event.workerModel.provider}/${event.workerModel.modelId}. Settings captured from the main chat; this is not a live worker status.`;
 				handleVoiceEvent({ kind: "ready", model: event.model });
 			} else if (event.kind === "voice_context") {
-				if (isStreamingPi) showVoiceContext(event);
+				showVoiceContext(event);
 			} else if (event.kind === "voice_result") {
-				if (isStreamingPi && event.error) sayStatus(event.text);
+				if (event.error) sayStatus(event.text);
 			} else if (event.kind === "voice_pending") {
-				if (isStreamingPi)
-					sayStatus("Pi Relay request accepted/queued; speech interruption does not cancel it.");
+				sayStatus("Pi Relay request accepted/queued; speech interruption does not cancel it.");
 			} else if (event.kind === "error") {
 				handleVoiceEvent(event);
 			} else if (event.kind === "job") {
@@ -1057,7 +999,6 @@ export function openVoiceTest(
 				relaySpeech = new SpokenMarkdown(!useZonosTts);
 				relayFirstText = 0;
 				if (!relayPauseSkipped) pcmStartedUtterance = "";
-				if (!isStreamingPi) relayMuted = false;
 				currentTurn = relayMessage;
 			} else if (
 				event.type === "message_update" &&
@@ -1093,9 +1034,9 @@ export function openVoiceTest(
 					streamSpeech(relayText);
 				}
 				streamSpeech("", true);
-				if (useSpeechTts) {
+				if (pcmSpeaker) {
 					if (pcmStartedUtterance === relayMessage) {
-						pcmSpeaker?.finishUtterance();
+						pcmSpeaker.finishUtterance();
 					} else if (
 						(relayMuted || relayPauseSkipped) &&
 						relayText.trim() &&
@@ -1115,7 +1056,7 @@ export function openVoiceTest(
 				relayMessage = "";
 				relayPauseSkipped = false;
 			} else if (event.type === "message_end" && event.message?.role === "user") {
-				if (isStreamingPi) relayMuted = false;
+				relayMuted = false;
 				link.hidden = false;
 				try {
 					if (sessionId) localStorage.setItem(sessionKey, sessionId);
@@ -1173,8 +1114,8 @@ export function openVoiceTest(
 		if (relayMuted || ending || dismissed) return;
 		firstTextMs = relayFirstText;
 		const messageId = relayMessage;
-		if (useSpeechTts) {
-			if (!pcmSpeaker || !messageId) return;
+		if (pcmSpeaker) {
+			if (!messageId) return;
 			if (pcmStartedUtterance !== messageId) {
 				pcmStartedUtterance = messageId;
 				pcmSpeaker.beginUtterance(messageId, endedAt || performance.now(), (report) =>

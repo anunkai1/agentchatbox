@@ -548,13 +548,6 @@ export class KokoroTtsTransport implements TtsTransport {
 	}
 }
 
-export function createKokoroSpeaker(callbacks: PcmTtsSpeakerCallbacks): PcmTtsSpeaker {
-	return new PcmTtsSpeaker(callbacks, {
-		create: () => new KokoroTtsTransport(KOKORO_TTS_CONFIG),
-		label: KOKORO_TTS_CONFIG.label,
-	});
-}
-
 export function createZonosSpeaker(
 	callbacks: PcmTtsSpeakerCallbacks,
 	speed: number | (() => number) = 1,

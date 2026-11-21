@@ -81,8 +81,8 @@ export const SLASH_COMMANDS: Record<string, string> = {
 	websearch: "search the web and summarise: /websearch <query>",
 	project: "start a new chat in a project: /project <name|id>",
 	voicetest: "open the isolated browser voice-conversation test",
-	relaytrial: "trial A: streaming Pi/Kokoro with speech-only interruption and a separate session",
-	relay: "open Relay, the resumable voice coordinator with one ACB work job",
+	relaytrial: "trial A: isolated streaming Pi voice with ZONOS3-Mini or Kokoro",
+	relay: "open the resumable Relay voice coordinator with ZONOS3-Mini: /relay [new]",
 };
 
 interface CommandPaletteEntry {
@@ -373,18 +373,19 @@ export function handleSlash(arg: string): void {
 			break;
 		case "relay": {
 			const tokens = rest.trim().toLowerCase().split(/\s+/).filter(Boolean);
-			const forceNew = tokens.includes("new");
-			const engineArg = tokens.find((t) => t !== "new");
-			openRelay(
-				engineArg === "kokoro" || engineArg === "kokoro-tts"
-					? "kokoro"
-					: engineArg === "zonos3" || engineArg === "zonos" || engineArg === "zonos3-mini"
-						? "zonos3"
-						: engineArg === "legacy"
-							? "legacy"
-							: undefined,
-				forceNew,
-			);
+			const newIndex = tokens.indexOf("new");
+			const forceNew = newIndex !== -1;
+			if (forceNew) tokens.splice(newIndex, 1);
+			if (
+				tokens.length > 1 ||
+				tokens.some((t) => !["zonos3", "zonos", "zonos3-mini"].includes(t))
+			) {
+				appendError(
+					"Relay only uses ZONOS3-Mini. Use /relay to resume or /relay new to start fresh.",
+				);
+				return;
+			}
+			openRelay(forceNew);
 			return;
 		}
 		case "relaytrial": {

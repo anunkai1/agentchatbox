@@ -1,11 +1,10 @@
 # ACB browser voice test
 
 This package also loads **[Relay](RELAY.md)** (`/relay`), the separate resumable
-full-access voice agent with direct tools and delegation. Relay now defaults to
-Server2 ZONOS3-Mini with synthesis-aligned playback evidence; Pi keeps work
-ownership, and speech interruption does not abort tools or workers. Legacy
-STT/Kokoro remains explicitly selectable. The prototype below remains unchanged
-and tool-free; its speech/cancellation description does not describe default Relay.
+full-access voice agent with direct tools and delegation. Relay uses Server2
+ZONOS3-Mini with synthesis-aligned playback evidence; speech interruption does
+not abort tools or workers. The separate prototype below remains tool-free and
+uses Kokoro.
 
 Prototype only: local STT → **Venice `deepseek-v4-1-flash-1017`** → local Kokoro.
 No telephone dialling, bookings, payments or other action tools are implemented.
@@ -54,7 +53,7 @@ The first utterance can be slower while local models load.
 - `src/client/voice-test.ts`: modal, isolated existing `/api/chat` connection,
   status/transcript rendering and audio orchestration.
 - `src/client/voice.ts`: browser audio capture/playback. Existing
-  `/api/transcribe` and `/api/tts/stream` remain the speech transports.
+  `/api/transcribe` and `/api/tts/kokoro-stream` are the prototype's speech transports.
 - No new ACB model endpoint, server-side agent loop, listener, daemon, timer,
   firewall rule, Nginx route or Asterisk change.
 

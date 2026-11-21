@@ -23,32 +23,22 @@ integration or standing proactive mandate is installed.
    work** model/thinking line. Conversation uses
    `venice/deepseek-v4-1-flash-1017`; work uses the captured ACB selection. Workers
    use native Pi, not the originating chat's `/cc` mode.
-3. The default when unset is **Pi + Server2 ZONOS3-Mini (speech-only, aligned)**
-   (`acb-relay-voice-engine = "zonos3"`, or `/relay zonos3`). Browser Silero VAD +
+3. Relay uses **Pi + Server2 ZONOS3-Mini** with synthesis-aligned speech. Browser Silero VAD +
    Server2 Fluid Speech Pro STT → full-access Pi → rendered `SpokenMarkdown`
    sentences → Server2 `zonos-relay-tts` (loopback 8184, neutral `Savannah` voice,
    44.1 kHz PCM16) via `/api/tts/zonos-relay-stream` with Layer-7 word-alignment
    timings (`X-Zonos-Alignment: zonos3-probe-v1`). No Server4, GPU voice session
-   or ASR listen-back is used. Saved `kokoro` and `legacy` selections are preserved.
-   A saved retired `server4` or `lfm-tts` selection changes to `zonos3` on opening
-   voice. This updates only the device preference, not the saved conversation.
-   **Use Pi + Server2 Kokoro (aligned)** (`"kokoro"`, or `/relay kokoro`)
-   explicitly selects Server2 Kokoro (loopback 8181, 24 kHz) via
-   `/api/tts/relay-stream` with synthesis-token timings (`kokoro-pred-dur-v1`).
-   **Use legacy STT/Kokoro** (`"legacy"`, or `/relay legacy`) explicitly selects
-   the older speech path without Server4 GPU dependency. This device remembers
-   the explicit choice without silently migrating saved sessions or falling back.
-   **New Relay conversation** sits directly beside **Voice settings & details** on
-   the primary drawer, and **Voice settings & details** expands the engine choices,
-   technical/privacy information and timing metrics. Opening
-   these details does not change settings or start work. Engine changes remain
-   explicit and preserve the saved session. The mic button shows its startup
-   state and whether the microphone is on; it is disabled during startup to avoid
-   duplicate permission requests. **Pause voice** / **Resume voice** (in
-   browser-STT Relay modes and on the collapsed strip) mutes the microphone and
-   suspends voice playback without discarding unsent speech or stopping Pi work.
-   Aligned ZONOS3-Mini/Kokoro modes label speech interruption
-   **Stop speaking**, separate from **Stop current Pi turn** and the tracked job's
+   or ASR listen-back is used. Saved `kokoro`, `legacy`, `server4` and `lfm-tts`
+   preferences migrate to `zonos3` when opening Relay, without changing the saved
+   chat or the trial preference. `/relay zonos3` still opens normal Relay;
+   retired engine arguments are rejected. There is no Kokoro fallback.
+   **New Relay conversation** sits beside **Voice settings & details**, which
+   expands technical/privacy information and timing metrics without starting work.
+   The mic button shows its state and is disabled during startup to avoid duplicate
+   permission requests. **Pause voice** / **Resume voice** (also on the collapsed
+   strip) mutes the microphone and suspends voice playback without discarding unsent
+   speech or stopping Pi work. **Stop speaking** is separate from
+   **Stop current Pi turn** and the tracked job's
    **Cancel work job** (only shown when a tracked job exists). **End voice** /
    **Close Relay** stay usable even if connection setup fails. Controls sit in a
    non-modal side drawer on desktop or a bottom drawer above the composer on
@@ -56,12 +46,10 @@ integration or standing proactive mandate is installed.
    with a persistent microphone/status strip, **Pause voice** / **Resume voice**,
    and **End voice**. Press **R** or the strip to reopen controls. There is no second transcript or text box: recognised
    speech, typed input, streamed full answers and tool activity share the normal
-   chat timeline and connection. Played-speech evidence is separate and collapsible:
-   synthesis-aligned in ZONOS3-Mini and Kokoro. Older labelled playback evidence
-   stays as saved. None replaces the full answer. Reading earlier messages does
-   not pull the page away. Legacy **Interrupt** retains its existing direct-turn
-   abort behaviour.
-   Browser STT modes allow about 0.5 seconds of quiet before recognition. If you
+   chat timeline and connection. Synthesis-aligned playback evidence is separate
+   and collapsible. Older labelled playback evidence stays as saved. None replaces
+   the full answer. Reading earlier messages does not pull the page away.
+   Relay allows about 0.5 seconds of quiet before recognition. If you
    resume during recognition, earlier unsubmitted audio is kept and joined with
    the next segment; stale partial transcripts cannot dispatch work. This is
    bounded to **two minutes of unsent audio** (including continuous speech),
@@ -69,9 +57,9 @@ integration or standing proactive mandate is installed.
    stays open across turns. Hitting the limit stops capture explicitly without
    submitting a partial instruction. The separate `/voicetest` prototype keeps
    its 30-second test limit.
-   **Interrupt** stops output without discarding that input. Stopping/hiding/closing
+   **Stop speaking** stops output without discarding that input. Stopping/hiding/closing
    the mic clears unsent input; typed submission explicitly replaces it.
-   In browser-STT Relay modes, an active microphone requests a screen wake lock
+   An active microphone requests a screen wake lock
    while the tab is visible, if the browser and power settings allow it. Switching
    away releases the mic and stops speech. Returning to the same open tab restores
    a microphone that was on once the same chat is reachable. **Pause voice**,
@@ -86,16 +74,12 @@ integration or standing proactive mandate is installed.
    ask only when scope or destination is genuinely unclear.
 4. Talk while the worker runs. Ask for status or send further instructions.
    Worker reports wake Relay; needs-input questions come back to this chat.
-5. In **Pi + Server2 ZONOS3-Mini** and **Pi + Server2 Kokoro**, speaking over a
-   reply or **Stop speaking** stops speech only: Pi direct tools and workers
-   continue. **Stop current Pi turn** explicitly aborts the active Pi turn;
-   queued voice requests and workers may continue. Completed effects remain.
-   End/hide/close releases the microphone without cancelling Pi work.
-   **Legacy mode differs:** its Interrupt or new speech can abort the current Pi
-   direct turn, though delegated workers survive. Hiding, losing the connection,
-   or stopping the microphone does not abort Pi. Closing voice or
-   navigating away from a Relay thread leaves Pi tools and workers running:
-   navigation detaches the old view without killing its Pi process.
+5. Speaking over a reply or pressing **Stop speaking** stops speech only: Pi
+   tools and workers continue. **Stop current Pi turn** explicitly aborts the
+   active Pi turn; queued voice requests and workers may continue. Completed
+   effects remain. Hiding, losing the connection or stopping the microphone does
+   not abort Pi. Closing voice or navigating away releases the microphone without
+   killing the Pi process.
 6. Reopen `/relay` to resume the saved conversation and associated job. The
    browser remembers the session ID on this device; it never replays utterances,
    work submissions or old speech. The saved transcript and worker chat are also
@@ -111,32 +95,28 @@ integration or standing proactive mandate is installed.
 
 ## Formatted replies and speech
 
-Normal Relay's aligned ZONOS3-Mini, aligned Kokoro, and legacy Kokoro routes render Markdown before
-sentence splitting. Headings, emphasis, lists and links stay formatted in the
-panel, while synthesis receives readable prose rather than literal Markdown
-markers or link destinations. Split/incomplete formatting is buffered. A later
-revision to already-emitted speech stops remaining audio rather than replaying
-or guessing. Restored replies render silently; saved Pi answers are unchanged.
-This formatting behaviour does not change the legacy cancellation differences
-above or select a different voice/engine.
+Relay renders Markdown before sentence splitting. Headings, emphasis, lists and
+links stay formatted in chat, while synthesis receives readable prose rather than
+literal Markdown markers or link destinations. Incomplete formatting is buffered.
+A later revision to already-emitted speech stops remaining audio rather than
+replaying or guessing. Restored replies render silently; saved Pi answers are unchanged.
 
-## Synthesis-aligned playback history (ZONOS3-Mini & Kokoro)
+## Synthesis-aligned playback history
 
-Default Relay uses `/api/tts/zonos-relay-stream`, which negotiates
+Relay uses `/api/tts/zonos-relay-stream`, which negotiates
 `X-Zonos-Alignment: zonos3-probe-v1` with loopback 8184 (`zonos-relay-tts`, 44.1 kHz
 PCM16, neutral `Savannah` voice, emitting an empty pre-word block for pre-speech
-audio and flushing any tail word on EOF). Explicit `/relay kokoro` uses
-`/api/tts/relay-stream`, which negotiates `X-Kokoro-Alignment: kokoro-pred-dur-v1`
-with loopback 8181 (24 kHz WAV chunks). Normal chat TTS, legacy Relay, `/voicetest`,
-KidStories and Lappy remain unchanged. Each 380-character-capped synthesis request
+audio and flushing any tail word on EOF). Relay honours the chat's synthesis speed.
+Each 380-character-capped synthesis request
 supplies exact `submittedText`, sample offsets and per-token end samples before
 its audio chunks. Multiple requests accumulate on the same progressive player's
 output clock; queued or half-played words are not retained. Zero-play records no
 spoken text.
 
-`voice_context.data.heard` says **ZONOS3-Mini synthesis alignment** or **Kokoro
-synthesis alignment**, retains only completed input tokens, and explicitly says
-pronunciation and hearing are not verified. This is model-duration alignment of
+`voice_context.data.heard` labels new aligned receipts **ZONOS3-Mini synthesis
+alignment**; older **Kokoro synthesis alignment** receipts retain their label.
+These records retain only completed input tokens and do not verify pronunciation
+or hearing. This is model-duration alignment of
 synthesis input, not ASR, acoustic verification or proof the owner heard it. Full
 Markdown remains in the ordinary Pi transcript. Truncation, unknown mappings,
 missing negotiation and stream failures are labelled incomplete/uncertain; no
@@ -155,16 +135,13 @@ Known completed tokens before and after that gap remain available; queued unknow
 chunks do not taint a prefix that has not reached them. Unknown markers are
 annotations, not claimed speech or confirmations. Invalid protocol/sample ranges,
 wrong submitted input or malformed audio still fail safely and preserve prior
-playback evidence. Read full chat for any unknown value. `/relay kokoro` selects the local fallback;
-`/relay zonos3` returns without changing the saved conversation.
+playback evidence. Read the full chat for any unknown value.
 
 Manual check: request `Hello world.`, interrupt between the end of `Hello` and
 `world`, and inspect the collapsible played record. Only `Hello` should remain,
 labelled synthesis alignment, while the full answer and any Pi work remain intact.
 Repeat at zero playback and with an unsupported mapping: no invented words or
-confirmation. The opt-in `KOKORO_LIVE=1` test uses the deployed backend with a
-**simulated** browser output clock and verifies persisted Pi context; it does not
-claim an acoustic/headphone check.
+confirmation.
 
 ## Isolated streaming trial
 
@@ -187,8 +164,12 @@ Pi turn** is the explicit coordinator abort; **Cancel work job** remains separat
 After an interruption, further output from that ongoing turn stays muted until
 a new owner turn. Restored history is never replayed as speech.
 
-Kokoro trial evidence records finished segments and marks cuts uncertain. ZONOS3-Mini
-uses the synthesis-aligned playback evidence above. Neither proves acoustic hearing.
+The Kokoro trial shares `/api/tts/kokoro-stream` (sentence WAVs) with `/voicetest`.
+Its evidence records finished segments and marks cuts uncertain; ZONOS3-Mini uses
+aligned evidence. Neither proves acoustic hearing. The separate aligned Kokoro
+proxy (`/api/tts/relay-stream`, `X-Kokoro-Alignment: kokoro-pred-dur-v1`) remains for
+backend verification, not as a selectable engine in either drawer. The opt-in
+`KOKORO_LIVE=1` test uses it with a simulated output clock and verifies saved Pi context.
 
 ## Ownership and persistence
 
@@ -259,11 +240,8 @@ Existing docs are the map; live checks establish present facts.
 
 ## Audio and retention
 
-**Default:** Server2 STT → Pi → ZONOS3-Mini synthesis-aligned speech, as detailed above;
-no Server4 voice/GPU session and no audio ASR listen-back.
-
-**Legacy** shares `/voicetest`'s STT, Silero VAD and sentence-streamed Kokoro.
-`/voicetest` itself is unchanged. Text context/direct tools go to Venice and
+Server2 STT → Pi → ZONOS3-Mini synthesis-aligned speech, as detailed above;
+no Server4 voice/GPU session and no audio ASR listen-back. Text context/direct tools go to Venice and
 delegated context to the selected worker provider; even local voice history may
 be included in a later work turn. Existing credential/PII confirmation rules
 still apply. Raw audio is not archived. Recognised text, labelled playback evidence,
@@ -284,7 +262,7 @@ text is not proof of playback or acoustic hearing. Closing is not a summary requ
   cover process groups and conservative restart handling.
 - `tests/ui-smoke.test.ts`: real browser bundle with fixture wire events, separate
   socket, native streamed replies, saved history without speech/work replay,
-  resume/new conversation, migration without changing chats, engine selection,
+  resume/new conversation, migration without changing chats, trial engine isolation,
   speech-only interruption and explicit Pi stop. Shared voice tests initialise
   actual local Silero assets with synthetic audio, never the real microphone.
 - Live functional checks should use an isolated loopback server/session/record

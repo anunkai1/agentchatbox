@@ -109,7 +109,7 @@ async function relayChatFixture(
 	let connections = 0;
 	await page.routeWebSocket(/\/api\/chat$/, (socket) => {
 		connections++;
-		if (!allowReconnect) expect(connections).toBe(1); // Normal R/engine/drawer changes reuse one socket.
+		if (!allowReconnect) expect(connections).toBe(1); // Reopening the drawer reuses one socket.
 		let userStarted = false;
 		let sessionId = "relay-source-chat";
 		let freshViews = 0;
@@ -2561,19 +2561,20 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("resumes legacy Relay without replaying speech or work, and only explicitly cancels the job", async () => {
+	it("resumes Relay after a legacy preference without replaying work or implicitly cancelling the job", async () => {
 		const { page } = await openPage("/");
 		await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "legacy"));
 		await expect.poll(() => page.locator("#model-picker").innerText()).toContain("Model");
 		const inits: Array<Record<string, unknown>> = [];
 		const prompts: string[] = [];
 		let cancelled = false;
-		await page.route("**/api/tts/kokoro-stream", (route) =>
-			route.fulfill({
-				body: Buffer.from([0, 0, 0, 0, 0]),
-				contentType: "application/octet-stream",
-			}),
-		);
+		let aborts = 0;
+		let kokoroRequests = 0;
+		await page.route("**/api/tts/zonos-relay-stream", (route) => route.abort());
+		await page.route(/\/api\/tts\/(kokoro|relay)-stream$/, (route) => {
+			kokoroRequests++;
+			return route.abort();
+		});
 		await relayChatFixture(page, (ws) => {
 			const native = (event: Record<string, unknown>) =>
 				ws.send(JSON.stringify({ type: "event", event }));
@@ -2645,7 +2646,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 						cancelled = true;
 						job();
 					}
-				}
+				} else if (message.type === "abort") aborts++;
 			});
 		});
 		try {
@@ -2678,7 +2679,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.poll(() => messages(page).innerText())
 				.toContain("The worker needs your choice.");
 			expect(await dialog.locator(".relay-job").innerText()).toContain("Not live progress");
-			await dialog.getByRole("button", { name: "Interrupt", exact: true }).click();
+			await expect.poll(() => dialog.locator(".voice-test-status").innerText()).toMatch(/^Error:/);
+			expect(kokoroRequests).toBe(0); // Failed synthesis does not fall back.
+			await dialog.getByRole("button", { name: "Stop speaking", exact: true }).click();
 			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
 			expect(cancelled).toBe(false);
 			await send(page, "/relay");
@@ -2688,6 +2691,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.toContain("The worker needs your choice.");
 			expect(inits).toHaveLength(1); // Reopening controls does not reattach/reset the thread.
 			expect(prompts.filter((p) => p === "Inspect the fixture")).toHaveLength(1);
+			expect(aborts).toBe(0);
 			await dialog.getByRole("button", { name: "Cancel work job", exact: true }).click();
 			await expect
 				.poll(() => dialog.locator(".relay-job").innerText())
@@ -2712,99 +2716,6 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await expect.poll(() => page.locator("#relay-voice-ui").count()).toBe(0);
 			expect(prompts).toHaveLength(beforeExit); // Leaving is a view change, not abort/start/work.
 			await expect.poll(() => page.locator("#input").isEnabled()).toBe(true);
-		} finally {
-			await page.close();
-		}
-	});
-
-	it("renders legacy Kokoro Relay Markdown before speaking and never replays restored answers", async () => {
-		const { page } = await openPage("/");
-		const tts: string[] = [];
-		let native: (event: object) => void = () => {};
-		const first = "### Status\n\n**The first sentence is ready. More";
-		const rest =
-			" detail.**\n\n1. Read [the guide](https://example.com/private).\n2. Keep `sensor_home`.\n";
-		const markdown = first + rest;
-		await page.evaluate(() => {
-			localStorage.setItem("acb-relay-voice-engine", "legacy");
-			localStorage.removeItem("acb-relay-session");
-		});
-		await page.route("**/api/tts/kokoro-stream", (route) => {
-			tts.push(route.request().postDataJSON().text);
-			return route.fulfill({
-				body: Buffer.alloc(5),
-				contentType: "application/octet-stream",
-			});
-		});
-		await relayChatFixture(page, (ws) => {
-			native = (event) => ws.send(JSON.stringify({ type: "event", event }));
-			ws.onMessage((raw) => {
-				const message = JSON.parse(String(raw));
-				if (message.type === "init") {
-					ws.send(JSON.stringify({ type: "ready", sessionId: "legacy-markdown-session" }));
-					if (message.sessionId)
-						ws.send(
-							JSON.stringify({
-								type: "transcript",
-								messages: [{ role: "assistant", content: markdown }],
-							}),
-						);
-				} else if (message.type === "getCapabilities")
-					ws.send(JSON.stringify({ type: "capabilities", commands: [{ name: "relay" }] }));
-				else if (message.type === "prompt" && message.text.startsWith("/relay start"))
-					native({
-						type: "message_end",
-						message: {
-							role: "custom",
-							customType: "acb-relay",
-							details: {
-								kind: "ready",
-								model: "venice/deepseek-v4-1-flash-1017",
-								workerModel: { provider: "venice", modelId: "fixture", thinkingLevel: "off" },
-							},
-						},
-					});
-				else if (message.type === "prompt" && message.text === "Read the fixture") {
-					native({ type: "message_end", message: { role: "user", content: message.text } });
-					native({ type: "message_start", message: { role: "assistant" } });
-					native({
-						type: "message_update",
-						assistantMessageEvent: { type: "text_delta", delta: first },
-					});
-				}
-			});
-		});
-		try {
-			await send(page, "/relay legacy");
-			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("Ready —");
-			await page.locator("#input").fill("Read the fixture");
-			await page.locator("#send-btn").click();
-			await expect.poll(() => messages(page).innerText()).toContain("The first sentence is ready.");
-			expect(tts).toEqual([]); // Unclosed bold must not leak markers to TTS.
-			native({
-				type: "message_update",
-				assistantMessageEvent: { type: "text_delta", delta: rest },
-			});
-			await expect.poll(() => tts.length).toBe(4); // Before message_end.
-			expect(tts).toEqual([
-				"Status The first sentence is ready.",
-				"More detail.",
-				"Read the guide.",
-				"Keep sensor_home.",
-			]);
-			expect(await messages(page).locator(".markdown h3").innerText()).toBe("Status");
-			expect(await messages(page).locator(".markdown strong").innerText()).toBe(
-				"The first sentence is ready. More detail.",
-			);
-			expect(await messages(page).locator(".markdown ol li").count()).toBe(2);
-			native({ type: "message_end", message: { role: "assistant", content: markdown } });
-			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
-			await send(page, "/relay legacy");
-			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => messages(page).locator(".markdown h3").innerText()).toBe("Status");
-			expect(tts).toHaveLength(4);
-			await dialog.getByRole("button", { name: "Close Relay", exact: true }).click();
 		} finally {
 			await page.close();
 		}
@@ -3018,6 +2929,14 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-session"))).toBe(
 				"keep-production-session",
 			);
+			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
+			await dialog.getByRole("button", { name: "Use Kokoro TTS", exact: true }).click();
+			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
+			await expect.poll(() => inits.length).toBe(3);
+			expect(inits.at(-1)?.sessionId).toBe("stream-trial-session");
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-trial-engine"))).toBe(
+				"kokoro",
+			);
 			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
 				"server4",
 			);
@@ -3029,15 +2948,11 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("defaults Relay to aligned ZONOS3-Mini, migrates retired preferences and preserves Kokoro", async () => {
+	it("opens ZONOS-only Relay and rejects old or crafted engine arguments without starting a thread", async () => {
 		const { page } = await openPage("/");
 		const prompts: string[] = [],
 			controls: string[] = [];
-		let server4Connections = 0;
-		await page.routeWebSocket(/\/experiments\/lfm-voice\/ws\?tts=1$/, (ws) => {
-			server4Connections++;
-			ws.send(JSON.stringify({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 0 }));
-		});
+		await page.evaluate(() => localStorage.setItem("acb-relay-session", "zonos3-default-session"));
 		await relayChatFixture(page, (ws) =>
 			ws.onMessage((raw) => {
 				const message = JSON.parse(String(raw));
@@ -3069,57 +2984,59 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			}),
 		);
 		try {
-			await page.getByRole("button", { name: "Open Relay", exact: true }).click();
-			let dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
-			expect(await dialog.locator("iframe").count()).toBe(0);
-			expect(server4Connections).toBe(0);
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBeNull();
-			await send(page, "/relay kokoro");
-			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
-			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
+			const dialog = page.getByRole("dialog", { name: "Relay", exact: true });
+			const errors = messages(page).locator(".row-error");
+			for (const [index, arg] of [
 				"kokoro",
+				"KOKORO-TTS",
+				"legacy",
+				"zonos3 new kokoro",
+			].entries()) {
+				await send(page, `/relay ${arg}`);
+				await expect.poll(() => errors.count()).toBe(index + 1);
+				expect(await errors.last().innerText()).toContain("Relay only uses ZONOS3-Mini");
+				expect(await dialog.count()).toBe(0);
+			}
+			expect(prompts).toEqual([]);
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-session"))).toBe(
+				"zonos3-default-session",
 			);
-			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
-			await send(page, "/relay");
-			await expect.poll(() => dialog.innerText()).toContain("Kokoro reads the replies aloud");
-			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
-			await page.evaluate(() => localStorage.setItem("acb-relay-voice-engine", "lfm-tts"));
-			await send(page, "/relay");
-			await expect.poll(() => dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
-				"zonos3",
-			);
-			expect(server4Connections).toBe(0);
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBeNull();
 			await send(page, "/relay zonos3");
-			dialog = page.getByRole("dialog", { name: "Relay", exact: true });
 			await expect.poll(() => dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
-			expect(await page.evaluate(() => localStorage.getItem("acb-relay-voice-engine"))).toBe(
-				"zonos3",
-			);
+			await expect.poll(() => dialog.innerText()).toContain("Ready —");
+			await send(page, "/relay legacy");
+			expect(await dialog.isVisible()).toBe(true);
+			expect(await dialog.innerText()).toContain("ZONOS3-Mini reads the replies aloud");
+			expect(prompts).toHaveLength(1);
 			expect(controls).not.toContain("abort");
-			expect(prompts).not.toContain("/relay cancel");
-			expect(prompts.some((text) => text.startsWith("/relay stop-job"))).toBe(false);
 			await dialog.getByRole("button", { name: "End voice", exact: true }).click();
 		} finally {
 			await page.close();
 		}
 	});
 
-	it("migrates Server4 voice without changing the chat, replays no history and fits mobile", async () => {
+	it("migrates Kokoro without changing the chat and plays only new aligned speech at the saved speed", async () => {
 		const { page } = await openPage("/");
 		let finishReply = () => {};
 		const inits: Array<Record<string, unknown>> = [],
 			prompts: string[] = [],
-			ttsRequests: string[] = [];
+			ttsRequests: Array<{ text: string; speed: number }> = [],
+			kokoroRequests: string[] = [];
 		await page.evaluate(() => {
 			localStorage.setItem("acb-relay-session", "saved-relay-session");
-			localStorage.setItem("acb-relay-voice-engine", "server4");
+			localStorage.setItem("acb-relay-voice-engine", "kokoro");
+			localStorage.setItem("acb-relay-trial-engine", "kokoro");
+			localStorage.setItem("acb:prefs:saved-relay-session", JSON.stringify({ ttsSpeed: 0.85 }));
+		});
+		await page.route(/\/api\/tts\/(kokoro|relay)-stream$/, (route) => {
+			kokoroRequests.push(route.request().url());
+			return route.abort();
 		});
 		await page.route("**/api/tts/zonos-relay-stream*", (route) => {
-			const { text } = route.request().postDataJSON() as { text: string };
-			ttsRequests.push(text);
+			const request = route.request().postDataJSON() as { text: string; speed: number };
+			ttsRequests.push(request);
+			const { text } = request;
 			const samples = 8820;
 			const frame = (type: number, payload: Buffer) => {
 				const header = Buffer.alloc(5);
@@ -3221,7 +3138,12 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await settings.focus();
 			await page.keyboard.press("Enter");
 			expect(await settings.getAttribute("aria-expanded")).toBe("true");
-			expect(await dialog.getByRole("button", { name: /LFM|Server4/ }).count()).toBe(0);
+			expect(
+				await dialog.getByRole("button", { name: /Use .*TTS|Use Pi|Kokoro|legacy/ }).count(),
+			).toBe(0);
+			expect(await page.evaluate(() => localStorage.getItem("acb-relay-trial-engine"))).toBe(
+				"kokoro",
+			);
 			await settings.click();
 			await expect.poll(() => dialog.innerText()).toContain("Ready —");
 			expect(await dialog.locator("iframe").count()).toBe(0);
@@ -3242,16 +3164,6 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				"rgba(0, 0, 0, 0)",
 			);
 			await dialog.getByRole("button", { name: "Voice settings & details" }).click();
-			expect(
-				await dialog
-					.getByRole("button", { name: "Use Pi + Server2 Kokoro (aligned)", exact: true })
-					.isVisible(),
-			).toBe(true);
-			expect(
-				await dialog
-					.getByRole("button", { name: "Use legacy STT/Kokoro", exact: true })
-					.isVisible(),
-			).toBe(true);
 			expect(
 				await dialog.getByRole("button", { name: "Stop current Pi turn", exact: true }).isVisible(),
 			).toBe(true);
@@ -3297,7 +3209,8 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				node.scrollTop = 0;
 			});
 			finishReply();
-			expect(ttsRequests[0]).toBe("Ready on mobile.");
+			expect(ttsRequests[0]).toEqual({ text: "Ready on mobile.", speed: 0.85 });
+			expect(kokoroRequests).toEqual([]);
 			await expect
 				.poll(() =>
 					prompts.some((p) => {
