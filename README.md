@@ -95,9 +95,14 @@ extensions/
   auto-continue/           # pi-owned automatic continuation on max-token cutoff
   acb-workflows/           # pi-owned environment/orientation & web workflow commands
   codex-fast/              # pi-owned OpenAI/Codex fast-tier (/fast) toggle
+  colab/                   # pi-owned Google Colab GPU runner and /colab command
   delegate/                # pi-owned background worker chats (/delegate)
   claude-delegate/         # optional Claude Code CLI passthrough (/cc)
+  plan-usage/              # /gpt-usage and /gemini-usage subscription allowance checks
+  session-recovery/        # bounded post-restart continuation for active owner chats
+  venice-key-pool/         # Venice API key pool rotation and /venice-balance
   venice-no-system-prompt/ # disables Venice's injected persona prompt
+  voice-test/              # Relay (/relay), streaming trial (/relaytrial) & /voicetest
   antigravity-thinking/    # injects thinkingLevel for Antigravity OAuth requests
   openai-models/           # optional filter keeping GPT-6+ only in OpenAI picker
 tests/                    # vitest, server-side + pure extension helpers + UI smoke
@@ -108,7 +113,7 @@ scripts/                  # build + setup + dev helpers
 
 ## Run locally
 
-Requires Node 22.19+ (Node 24 LTS recommended) and the [`pi` CLI](https://pi.dev) on your `$PATH`.
+Requires Node.js and the [`pi` CLI](https://pi.dev) on your `$PATH`.
 
 ```bash
 git clone https://github.com/anunkai1/agentchatbox
@@ -357,6 +362,7 @@ speech synthesis (ZONOS3-Mini for normal playback; Kokoro for explicit Relay mod
 - **Streaming Pi voice trial:** `/relaytrial` uses ZONOS3-Mini or Kokoro in an independent Pi session, with speech interruption separate from work stops. [Trial guide](extensions/voice-test/RELAY.md#isolated-streaming-trial).
 - **Browser conversation test:** `/voicetest` opens an isolated voice session using local STT, Venice DeepSeek V4.1 Flash 1017 and Kokoro, with local Silero VAD, interruptions, stage timings and a saved transcript/summary. No phone calls or action tools yet; the current chat's model/tools remain unchanged. Use headphones. [Controls, architecture, privacy and tests](extensions/voice-test/README.md); operational setup/recovery is in `infra/docs/acb-voice-calling.md`.
 - **Voice mode** (header pill, or Settings → Media → Voice mode; device-wide): click to cycle **Off → V → V+ → Off**. **Off** leaves transcribed recordings in the composer for review; **V** auto-submits them without speaking replies; **V+** auto-submits and speaks each finished reply (the Long variant, via `/voice-last long`) in the visible tab only. Recordings end after 4 s of silence after speech (7 s if none was heard). The choice survives refreshes and chat changes, and changes made in one tab are picked up by the others. Existing enabled voice-mode preferences become V+ to preserve their behaviour.
+- **Image and video generation:** `/imagemodel` (header image button or Settings → Media → Image model) selects across [`pi-image-core`](https://github.com/anunkai1/pi-image-core) providers (`pi-local-image`, `pi-venice-image`, `pi-openrouter-image`, `pi-openai-codex-image`). `/videomodel` (Settings → Media → Video model) and `/videogen` generate inline `<video>` clips with poster thumbnails via [`pi-venice-video`](https://github.com/anunkai1/pi-venice-video).
 
 ### Upstream
 
