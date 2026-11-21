@@ -593,11 +593,11 @@ describe("delegation guidance and context reuse", () => {
 		);
 	});
 
-	it("guides approved independent dispatches, topic reuse and no speculative progress", async () => {
+	it("guides independent dispatches, topic reuse and no speculative progress", async () => {
 		const h = harness();
 		const tool = h.tools.get("delegate")!;
 		expect(tool.promptGuidelines).toEqual([...DISPATCH_GUIDANCE, BRIEF_GUIDANCE]);
-		expect(tool.description).toContain("ordinary requests are not approval");
+		expect(tool.description).not.toContain("ordinary requests are not approval");
 		expect(tool.description).toContain("independently/concurrently");
 		expect(tool.description).toContain("Do not split tightly dependent work unnecessarily");
 		expect(tool.description).toContain("After all dispatches");

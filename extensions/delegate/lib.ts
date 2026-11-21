@@ -141,9 +141,8 @@ export const BRIEF_GUIDANCE =
 	"The worker cannot see this conversation. Write a self-contained brief with sections: Goal and why; Known facts (relevant paths, errors and the owner's words); Done when (required checks and the evidence to return). Include only supplied or verified facts, not invented details. Investigate gaps where possible; ask the owner only if genuinely blocked, not when the task is already clear.";
 
 export const DISPATCH_GUIDANCE = [
-	"Delegate only when the owner explicitly asks to delegate, hand off or run work in the background, or accepts your suggestion; ordinary requests are not approval.",
 	"Before spawning, use delegate_status to find relevant existing workers by topic. Prefer delegate_message for the same topic to retain context; compare the title, task and parent chat, not just the repository. Do not reuse an unrelated worker merely because it shares a repo.",
-	"For an explicitly delegated request with independent tasks, split and dispatch them independently/concurrently where appropriate. Do not split tightly dependent work unnecessarily. After all dispatches, briefly give the owner the session links and end your turn; do not wait or poll for completion.",
+	"When delegating independent tasks, split and dispatch them independently/concurrently where appropriate. Do not split tightly dependent work unnecessarily. After all dispatches, briefly give the owner the session links and end your turn; do not wait or poll for completion.",
 ];
 
 export const ONE_LINER_GUIDANCE =

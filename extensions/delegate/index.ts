@@ -228,7 +228,7 @@ export default function registerDelegate(
 				content: [
 					{
 						type: "text",
-						text: `Worker started: ${chatLink(record.title, record.id)} in ${record.cwd} (${workerLabel(record)}). After all independent tasks in the approved request are dispatched, give the owner the links and end your turn.`,
+						text: `Worker started: ${chatLink(record.title, record.id)} in ${record.cwd} (${workerLabel(record)}). After all independent tasks are dispatched, give the owner the links and end your turn.`,
 					},
 				],
 				details: undefined,

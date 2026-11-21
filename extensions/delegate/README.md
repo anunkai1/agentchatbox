@@ -7,15 +7,14 @@ status, full folder path, last update and parent/worker links.
 
 ## Dispatching and retaining context
 
-- Delegate only with the owner's approval, not for ordinary requests by default.
 - First use `delegate_status` to look for the same topic. Compare the title,
   original task and parent chat; sharing a repository does not make two tasks
   related. Continue a relevant worker with `delegate_message` instead of losing
   its context in a new chat. Follow-ups still report to its **original parent**.
-- For an explicitly delegated request containing independent tasks, dispatch them
-  independently/concurrently where appropriate. Keep tightly dependent work
-  together. Give the owner all session links and end the turn **after all
-  dispatches**, without waiting or polling for completion.
+- When delegating independent tasks, dispatch them independently/concurrently
+  where appropriate. Keep tightly dependent work together. Give the owner all
+  session links and end the turn **after all dispatches**, without waiting or
+  polling for completion.
 - Workers use ACB's configured default model (falling back to the current chat's
   model and thinking level when unset), unless the owner specifies a model or
   thinking level (or `/cc on` is active). When an explicit model is named
