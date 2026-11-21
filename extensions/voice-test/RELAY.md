@@ -19,9 +19,10 @@ integration or standing proactive mandate is installed.
    and thinking selection for its tracked worker, rather than Global's default for
    newly opened chats. Relay's own direct work runs on the conversation model;
    additional workers use the normal delegation tools' model-selection behaviour.
-2. The panel shows **Answers & tools: DeepSeek Flash · thinking off** and a separate **Delegated
-   work** model/thinking line. Conversation uses
-   `venice/deepseek-v4-1-flash-1017`; work uses the captured ACB selection. Workers
+2. The panel starts on **Answers & tools: DeepSeek Flash · thinking off** (`venice/deepseek-v4-1-flash-1017`)
+   and shows a separate **Delegated work** model/thinking line using the captured ACB selection.
+   If you select a different conversation model or thinking level inside a Relay session, that
+   selection stays for the rest of that Relay session (including reopens and restarts). Workers
    use native Pi, not the originating chat's `/cc` mode.
 3. Relay uses **Pi + Server2 ZONOS3-Mini** with synthesis-aligned speech. Browser Silero VAD +
    Server2 Fluid Speech Pro STT → full-access Pi → rendered `SpokenMarkdown`

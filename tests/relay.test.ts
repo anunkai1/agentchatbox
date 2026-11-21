@@ -239,4 +239,79 @@ describe("Relay full-access agent and tracked worker", () => {
 		h.hooks.get("before_agent_start")!({ systemPrompt: "Existing owner rules" }, h.ctx);
 		expect(h.pi.getActiveTools()).toEqual(ordinaryTools);
 	});
+	it("preserves a different model and thinking level selected during a Relay session across reopens and restarts", async () => {
+		const manager = SessionManager.create(tmpdir(), root);
+		const file = manager.getSessionFile()!;
+		let currentModel: { provider: string; id: string } = { provider: "openai", id: "work-model" };
+		let currentThinking = "high";
+		const build = (mgr: SessionManager) => {
+			const h = harness(mgr);
+			Object.defineProperty(h.ctx, "model", { get: () => currentModel, configurable: true });
+			h.pi.getThinkingLevel = () => currentThinking;
+			h.pi.setModel = vi.fn(async (m: { provider: string; id: string }) => {
+				currentModel = m;
+				return true;
+			});
+			h.pi.setThinkingLevel = vi.fn((level: string) => {
+				currentThinking = level;
+			});
+			return h;
+		};
+		const h = build(manager);
+		await h.command("start");
+		expect(currentModel).toEqual({ provider: "venice", id: "deepseek-v4-1-flash-1017" });
+		expect(currentThinking).toBe("off");
+
+		// Simulate the user selecting a different model and thinking level in the Relay session.
+		currentModel = { provider: "anthropic", id: "claude-opus-4-6" };
+		currentThinking = "medium";
+		h.hooks.get("model_select")!({ type: "model_select", model: currentModel }, h.ctx);
+		h.hooks.get("thinking_level_select")!({ type: "thinking_level_select", level: "medium" }, h.ctx);
+
+		// Reopening Relay (/relay start) keeps the chosen model and emits it in ready.
+		h.pi.setModel.mockClear();
+		h.pi.setThinkingLevel.mockClear();
+		await h.command("start");
+		expect(h.pi.setModel).not.toHaveBeenCalled();
+		expect(h.pi.setThinkingLevel).not.toHaveBeenCalled();
+		expect(currentModel).toEqual({ provider: "anthropic", id: "claude-opus-4-6" });
+		expect(currentThinking).toBe("medium");
+		expect(h.pi.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				details: expect.objectContaining({
+					kind: "ready",
+					model: "anthropic/claude-opus-4-6",
+					thinkingLevel: "medium",
+				}),
+			}),
+			expect.anything(),
+		);
+
+		// Also verify non-off Venice selections do not get disable_thinking injected.
+		currentModel = { provider: "venice", id: "other-venice" };
+		currentThinking = "high";
+		h.hooks.get("model_select")!({ type: "model_select", model: currentModel }, h.ctx);
+		expect(
+			h.hooks.get("before_provider_request")!({ payload: {} }, { model: { provider: "venice" } }),
+		).toBeUndefined();
+
+		// Flush the session to disk (first real user message) and resume from a fresh process
+		// whose CLI init defaulted back to DeepSeek/work-model.
+		await h.command("say turn-1 Use the selected model");
+		h.owner();
+		await h.run(START);
+		expect(readDelegation("worker-1")).toMatchObject({
+			parentModel: { provider: "venice", modelId: "other-venice", thinkingLevel: "high" },
+		});
+
+		currentModel = { provider: "venice", id: "deepseek-v4-1-flash-1017" };
+		currentThinking = "off";
+		const resumed = build(SessionManager.open(file));
+		await resumed.hooks.get("session_start")!({}, resumed.ctx);
+		expect(currentModel).toEqual({ provider: "venice", id: "other-venice" });
+		expect(currentThinking).toBe("high");
+		await resumed.command("start");
+		expect(currentModel).toEqual({ provider: "venice", id: "other-venice" });
+		expect(currentThinking).toBe("high");
+	});
 });

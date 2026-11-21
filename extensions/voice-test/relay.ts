@@ -21,11 +21,17 @@ export const RELAY_STATE = "acb-relay-state";
 interface RelayState {
 	version: 1;
 	workerModel: ModelChoice;
+	model?: ModelChoice;
 	workerId?: string;
 	/** Persist before network I/O. Uncertain submissions must never create another worker. */
 	starting?: boolean;
 	messagePending?: boolean;
 }
+const DEFAULT_MODEL: ModelChoice = {
+	provider: VOICE_PROVIDER,
+	modelId: VOICE_MODEL,
+	thinkingLevel: "off",
+};
 const PROMPT = `You are Relay, your owner's voice-enabled ACB super-agent. You have normal owner-level ACB tools and filesystem/network access, not a sandbox or a folder/document whitelist. You can read files across repositories, execute shell commands, edit and write files, check live infrastructure, use browser/web/app integrations and carry out owner-approved work directly. Use the available tools and existing workflows; do not claim a capability is unavailable merely because it is outside the chat folder. Only claim actions confirmed by evidence.
 Speak concise, natural Australian English, usually one or two sentences. Prefer plain spoken replies; keep large code/data in files rather than reading it aloud. You receive transcriptions, not audio; never claim to assess audio quality. No dedicated telephone integration is installed; do not invent tools or completed calls.
 Use existing docs as the map (start with /home/lepton/infra/apps/REGISTRY.md for application folders, /home/lepton/infra/docs/server2-overview.md for host operations). Do not guess repositories or facts. Follow the normal owner instructions for credential handling, personal-detail disclosure, changes and deployment; full access does not mean exposing secrets.
@@ -37,6 +43,7 @@ Closing the voice window or interrupting speech leaves Pi work and delegated wor
 export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions()): void {
 	let state: RelayState | undefined;
 	let ownerTurn = false;
+	let activating = false;
 	const turns = new Set<string>();
 	const actions = new Set<string>();
 	const emit = (details: RelayEvent) =>
@@ -85,19 +92,49 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 			uncertain: Boolean(state?.starting || state?.messagePending),
 		});
 	}
-	async function activate(ctx: ExtensionContext): Promise<void> {
+	function activeModel(): ModelChoice {
+		return state?.model ?? DEFAULT_MODEL;
+	}
+	function updateModel(
+		ctx: ExtensionContext,
+		provider: string,
+		modelId: string,
+		thinkingLevel: string,
+	): void {
+		if (!state || activating) return;
+		if (
+			state.model?.provider === provider &&
+			state.model?.modelId === modelId &&
+			state.model?.thinkingLevel === thinkingLevel
+		) {
+			return;
+		}
+		state.model = { provider, modelId, thinkingLevel };
+		save(ctx, false);
+	}
+	async function activate(
+		ctx: ExtensionContext,
+		target: ModelChoice = DEFAULT_MODEL,
+	): Promise<void> {
 		const previousTools = pi.getActiveTools();
 		pi.setActiveTools([]); // Do not start turns with a partially configured Relay.
+		activating = true;
 		try {
-			const model = ctx.modelRegistry.find(VOICE_PROVIDER, VOICE_MODEL);
-			if (!model || !(await pi.setModel(model)))
-				throw new Error(`Relay needs configured ${VOICE_PROVIDER}/${VOICE_MODEL}`);
-			pi.setThinkingLevel("off");
+			if (ctx.model?.provider !== target.provider || ctx.model?.id !== target.modelId) {
+				const model = ctx.modelRegistry.find(target.provider, target.modelId);
+				if (!model || !(await pi.setModel(model)))
+					throw new Error(`Relay needs configured ${target.provider}/${target.modelId}`);
+			}
+			if (pi.getThinkingLevel() !== target.thinkingLevel) {
+				pi.setThinkingLevel(target.thinkingLevel as (typeof THINKING_LEVELS)[number]);
+			}
 			pi.setActiveTools(pi.getAllTools().map((tool) => tool.name));
 		} catch (error) {
 			// A failed conversion must not leave the ordinary chat tool-less.
 			pi.setActiveTools(previousTools);
 			throw error;
+		} finally {
+			activating = false;
 		}
 	}
 	pi.on("session_start", async (_event, ctx) => {
@@ -111,7 +148,13 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 			if (entry.customType === "acb-relay-action") actions.add(String(entry.data));
 		}
 		voice.restore(ctx);
-		if (state) await activate(ctx);
+		if (state) await activate(ctx, activeModel());
+	});
+	pi.on("model_select", (event, ctx) => {
+		updateModel(ctx, event.model.provider, event.model.id, pi.getThinkingLevel());
+	});
+	pi.on("thinking_level_select", (event, ctx) => {
+		if (ctx.model) updateModel(ctx, ctx.model.provider, ctx.model.id, event.level);
 	});
 
 	pi.registerCommand("relay", {
@@ -144,13 +187,15 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 							modelId: selected.id,
 							thinkingLevel: thinking,
 						};
-						await activate(ctx);
-						state = { version: 1, workerModel };
+						await activate(ctx, DEFAULT_MODEL);
+						state = { version: 1, workerModel, model: { ...DEFAULT_MODEL } };
 						save(ctx, false);
-					} else await activate(ctx);
+					} else await activate(ctx, activeModel());
+					const current = activeModel();
 					emit({
 						kind: "ready",
-						model: `${VOICE_PROVIDER}/${VOICE_MODEL}`,
+						model: `${current.provider}/${current.modelId}`,
+						thinkingLevel: current.thinkingLevel,
 						workerModel: state.workerModel,
 					});
 					publish(ctx);
@@ -239,7 +284,7 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 						task: params.task,
 						cwd: params.cwd,
 						parentSessionId: parent,
-						parentModel: { provider: VOICE_PROVIDER, modelId: VOICE_MODEL, thinkingLevel: "off" },
+						parentModel: activeModel(),
 						workerModel: state.workerModel,
 					},
 				);
@@ -335,7 +380,8 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 	pi.on("session_before_tree", () => (state ? { cancel: true } : undefined));
 	pi.on("session_before_fork", () => (state ? { cancel: true } : undefined));
 	pi.on("before_provider_request", (event, ctx) => {
-		if (state && ctx.model?.provider === VOICE_PROVIDER) return voicePayload(event.payload);
+		if (state && ctx.model?.provider === VOICE_PROVIDER && activeModel().thinkingLevel === "off")
+			return voicePayload(event.payload);
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		if (state) {

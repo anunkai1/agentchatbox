@@ -580,7 +580,11 @@ function openVoice(
 		const turnId = uuid();
 		currentTurn = turnId;
 		firstTextMs = 0;
-		sayStatus("DeepSeek is preparing a reply…");
+		sayStatus(
+			model.title && model.title !== "venice/deepseek-v4-1-flash-1017"
+				? "Preparing a reply…"
+				: "DeepSeek is preparing a reply…",
+		);
 		// Remember identity before submission, even if the tab closes before acknowledgement.
 		// An unsaved/missing session then fails closed; never auto-repeat the utterance.
 		try {
@@ -902,7 +906,11 @@ function openVoice(
 				capturedWorker = `${event.workerModel.provider}/${event.workerModel.modelId} ${event.workerModel.thinkingLevel}`;
 				workerModel.textContent = `Delegated work: ${event.workerModel.modelId} · thinking ${event.workerModel.thinkingLevel} (when requested)`;
 				workerModel.title = `${event.workerModel.provider}/${event.workerModel.modelId}. Settings captured from the main chat; this is not a live worker status.`;
-				handleVoiceEvent({ kind: "ready", model: event.model });
+				handleVoiceEvent({
+					kind: "ready",
+					model: event.model,
+					thinkingLevel: event.thinkingLevel,
+				});
 			} else if (event.kind === "voice_context") {
 				showVoiceContext(event);
 			} else if (event.kind === "voice_result") {
@@ -1088,7 +1096,7 @@ function openVoice(
 			relayStarted = relay;
 			ready = true;
 			if (foregroundRelay && document.visibilityState === "visible") foregroundPending = false;
-			setConversationModel(event.model);
+			setConversationModel(event.model, event.thinkingLevel);
 			send.disabled = interrupt.disabled = stopPi.disabled = finish.disabled = false;
 			renderMic();
 			sayStatus("Ready — start the microphone or send text");

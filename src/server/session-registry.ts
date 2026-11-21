@@ -45,6 +45,7 @@ import type {
 	ThinkingLevel,
 	TranscriptPayload,
 } from "../shared/protocol.js";
+import { RELAY_MESSAGE } from "../shared/relay.js";
 import { recordTransportStop } from "../shared/transport-state.js";
 import { config, getServerApiKey } from "./config.js";
 import { log } from "./logger.js";
@@ -775,37 +776,92 @@ class SessionRegistry {
 		// a "session" line on startup; the id is buried in get_state's
 		// response. On the first one, mark ready and (if a view is
 		// attached) send ready + catch-up.
-		if (line.type === "response" && line.command === "get_state" && !session.ready) {
-			const data = line.data as { sessionId?: string } | undefined;
-			const id = String(data?.sessionId ?? "");
-			if (id) {
-				if (session.init.sessionId && id !== session.init.sessionId) {
-					// A resume must prove it opened the requested chat, not just any chat.
-					// Do not overwrite a live registry entry or replay another transcript.
-					log.warn("pi resumed an unexpected session", {
-						requestedSessionId: session.init.sessionId,
-						actualSessionId: id,
-					});
-					const message = "pi opened a different chat than requested; reconnect to try again";
-					deliver(session.ws, { type: "error", message });
-					for (const waiter of session.readyWaiters.splice(0)) waiter.reject(new Error(message));
-					this.kill(session);
-					return;
+		if (line.type === "response" && line.command === "get_state") {
+			const data = line.data as
+				| {
+						sessionId?: unknown;
+						model?: { provider?: unknown; id?: unknown };
+						thinkingLevel?: unknown;
+						sessionName?: unknown;
+				  }
+				| undefined;
+			if (!session.ready) {
+				const id = String(data?.sessionId ?? "");
+				if (id) {
+					if (session.init.sessionId && id !== session.init.sessionId) {
+						// A resume must prove it opened the requested chat, not just any chat.
+						// Do not overwrite a live registry entry or replay another transcript.
+						log.warn("pi resumed an unexpected session", {
+							requestedSessionId: session.init.sessionId,
+							actualSessionId: id,
+						});
+						const message = "pi opened a different chat than requested; reconnect to try again";
+						deliver(session.ws, { type: "error", message });
+						for (const waiter of session.readyWaiters.splice(0)) waiter.reject(new Error(message));
+						this.kill(session);
+						return;
+					}
+					if (typeof data?.sessionName === "string") session.name = data.sessionName;
+					const provider = data?.model?.provider;
+					const modelId = data?.model?.id;
+					const thinkingLevel = data?.thinkingLevel;
+					if (typeof provider === "string" && typeof modelId === "string") {
+						const thinking =
+							typeof thinkingLevel === "string"
+								? (thinkingLevel as ThinkingLevel)
+								: session.init.thinkingLevel;
+						session.init = { ...session.init, provider, modelId, thinkingLevel: thinking };
+					}
+					session.sessionId = id;
+					session.ready = true;
+					this.pending.delete(session);
+					this.entries.set(id, session); // idempotent for resume, first reg for new
+					for (const waiter of session.readyWaiters.splice(0)) waiter.resolve();
+					this.sendReadyAndCatchup(session);
 				}
-				session.sessionId = id;
-				session.ready = true;
-				this.pending.delete(session);
-				this.entries.set(id, session); // idempotent for resume, first reg for new
-				for (const waiter of session.readyWaiters.splice(0)) waiter.resolve();
-				this.sendReadyAndCatchup(session);
+			} else {
+				// Keep the transport's model snapshot current after an extension-triggered
+				// get_state so the detachable-session state and browser picker stay in sync.
+				session.name = typeof data?.sessionName === "string" ? data.sessionName : undefined;
+				const provider = data?.model?.provider;
+				const modelId = data?.model?.id;
+				const thinkingLevel = data?.thinkingLevel;
+				if (typeof provider === "string" && typeof modelId === "string") {
+					const thinking =
+						typeof thinkingLevel === "string"
+							? (thinkingLevel as ThinkingLevel)
+							: session.init.thinkingLevel;
+					const changed =
+						session.init.provider !== provider ||
+						session.init.modelId !== modelId ||
+						session.init.thinkingLevel !== thinking;
+					session.init = { ...session.init, provider, modelId, thinkingLevel: thinking };
+					if (changed) {
+						deliver(session.ws, {
+							type: "modelState",
+							provider,
+							modelId,
+							thinkingLevel: thinking,
+						});
+					}
+				}
 			}
 		}
 
 		// Extension commands can change pi's model internally with pi.setModel()
 		// without producing the normal set_model RPC acknowledgement. When an
-		// extension publishes a status update, take a fresh get_state snapshot so
-		// the detachable-session state and browser picker stay in sync too.
-		if (line.type === "extension_ui_request" && line.method === "setStatus" && session.ready) {
+		// extension publishes a status update (or Relay activates/resumes), take
+		// a fresh get_state snapshot so the detachable-session state and browser
+		// picker stay in sync too.
+		const relayReady =
+			line.type === "message_end" &&
+			(line.message as { customType?: unknown; details?: { kind?: unknown } } | undefined)
+				?.customType === RELAY_MESSAGE &&
+			(line.message as { details?: { kind?: unknown } } | undefined)?.details?.kind === "ready";
+		if (
+			session.ready &&
+			((line.type === "extension_ui_request" && line.method === "setStatus") || relayReady)
+		) {
 			session.pi.send({ type: "get_state" });
 		}
 
@@ -826,42 +882,6 @@ class SessionRegistry {
 			}
 			// A detached /cc run that just finished leaves the session idle.
 			if (!session.ws && !isWorking(session)) this.scheduleIdleReap(session);
-		}
-
-		// Keep the transport's model snapshot current after an extension-triggered
-		// get_state. The normal readiness get_state above only discovers the
-		// session id; later snapshots are the source of truth for model changes.
-		if (line.type === "response" && line.command === "get_state" && session.ready) {
-			const data = line.data as
-				| {
-						model?: { provider?: unknown; id?: unknown };
-						thinkingLevel?: unknown;
-						sessionName?: unknown;
-				  }
-				| undefined;
-			session.name = typeof data?.sessionName === "string" ? data.sessionName : undefined;
-			const provider = data?.model?.provider;
-			const modelId = data?.model?.id;
-			const thinkingLevel = data?.thinkingLevel;
-			if (typeof provider === "string" && typeof modelId === "string") {
-				const thinking =
-					typeof thinkingLevel === "string"
-						? (thinkingLevel as ThinkingLevel)
-						: session.init.thinkingLevel;
-				const changed =
-					session.init.provider !== provider ||
-					session.init.modelId !== modelId ||
-					session.init.thinkingLevel !== thinking;
-				session.init = { ...session.init, provider, modelId, thinkingLevel: thinking };
-				if (changed) {
-					deliver(session.ws, {
-						type: "modelState",
-						provider,
-						modelId,
-						thinkingLevel: thinking,
-					});
-				}
-			}
 		}
 
 		// Resolve in-flight set_model / set_thinking_level requests.

@@ -3130,6 +3130,75 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			delete process.env.AGENTCHATBOX_FAKE_PI_MARKER;
 		}
 	});
+
+	it("syncs initial get_state model/thinking into ready and refreshes modelState on acb-relay ready", async () => {
+		fakePiPath = makeFakePi("ack");
+		writeFileSync(
+			fakePiPath,
+			`#!/usr/bin/env node
+const readline = require('node:readline');
+let provider = 'anthropic';
+let id = 'claude-opus-4-6';
+let thinkingLevel = 'medium';
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.type === 'get_state') {
+    console.log(JSON.stringify({
+      type: 'response',
+      command: 'get_state',
+      success: true,
+      data: { sessionId: 'relay-sync-001', model: { provider, id }, thinkingLevel },
+    }));
+  } else if (msg.type === 'prompt' && msg.message === '/relay start') {
+    provider = 'venice';
+    id = 'deepseek-v4-1-flash-1017';
+    thinkingLevel = 'off';
+    console.log(JSON.stringify({
+      type: 'message_end',
+      message: { role: 'custom', customType: 'acb-relay', details: { kind: 'ready' } },
+    }));
+  }
+});
+`,
+			{ mode: 0o755 },
+		);
+		process.env.PI_BIN = fakePiPath;
+		vi.resetModules();
+
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			ws.send(
+				JSON.stringify({ type: "init", provider: "deepseek", modelId: "m1", thinkingLevel: "off" }),
+			);
+			const [ready] = (await waitForType(inbox, "ready", 1, 3000)) as Array<{
+				provider?: string;
+				modelId?: string;
+				thinkingLevel?: string;
+			}>;
+			expect(ready).toMatchObject({
+				provider: "anthropic",
+				modelId: "claude-opus-4-6",
+				thinkingLevel: "medium",
+			});
+
+			ws.send(JSON.stringify({ type: "prompt", text: "/relay start" }));
+			const [modelState] = (await waitForType(inbox, "modelState", 1, 3000)) as Array<{
+				provider?: string;
+				modelId?: string;
+				thinkingLevel?: string;
+			}>;
+			expect(modelState).toEqual({
+				type: "modelState",
+				provider: "venice",
+				modelId: "deepseek-v4-1-flash-1017",
+				thinkingLevel: "off",
+			});
+		} finally {
+			close();
+		}
+	});
 });
 async function waitForReadyCount(inbox: Inbox, count: number, timeoutMs: number): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;

@@ -11,6 +11,7 @@ export type RelayEvent =
 	| {
 			kind: "ready";
 			model: string;
+			thinkingLevel?: string;
 			workerModel: { provider: string; modelId: string; thinkingLevel: string };
 	  }
 	| { kind: "voice_context"; id: string; user?: string; heard?: string }
