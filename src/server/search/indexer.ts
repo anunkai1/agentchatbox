@@ -8,7 +8,7 @@ import {
 	type SessionSummary,
 } from "../session-list.js";
 import { embedBatch } from "./embeddings.js";
-import { indexedSessionState, indexSession, isIndexed } from "./store.js";
+import { indexedSessionState, indexSession } from "./store.js";
 
 /** Small overlapping passages fit the existing MiniLM model better than whole replies. */
 export function chunkText(text: string): string[] {
@@ -121,12 +121,12 @@ export async function ensureSessionIndexed(session: SessionSummary): Promise<num
 	if (!file) return 0;
 	const { mtimeMs, size } = await stat(file);
 	const stamp = mtimeMs.toString();
-	if (await isIndexed(session.id, stamp)) return 0;
+	const prior = indexedSessionState(session.id);
+	if (prior?.mtime === stamp && prior.cwd === session.cwd) return 0;
 
 	// Transcripts are append-only: resume after what is already indexed, as
 	// long as it was recorded for this same file (a move rewrites the header,
 	// so a changed cwd means the offsets no longer apply).
-	const prior = indexedSessionState(session.id);
 	const append =
 		prior !== undefined &&
 		prior.cwd === session.cwd &&

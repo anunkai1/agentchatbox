@@ -63,13 +63,14 @@ describe("semantic search store", () => {
 		await store.indexSession(
 			{ ...meta("one", "/a", "2"), title: "Renamed" },
 			[passage(0, "updated")],
-			async (texts: string[]) => texts.map(() => vector()),
+			// The older passages have a higher score: any stale row wins and fails this check.
+			async (texts: string[]) => texts.map(() => vector(0.9)),
 		);
 		expect(store.searchVectors(vector(), 1)[0]).toMatchObject({
 			title: "Renamed",
 			text: "updated",
 		});
-		expect(await store.isIndexed("one", "1")).toBe(false);
+		expect(store.indexedSessionState("one")?.mtime).toBe("2");
 		await store.loadCache();
 		expect(store.searchVectors(vector(), 1)[0].title).toBe("Renamed");
 		await store.deleteSession("one");
@@ -106,6 +107,6 @@ describe("semantic search store", () => {
 			async (texts: string[]) => texts.map(() => vector()),
 			() => false,
 		);
-		expect(await store.isIndexed("deleted", "1")).toBe(false);
+		expect(store.indexedSessionState("deleted")).toBeUndefined();
 	});
 });

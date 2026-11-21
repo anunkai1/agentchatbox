@@ -8,9 +8,8 @@
  *
  * The DB is durable storage only. At module load we pull every vector into one
  * contiguous `Float32Array` and brute-force search it with a bounded heap — no
- * SQLite query per search, no sqlite-vec extension needed. At our scale (one
- * user, hundreds–thousands of sessions) this is ~15 MB of RAM and sub-100 ms
- * per query. (Resonant ships this exact shape and benchmarks it.)
+ * SQLite query per search, no sqlite-vec extension needed. Vectors use
+ * 384 × 4 bytes per passage, plus spare capacity for appends and metadata.
  *
  * PLUGGABILITY: `better-sqlite3` is an OPTIONAL package, dynamically imported.
  * If it is not installed the store reports unavailable and the search module
@@ -244,15 +243,6 @@ export async function loadCache(): Promise<void> {
 	cacheLoaded = true;
 }
 
-/** Has a session already been indexed at (or after) the given mtime? */
-export async function isIndexed(sessionId: string, mtimeIso: string): Promise<boolean> {
-	const database = await getDb();
-	const row = database
-		.prepare("SELECT mtime FROM indexed_sessions WHERE session_id = ?")
-		.get(sessionId) as { mtime: string } | undefined;
-	return !!row && row.mtime === mtimeIso;
-}
-
 /** What is already indexed for a session (cache-backed; call after loadCache). */
 export function indexedSessionState(sessionId: string): IndexedSessionMeta | undefined {
 	return sessionMeta.get(sessionId);
@@ -319,13 +309,17 @@ export async function indexSession(
 	});
 	tx();
 
-	sessionMeta.set(meta.sessionId, meta);
-	if (opts.append) {
-		if (!cacheLoaded) await loadCache();
-		else appendToCache(meta.sessionId, messages, vectors);
-	} else {
-		await refreshCacheForSession(meta.sessionId);
+	if (!cacheLoaded) {
+		await loadCache();
+		return;
 	}
+	// A new chat has no old rows to remove. Growing the vector buffer
+	// geometrically avoids copying the entire index for each new chat.
+	if (!opts.append && sessionMeta.has(meta.sessionId)) {
+		pruneCacheForSession(meta.sessionId, vectors.size);
+	}
+	sessionMeta.set(meta.sessionId, meta);
+	appendToCache(meta.sessionId, messages, vectors);
 }
 
 /** Extend the in-memory cache with new passages. Capacity grows geometrically, so an append is O(new). */
@@ -378,14 +372,14 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 /** Drop a single session's entries from the in-memory cache (after a delete). */
-function pruneCacheForSession(sessionId: string): void {
+function pruneCacheForSession(sessionId: string, reserveRows = 0): void {
 	let removed = 0;
 	for (let i = 0; i < cacheMeta.length; i++) {
 		if (cacheMeta[i].sessionId === sessionId) removed++;
 	}
 	if (removed === 0) return;
 	const kept = cacheMeta.length - removed;
-	const newVecs = new Float32Array(kept * EMBEDDING_DIM);
+	const newVecs = new Float32Array((kept + reserveRows) * EMBEDDING_DIM);
 	const newMeta: CacheMeta[] = [];
 	let w = 0;
 	for (let i = 0; i < cacheMeta.length; i++) {
@@ -395,57 +389,6 @@ function pruneCacheForSession(sessionId: string): void {
 			cacheVectors.subarray(i * EMBEDDING_DIM, (i + 1) * EMBEDDING_DIM),
 			w * EMBEDDING_DIM,
 		);
-		w++;
-	}
-	cacheMeta = newMeta;
-	cacheVectors = newVecs;
-}
-
-/** Reload a single session's rows into the cache (after indexing). */
-async function refreshCacheForSession(sessionId: string): Promise<void> {
-	if (!cacheLoaded) await loadCache();
-	const database = await getDb();
-	// Drop old cache entries for this session, then re-insert its fresh rows.
-	const kept: CacheMeta[] = [];
-	const keptVecs: number[] = [];
-	for (let i = 0; i < cacheMeta.length; i++) {
-		if (cacheMeta[i].sessionId !== sessionId) {
-			kept.push(cacheMeta[i]);
-			keptVecs.push(i);
-		}
-	}
-	const fresh = database
-		.prepare(
-			"SELECT msg_idx, role, text, vector, created_at FROM embeddings WHERE session_id = ? ORDER BY msg_idx",
-		)
-		.all(sessionId) as Array<{
-		msg_idx: number;
-		role: string;
-		text: string;
-		vector: Buffer;
-		created_at: string;
-	}>;
-
-	const total = kept.length + fresh.length;
-	const newVecs = new Float32Array(total * EMBEDDING_DIM);
-	let w = 0;
-	for (const idx of keptVecs) {
-		newVecs.set(
-			cacheVectors.subarray(idx * EMBEDDING_DIM, (idx + 1) * EMBEDDING_DIM),
-			w * EMBEDDING_DIM,
-		);
-		w++;
-	}
-	const newMeta: CacheMeta[] = kept;
-	for (const r of fresh) {
-		newMeta.push({
-			sessionId,
-			msgIdx: r.msg_idx,
-			role: r.role,
-			text: r.text,
-			createdAt: r.created_at,
-		});
-		newVecs.set(bufferToVector(r.vector), w * EMBEDDING_DIM);
 		w++;
 	}
 	cacheMeta = newMeta;
