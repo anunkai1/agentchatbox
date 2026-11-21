@@ -1821,24 +1821,3 @@ describe("claude-delegate and delegated workers", () => {
 		expect(accept).not.toHaveBeenCalled();
 	});
 });
-
-describe("claude-delegate for delegated reports", () => {
-	it("reviews a worker report only while in Claude Code mode, with the chat's ids", async () => {
-		const seen: Array<Record<string, string>> = [];
-		const h = harness("sonnet", {}, (async (
-			_args: string[],
-			options: { env: Record<string, string> },
-		) => {
-			seen.push(options.env);
-			return { resultText: "ok", isError: false };
-		}) as never);
-		const accept = vi.fn();
-		h.events.emit("claude-delegate:run", { ctx: h.uiCtx, task: "report", accept });
-		expect(accept).not.toHaveBeenCalled();
-		await h.cc("on haiku", h.uiCtx);
-		h.events.emit("claude-delegate:run", { ctx: h.uiCtx, task: "report", accept });
-		expect(accept).toHaveBeenCalled();
-		await h.whenIdle();
-		expect(seen[0]).toMatchObject({ ACB_CHAT_ID: "chat-1", ACB_CLAUDE_MODE: "haiku" });
-	});
-});

@@ -1062,17 +1062,6 @@ export function registerClaudeDelegate(
 	pi.events?.on("claude-delegate:query", (data) => {
 		(data as { reply(mode?: DelegationMode): void }).reply(sticky);
 	});
-	// A worker's report for a main chat in Claude Code mode.
-	pi.events?.on("claude-delegate:run", (data) => {
-		const run = data as {
-			ctx: StatusContext & { ui: { notify(message: string, type?: string): void } };
-			task: string;
-			accept(): void;
-		};
-		if (!sticky) return;
-		run.accept();
-		void delegateDirect(run.task, sticky, run.ctx, sessionKey(run.ctx), false);
-	});
 	pi.events?.on("claude-delegate:start", (data) => {
 		const start = data as {
 			ctx: StatusContext & { ui: { notify(message: string, type?: string): void } };

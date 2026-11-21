@@ -180,9 +180,7 @@ export default function registerDelegate(
 		label: "Delegate",
 		description: [
 			"Start a worker: a separate ACB chat that does a task in the background while this chat stays free.",
-			...DISPATCH_GUIDANCE,
 			cwdGuidance(),
-			BRIEF_GUIDANCE,
 			"The worker's full report stays in its own chat; a one-line summary with a link arrives here. Omit model and thinkingLevel unless the owner specified one; workers use ACB's default model (or this chat's model if unset).",
 		].join(" "),
 		promptGuidelines: [...DISPATCH_GUIDANCE, BRIEF_GUIDANCE],

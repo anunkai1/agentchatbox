@@ -598,10 +598,8 @@ describe("delegation guidance and context reuse", () => {
 		const tool = h.tools.get("delegate")!;
 		expect(tool.promptGuidelines).toEqual([...DISPATCH_GUIDANCE, BRIEF_GUIDANCE]);
 		expect(tool.description).not.toContain("ordinary requests are not approval");
-		expect(tool.description).toContain("independently/concurrently");
-		expect(tool.description).toContain("Do not split tightly dependent work unnecessarily");
-		expect(tool.description).toContain("After all dispatches");
-		expect(tool.description).toContain("Do not reuse an unrelated worker");
+		for (const rule of [...DISPATCH_GUIDANCE, BRIEF_GUIDANCE])
+			expect(tool.description).not.toContain(rule);
 		expect(h.tools.get("delegate_message")!.description).toContain("retains context");
 		expect(h.tools.get("delegate_status")!.promptGuidelines?.join(" ")).toContain(
 			"never guess results or progress",

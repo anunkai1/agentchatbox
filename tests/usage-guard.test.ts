@@ -13,11 +13,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import registerUsageGuard from "../extensions/usage-guard/index.js";
-import {
-	estimateMessageTokens,
-	reportedContextTokens,
-	sanitiseUsage,
-} from "../extensions/usage-guard/lib.js";
+import { reportedContextTokens, sanitiseUsage } from "../extensions/usage-guard/lib.js";
 
 const plausible = {
 	input: 170_746,
@@ -35,19 +31,6 @@ describe("reportedContextTokens", () => {
 
 	it("falls back to the sum when totalTokens is absent or zero", () => {
 		expect(reportedContextTokens({ ...plausible, totalTokens: 0 })).toBe(4_087_626);
-	});
-});
-
-describe("estimateMessageTokens", () => {
-	it("counts images as 1200 tokens instead of raw base64 bytes", () => {
-		const msg = {
-			role: "user",
-			content: [
-				{ type: "text", text: "abcd" },
-				{ type: "image", data: "x".repeat(4_000_000), mimeType: "image/png" },
-			],
-		};
-		expect(estimateMessageTokens(msg)).toBe(1201);
 	});
 });
 
@@ -131,15 +114,15 @@ describe("usage-guard extension", () => {
 			},
 		} as never;
 		registerUsageGuard(pi);
+		const buildSessionProjection = vi.fn(() => ({ messages: projectedMessages ?? [] }));
 		const ctx = {
 			model: { contextWindow },
-			...(projectedMessages
-				? { sessionManager: { buildSessionProjection: () => ({ messages: projectedMessages }) } }
-				: {}),
+			...(projectedMessages ? { sessionManager: { buildSessionProjection } } : {}),
 		};
 		return {
 			emit: (event: unknown) => handlers.get("message_end")?.(event, ctx),
 			handlers,
+			buildSessionProjection,
 		};
 	}
 
@@ -184,6 +167,32 @@ describe("usage-guard extension", () => {
 		) as { message: { usage: { totalTokens: number } } };
 		expect(result.message.usage.totalTokens).toBe(0);
 		vi.restoreAllMocks();
+	});
+
+	it("does not build a session projection for other providers", () => {
+		const h = harness(1_000_000, [{ role: "user", content: "hello" }]);
+		const event = assistant({ ...plausible, totalTokens: 185_626 });
+		event.message.provider = "openai";
+		expect(h.emit(event)).toBeUndefined();
+		expect(h.buildSessionProjection).not.toHaveBeenCalled();
+	});
+
+	it("uses Pi's image estimate instead of counting base64 towards Antigravity context", () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const h = harness(1_000_000, [
+				{
+					role: "user",
+					content: [{ type: "image", data: "x".repeat(4_000_000), mimeType: "image/png" }],
+				},
+			]);
+			expect(h.emit(assistant({ ...plausible, totalTokens: 506_654 }))).toMatchObject({
+				message: { usage: { totalTokens: 0 } },
+			});
+			expect(h.buildSessionProjection).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.restoreAllMocks();
+		}
 	});
 
 	it("returns nothing for a plausible report, so pi keeps the exact numbers", () => {

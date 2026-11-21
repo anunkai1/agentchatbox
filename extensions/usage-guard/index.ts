@@ -16,10 +16,8 @@
  * Plausible usage passes through untouched, so per-turn token and cost
  * accounting is unaffected.
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, estimateTokens } from "@earendil-works/pi-coding-agent";
 import {
-	estimateMessagesTokens,
-	estimateMessageTokens,
 	reportedContextTokens,
 	type SanitiseUsageOptions,
 	sanitiseUsage,
@@ -46,10 +44,14 @@ export default function registerUsageGuard(pi: ExtensionAPI): void {
 	pi.on("message_end", (event, ctx) => {
 		if (event.message.role !== "assistant") return;
 		const original = event.message as typeof event.message & MaybeUsaged & { model?: string };
-		const projected = ctx.sessionManager?.buildSessionProjection?.()?.messages;
-		const estimatedContextTokens = Array.isArray(projected)
-			? estimateMessagesTokens([...projected, original])
-			: undefined;
+		const projected =
+			original.provider === "antigravity-acp"
+				? ctx.sessionManager?.buildSessionProjection?.()?.messages
+				: undefined;
+		const estimatedContextTokens = projected?.reduce(
+			(total, message) => total + estimateTokens(message),
+			estimateTokens(original),
+		);
 		const message = withoutImpossibleUsage(original, ctx.model?.contextWindow, {
 			provider: original.provider,
 			estimatedContextTokens,
@@ -66,9 +68,13 @@ export default function registerUsageGuard(pi: ExtensionAPI): void {
 
 	pi.on("context", (event, ctx) => {
 		let changed = false;
+		const needsEstimate = event.messages.some(
+			(message) =>
+				message.role === "assistant" && (message as MaybeUsaged).provider === "antigravity-acp",
+		);
 		let runningEstimated = 0;
 		const messages = event.messages.map((message) => {
-			runningEstimated += estimateMessageTokens(message);
+			if (needsEstimate) runningEstimated += estimateTokens(message);
 			if (message.role !== "assistant") return message;
 			const typed = message as typeof message & MaybeUsaged;
 			const sanitised = withoutImpossibleUsage(typed, ctx.model?.contextWindow, {
