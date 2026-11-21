@@ -233,16 +233,11 @@ export interface AppState {
 	connectionStatus: "connecting" | "open" | "closed" | "stalled";
 	/** Whether the server's TTS service is reachable (/api/health). null until probed. */
 	ttsAvailable: boolean | null;
-	/** Currently selected TTS voice id (user's pick; null = server default). */
-	ttsVoice: string | null;
 	/** TTS engine id from /api/health (e.g. "zonos3").
 	 * Surfaces the configured engine in the TTS banner. */
 	ttsEngine: string | null;
-	/** Server-default TTS voice from /api/health (used as the banner label
-	 * when the user hasn't picked a specific voice). */
+	/** Server TTS voice label from /api/health. */
 	ttsDefaultVoice: string | null;
-	/** Available TTS voice ids from /api/health. */
-	ttsVoices: string[];
 	/** Configured spoken-rewrite model override ("provider/modelId") from
 	 * /api/health — the model the pi-voice-reply extension actually uses for
 	 * the text-rewrite phase. null = rewrite falls back to the session model. */
@@ -395,10 +390,8 @@ export const state: AppState = {
 	uploadedFiles: new Map(),
 	connectionStatus: "connecting",
 	ttsAvailable: null,
-	ttsVoice: null,
 	ttsEngine: null,
 	ttsDefaultVoice: null,
-	ttsVoices: [],
 	voiceRewriteModel: null,
 	whisperModel: null,
 	imageModel: null,

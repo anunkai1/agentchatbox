@@ -28,7 +28,7 @@ import { readModelThinking } from "./model-thinking.js";
 import { GLOBAL_PROJECT_ID, getProject, listProjects } from "./projects.js";
 import { PromptReceipts } from "./prompt-receipts.js";
 import { findSessionCwd } from "./session-list.js";
-import { isWorking, registry } from "./session-registry.js";
+import { deliverError, isWorking, registry } from "./session-registry.js";
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_MESSAGE_CHARS = 200_000;
@@ -200,7 +200,14 @@ export function createInternalSessionsRouter(): Router {
 				recordTransportStop(origin, id);
 				// Wait for the process group to exit, including external /cc runs.
 				// This also discards queued prompts instead of running them after abort.
+				const view = registry.liveFor(id)?.ws;
 				const live = await registry.terminateById(id);
+				// Only an explicit stop disconnects this view. Move/delete have
+				// their own lifecycle and must not inherit this close.
+				if (live && view?._session === live) {
+					deliverError(view, "Session stopped; reconnecting to the saved chat.");
+					view.close(1011, "session stopped");
+				}
 				res.json({ ok: true, live: Boolean(live) });
 			} finally {
 				registry.endMutation(id, mutation);

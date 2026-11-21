@@ -1,8 +1,11 @@
 import { createServer, type Server } from "node:http";
 import express from "express";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createTtsRouter } from "../src/server/tts.js";
-import { KOKORO_ALIGNMENT, ZONOS3_ALIGNMENT } from "../src/shared/kokoro.js";
+import { KOKORO_ALIGNMENT, ZONOS3_ALIGNMENT, ZONOS3_SAMPLE_RATE } from "../src/shared/kokoro.js";
+
+vi.stubEnv("ZONOS_TTFB_TIMEOUT_MS", "100");
+const { createTtsRouter } = await import("../src/server/tts.js");
+vi.unstubAllEnvs();
 
 const realFetch = globalThis.fetch;
 let server: Server;
@@ -19,6 +22,84 @@ afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => {
 	server.closeAllConnections();
 	await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+describe("TTS first-chunk deadline", () => {
+	it.each([
+		"relay-stream",
+		"stream",
+		"",
+	])("rejects headers followed by silence on /api/tts/%s", async (route) => {
+		let signal: AbortSignal | undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				signal = init.signal ?? undefined;
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							signal?.addEventListener(
+								"abort",
+								() => controller.error(new Error("body read aborted")),
+								{ once: true },
+							);
+						},
+					}),
+					{
+						headers: {
+							"X-Kokoro-Alignment": KOKORO_ALIGNMENT,
+							"X-Zonos-Alignment": ZONOS3_ALIGNMENT,
+							"X-Audio-Format": "pcm16",
+							"X-Audio-Sample-Rate": String(ZONOS3_SAMPLE_RATE),
+							"X-Audio-Channels": "1",
+						},
+					},
+				);
+			}),
+		);
+		const response = await realFetch(`${base}/api/tts/${route}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ text: "Hello." }),
+			signal: AbortSignal.timeout(2500),
+		});
+		expect(response.status).toBe(504);
+		expect(await response.json()).toMatchObject({
+			error: expect.stringContaining("no first chunk"),
+		});
+		expect(signal?.aborted).toBe(true);
+	});
+
+	it("does not cut off a healthy Relay stream after its first bytes", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async (_url: string, init: RequestInit) =>
+					new Response(
+						new ReadableStream({
+							start(controller) {
+								controller.enqueue(Uint8Array.of(1));
+								setTimeout(() => {
+									if (init.signal?.aborted) controller.error(new Error("stream cut off"));
+									else {
+										controller.enqueue(Uint8Array.of(2));
+										controller.close();
+									}
+								}, 150);
+							},
+						}),
+						{ headers: { "X-Kokoro-Alignment": KOKORO_ALIGNMENT } },
+					),
+			),
+		);
+		const response = await realFetch(`${base}/api/tts/relay-stream`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ text: "Hello." }),
+		});
+		expect(response.status).toBe(200);
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.of(1, 2));
+	});
 });
 
 describe("Relay-only aligned TTS byte pipe", () => {

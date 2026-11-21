@@ -85,8 +85,6 @@ describe("ordinary ZONOS3-Mini read-aloud", () => {
 			available: true,
 			voice: "Savannah",
 		});
-		const result = await realFetch(`${base}/voices`);
-		expect(await result.json()).toEqual({ default: "Savannah", available: ["Savannah"] });
 	});
 
 	it("rejects missing alignment negotiation without silently speaking with Kokoro", async () => {

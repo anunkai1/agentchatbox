@@ -33,15 +33,27 @@ const HEALTH_CACHE_MS = 60 * 1000;
 
 /**
  * How long to wait for the upstream's FIRST chunk before declaring it hung.
- * This only bounds the wait for response headers: once the stream is open the
- * only thing that aborts it is the browser going away, because a long reply
- * legitimately streams for minutes. A first chunk takes ~2-3s warm, ~12s if a
+ * Headers alone do not count. Once bytes flow, a long reply can stream for
+ * minutes without a first-chunk deadline. A first chunk takes ~2-3s warm, ~12s if a
  * full 500-char chunk has to be synthesized under load, so this is a hang
  * detector rather than a budget. Overridable so the timeout path can be
  * exercised without waiting a minute.
  */
 const STREAM_TTFB_TIMEOUT_MS =
 	Number(process.env.ZONOS_TTFB_TIMEOUT_MS || process.env.KOKORO_TTFB_TIMEOUT_MS) || 60_000;
+
+class FirstChunkTimeout extends Error {
+	constructor(engine: string) {
+		super(`${engine} produced no first chunk within ${STREAM_TTFB_TIMEOUT_MS}ms`);
+	}
+}
+
+function firstChunkTimer(
+	controller: AbortController,
+	engine: string,
+): ReturnType<typeof setTimeout> {
+	return setTimeout(() => controller.abort(new FirstChunkTimeout(engine)), STREAM_TTFB_TIMEOUT_MS);
+}
 
 type Engine = "zonos3";
 
@@ -113,8 +125,6 @@ const ZONOS_RELAY_BASE =
 	process.env.ZONOS_RELAY_TTS_URL ||
 	`http://${process.env.ZONOS_RELAY_HOST || "127.0.0.1"}:${process.env.ZONOS_RELAY_PORT || "8184"}`;
 
-export const TTS_VOICES = { default: "Savannah", available: ["Savannah"] };
-
 export function createTtsRouter(): Router {
 	const router = express.Router();
 
@@ -160,8 +170,12 @@ export function createTtsRouter(): Router {
 			} catch (error) {
 				if (res.destroyed) return;
 				const message = error instanceof Error ? error.message : String(error);
-				if (!res.headersSent) res.status(502).json({ error: message });
-				else res.end(audioFrame(0x80, Buffer.from(message)));
+				if (!res.headersSent) {
+					res
+						.status(error instanceof FirstChunkTimeout ? 504 : 502)
+						.type("json")
+						.json({ error: message });
+				} else res.end(audioFrame(0x80, Buffer.from(message)));
 			} finally {
 				controller.abort();
 			}
@@ -212,18 +226,9 @@ export function createTtsRouter(): Router {
 			// aborting an already-finished fetch is a harmless no-op.
 			const clientGone = new AbortController();
 			res.on("close", () => clientGone.abort());
-			// The same controller covers a hung upstream: if no first chunk arrives,
-			// abort rather than leave the browser's spinner turning forever. Cleared
-			// as soon as headers land so it can never cut a healthy stream short.
-			let timedOut = false;
-			const ttfbTimer = setTimeout(() => {
-				timedOut = true;
-				clientGone.abort();
-			}, STREAM_TTFB_TIMEOUT_MS);
-
-			let upstream: globalThis.Response;
+			const ttfbTimer = firstChunkTimer(clientGone, `${engineName} tts/stream`);
 			try {
-				upstream = await fetch(`${upstreamBase}/tts/stream`, {
+				const upstream = await fetch(`${upstreamBase}/tts/stream`, {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",
@@ -236,90 +241,60 @@ export function createTtsRouter(): Router {
 					),
 					signal: clientGone.signal,
 				});
+				// Pre-stream failures stay JSON so the browser can handle them before playback.
+				if (!upstream.ok || !upstream.body) {
+					const detail = (await upstream.text()).slice(0, 300);
+					throw new Error(`upstream ${upstream.status}: ${detail}`);
+				}
+				if (alignHeader && alignValue) {
+					if (upstream.headers.get(alignHeader) !== alignValue) {
+						clientGone.abort();
+						throw new Error(
+							`${zonosRelay ? "ZONOS3-Mini" : "Kokoro"} synthesis alignment unavailable; no speech fallback`,
+						);
+					}
+					res.setHeader(alignHeader, alignValue);
+				}
+				res.setHeader("Content-Type", "application/octet-stream");
+				res.setHeader("Cache-Control", "no-store");
+				res.setHeader("X-Accel-Buffering", "no");
+
+				const reader = upstream.body.getReader();
+				try {
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						if (!value?.byteLength) continue;
+						if (!res.headersSent) clearTimeout(ttfbTimer);
+						// Preserve backpressure: don't buffer the whole stream for a slow tab.
+						const more = res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+						if (!more) await waitForDrain(res);
+					}
+				} finally {
+					reader.releaseLock();
+				}
+				if (!res.headersSent) throw new Error("upstream ended without audio data");
+				res.end();
 			} catch (e) {
-				if (timedOut) {
-					res.status(504).json({
-						error: `${engineName} tts/stream produced no first chunk within ${STREAM_TTFB_TIMEOUT_MS}ms at ${upstreamBase}`,
-					});
+				if (res.destroyed) return;
+				if (res.headersSent) {
+					res.end();
 					return;
 				}
-				// The browser left before the engine answered — there is nobody to
-				// report to, and writing to a dead socket is pointless.
-				if (clientGone.signal.aborted) return;
+				const timeout = clientGone.signal.reason;
 				const message = e instanceof Error ? e.message : String(e);
 				res
-					.status(502)
-					.json({ error: `${engineName} tts unreachable at ${upstreamBase}: ${message}` });
-				return;
+					.status(timeout instanceof FirstChunkTimeout ? 504 : 502)
+					.type("json")
+					.json({
+						error:
+							timeout instanceof FirstChunkTimeout
+								? timeout.message
+								: `${engineName} tts/stream: ${message}`,
+					});
 			} finally {
 				clearTimeout(ttfbTimer);
 			}
-			// Pre-stream upstream failure (e.g. 503 model not loaded): relay as JSON
-			// so the client can fall back to the whole-blob endpoint.
-			if (!upstream.ok || !upstream.body) {
-				const errText = await upstream.text().catch(() => "");
-				res.status(502).json({
-					error: `${engineName} tts/stream upstream ${upstream.status}: ${errText.slice(0, 300)}`,
-				});
-				return;
-			}
-
-			if (alignHeader && alignValue) {
-				if (upstream.headers.get(alignHeader) !== alignValue) {
-					clientGone.abort();
-					res.status(502).json({
-						error: `${zonosRelay ? "ZONOS3-Mini" : "Kokoro"} synthesis alignment unavailable; no speech fallback`,
-					});
-					return;
-				}
-				res.setHeader(alignHeader, alignValue);
-			}
-			res.setHeader("Content-Type", "application/octet-stream");
-			res.setHeader("Cache-Control", "no-store");
-			res.setHeader("X-Accel-Buffering", "no"); // defeat any reverse-proxy buffering
-
-			const reader = upstream.body.getReader();
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					if (value) {
-						// Zero-copy wrap the Uint8Array into a Buffer for res.write.
-						const more = res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
-						// Honor backpressure: res.write() returns false when the socket's
-						// write buffer is full. Without waiting for 'drain' we'd keep
-						// pulling from upstream and buffer the whole stream in memory on a
-						// slow client (a long voice reply can be several MB of WAV).
-						// waitForDrain also resolves on 'close' so a disconnect mid-wait
-						// can't wedge the pipe — clientGone aborts the upstream fetch,
-						// the next reader.read() rejects, and we drop into the catch.
-						if (!more) await waitForDrain(res);
-					}
-				}
-				res.end();
-			} catch (e) {
-				if (!res.headersSent) {
-					const message = e instanceof Error ? e.message : String(e);
-					res.status(502).json({ error: `tts stream pipe failed: ${message}` });
-				} else {
-					try {
-						res.end();
-					} catch {
-						/* client already gone */
-					}
-				}
-			}
-		}),
-	);
-
-	/**
-	 * GET /api/tts/voices
-	 * Returns: { default: string, available: string[] }
-	 */
-	router.get(
-		"/voices",
-		asyncHandler(async (_req, res) => {
-			res.json(TTS_VOICES);
 		}),
 	);
 
@@ -362,31 +337,34 @@ async function* synthZonosPcm(
 ): AsyncGenerator<Uint8Array> {
 	for (const chunk of splitZonosReadAloud(text)) {
 		controller.signal.throwIfAborted();
-		const timer = setTimeout(
-			() => controller.abort(new Error("Zonos first-chunk timeout")),
-			STREAM_TTFB_TIMEOUT_MS,
-		);
-		let upstream: globalThis.Response;
+		const timer = firstChunkTimer(controller, "ZONOS3-Mini");
 		try {
-			upstream = await fetch(`${ZONOS_RELAY_BASE}/tts/stream`, {
+			const upstream = await fetch(`${ZONOS_RELAY_BASE}/tts/stream`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", "X-Zonos-Alignment": ZONOS3_ALIGNMENT },
 				body: JSON.stringify({ text: chunk, voice: "Savannah", speed }),
 				signal: controller.signal,
 			});
+			if (!upstream.ok)
+				throw new Error(
+					`zonos3 tts upstream ${upstream.status}: ${(await upstream.text()).slice(0, 300)}`,
+				);
+			// Without this opt-in Zonos returns raw float32, not framed PCM16.
+			if (upstream.headers.get("X-Zonos-Alignment") !== ZONOS3_ALIGNMENT) {
+				await upstream.body?.cancel();
+				throw new Error("ZONOS3-Mini PCM stream negotiation unavailable; no speech fallback");
+			}
+			for await (const pcm of zonosPcm(upstream)) {
+				clearTimeout(timer);
+				yield pcm;
+			}
+		} catch (error) {
+			// Fetch can reject a body read with a generic AbortError after headers.
+			controller.signal.throwIfAborted();
+			throw error;
 		} finally {
 			clearTimeout(timer);
 		}
-		if (!upstream.ok)
-			throw new Error(
-				`zonos3 tts upstream ${upstream.status}: ${(await upstream.text()).slice(0, 300)}`,
-			);
-		// Without this opt-in Zonos returns raw float32, not framed PCM16.
-		if (upstream.headers.get("X-Zonos-Alignment") !== ZONOS3_ALIGNMENT) {
-			await upstream.body?.cancel();
-			throw new Error("ZONOS3-Mini PCM stream negotiation unavailable; no speech fallback");
-		}
-		yield* zonosPcm(upstream);
 	}
 }
 
@@ -397,11 +375,8 @@ async function synthZonos(text: string, speed: number, res: Response): Promise<v
 	// otherwise leave Zonos burning CPU — minutes of it, at the 30k-char cap —
 	// on audio nobody will ever hear.
 	//
-	// Deliberately no timeout alongside it: the upstream response carries every
-	// chunk, so for a large request there is legitimately nothing to read for
-	// minutes. A deadline here would break real requests instead of protecting
-	// anything; the streaming route (which responds per chunk) is where a hang
-	// detector belongs, and it has one.
+	// No deadline on the whole reply; synthZonosPcm bounds the wait for each
+	// synthesis request to start streaming.
 	const clientGone = new AbortController();
 	res.on("close", () => clientGone.abort());
 	try {
@@ -416,7 +391,7 @@ async function synthZonos(text: string, speed: number, res: Response): Promise<v
 		// An aborted fetch means the browser left; there is nobody to answer.
 		if (res.destroyed) return;
 		const message = e instanceof Error ? e.message : String(e);
-		res.status(502).json({
+		res.status(e instanceof FirstChunkTimeout ? 504 : 502).json({
 			error: `zonos3 tts failed at ${ZONOS_RELAY_BASE}: ${message}`,
 		});
 	}

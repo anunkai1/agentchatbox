@@ -460,6 +460,21 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
+	it("sends a prompt when crypto.randomUUID is unavailable as on plain HTTP", async () => {
+		const { page } = await openPage(
+			"/",
+			`Object.defineProperty(crypto, "randomUUID", { value: undefined });\n${client.js}`,
+		);
+		try {
+			await expect.poll(() => new URL(page.url()).pathname).toBe("/s/live-session-001");
+			await send(page, "plain HTTP fallback");
+			await expect.poll(() => messages(page).innerText()).toContain("reply 1");
+			expect(lastPrompt()).toMatchObject({ message: "plain HTTP fallback" });
+		} finally {
+			await page.close();
+		}
+	});
+
 	it.each([
 		["normally", null],
 		["when another tab replaces the unbound key", "Another tab's draft"],
@@ -1169,7 +1184,6 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 						tts: true,
 						ttsEngine: "zonos3",
 						ttsVoice: "Savannah",
-						ttsVoices: ["Savannah"],
 					}),
 				}),
 			);
@@ -2032,7 +2046,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("keeps tool failures inspectable inline without raising error notices", async () => {
+	it("pairs parallel tools once in live view, export and transcript replay", async () => {
 		const { page, sockets } = await openPage(`/s/${SEEDED_ID}`);
 		try {
 			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
@@ -2040,42 +2054,83 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.getByRole("button", { name: /Tool calls/ }).click();
 			await page.getByRole("button", { name: "Done", exact: true }).click();
 			const socket = sockets.at(-1)!;
-			for (const [toolName, text] of [
+			const tools = [
 				["bash", "grep: no match\n\nCommand exited with code 1"],
 				["edit", "Could not find edits[2]. The oldText must match exactly."],
 				["read", "ENOENT: no such file or directory"],
-			]) {
-				const toolCallId = `call-${toolName}`;
+			];
+			const assistant = {
+				role: "assistant",
+				timestamp: 3,
+				stopReason: "toolUse",
+				content: tools.map(([name]) => ({
+					type: "toolCall",
+					id: `call-${name}`,
+					name,
+					arguments: {},
+				})),
+			};
+			const sendEvent = (event: Record<string, unknown>) =>
+				socket.send(JSON.stringify({ type: "event", event }));
+			sendEvent({ type: "message_start", message: assistant });
+			sendEvent({ type: "message_end", message: assistant });
+			for (const [toolName] of tools) {
 				socket.send(
 					JSON.stringify({
 						type: "event",
-						event: { type: "tool_execution_start", toolName, toolCallId, args: {} },
+						event: { type: "tool_execution_start", toolName, toolCallId: `call-${toolName}`, args: {} },
 					}),
 				);
-				socket.send(
-					JSON.stringify({
-						type: "event",
-						event: {
-							type: "message_start",
-							message: {
-								role: "toolResult",
-								toolCallId,
-								toolName,
-								content: [{ type: "text", text }],
-								isError: true,
-							},
-						},
-					}),
-				);
-				const row = page.locator(`[data-tool-call-id="${toolCallId}"]`);
+			}
+			const results = tools.toReversed().map(([toolName, text]) => ({
+				role: "toolResult",
+				toolCallId: `call-${toolName}`,
+				toolName,
+				content: [{ type: "text", text }],
+				isError: true,
+			}));
+			for (const result of results) {
+				sendEvent({ type: "message_start", message: result });
+				const row = page.locator(`[data-tool-call-id="${result.toolCallId}"]`);
 				await expect.poll(() => row.locator(".tool-status-error").count()).toBe(1);
-				expect(await row.locator(".tool-result.tool-error").textContent()).toBe(text);
+				expect(await row.locator(".tool-result.tool-error").textContent()).toBe(
+					result.content[0].text,
+				);
 				expect(await row.locator(".tool-result").isVisible()).toBe(false);
 				await row.locator(".tool-head").click();
 				expect(await row.locator(".tool-result").isVisible()).toBe(true);
 				expect(await page.locator(".composer-notice-error").count()).toBe(0);
 			}
 			expect(await page.locator("#composer-notices").isVisible()).toBe(false);
+			const downloaded = page.waitForEvent("download");
+			await send(page, "/export");
+			const html = readFileSync(await (await downloaded).path(), "utf8");
+			expect(html.match(/<div class="msg tool">/g)).toHaveLength(3);
+			for (const [toolName] of tools) expect(html).toContain(`${toolName} {}`);
+
+			const textContent = (text: string) => [{ type: "text", text }];
+			await messages(page).evaluate((el) => el.setAttribute("data-replay-sentinel", "keep"));
+			socket.send(
+				JSON.stringify({
+					type: "transcript",
+					sessionId: SEEDED_ID,
+					messages: [
+						{
+							role: "user",
+							timestamp: 1,
+							content: textContent(`![image: photo.png](upload:${SEEDED_IMAGE})\nstored question`),
+						},
+						{ role: "assistant", timestamp: 2, content: textContent("stored answer") },
+						assistant,
+						...results,
+					],
+				}),
+			);
+			// An observable frame after the replay proves both frames were processed.
+			socket.send(JSON.stringify({ type: "error", message: "received after replay" }));
+			await expect.poll(() => messages(page).innerText()).toContain("received after replay");
+			expect(await messages(page).getAttribute("data-replay-sentinel")).toBe("keep");
+			expect(await page.locator(".row-tool").count()).toBe(3);
 		} finally {
 			await page.close();
 		}

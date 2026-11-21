@@ -13,7 +13,6 @@
 
 import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
-import { listVoices } from "./api.js";
 import { copyText } from "./clipboard.js";
 import { $, el, escapeHtml, mountModal } from "./dom.js";
 import { saveSessionPrefs } from "./prefs.js";
@@ -1261,45 +1260,6 @@ export function renderSessionsIntoPicker(sessions: SessionSummary[]): void {
 	);
 }
 
-export async function openVoicePicker(): Promise<void> {
-	let voices: string[];
-	let defaultVoice: string;
-	try {
-		const v = await listVoices();
-		voices = v.available;
-		defaultVoice = v.default;
-	} catch (e) {
-		appendError(`could not list voices: ${e instanceof Error ? e.message : String(e)}`);
-		return;
-	}
-	if (voices.length === 0) {
-		appendError("no TTS voices found.");
-		return;
-	}
-
-	const { overlay, box } = openModal("TTS voice");
-	for (const v of voices) {
-		const row = el("div", { class: "model-row" });
-		row.append(el("div", { class: "model-name" }, v));
-		if (v === defaultVoice) row.append(el("div", { class: "model-provider" }, "(server default)"));
-		if (v === state.ttsVoice) row.classList.add("active");
-		makeKeyboardClickable(row, () => {
-			state.ttsVoice = v;
-			saveSessionPrefs();
-			overlay.remove();
-			refreshStatus();
-		});
-		box.append(row);
-	}
-	box.append(
-		el("button", {
-			class: "btn",
-			text: "Close",
-			onclick: () => overlay.remove(),
-		}),
-	);
-}
-
 // ---------------------------------------------------------------------------
 // Models & services overview panel (display-only)
 // ---------------------------------------------------------------------------
@@ -1550,28 +1510,19 @@ export function openModelsPanel(): void {
 		),
 	);
 
-	const ttsVoice = state.ttsVoice ?? state.ttsDefaultVoice ?? "(unset)";
+	const ttsVoice = state.ttsDefaultVoice ?? "(unset)";
 	const engine =
 		state.ttsEngine === "zonos3"
 			? "ZONOS3-Mini"
 			: state.ttsEngine
 				? state.ttsEngine.charAt(0).toUpperCase() + state.ttsEngine.slice(1)
 				: "TTS";
-	const canSwitchVoice = state.ttsVoices.length > 1;
 	box.append(
 		svcRow(
 			"Text-to-speech",
 			`Synthesises audio for playback & voice replies. Engine: ${engine}.`,
 			modelLine(pill("env", "set"), `voice ${ttsVoice}`),
-			canSwitchVoice
-				? hint("click to switch voice")
-				: hint("change → ", kbd("ZONOS_RELAY_TTS_URL")),
-			canSwitchVoice
-				? () => {
-						overlay.remove();
-						void openVoicePicker();
-					}
-				: undefined,
+			hint("change → ", kbd("ZONOS_RELAY_TTS_URL")),
 		),
 	);
 
@@ -1811,16 +1762,6 @@ export function openOverflowMenu(): void {
 	}
 	mediaRows.push(voiceModeRow);
 	if (state.ttsAvailable !== false) {
-		if (state.ttsVoices.length > 1) {
-			mediaRows.push(
-				actionRow(
-					"Voice",
-					state.ttsVoice ?? "Default",
-					closeThen(() => void openVoicePicker()),
-					"Choose text-to-speech voice",
-				),
-			);
-		}
 		mediaRows.push(
 			actionRow(
 				"Speech speed",
@@ -1931,6 +1872,7 @@ export function exportSessionAsHtml(): void {
 				`<div class="msg user"><span class="role">You ›</span><span class="body">${esc(m.text)}</span></div>`,
 			);
 		} else if (m.kind === "assistant") {
+			if (!m.text && !(state.showThinking && m.thinking)) continue;
 			lines.push(`<div class="msg assistant"><span class="role">Pi ›</span><span class="body">`);
 			if (state.showThinking && m.thinking)
 				lines.push(

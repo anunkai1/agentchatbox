@@ -844,6 +844,39 @@ describe("mountChatWs — pi subprocess pipe", () => {
 		}
 	}, 30_000); // First test to import chat.js; under a full parallel run that import has timed out at 5s.
 
+	it("handles sidebar requests in the same network burst as init", async () => {
+		const { mountChatWs } = await import("../src/server/chat.js");
+		mountChatWs(server!);
+		const { ws, inbox, close } = await connectClient();
+		try {
+			// Cork the TCP stream so all three frames can reach the server in one read.
+			const tcp = (ws as unknown as { _socket: import("node:net").Socket })._socket;
+			tcp.cork();
+			try {
+				ws.send(
+					JSON.stringify({
+						type: "init",
+						provider: "deepseek",
+						modelId: "m1",
+						thinkingLevel: "off",
+					}),
+				);
+				ws.send(JSON.stringify({ type: "listSessions" }));
+				ws.send(JSON.stringify({ type: "listProjects" }));
+			} finally {
+				tcp.uncork();
+			}
+			const [sessions, projects, ready] = await Promise.all(
+				["sessions", "projects", "ready"].map((type) => waitForType(inbox, type, 1)),
+			);
+			expect(sessions).toHaveLength(1);
+			expect(projects).toHaveLength(1);
+			expect(ready).toHaveLength(1);
+		} finally {
+			close();
+		}
+	});
+
 	it("strips image payloads during live delivery, reattach replay and run completion", async () => {
 		writeFileSync(
 			fakePiPath!,

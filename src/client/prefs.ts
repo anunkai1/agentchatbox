@@ -8,7 +8,6 @@
  * user's display choice, but another device starts with the defaults.
  *
  * What's persisted here (client-owned only):
- *   - ttsVoice   (selected TTS voice, per session)
  *   - ttsSpeed   (playback rate, per session)
  *   - showThinking / showToolCalls (device-local display defaults)
  *
@@ -35,7 +34,6 @@ const PREFIX = "acb:prefs:";
 export const DISPLAY_DEFAULTS_KEY = "acb:prefs:display-defaults";
 
 export interface SessionPrefs {
-	ttsVoice?: string | null;
 	ttsSpeed?: number;
 	/** Legacy fields retained so old per-session prefs can be migrated. */
 	showThinking?: boolean;
@@ -119,12 +117,6 @@ export function applySessionPrefs(): void {
 	state.showThinking = false;
 	state.showToolCalls = false;
 	const prefs = loadPrefs(id);
-	if (typeof prefs.ttsVoice === "string") {
-		state.ttsVoice =
-			state.ttsEngine === "zonos3" && prefs.ttsVoice !== state.ttsDefaultVoice
-				? null
-				: prefs.ttsVoice;
-	}
 	if (typeof prefs.ttsSpeed === "number" && Number.isFinite(prefs.ttsSpeed)) {
 		state.ttsSpeed = Math.min(1.4, Math.max(0.5, prefs.ttsSpeed));
 	}
@@ -160,7 +152,6 @@ export function saveSessionPrefs(): void {
 	const id = state.sessionId;
 	if (!id) return;
 	savePrefs(id, {
-		ttsVoice: state.ttsVoice,
 		ttsSpeed: state.ttsSpeed,
 	});
 }

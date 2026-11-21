@@ -6,7 +6,6 @@ import {
 	type RelaySynthesisAlignment,
 	ZONOS3_ALIGNMENT,
 	ZONOS3_SAMPLE_RATE,
-	type Zonos3Alignment,
 } from "../shared/kokoro.js";
 import {
 	type PcmPlayedReport,
@@ -180,21 +179,6 @@ export function validateKokoroAlignment(
 	});
 }
 
-export function validateZonosAlignment(
-	value: unknown,
-	submitted: string,
-	offset: number,
-	minWordSample = 0,
-): Zonos3Alignment {
-	return validateSynthesisAlignment<Zonos3Alignment>(value, submitted, offset, {
-		alignment: ZONOS3_ALIGNMENT,
-		sampleRate: ZONOS3_SAMPLE_RATE,
-		minWordSample,
-		allowEmptyChunk: true,
-		shortLabel: "ZONOS3-Mini",
-	});
-}
-
 /** Reconcile presentation only, never currency, numeric expansion or new words. */
 export function hasReliableKokoroWords(m: RelaySynthesisAlignment): boolean {
 	if (m.alignmentComplete !== true || m.unalignedTokens.length || !m.words.length) return false;
@@ -273,11 +257,8 @@ export function formatKokoroPlayedHistory(report: PcmPlayedReport): string {
 
 /** Adapts the negotiated HTTP stream to the existing progressive PCM player. */
 export class KokoroTtsTransport implements TtsTransport {
-	readyState = 1;
-	bufferedAmount = 0;
 	onmessage: TtsTransport["onmessage"] = null;
-	onerror: TtsTransport["onerror"] = null;
-	onclose: TtsTransport["onclose"] = null;
+	private closed = false;
 	private ledgers = new Map<number, Ledger>();
 	private readonly config: AlignedTtsConfig;
 	/**
@@ -304,10 +285,10 @@ export class KokoroTtsTransport implements TtsTransport {
 		return Number.isFinite(raw) ? Math.min(1.4, Math.max(0.5, raw)) : 1;
 	}
 	private emit(message: unknown): void {
-		if (this.readyState === 1) this.onmessage?.({ data: JSON.stringify(message) });
+		if (!this.closed) this.onmessage?.({ data: JSON.stringify(message) });
 	}
 	send(data: string): void {
-		if (this.readyState !== 1) return;
+		if (this.closed) return;
 		const msg = JSON.parse(data) as { type: string; epoch: number; text: string; seq: number };
 		let ledger = this.ledgers.get(msg.epoch);
 		if (msg.type === "speak") {
@@ -561,7 +542,7 @@ export class KokoroTtsTransport implements TtsTransport {
 		}
 	}
 	close(): void {
-		this.readyState = 3;
+		this.closed = true;
 		for (const ledger of this.ledgers.values()) ledger.controller.abort();
 		// Retain ledgers briefly for the player's synchronous failure snapshot.
 	}

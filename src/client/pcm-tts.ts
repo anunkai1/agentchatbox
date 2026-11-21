@@ -24,8 +24,6 @@ export interface PcmPlayedReport {
 }
 
 export interface PcmUtteranceMetrics {
-	coldLoadMs: number | null;
-	ttsFirstPcmServerMs: number | null;
 	ttsFirstPcmClientMs: number | null;
 	scheduledPlaybackMs: number | null;
 }
@@ -114,11 +112,7 @@ export interface PcmTtsSpeakerCallbacks {
 
 /** Local adapter between HTTP synthesis streams and the PCM player. */
 export interface TtsTransport {
-	readyState: number;
-	bufferedAmount: number;
 	onmessage: ((event: { data: string | ArrayBuffer }) => void) | null;
-	onerror: (() => void) | null;
-	onclose: (() => void) | null;
 	send(data: string): void;
 	close(): void;
 	playedPrefix: (
@@ -139,7 +133,6 @@ export class PcmTtsSpeaker {
 	private paused = false;
 	private connGen = 0;
 	private epoch = 0;
-	private coldLoadMs: number | null = null;
 	private active: ActiveUtterance | null = null;
 	private nodes = new Set<AudioBufferSourceNode>();
 	private nextAt = 0;
@@ -215,9 +208,7 @@ export class PcmTtsSpeaker {
 				return;
 			}
 			const type = msg.type;
-			if (type === "starting") {
-				if (!this.active) this.callbacks.onStatus(`Loading ${this.transportOptions.label}…`);
-			} else if (type === "ready") {
+			if (type === "ready") {
 				if (msg.protocol !== 3 || msg.tts !== 1 || msg.outputRate !== this.outputRate) {
 					this.failConnection(
 						new Error(`${this.transportOptions.label} player protocol mismatch. Refresh ACB.`),
@@ -226,31 +217,11 @@ export class PcmTtsSpeaker {
 				}
 				this.connecting = false;
 				this.wsReady = true;
-				const loadMs = typeof msg.loadMs === "number" && msg.loadMs > 0 ? msg.loadMs : null;
-				if (this.active) {
-					this.active.metrics.coldLoadMs = loadMs;
-					this.coldLoadMs = null;
-					this.flushSendQueue();
-				} else {
-					this.coldLoadMs = loadMs;
-					this.callbacks.onIdle();
-				}
-			} else if (type === "first_pcm") {
-				if (this.active && msg.epoch === this.active.epoch) {
-					this.active.metrics.ttsFirstPcmServerMs =
-						typeof msg.ttsFirstPcmMs === "number" ? msg.ttsFirstPcmMs : null;
-				}
-			} else if (type === "utterance_limit") {
-				if (this.active && msg.epoch === this.active.epoch) {
-					this.active.truncated = true;
-					this.callbacks.onStatus(
-						"Long answer truncated in voice playback; read the full formatted reply in chat.",
-					);
-				}
+				if (this.active) this.flushSendQueue();
+				else this.callbacks.onIdle();
 			} else if (type === "utterance_done") {
 				if (this.active && msg.epoch === this.active.epoch) {
 					this.active.serverDone = true;
-					if (msg.truncated === true) this.active.truncated = true;
 					this.flushPreroll(true);
 					this.checkPlaybackComplete();
 				}
@@ -260,29 +231,6 @@ export class PcmTtsSpeaker {
 						typeof msg.message === "string"
 							? msg.message
 							: `${this.transportOptions.label} failed.`,
-					),
-				);
-			}
-		};
-
-		socket.onerror = () => {
-			if (gen !== this.connGen || this.closed) return;
-			this.failConnection(new Error(`Cannot reach ${this.transportOptions.label}.`));
-		};
-
-		socket.onclose = () => {
-			if (gen !== this.connGen || this.closed) return;
-			const wasActive = Boolean(this.active || this.connecting);
-			this.ws = null;
-			this.wsReady = false;
-			this.connecting = false;
-			if (this.active) {
-				this.abortActiveLocally();
-			}
-			if (wasActive) {
-				this.callbacks.onError(
-					new Error(
-						`${this.transportOptions.label} disconnected; Pi work continues. Send or speak again to reconnect.`,
 					),
 				);
 			}
@@ -317,8 +265,6 @@ export class PcmTtsSpeaker {
 		const epoch = ++this.epoch;
 		this.played.reset();
 		this.nextAt = 0;
-		const coldLoadMs = this.coldLoadMs;
-		this.coldLoadMs = null;
 		this.active = {
 			epoch,
 			id: utteranceId,
@@ -337,8 +283,6 @@ export class PcmTtsSpeaker {
 			prerollSamples: 0,
 			startedPlayback: false,
 			metrics: {
-				coldLoadMs,
-				ttsFirstPcmServerMs: null,
 				ttsFirstPcmClientMs: null,
 				scheduledPlaybackMs: null,
 			},
@@ -389,12 +333,7 @@ export class PcmTtsSpeaker {
 
 	private flushSendQueue(): void {
 		const utt = this.active;
-		if (!utt || !this.wsReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-		// Backpressure: wait briefly if WS outbound buffer is congested (>128 KB).
-		if (this.ws.bufferedAmount > 131_072) {
-			setTimeout(() => this.flushSendQueue(), 25);
-			return;
-		}
+		if (!utt || !this.wsReady || !this.ws) return;
 		while (utt.queuedForSend.length > 0) {
 			const item = utt.queuedForSend.shift()!;
 			utt.sentAny = true;

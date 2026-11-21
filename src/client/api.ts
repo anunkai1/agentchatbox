@@ -11,7 +11,7 @@
  *   - /api/health — server liveness + configured providers
  */
 
-import type { TranscribeResponse, UploadResponse, VoicesResponse } from "../shared/protocol.js";
+import type { TranscribeResponse, UploadResponse } from "../shared/protocol.js";
 
 const BASE = ""; // same origin
 
@@ -154,8 +154,6 @@ export interface HealthInfo {
 	ttsEngine?: string;
 	/** Server-default TTS voice. */
 	ttsVoice?: string;
-	/** Available TTS voice ids advertised by this server. */
-	ttsVoices?: string[];
 	/** Configured spoken-rewrite model override from /api/health
 	 * ("provider/modelId"), used so the TTS banner names the model actually
 	 * doing the rewrite, not the session model. */
@@ -218,14 +216,13 @@ export async function getModels(): Promise<ModelInfo[]> {
  */
 export async function synthesizeSpeech(
 	text: string,
-	voice?: string,
 	signal?: AbortSignal,
 	speed?: number,
 ): Promise<Blob> {
 	const res = await fetch(`${BASE}/api/tts`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ text, voice, speed }),
+		body: JSON.stringify({ text, speed }),
 		signal,
 	});
 	if (!res.ok) {
@@ -326,12 +323,16 @@ async function openAudioFrameStream(
  */
 export async function* streamSynthesizeAudio(
 	text: string,
-	voice?: string,
 	signal?: AbortSignal,
 	speed?: number,
-	endpoint = "/api/tts/stream",
 ): AsyncGenerator<StreamAudioFrame> {
-	const { headers, frames } = await openAudioFrameStream(text, voice, signal, speed, endpoint);
+	const { headers, frames } = await openAudioFrameStream(
+		text,
+		undefined,
+		signal,
+		speed,
+		"/api/tts/stream",
+	);
 	const format = headers?.get("X-Audio-Format");
 	if (format === "pcm16") {
 		const sampleRate = Number(headers?.get("X-Audio-Sample-Rate"));
@@ -385,12 +386,6 @@ export async function sessionExists(sessionId: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
-}
-
-export async function listVoices(): Promise<VoicesResponse> {
-	const res = await fetch(`${BASE}/api/tts/voices`);
-	if (!res.ok) throw new Error(`voices failed: ${res.status}`);
-	return (await res.json()) as VoicesResponse;
 }
 
 /** One semantic search hit returned by /api/sessions/search. */

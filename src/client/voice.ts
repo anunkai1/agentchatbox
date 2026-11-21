@@ -230,14 +230,6 @@ function ttsEngineLabel(): string {
 }
 
 /**
- * The active TTS voice for the status entry — the user's pick if set, else the
- * server default. null when neither is known yet.
- */
-function ttsVoiceLabel(): string | null {
-	return state.ttsVoice ?? state.ttsDefaultVoice ?? null;
-}
-
-/**
  * Synthesize the given text via /api/tts and play it on the shared <audio>.
  * One call at a time — starting a new one stops the current playback.
  * `label` (e.g. "LongTTS") names the variant in the bottom status area.
@@ -254,7 +246,7 @@ export async function speakText(text: string, label = "TTS"): Promise<void> {
 	// Keep voice preparation in the footer until playback, stop or error.
 	// The full engine/voice label and spoken preview are available on tap.
 	const engine = ttsEngineLabel();
-	const voice = ttsVoiceLabel();
+	const voice = state.ttsDefaultVoice;
 	const synthHead = voice
 		? `${label} · synthesizing via ${engine} (${voice})…`
 		: `${label} · synthesizing via ${engine}…`;
@@ -348,12 +340,7 @@ async function playStreamed(
 	};
 
 	try {
-		for await (const frame of streamSynthesizeAudio(
-			spoken,
-			state.ttsVoice ?? undefined,
-			controller.signal,
-			activeSynthSpeed,
-		)) {
+		for await (const frame of streamSynthesizeAudio(spoken, controller.signal, activeSynthSpeed)) {
 			if (gen !== speakGeneration) return; // stopped or superseded mid-stream
 			if (frame.kind === "pcm16") {
 				if (pendingRate && pendingRate !== frame.sampleRate) flushPcm();
@@ -564,12 +551,7 @@ async function playWholeBlob(
 	gen: number,
 	controller: AbortController,
 ): Promise<void> {
-	const blob = await synthesizeSpeech(
-		spoken,
-		state.ttsVoice ?? undefined,
-		controller.signal,
-		activeSynthSpeed,
-	);
+	const blob = await synthesizeSpeech(spoken, controller.signal, activeSynthSpeed);
 	if (gen !== speakGeneration) return;
 	// No more chunks will ever arrive, so this node's `ended` finalizes.
 	streamEnded = true;

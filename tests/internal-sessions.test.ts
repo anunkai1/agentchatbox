@@ -21,8 +21,10 @@ const registry = vi.hoisted(() => ({
 	sendInstruction: vi.fn(),
 }));
 const broadcastSessions = vi.hoisted(() => vi.fn());
+const deliverError = vi.hoisted(() => vi.fn());
 vi.mock("../src/server/session-registry.js", () => ({
 	registry,
+	deliverError,
 	isWorking: (session: {
 		busy?: boolean;
 		streaming?: boolean;
@@ -324,12 +326,27 @@ describe("/api/internal", () => {
 
 	it("stops a process group with a durable cancellation marker and never resumes it", async () => {
 		const since = Date.now() - 1000;
-		registry.terminateById.mockResolvedValue(liveSession());
+		const live = {
+			...liveSession(),
+			ws: null as { _session: unknown; close: ReturnType<typeof vi.fn> } | null,
+		};
+		const socket = { _session: live, close: vi.fn() };
+		live.ws = socket;
+		registry.liveFor.mockReturnValue(live);
+		registry.terminateById.mockImplementationOnce(async () => {
+			live.ws = null; // registry.kill detaches the view before waiting for exit.
+			return live;
+		});
 		expect((await post("/sessions/live-1/stop", {})).status).toBe(200);
 		expect(registry.terminateById).toHaveBeenCalledWith("live-1");
+		expect(deliverError).toHaveBeenCalledWith(socket, expect.stringContaining("Session stopped"));
+		expect(socket.close).toHaveBeenCalledWith(1011, "session stopped");
 		expect(transportStoppedSince(`http://127.0.0.1:${config.port}`, "live-1", since)).toBe(true);
 		registry.terminateById.mockResolvedValue(null);
-		expect(await (await post("/sessions/closed-1/stop", {})).json()).toEqual({ ok: true, live: false });
+		expect(await (await post("/sessions/closed-1/stop", {})).json()).toEqual({
+			ok: true,
+			live: false,
+		});
 		expect(registry.acquire).not.toHaveBeenCalled();
 		expect((await post("/sessions/live-1/stop", {}, "wrong")).status).toBe(404);
 	});

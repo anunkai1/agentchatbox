@@ -42,7 +42,6 @@ beforeEach(() => {
 	state.showToolCalls = true;
 	state.ttsEngine = null;
 	state.ttsDefaultVoice = null;
-	state.ttsVoice = null;
 });
 
 afterEach(() => {
@@ -108,24 +107,14 @@ describe("chat display preferences", () => {
 });
 
 describe("Zonos voice preferences", () => {
-	it("discards saved Kokoro voices on session changes without changing the saved speed", () => {
-		state.ttsEngine = "zonos3";
-		state.ttsDefaultVoice = "Savannah";
-		storage.setItem(
-			"acb:prefs:prefs-test-session",
-			JSON.stringify({ ttsVoice: "af_heart", ttsSpeed: 1.4 }),
-		);
+	it("ignores retired voice preferences but keeps and clamps the saved speed", () => {
+		const key = "acb:prefs:prefs-test-session";
+		storage.setItem(key, JSON.stringify({ ttsVoice: "af_heart", ttsSpeed: 2 }));
 		applySessionPrefs();
-		expect(state.ttsVoice).toBeNull();
 		expect(state.ttsSpeed).toBe(1.4);
-		state.sessionId = "zonos-session";
-		storage.setItem(
-			"acb:prefs:zonos-session",
-			JSON.stringify({ ttsVoice: "Savannah", ttsSpeed: 2 }),
-		);
-		applySessionPrefs();
-		expect(state.ttsVoice).toBe("Savannah");
-		expect(state.ttsSpeed).toBe(1.4);
+		saveSessionPrefs();
+		expect(state).not.toHaveProperty("ttsVoice");
+		expect(JSON.parse(storage.getItem(key) ?? "{}")).toMatchObject({ ttsSpeed: 1.4 });
 	});
 });
 

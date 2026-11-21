@@ -443,15 +443,10 @@ export function openVoiceTest(
 			`Pi first text ${firstTextMs.toFixed(0)} ms`,
 		];
 		if (m.ttsFirstPcmClientMs !== null) {
-			const nativeNote =
-				m.ttsFirstPcmServerMs !== null ? ` (backend ${m.ttsFirstPcmServerMs.toFixed(0)} ms)` : "";
-			parts.push(`TTS first PCM ${m.ttsFirstPcmClientMs.toFixed(0)} ms${nativeNote}`);
+			parts.push(`TTS first PCM ${m.ttsFirstPcmClientMs.toFixed(0)} ms`);
 		}
 		if (m.scheduledPlaybackMs !== null) {
 			parts.push(`scheduled playback ${m.scheduledPlaybackMs.toFixed(0)} ms`);
-		}
-		if (m.coldLoadMs !== null) {
-			parts.push(`cold load ${m.coldLoadMs.toFixed(0)} ms (separate)`);
 		}
 		metrics.textContent = parts.join(" · ");
 	};

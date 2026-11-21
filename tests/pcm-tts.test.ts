@@ -81,16 +81,9 @@ class FakeAudioContext {
 }
 
 class FakeTransport {
-	static OPEN = 1;
-	static CLOSED = 3;
 	static instances: FakeTransport[] = [];
-
-	readyState = FakeTransport.OPEN;
-	bufferedAmount = 0;
 	sent: Array<Record<string, unknown>> = [];
 	onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null;
-	onerror: (() => void) | null = null;
-	onclose: (() => void) | null = null;
 
 	constructor() {
 		FakeTransport.instances.push(this);
@@ -110,9 +103,7 @@ class FakeTransport {
 		this.sent.push(JSON.parse(raw) as Record<string, unknown>);
 	}
 
-	close(): void {
-		this.readyState = FakeTransport.CLOSED;
-	}
+	close(): void {}
 
 	receiveJson(payload: object): void {
 		this.onmessage?.({ data: JSON.stringify(payload) });
@@ -283,7 +274,7 @@ describe("Aligned PCM synthesis player", () => {
 		const ws = FakeTransport.instances[0];
 		ws.receiveJson({ type: "ready", protocol: 3, tts: 1, outputRate: 24000, loadMs: 0 });
 		ws.receiveBinary(encodePcmFrame(1, new Array(6000).fill(0.1)));
-		ws.receiveJson({ type: "utterance_done", epoch: 1, utterance: "utt-paused", truncated: false });
+		ws.receiveJson({ type: "utterance_done", epoch: 1 });
 
 		// Scheduling while paused must NOT auto-resume the suspended AudioContext.
 		expect(ctx.state).toBe("suspended");

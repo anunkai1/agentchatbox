@@ -43,7 +43,7 @@ import {
 import { registry } from "./session-registry.js";
 import { staticCacheControl } from "./static-cache.js";
 import { checkSttAvailable, createTranscribeRouter } from "./transcribe.js";
-import { checkTtsAvailable, createTtsRouter, TTS_VOICES } from "./tts.js";
+import { checkTtsAvailable, createTtsRouter } from "./tts.js";
 import { UploadStore } from "./upload-store.js";
 import { createUploadsRouter } from "./uploads.js";
 import { createUploadsServingRouter } from "./uploads-serving.js";
@@ -359,7 +359,6 @@ app.get(
 			ttsEngine: tts.engine,
 			ttsReason: tts.available ? undefined : tts.reason,
 			ttsVoice: tts.voice,
-			ttsVoices: TTS_VOICES.available,
 			// Configured spoken-rewrite model override (pi-voice-reply extension).
 			// Surfaced so the browser banner can name the model actually generating
 			// the spoken text instead of the (often different) session model. Raw

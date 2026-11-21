@@ -1466,12 +1466,7 @@ export function appendToolCall(name: string, args: unknown, toolCallId: string):
 	const pending = el("div", { class: "tool-pending" }, "running…");
 	card.append(pending);
 	wrap.append(card);
-	// Mark the row with the SDK's toolCallId so the matching
-	// `tool_execution_end` (or the subsequent `message_start` for the
-	// toolResult) can find it directly. Falls back to the "last
-	// pending" heuristic if id is missing for some reason. (The "last
-	// pending" approach broke when the model fired two parallel tool
-	// calls — the second's result would fill the first's pending row.)
+	// Each result must update its own row even when tools run in parallel.
 	wrap.dataset.toolCallId = toolCallId;
 	wrap.dataset.toolPending = "1";
 	appendNode(wrap, { pin: true });
@@ -1479,7 +1474,6 @@ export function appendToolCall(name: string, args: unknown, toolCallId: string):
 
 export function finalizeToolCall(
 	toolCallId: string,
-	name: string,
 	result: string | undefined,
 	isError: boolean,
 ): void {
@@ -1488,25 +1482,9 @@ export function finalizeToolCall(
 	// pinning for the rest of the turn (see appendNode for the full
 	// rationale).
 	const wasPinned = isAtBottom();
-	const list = $("#messages");
-	const target = toolCallId
-		? list.querySelector(`[data-tool-call-id="${CSS.escape(toolCallId)}"]`)
-		: null;
-	// Resolve the row: prefer the id match (handles parallel tool calls);
-	// fall back to the "last pending" heuristic for any tool that landed
-	// without an id (shouldn't happen with the current SDK, but keeps us
-	// safe against future protocol changes).
-	let row: HTMLElement | null = target as HTMLElement | null;
-	if (!row) {
-		const rows = list.querySelectorAll(".row-tool");
-		for (let i = rows.length - 1; i >= 0; i--) {
-			const r = rows[i] as HTMLElement;
-			if (r.dataset.toolPending === "1") {
-				row = r;
-				break;
-			}
-		}
-	}
+	const row = $("#messages").querySelector<HTMLElement>(
+		`[data-tool-call-id="${CSS.escape(toolCallId)}"][data-tool-pending="1"]`,
+	);
 	if (!row) return;
 	delete row.dataset.toolPending;
 	const card = row.querySelector<HTMLElement>(".tool-card");
@@ -1515,7 +1493,6 @@ export function finalizeToolCall(
 	if (card && result !== undefined) {
 		appendToolResult(card, result, isError);
 	}
-	void name; // unused for now — the tool-name row was already set on append
 	// Polite scroll based on pre-mutation pinning state. Without this,
 	// the tall result <pre> grows the page without the viewport
 	// following, leaving the user above the bottom and silently killing

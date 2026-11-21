@@ -31,8 +31,7 @@ import {
 	resetContextEstimate,
 	seedPostCompactionEstimate,
 } from "./context-estimate.js";
-import type { LiveAssistantDom } from "./dom.js";
-import { $ } from "./dom.js";
+import { $, type LiveAssistantDom, uuid } from "./dom.js";
 import { type ExtensionUiResponder, handleExtensionUiRequest } from "./extension-ui.js";
 import { setRichText } from "./linkify.js";
 import { clearNotice, refreshNotices, setNoticeSession, showNotice } from "./notices.js";
@@ -334,7 +333,7 @@ function handleSend(): void {
 
 	// While the agent is streaming, a typed message is a steering comment:
 	// queued and delivered after the current turn's tool calls finish.
-	const requestId = crypto.randomUUID();
+	const requestId = uuid();
 	if (state.isStreaming) sendSteer(trimmed, requestId);
 	else sendAsUser(trimmed, requestId);
 }
@@ -469,6 +468,32 @@ let extensionUiResponder: ExtensionUiResponder | null = null;
  */
 let liveMessageSeq = 0;
 
+// Live DOM rows and the export/history state both represent one tool call.
+const pendingTools = new Map<string, Extract<PersistedMessage, { kind: "tool" }>>();
+
+function startTool(id: string, name: string, args: unknown): void {
+	if (pendingTools.has(id)) return;
+	const row = { kind: "tool" as const, name, args };
+	pendingTools.set(id, row);
+	state.messages.push(row);
+	appendToolCall(name, args, id);
+}
+
+function finishTool(id: string, name: string, result: string | undefined, isError: boolean): void {
+	const row = pendingTools.get(id);
+	if (row) {
+		pendingTools.delete(id);
+		row.result = result;
+		row.isError = isError;
+		finalizeToolCall(id, result, isError);
+	} else if (name && result !== undefined) {
+		// The start event can be missing from a bounded reconnect buffer.
+		const completed = { kind: "tool" as const, name, args: "(unavailable)", result, isError };
+		state.messages.push(completed);
+		appendNode(renderMessageNode(completed), { pin: true });
+	}
+}
+
 interface ClaudeActivity {
 	t?: string;
 	text?: string;
@@ -498,10 +523,9 @@ function handleClaudeActivity(raw: string): void {
 		state.messages.push(msg);
 		appendNode(renderMessageNode(msg), { pin: true });
 	} else if (a.t === "tool" && typeof a.id === "string" && typeof a.name === "string") {
-		state.messages.push({ kind: "tool", name: a.name, args: a.args });
-		appendToolCall(a.name, a.args, a.id);
+		startTool(a.id, a.name, a.args);
 	} else if (a.t === "tool_end" && typeof a.id === "string") {
-		finalizeToolCall(a.id, a.name ?? "", a.text, a.isError === true);
+		finishTool(a.id, a.name ?? "", a.text, a.isError === true);
 		if (typeof a.saved === "number") liveMessageSeq += a.saved;
 	}
 }
@@ -707,6 +731,7 @@ let pendingStreamDom: { dom: LiveAssistantDom; text: string; thinking: string } 
 let streamRafId: number | null = null;
 let streamThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 let lastStreamPaintAt = 0;
+const paintedStreamText = new WeakMap<HTMLElement, string>();
 const STREAM_PAINT_INTERVAL_MS = 75; // ~13 updates/sec; final output still flushes immediately
 
 function paintStreamDom(p: { dom: LiveAssistantDom; text: string; thinking: string }): void {
@@ -721,7 +746,10 @@ function paintStreamDom(p: { dom: LiveAssistantDom; text: string; thinking: stri
 	// Same capture-before/scroll-after pattern as appendNode and
 	// finalizeToolCall in render.ts.
 	const wasPinned = isAtBottom();
-	setRichText(p.dom.textPre, p.text || " ");
+	if (paintedStreamText.get(p.dom.textPre) !== p.text) {
+		setRichText(p.dom.textPre, p.text || " ");
+		paintedStreamText.set(p.dom.textPre, p.text);
+	}
 	if (p.thinking) {
 		p.dom.thinkingPre.textContent = p.thinking;
 		p.dom.thinkingWrap.classList.remove("hidden-thinking");
@@ -850,9 +878,8 @@ function onEvent(event: Record<string, unknown>): void {
 			// The new agent run is the authoritative end of the cleanup state.
 			state.compaction = null;
 			state.streamingTokenSpeed = null;
-			setStreaming(true);
 			state.streamingStartedAt = Date.now();
-			refreshStatus();
+			setStreaming(true);
 			break;
 
 		case "agent_end":
@@ -1124,17 +1151,8 @@ function onEvent(event: Record<string, unknown>): void {
 					.filter((c) => c.type === "text")
 					.map((c) => (c as TextContent).text)
 					.join("");
-				state.messages.push({
-					kind: "tool",
-					name: tr.toolName,
-					args: "(see above)",
-					result: text,
-					isError: tr.isError,
-				});
-				// Tool failures belong inline: the agent can inspect and retry them.
-				// isError alone does not mean the user needs to intervene; session
-				// and connection failures still use the separate notice paths.
-				finalizeToolCall(tr.toolCallId, tr.toolName, text, tr.isError);
+				// Tool failures belong inline, not in the composer's notices.
+				finishTool(tr.toolCallId, tr.toolName, text, tr.isError);
 			}
 			break;
 
@@ -1253,10 +1271,12 @@ function onEvent(event: Record<string, unknown>): void {
 			// removed here (spurious extension turns / provider errors).
 			let finalText = "";
 			let finalThinking = "";
+			let hasToolCall = false;
 			if (m.role === "assistant") {
 				for (const block of m.content) {
 					if (block.type === "text") finalText += (block as TextContent).text;
 					else if (block.type === "thinking") finalThinking += (block as ThinkingContent).thinking;
+					else if (block.type === "toolCall") hasToolCall = true;
 				}
 			}
 			if (
@@ -1284,6 +1304,7 @@ function onEvent(event: Record<string, unknown>): void {
 				lastAssistant.kind === "assistant" &&
 				!hasRawText &&
 				!hasRawThinking &&
+				!hasToolCall &&
 				lastAssistantDom
 			) {
 				if (isModelError) {
@@ -1328,13 +1349,7 @@ function onEvent(event: Record<string, unknown>): void {
 		}
 
 		case "tool_execution_start":
-			// The model just decided to call a tool. Show a pending block.
-			// Carry the SDK's toolCallId through to the DOM so the
-			// matching tool_execution_end / message_start can find the
-			// right row even when multiple tools are in flight in
-			// parallel.
-			state.messages.push({ kind: "tool", name: e.toolName, args: e.args });
-			appendToolCall(e.toolName, e.args, e.toolCallId);
+			startTool(e.toolCallId, e.toolName, e.args);
 			break;
 
 		case "tool_execution_update":
@@ -1874,6 +1889,7 @@ async function boot(): Promise<void> {
 				lastAssistantDom = null;
 				state.isStreaming = false;
 				state.compaction = null;
+				pendingTools.clear();
 				resetChatState();
 			} else {
 				showNotice("The requested chat did not open; the current chat was kept.", "warning");
@@ -2114,6 +2130,7 @@ async function boot(): Promise<void> {
 			(state.messages.length === 0 ||
 				JSON.stringify(state.messages[state.messages.length - 1]) ===
 					JSON.stringify(projected[projected.length - 1]));
+		pendingTools.clear();
 		state.messages = projected;
 		// Seed the live message ordinal from the replayed transcript so
 		// subsequently streamed messages continue with correct JSONL
@@ -2339,12 +2356,6 @@ async function boot(): Promise<void> {
 			state.ttsAvailable = h.tts ?? false;
 			state.ttsEngine = h.ttsEngine ?? null;
 			state.ttsDefaultVoice = h.ttsVoice ?? null;
-			state.ttsVoices = h.ttsVoices ?? (h.ttsVoice ? [h.ttsVoice] : []);
-			// Kokoro voice IDs saved by older browsers are not Zonos voices.
-			if (h.ttsEngine === "zonos3" && state.ttsVoice && state.ttsVoice !== h.ttsVoice) {
-				state.ttsVoice = null;
-				saveSessionPrefs();
-			}
 			state.voiceRewriteModel = h.voiceRewriteModel ?? null;
 			state.whisperModel = h.whisperModel ?? null;
 			state.imageModel = h.imageModel ?? null;

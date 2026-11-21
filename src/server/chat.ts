@@ -186,15 +186,7 @@ export function mountChatWs(server: HttpServer): void {
 		}, HEARTBEAT_INTERVAL_MS);
 		ws.on("close", () => clearInterval(appPing));
 
-		handleConnection(ws as PiSocket).catch((err) => {
-			const message = err instanceof Error ? err.message : String(err);
-			deliverError(ws as PiSocket, `failed to start session: ${message}`);
-			try {
-				ws.close();
-			} catch {
-				/* ignore */
-			}
-		});
+		handleConnection(s);
 	});
 
 	wss.on("close", () => {
@@ -224,11 +216,9 @@ function rejectInstruction(
 	else deliverError(ws, message);
 }
 
-async function handleConnection(ws: PiSocket): Promise<void> {
-	// The first message from the client must be a validated `init`. Client
-	// input never supplies cwd; that trust decision is derived server-side
+function attachInitialSession(ws: PiSocket, first: Extract<ClientMessage, { type: "init" }>): void {
+	// Client input never supplies cwd; that trust decision is derived server-side
 	// from a known project/session below.
-	const first = await waitForMessage(ws, "init");
 	const init: InitMessage = {
 		provider: first.provider,
 		modelId: first.modelId,
@@ -259,8 +249,23 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 				thinkingLevel:
 					readModelThinking(defaulted.provider, defaulted.modelId) ?? defaulted.thinkingLevel,
 			};
-	const session = registry.acquire(resolvedInit);
-	registry.attach(session, ws);
+	registry.attach(registry.acquire(resolvedInit), ws);
+}
+
+function handleConnection(ws: PiSocket): void {
+	let initialised = false;
+	function failInit(error: unknown): void {
+		clearTimeout(initTimer);
+		const message = error instanceof Error ? error.message : String(error);
+		deliverError(ws, `failed to start session: ${message}`);
+		ws.close();
+	}
+	const initTimer = setTimeout(
+		() => failInit(new ProtocolError("timed out waiting for init")),
+		10_000,
+	);
+	// A socket-level error is followed by close (including during init).
+	ws.on("error", () => ws.terminate());
 
 	// Handle subsequent client messages in arrival order. Image references are
 	// resolved asynchronously from the private upload store; serialising the
@@ -279,11 +284,26 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 		);
 	};
 	ws.on("message", (raw) => {
+		if (ws.readyState !== ws.OPEN) return;
 		let msg: ClientMessage;
 		try {
 			msg = parseClientMessage(JSON.parse(raw.toString()) as unknown);
 		} catch (error) {
-			protocolViolation(ws, error);
+			if (initialised) protocolViolation(ws, error);
+			else failInit(error);
+			return;
+		}
+		if (!initialised) {
+			clearTimeout(initTimer);
+			// Bind synchronously: ws can emit the next frame from the same TCP
+			// read before a promise continuation runs. Pi readiness is separate.
+			try {
+				if (msg.type !== "init") throw new ProtocolError('expected first message to be "init"');
+				attachInitialSession(ws, msg);
+				initialised = true;
+			} catch (error) {
+				failInit(error);
+			}
 			return;
 		}
 		const isSwitch = msg.type === "newSession" || msg.type === "resumeSession";
@@ -339,6 +359,7 @@ async function handleConnection(ws: PiSocket): Promise<void> {
 	// it later only if it goes idle and stays unattached. This is the line
 	// that used to read `ws._pi?.kill()` and interrupted every phone lock.
 	ws.on("close", () => {
+		clearTimeout(initTimer);
 		const bound = ws._session;
 		if (bound) registry.detach(bound, ws);
 	});
@@ -959,49 +980,6 @@ export function rewriteUploadUrls(text: string, hasStructuredImages: boolean): s
 			return `[${kind}: ${name}](${join(config.uploadsDir, filename)})`;
 		},
 	);
-}
-
-/** Wait at most ten seconds for a validated init message. */
-function waitForMessage(
-	ws: WebSocket,
-	type: "init",
-): Promise<Extract<ClientMessage, { type: "init" }>> {
-	return new Promise((resolve, reject) => {
-		const timer = setTimeout(() => {
-			cleanup();
-			reject(new ProtocolError("timed out waiting for init"));
-		}, 10_000);
-		const onMessage = (raw: WebSocket.RawData) => {
-			cleanup();
-			try {
-				const parsed = parseClientMessage(JSON.parse(raw.toString()) as unknown);
-				if (parsed.type !== type) {
-					reject(new ProtocolError(`expected first message to be "${type}"`));
-					return;
-				}
-				resolve(parsed);
-			} catch (err) {
-				reject(err instanceof Error ? err : new Error(String(err)));
-			}
-		};
-		const onClose = () => {
-			cleanup();
-			reject(new Error("ws closed before init"));
-		};
-		const onError = (err: Error) => {
-			cleanup();
-			reject(err);
-		};
-		const cleanup = () => {
-			clearTimeout(timer);
-			ws.off("message", onMessage);
-			ws.off("close", onClose);
-			ws.off("error", onError);
-		};
-		ws.on("message", onMessage);
-		ws.on("close", onClose);
-		ws.on("error", onError);
-	});
 }
 
 function protocolViolation(ws: PiSocket, error: unknown): void {

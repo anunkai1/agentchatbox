@@ -52,12 +52,6 @@ export interface TranscribeResponse {
 	text: string;
 }
 
-/** /api/tts/voices response. */
-export interface VoicesResponse {
-	default: string;
-	available: string[];
-}
-
 // ---------------------------------------------------------------------------
 // WebSocket protocol for /api/chat
 // ---------------------------------------------------------------------------
