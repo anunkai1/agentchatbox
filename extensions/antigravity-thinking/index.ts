@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	ANTIGRAVITY_PROVIDER_ID,
@@ -62,6 +63,42 @@ export interface LazyAntigravityThinkingHandle {
 
 export const ANTIGRAVITY_SHARED_RUNTIME_SYMBOL = Symbol.for("pi-antigravity-acp:runtime");
 const WRAPPED_NATIVE_MARKER = Symbol.for("acb:antigravity-thinking:wrapped-native");
+const PATCHED_RUNTIME_MARKER = Symbol.for("acb:antigravity-thinking:patched-runtime");
+
+interface AcpSelectOption {
+	value: string;
+	name: string;
+}
+
+interface AcpConfigOption {
+	id: string;
+	type: string;
+	category?: string | null;
+	currentValue?: unknown;
+	options?: Array<AcpSelectOption | { group: string; name: string; options: AcpSelectOption[] }>;
+}
+
+export interface AcpModelInfo {
+	modelId: string;
+	name: string;
+}
+
+export interface AcpSessionLike {
+	models?: { currentModelId?: string; availableModels?: AcpModelInfo[] } | null;
+	configOptions?: AcpConfigOption[] | null;
+}
+
+interface AntigravityConnectionLike {
+	newSession?: (...args: unknown[]) => Promise<AcpSessionLike>;
+	setModel?: (sessionId: string, modelId: string, signal?: AbortSignal) => Promise<void>;
+	getSessionState?: (sessionId: string) => AcpSessionLike | undefined;
+}
+
+export interface AntigravityRuntimeLike {
+	[PATCHED_RUNTIME_MARKER]?: boolean;
+	connectionFactory?: (options: unknown) => AntigravityConnectionLike;
+	discoverModels?: (apiKey: string | undefined, signal?: AbortSignal) => Promise<AcpModelInfo[]>;
+}
 
 interface AntigravityNativeSharedSlot {
 	provider?: Record<string, unknown> & {
@@ -69,6 +106,139 @@ interface AntigravityNativeSharedSlot {
 		getModels?: () => unknown[];
 		refreshModels?: (context: unknown) => Promise<void>;
 	};
+	runtime?: AntigravityRuntimeLike;
+}
+
+const discoverySessionStore = new AsyncLocalStorage<{ session?: AcpSessionLike }>();
+
+function findSelectValues(
+	configOptions: AcpConfigOption[] | null | undefined,
+	category: "model" | "thought_level",
+): { currentValue: string | undefined; values: string[] } | undefined {
+	const opt = configOptions?.find(
+		(item) =>
+			item.type === "select" &&
+			(item.category === category ||
+				item.id === category ||
+				(category === "thought_level" && item.id === "thinking_level")),
+	);
+	if (!opt || !Array.isArray(opt.options)) return undefined;
+	const values: string[] = [];
+	for (const entry of opt.options) {
+		if ("options" in entry && Array.isArray(entry.options)) {
+			for (const sub of entry.options) values.push(sub.value);
+		} else if ("value" in entry && typeof entry.value === "string") {
+			values.push(entry.value);
+		}
+	}
+	return {
+		currentValue: typeof opt.currentValue === "string" ? opt.currentValue : undefined,
+		values,
+	};
+}
+
+function splitAgainstModelSelector(
+	modelValues: readonly string[],
+	modelId: string,
+): { base: string; effort: string } | undefined {
+	if (modelValues.includes(modelId)) return undefined;
+	let bestBase: string | undefined;
+	for (const base of modelValues) {
+		if (modelId.startsWith(`${base}-`) && (!bestBase || base.length > bestBase.length)) {
+			bestBase = base;
+		}
+	}
+	if (!bestBase) return undefined;
+	const effort = modelId.slice(bestBase.length + 1);
+	return effort ? { base: bestBase, effort } : undefined;
+}
+
+/**
+ * Antigravity ACP's initial `configOptions.thinking_level` reflects only the
+ * server's default model (`gemini-3.8-flash`), whereas `models.availableModels`
+ * enumerates the true per-model variants (including `xhigh` on Neon/Hydrogen).
+ * Preserve `models.availableModels` when it matches the live `model` selector.
+ */
+export function selectAuthoritativeAcpModels(
+	session: AcpSessionLike | undefined,
+	fallback: AcpModelInfo[],
+): AcpModelInfo[] {
+	const raw = session?.models?.availableModels;
+	if (!Array.isArray(raw) || raw.length === 0) return fallback;
+	const seen = new Set<string>();
+	for (const item of raw) {
+		if (!item || typeof item.modelId !== "string" || !item.modelId.trim()) return fallback;
+		if (seen.has(item.modelId)) return fallback;
+		seen.add(item.modelId);
+	}
+	const modelSelector = findSelectValues(session?.configOptions, "model");
+	if (!modelSelector || modelSelector.values.length === 0) return fallback;
+	const baseValues = modelSelector.values;
+	const matchesBase = (modelId: string, base: string): boolean =>
+		modelId === base || modelId.startsWith(`${base}-`);
+	if (!baseValues.every((base) => raw.some((m) => matchesBase(m.modelId, base)))) {
+		return fallback;
+	}
+	if (!raw.every((m) => baseValues.some((base) => matchesBase(m.modelId, base)))) {
+		return fallback;
+	}
+	return raw;
+}
+
+export function patchAntigravityRuntime(runtime: AntigravityRuntimeLike | undefined): boolean {
+	if (!runtime || runtime[PATCHED_RUNTIME_MARKER]) return false;
+	if (
+		typeof runtime.connectionFactory !== "function" ||
+		typeof runtime.discoverModels !== "function"
+	) {
+		return false;
+	}
+	runtime[PATCHED_RUNTIME_MARKER] = true;
+
+	const origFactory = runtime.connectionFactory;
+	runtime.connectionFactory = (connectionOptions: unknown) => {
+		const connection = origFactory(connectionOptions);
+		if (connection && typeof connection.newSession === "function") {
+			const origNewSession = connection.newSession.bind(connection);
+			connection.newSession = async (...args: unknown[]) => {
+				const session = await origNewSession(...args);
+				const store = discoverySessionStore.getStore();
+				if (store) store.session = session;
+				return session;
+			};
+		}
+		if (connection && typeof connection.setModel === "function") {
+			const origSetModel = connection.setModel.bind(connection);
+			connection.setModel = async (sessionId, modelId, signal) => {
+				const state = connection.getSessionState?.(sessionId);
+				const modelSel = findSelectValues(state?.configOptions, "model");
+				const thoughtSel = findSelectValues(state?.configOptions, "thought_level");
+				if (modelSel && thoughtSel) {
+					const split = splitAgainstModelSelector(modelSel.values, modelId);
+					if (
+						split &&
+						modelSel.currentValue !== split.base &&
+						!thoughtSel.values.includes(split.effort)
+					) {
+						// Switch to the base model first so ACP refreshes `thought_level`
+						// options for that model (exposing `xhigh` for Neon/Hydrogen).
+						await origSetModel(sessionId, split.base, signal);
+					}
+				}
+				return origSetModel(sessionId, modelId, signal);
+			};
+		}
+		return connection;
+	};
+
+	const origDiscoverModels = runtime.discoverModels.bind(runtime);
+	runtime.discoverModels = async (apiKey, signal) => {
+		const box: { session?: AcpSessionLike } = {};
+		const fallback = await discoverySessionStore.run(box, () => origDiscoverModels(apiKey, signal));
+		return selectAuthoritativeAcpModels(box.session, fallback);
+	};
+
+	return true;
 }
 
 function wrapNativeProviderWithCachedModels(
@@ -117,14 +287,19 @@ export function registerLazyAntigravityThinking(
 	const isRefreshProbe = env[MODELS_REFRESH_PROBE_ENV] === "1";
 	const cacheDisabled = env[DISABLE_MODELS_CACHE_ENV] === "1";
 
+	const getSharedSlot = (): AntigravityNativeSharedSlot | undefined =>
+		(globalThis as Record<symbol, AntigravityNativeSharedSlot | undefined>)[
+			ANTIGRAVITY_SHARED_RUNTIME_SYMBOL
+		];
+
+	patchAntigravityRuntime(getSharedSlot()?.runtime);
+
 	let cachedNativeApplied = false;
 	const applyCachedModelsAtLoad = (): void => {
 		if (isRefreshProbe || cacheDisabled || typeof pi.registerProvider !== "function") return;
 		const cached = toAntigravityModels(readAntigravityModelsCache(cachePath));
 		if (cached.length === 0) return;
-		const slot = (globalThis as Record<symbol, AntigravityNativeSharedSlot | undefined>)[
-			ANTIGRAVITY_SHARED_RUNTIME_SYMBOL
-		];
+		const slot = getSharedSlot();
 		const wrapped = wrapNativeProviderWithCachedModels(slot?.provider, cached);
 		if (wrapped) {
 			(pi.registerProvider as (provider: unknown) => void)(wrapped);
@@ -172,6 +347,7 @@ export function registerLazyAntigravityThinking(
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		patchAntigravityRuntime(getSharedSlot()?.runtime);
 		if (!cachedNativeApplied && !isRefreshProbe && !cacheDisabled) {
 			const cached = toAntigravityModels(readAntigravityModelsCache(cachePath));
 			const native = ctx.modelRegistry?.getRegisteredNativeProvider?.(ANTIGRAVITY_PROVIDER_ID);

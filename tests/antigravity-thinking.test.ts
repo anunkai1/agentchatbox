@@ -410,8 +410,10 @@ import {
 	CCPA_BASE_URL_ENV,
 	CCPA_PROXY_MANAGED_ENV,
 	MODELS_REFRESH_PROBE_ENV,
+	patchAntigravityRuntime,
 	registerAntigravityThinking,
 	registerLazyAntigravityThinking,
+	selectAuthoritativeAcpModels,
 } from "../extensions/antigravity-thinking/index.js";
 import {
 	ANTIGRAVITY_API,
@@ -705,5 +707,146 @@ describe("registerLazyAntigravityThinking & models-cache", () => {
 
 		// Idempotent write skips rewrite when models haven't changed.
 		expect(writeAntigravityModelsCache([sampleModel], cachePath)).toBe(false);
+	});
+});
+
+describe("patchAntigravityRuntime & selectAuthoritativeAcpModels", () => {
+	const baseConfigOptions = [
+		{
+			id: "model",
+			type: "select",
+			category: "model",
+			currentValue: "gemini-3.8-flash",
+			options: [
+				{ value: "gemini-4-neon", name: "Gemini 4 Neon" },
+				{ value: "gemini-4-argon", name: "Gemini 4 Argon" },
+				{ value: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen" },
+				{ value: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+			],
+		},
+		{
+			id: "thinking_level",
+			type: "select",
+			category: "thought_level",
+			currentValue: "high",
+			options: [
+				{ value: "low", name: "Low" },
+				{ value: "medium", name: "Medium" },
+				{ value: "high", name: "High" },
+			],
+		},
+	];
+
+	const rawAvailable = [
+		{ modelId: "gemini-4-neon-low", name: "Gemini 4 Neon (Low)" },
+		{ modelId: "gemini-4-neon-medium", name: "Gemini 4 Neon (Medium)" },
+		{ modelId: "gemini-4-neon-high", name: "Gemini 4 Neon (High)" },
+		{ modelId: "gemini-4-neon-xhigh", name: "Gemini 4 Neon (XHigh)" },
+		{ modelId: "gemini-4-argon-low", name: "Gemini 4 Argon (Low)" },
+		{ modelId: "gemini-4-argon-medium", name: "Gemini 4 Argon (Medium)" },
+		{ modelId: "gemini-4-argon-high", name: "Gemini 4 Argon (High)" },
+		{ modelId: "gemini-4-hydrogen-low", name: "Gemini 4 Hydrogen (Low)" },
+		{ modelId: "gemini-4-hydrogen-medium", name: "Gemini 4 Hydrogen (Medium)" },
+		{ modelId: "gemini-4-hydrogen-high", name: "Gemini 4 Hydrogen (High)" },
+		{ modelId: "gemini-4-hydrogen-xhigh", name: "Gemini 4 Hydrogen (XHigh)" },
+		{ modelId: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)" },
+		{ modelId: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)" },
+		{ modelId: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)" },
+	];
+
+	const synthesizedFallback = rawAvailable.filter((m) => !m.modelId.endsWith("-xhigh"));
+
+	it("preserves per-model variants like Neon/Hydrogen xhigh from models.availableModels", () => {
+		const resolved = selectAuthoritativeAcpModels(
+			{
+				models: { currentModelId: "gemini-3.8-flash-high", availableModels: rawAvailable },
+				configOptions: baseConfigOptions,
+			},
+			synthesizedFallback,
+		);
+		expect(resolved.map((m) => m.modelId)).toEqual(rawAvailable.map((m) => m.modelId));
+	});
+
+	it("falls back when models.availableModels is missing, duplicated, or mismatched", () => {
+		expect(selectAuthoritativeAcpModels(undefined, synthesizedFallback)).toEqual(
+			synthesizedFallback,
+		);
+		expect(
+			selectAuthoritativeAcpModels(
+				{
+					models: {
+						availableModels: [...rawAvailable, rawAvailable[0]!],
+					},
+					configOptions: baseConfigOptions,
+				},
+				synthesizedFallback,
+			),
+		).toEqual(synthesizedFallback);
+		expect(
+			selectAuthoritativeAcpModels(
+				{
+					models: {
+						availableModels: [...rawAvailable, { modelId: "gemini-unknown-high", name: "Unknown" }],
+					},
+					configOptions: baseConfigOptions,
+				},
+				synthesizedFallback,
+			),
+		).toEqual(synthesizedFallback);
+	});
+
+	it("patches discoverModels and pre-switches base model before setting xhigh", async () => {
+		const setModelCalls: string[] = [];
+		const state = {
+			models: { currentModelId: "gemini-3.8-flash-high", availableModels: rawAvailable },
+			configOptions: structuredClone(baseConfigOptions),
+		};
+
+		const fakeRuntime = {
+			connectionFactory: () => ({
+				newSession: async () => state,
+				getSessionState: () => state,
+				setModel: async (_sessionId: string, modelId: string) => {
+					setModelCalls.push(modelId);
+					if (modelId === "gemini-4-neon") {
+						state.configOptions[0]!.currentValue = "gemini-4-neon";
+						state.configOptions[1]!.options = [
+							{ value: "low", name: "Low" },
+							{ value: "medium", name: "Medium" },
+							{ value: "high", name: "High" },
+							{ value: "xhigh", name: "Extra" },
+						];
+					} else if (modelId === "gemini-4-neon-xhigh") {
+						if (!state.configOptions[1]!.options.some((o) => o.value === "xhigh")) {
+							throw new Error("xhigh not in thought_level options");
+						}
+						state.configOptions[1]!.currentValue = "xhigh";
+					}
+				},
+			}),
+			discoverModels: async () => {
+				const conn = fakeRuntime.connectionFactory({});
+				await conn.newSession();
+				return synthesizedFallback;
+			},
+		};
+
+		expect(patchAntigravityRuntime(fakeRuntime)).toBe(true);
+		expect(patchAntigravityRuntime(fakeRuntime)).toBe(false);
+
+		const discovered = await fakeRuntime.discoverModels();
+		expect(discovered.map((m) => m.modelId)).toContain("gemini-4-neon-xhigh");
+		expect(discovered.map((m) => m.modelId)).toContain("gemini-4-hydrogen-xhigh");
+		expect(discovered.map((m) => m.modelId)).not.toContain("gemini-4-argon-xhigh");
+
+		// Pre-switches to gemini-4-neon so xhigh enters thought_level options, then applies xhigh.
+		const conn = fakeRuntime.connectionFactory({});
+		await conn.setModel("sid-1", "gemini-4-neon-xhigh");
+		expect(setModelCalls).toEqual(["gemini-4-neon", "gemini-4-neon-xhigh"]);
+
+		// Once xhigh is already in thought_level options, no extra pre-switch is issued.
+		setModelCalls.length = 0;
+		await conn.setModel("sid-1", "gemini-4-hydrogen-xhigh");
+		expect(setModelCalls).toEqual(["gemini-4-hydrogen-xhigh"]);
 	});
 });
