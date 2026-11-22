@@ -126,6 +126,52 @@ describe("rewriteCcpaGeneratePayload", () => {
 		});
 	});
 
+	it("injects includeThoughts: true when thinkingConfig is omitted, and preserves explicit includeThoughts: false", () => {
+		const omitted = {
+			project: "aicode-consumers",
+			model: "gemini-4-neon-high",
+			request: {
+				generationConfig: { maxOutputTokens: 65536 },
+			},
+		};
+		const omittedResult = rewriteCcpaGeneratePayload(omitted);
+		expect(omittedResult.changed).toBe(true);
+		expect(omittedResult.thinkingLevel).toBe("HIGH");
+		expect(omittedResult.rewritten).toEqual({
+			project: "aicode-consumers",
+			model: "gemini-4-neon-high",
+			request: {
+				generationConfig: {
+					maxOutputTokens: 65536,
+					thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" },
+				},
+			},
+		});
+
+		const explicitFalse = {
+			project: "aicode-consumers",
+			model: "gemini-4-neon-high",
+			request: {
+				generationConfig: {
+					maxOutputTokens: 65536,
+					thinkingConfig: { includeThoughts: false },
+				},
+			},
+		};
+		const falseResult = rewriteCcpaGeneratePayload(explicitFalse);
+		expect(falseResult.changed).toBe(true);
+		expect(falseResult.rewritten).toEqual({
+			project: "aicode-consumers",
+			model: "gemini-4-neon-high",
+			request: {
+				generationConfig: {
+					maxOutputTokens: 65536,
+					thinkingConfig: { includeThoughts: false, thinkingLevel: "HIGH" },
+				},
+			},
+		});
+	});
+
 	it("preserves explicit thinkingLevel or thinkingBudget if already set", () => {
 		const withLevel = {
 			project: "aicode-consumers",
@@ -222,7 +268,7 @@ describe("startCcpaThinkingProxy", () => {
 				request: {
 					generationConfig: {
 						maxOutputTokens: 65535,
-						thinkingConfig: { thinkingLevel: "HIGH" },
+						thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" },
 					},
 				},
 			},
@@ -235,7 +281,7 @@ describe("startCcpaThinkingProxy", () => {
 				request: {
 					generationConfig: {
 						maxOutputTokens: 65535,
-						thinkingConfig: { thinkingLevel: "LOW" },
+						thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
 					},
 				},
 			},

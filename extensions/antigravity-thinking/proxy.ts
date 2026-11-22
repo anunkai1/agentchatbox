@@ -110,10 +110,14 @@ export function extractDiscoveredThinkingLevels(payload: unknown): Map<string, T
 }
 
 /**
- * Injects `request.generationConfig.thinkingConfig.thinkingLevel` into CCPA
- * `generateContent` / `streamGenerateContent` payloads when `agy_acp_server`
- * omitted it for a Gemini 3+ reasoning variant. Existing `thinkingLevel` or
- * `thinkingBudget` fields are preserved untouched.
+ * Injects `request.generationConfig.thinkingConfig.thinkingLevel` (and
+ * `includeThoughts: true` when unset) into CCPA `generateContent` /
+ * `streamGenerateContent` payloads when `agy_acp_server` omitted it for a
+ * Gemini 3+ reasoning variant. Streaming thought chunks keeps response headers
+ * and SSE bytes flowing during long thinking turns so Google's ~60s silent
+ * connection timeout does not cut off `HIGH`/`XHIGH` requests. Existing
+ * `thinkingLevel`, `thinkingBudget`, or explicit `includeThoughts` fields are
+ * preserved untouched.
  */
 export function rewriteCcpaGeneratePayload(
 	payload: unknown,
@@ -154,6 +158,7 @@ export function rewriteCcpaGeneratePayload(
 					...generationConfig,
 					thinkingConfig: {
 						...thinkingConfig,
+						...(thinkingConfig.includeThoughts === undefined ? { includeThoughts: true } : {}),
 						thinkingLevel: resolvedLevel,
 					},
 				},
