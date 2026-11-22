@@ -537,7 +537,13 @@ function openVoice(
 	};
 	const startupTimer = setTimeout(() => {
 		if (!ready) {
-			fail(new Error("Voice extension did not become ready. Deploy it, then reopen the test."));
+			fail(
+				new Error(
+					extensionAvailable
+						? "Pi accepted the start command but Relay never became ready. Wait for the current reply to finish, then reopen voice."
+						: "Voice Pi extension is not loaded for this session. Deploy it, then reopen voice.",
+				),
+			);
 			closeSocket();
 		}
 	}, 20_000);
@@ -917,6 +923,14 @@ function openVoice(
 				if (event.error) sayStatus(event.text);
 			} else if (event.kind === "voice_pending") {
 				sayStatus("Pi Relay request accepted/queued; speech interruption does not cancel it.");
+			} else if (event.kind === "voice-failed") {
+				// The command failed before ready (busy turn, rejected model). Settle the
+				// panel now; the startup timer's extension wording would be misleading.
+				if (!ready) {
+					clearTimeout(startupTimer);
+					fail(new Error(event.text));
+					startSent = false;
+				}
 			} else if (event.kind === "error") {
 				handleVoiceEvent(event);
 			} else if (event.kind === "job") {
