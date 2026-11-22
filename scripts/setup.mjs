@@ -34,6 +34,7 @@ export const DEFAULT_BUNDLED_EXTENSIONS = [
 	"codex-fast",
 	"venice-no-system-prompt",
 	"antigravity-thinking",
+	"antigravity-account-pool",
 	"claude-delegate",
 	"delegate",
 ];

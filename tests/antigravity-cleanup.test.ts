@@ -124,4 +124,41 @@ describe("cleanAntigravityArtifacts", () => {
 		expect(existsSync(join(tmp, oldWarn))).toBe(false);
 		expect(existsSync(join(tmp, oldError))).toBe(false);
 	});
+
+	it("cleans old brain/conversations artifacts inside pooled accountsDir slots", () => {
+		const root = makeTempDir();
+		const primaryAcp = join(root, "primary-acp");
+		const accountsDir = join(root, "accounts");
+		const slotAcp = join(accountsDir, "pro2", "antigravity-acp");
+		const slotBrain = join(slotAcp, "brain");
+		const slotConv = join(slotAcp, "conversations");
+		mkdirSync(slotBrain, { recursive: true });
+		mkdirSync(slotConv, { recursive: true });
+
+		const oldId = "33333333-3333-4333-8333-333333333333";
+		const freshId = "44444444-4444-4444-8444-444444444444";
+		mkdirSync(join(slotBrain, oldId), { recursive: true });
+		writeFileSync(join(slotBrain, oldId, "old.md"), "stale");
+		writeFileSync(join(slotConv, `${oldId}.db`), "dbdata");
+		const oldSec = (now - 20 * day) / 1000;
+		utimesSync(join(slotBrain, oldId, "old.md"), oldSec, oldSec);
+		utimesSync(join(slotBrain, oldId), oldSec, oldSec);
+		utimesSync(join(slotConv, `${oldId}.db`), oldSec, oldSec);
+
+		writeFileSync(join(slotConv, `${freshId}.db`), "active");
+		const recentSec = (now - 1 * day) / 1000;
+		utimesSync(join(slotConv, `${freshId}.db`), recentSec, recentSec);
+
+		const res = cleanAntigravityArtifacts({
+			acpHomeDir: primaryAcp,
+			accountsDir,
+			tmpDir: join(root, "missing-tmp"),
+			nowMs: now,
+		});
+
+		expect(res.removedSessions).toBe(1);
+		expect(existsSync(join(slotBrain, oldId))).toBe(false);
+		expect(existsSync(join(slotConv, `${oldId}.db`))).toBe(false);
+		expect(existsSync(join(slotConv, `${freshId}.db`))).toBe(true);
+	});
 });

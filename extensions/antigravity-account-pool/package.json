@@ -1,0 +1,19 @@
+{
+	"name": "acb-antigravity-account-pool",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Pi extension: pools multiple Google Antigravity accounts with one-command switching and automatic quota failover.",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}

@@ -46,6 +46,7 @@ const TMP_ACTIVE_SYMLINKS = [
 
 export interface AntigravityCleanupOptions {
 	acpHomeDir?: string;
+	accountsDir?: string;
 	tmpDir?: string;
 	nowMs?: number;
 	historyMaxAgeMs?: number;
@@ -102,22 +103,16 @@ function activeSymlinkTargets(tmpDir: string): Set<string> {
 	return protectedPaths;
 }
 
-export function cleanAntigravityArtifacts(
-	options: AntigravityCleanupOptions = {},
-): AntigravityCleanupResult {
-	const acpHomeDir = options.acpHomeDir ?? join(homedir(), ".gemini", "antigravity-acp");
-	const tmpDir = options.tmpDir ?? "/tmp";
-	const nowMs = options.nowMs ?? Date.now();
-	const historyMaxAgeMs =
-		options.historyMaxAgeMs ??
-		Number(process.env.AGENTCHATBOX_ACP_HISTORY_MAX_AGE_MS ?? DEFAULT_ACP_HISTORY_MAX_AGE_MS);
-	const warnLogMaxAgeMs = options.warnLogMaxAgeMs ?? DEFAULT_ACP_WARN_LOG_MAX_AGE_MS;
-	const otherLogMaxAgeMs = options.otherLogMaxAgeMs ?? DEFAULT_ACP_OTHER_LOG_MAX_AGE_MS;
-
+function cleanAcpHistoryDir(
+	acpHomeDir: string,
+	nowMs: number,
+	historyMaxAgeMs: number,
+): { removedSessions: number; freedBytes: number } {
 	let removedSessions = 0;
-	let removedTmpLogs = 0;
 	let freedBytes = 0;
-
+	if (!Number.isFinite(historyMaxAgeMs) || historyMaxAgeMs <= 0) {
+		return { removedSessions, freedBytes };
+	}
 	const brainDir = join(acpHomeDir, "brain");
 	const conversationsDir = join(acpHomeDir, "conversations");
 	const groups = new Map<string, { paths: string[]; maxMtimeMs: number; totalBytes: number }>();
@@ -165,24 +160,69 @@ export function cleanAntigravityArtifacts(
 		}
 	}
 
-	if (Number.isFinite(historyMaxAgeMs) && historyMaxAgeMs > 0) {
-		const historyCutoffMs = nowMs - historyMaxAgeMs;
-		for (const group of groups.values()) {
-			if (group.maxMtimeMs <= 0 || group.maxMtimeMs >= historyCutoffMs) continue;
-			let deletedAny = false;
-			for (const targetPath of group.paths) {
-				try {
-					rmSync(targetPath, { recursive: true, force: true });
-					deletedAny = true;
-				} catch {
-					/* keep going on individual file errors */
-				}
-			}
-			if (deletedAny) {
-				removedSessions += 1;
-				freedBytes += group.totalBytes;
+	const historyCutoffMs = nowMs - historyMaxAgeMs;
+	for (const group of groups.values()) {
+		if (group.maxMtimeMs <= 0 || group.maxMtimeMs >= historyCutoffMs) continue;
+		let deletedAny = false;
+		for (const targetPath of group.paths) {
+			try {
+				rmSync(targetPath, { recursive: true, force: true });
+				deletedAny = true;
+			} catch {
+				/* keep going on individual file errors */
 			}
 		}
+		if (deletedAny) {
+			removedSessions += 1;
+			freedBytes += group.totalBytes;
+		}
+	}
+
+	return { removedSessions, freedBytes };
+}
+
+export function cleanAntigravityArtifacts(
+	options: AntigravityCleanupOptions = {},
+): AntigravityCleanupResult {
+	const acpHomeDir = options.acpHomeDir ?? join(homedir(), ".gemini", "antigravity-acp");
+	const accountsDir =
+		options.accountsDir ??
+		(options.acpHomeDir === undefined
+			? join(homedir(), ".gemini", "antigravity-accounts")
+			: undefined);
+	const tmpDir = options.tmpDir ?? "/tmp";
+	const nowMs = options.nowMs ?? Date.now();
+	const historyMaxAgeMs =
+		options.historyMaxAgeMs ??
+		Number(process.env.AGENTCHATBOX_ACP_HISTORY_MAX_AGE_MS ?? DEFAULT_ACP_HISTORY_MAX_AGE_MS);
+	const warnLogMaxAgeMs = options.warnLogMaxAgeMs ?? DEFAULT_ACP_WARN_LOG_MAX_AGE_MS;
+	const otherLogMaxAgeMs = options.otherLogMaxAgeMs ?? DEFAULT_ACP_OTHER_LOG_MAX_AGE_MS;
+
+	let removedSessions = 0;
+	let removedTmpLogs = 0;
+	let freedBytes = 0;
+
+	const dirsToClean = [acpHomeDir];
+	if (accountsDir && existsSync(accountsDir)) {
+		try {
+			for (const name of readdirSync(accountsDir)) {
+				if (name.startsWith(".")) continue;
+				const acpSubdir = join(accountsDir, name, "antigravity-acp");
+				try {
+					if (statSync(acpSubdir).isDirectory()) dirsToClean.push(acpSubdir);
+				} catch {
+					/* ignore */
+				}
+			}
+		} catch {
+			/* ignore */
+		}
+	}
+
+	for (const dir of dirsToClean) {
+		const cleaned = cleanAcpHistoryDir(dir, nowMs, historyMaxAgeMs);
+		removedSessions += cleaned.removedSessions;
+		freedBytes += cleaned.freedBytes;
 	}
 
 	if (existsSync(tmpDir)) {

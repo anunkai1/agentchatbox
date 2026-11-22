@@ -13,6 +13,7 @@
  * command is one note, so nothing extra reaches the model.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { AccountPool } from "../antigravity-account-pool/pool.js";
 import { fetchQuota, formatQuota } from "./gemini.js";
 import { fetchFirstUsage, formatUsage } from "./gpt.js";
 
@@ -35,6 +36,27 @@ export default function registerPlanUsage(pi: ExtensionAPI): void {
 
 	pi.registerCommand("gemini-usage", {
 		description: "Show Antigravity (Gemini) usage: 5-hour and weekly allowance",
-		handler: report("**📊 /gemini-usage**", async () => formatQuota(await fetchQuota())),
+		handler: report("**📊 /gemini-usage**", async () => {
+			const pool = new AccountPool();
+			const accounts = pool.orderedAccounts();
+			if (accounts.length <= 1) {
+				const tokenFile = accounts[0]?.tokenFile;
+				return formatQuota(await fetchQuota(tokenFile));
+			}
+			const active = pool.activeAccount();
+			const sections = await Promise.all(
+				accounts.map(async (account) => {
+					const tag = account.label === active?.label ? " (in use)" : "";
+					try {
+						const lines = formatQuota(await fetchQuota(account.tokenFile));
+						lines[0] = `**${account.label}${tag}** — ${lines[0]!.replace(/^\*\*📊 \/gemini-usage\*\*\s*—\s*/, "")}`;
+						return lines.join("\n\n");
+					} catch (error) {
+						return `**${account.label}${tag}** — ${(error as Error).message}`;
+					}
+				}),
+			);
+			return ["**📊 /gemini-usage**", ...sections];
+		}),
 	});
 }

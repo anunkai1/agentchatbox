@@ -104,6 +104,7 @@ extensions/
   venice-no-system-prompt/ # disables Venice's injected persona prompt
   voice-test/              # Relay (/relay), streaming trial (/relaytrial) & /voicetest
   antigravity-thinking/    # injects thinkingLevel for Antigravity OAuth requests
+  antigravity-account-pool/ # pools Antigravity Google accounts with /gemini-accounts & failover
   openai-models/           # optional filter keeping GPT-6+ only in OpenAI picker
 tests/                    # vitest, server-side + pure extension helpers + UI smoke
 scripts/                  # build + setup + dev helpers
