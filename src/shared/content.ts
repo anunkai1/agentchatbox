@@ -34,3 +34,15 @@ export function truncate(s: string, n: number): string {
 	if (s.length <= n) return s;
 	return `${s.slice(0, n - 1)}…`;
 }
+
+const PI_IMAGE_META_RE =
+	/(?:^|(?:\r?\n)+)\[Image: original \d+x\d+, displayed at \d+x\d+\.(?: Multiply coordinates by [0-9.]+ to map to original image\.)?\](?=\r?\n|$)/g;
+
+/**
+ * Strip Pi's internal image-scaling coordinate notes from user message text
+ * for browser display, copy, and replay matching while leaving prose intact.
+ */
+export function stripPiImageMeta(text: string): string {
+	if (!text.includes("[Image: original ")) return text;
+	return text.replace(PI_IMAGE_META_RE, "").replace(/^(?:\r?\n)+/, "");
+}

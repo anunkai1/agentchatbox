@@ -18,6 +18,7 @@
 
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import { stripPiImageMeta } from "../shared/content.js";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -190,7 +191,7 @@ export function setRichText(container: HTMLElement, text: string): void {
 export function setUserRichText(container: HTMLElement, text: string): void {
 	setRichText(
 		container,
-		text
+		stripPiImageMeta(text)
 			.replace(/(\[image: [^\]]+\])\(upload:([A-Za-z0-9-]+\.[A-Za-z0-9]+)\)/g, "$1(/uploads/$2)")
 			.replace(
 				/(^|[\s])\[image: ([^\]]+)\]\((\/uploads\/[A-Za-z0-9-]+\.[A-Za-z0-9]+)\)/g,

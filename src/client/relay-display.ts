@@ -1,3 +1,4 @@
+import { stripPiImageMeta } from "../shared/content.js";
 import type { PersistedMessage } from "./state.js";
 
 type User = Extract<PersistedMessage, { kind: "user" }>;
@@ -55,7 +56,7 @@ export function relayVoiceDisplay(
  * an echoed user/steer message matches the browser's optimistic bubble.
  */
 function normalizeUserMessageText(text: string): string {
-	return text
+	return stripPiImageMeta(text)
 		.replace(
 			/!?\[(image|file):\s*([^\]]*)\]\((?:upload:|[^()\s]*[\\/])([A-Za-z0-9._-]+)\)/g,
 			(_full, kind: string, label: string, filename: string) =>
@@ -72,7 +73,8 @@ export function userMessageDisplay(
 	seq: number,
 	ts?: number,
 ): DisplayChange | null {
-	const normalized = normalizeUserMessageText(text);
+	const cleanText = stripPiImageMeta(text);
+	const normalized = normalizeUserMessageText(cleanText);
 	const pending = messages.find(
 		(m): m is User =>
 			m.kind === "user" && m.seq === undefined && normalizeUserMessageText(m.text) === normalized,
@@ -85,7 +87,7 @@ export function userMessageDisplay(
 	// Steering already has its own normal-chat bubble and delivery indicator.
 	if (messages.some((m) => m.kind === "steer" && normalizeUserMessageText(m.text) === normalized))
 		return null;
-	const message: User = { kind: "user", text, seq, ts };
+	const message: User = { kind: "user", text: cleanText, seq, ts };
 	messages.push(message);
 	return { message, added: true };
 }

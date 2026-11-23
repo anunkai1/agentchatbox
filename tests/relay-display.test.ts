@@ -119,6 +119,46 @@ describe("Relay normal-chat display", () => {
 		expect(messages).toHaveLength(1);
 	});
 
+	it("strips Pi's [Image: original ...] metadata when replaying saved user messages", () => {
+		const messages = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: "![image: Shot.jpg](upload:ea689204-3015-45b6-bc68-ef303bb83c0c.jpg)\nWhat does this button do?\n\n[Image: original 1220x2712, displayed at 900x2000. Multiply coordinates by 1.36 to map to original image.]",
+					},
+				],
+				timestamp: 10,
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: "![image: Two.jpg](upload:a.jpg)\n![image: Three.jpg](upload:b.jpg)\n\n[Image: original 800x600, displayed at 800x600.]\n[Image: original 1000x1000, displayed at 1000x1000. Multiply coordinates by 1.00 to map to original image.]",
+					},
+				],
+				timestamp: 11,
+			},
+		] as unknown as Message[];
+		const projected = projectTranscript(messages);
+		expect(projected).toEqual([
+			{
+				kind: "user",
+				text: "![image: Shot.jpg](upload:ea689204-3015-45b6-bc68-ef303bb83c0c.jpg)\nWhat does this button do?",
+				seq: 1,
+				ts: 10,
+			},
+			{
+				kind: "user",
+				text: "![image: Two.jpg](upload:a.jpg)\n![image: Three.jpg](upload:b.jpg)",
+				seq: 2,
+				ts: 11,
+			},
+		]);
+	});
+
 	it("replays voice, full model replies and approximate playback with stable fork ordinals", () => {
 		const messages = [
 			{

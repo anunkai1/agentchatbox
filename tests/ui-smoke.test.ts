@@ -4696,7 +4696,12 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 									},
 									{
 										role: "user",
-										content: [{ type: "text", text: "First user note for selection" }],
+										content: [
+											{
+												type: "text",
+												text: "![image: shot.png](upload:test-shot-1.png)\nFirst user note for selection\n\n[Image: original 1220x2712, displayed at 900x2000. Multiply coordinates by 1.36 to map to original image.]",
+											},
+										],
 									},
 									{
 										role: "assistant",
@@ -4781,11 +4786,13 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.keyboard.press("Escape");
 			await expect.poll(() => dialog.count()).toBe(0);
 
-			// 2. Select text button also works on user messages
-			await page.locator(".row-user").first().getByRole("button", { name: "Select text" }).click();
+			// 2. Replayed user photo hides Pi's [Image: original ...] line in bubble and Select text modal
+			const firstUser = page.locator(".row-user").first();
+			expect(await firstUser.locator(".bubble").innerText()).not.toContain("[Image: original");
+			await firstUser.getByRole("button", { name: "Select text" }).click();
 			await expect
 				.poll(() => dialog.locator(".select-text-body").innerText())
-				.toBe("First user note for selection");
+				.toBe("![image: shot.png](upload:test-shot-1.png)\nFirst user note for selection");
 			await page.keyboard.press("Escape");
 			await expect.poll(() => dialog.count()).toBe(0);
 
@@ -4806,7 +4813,13 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				.poll(() => page.locator(".row-user").last().locator('a[aria-label*="Fork"]').count())
 				.toBe(1);
 			expect(await page.locator(".row-user").count()).toBe(2);
-			expect(await page.locator('.row-user img[src="/uploads/test-shot-1.png"]').count()).toBe(1);
+			expect(
+				await page
+					.locator(".row-user")
+					.last()
+					.locator('img[src="/uploads/test-shot-1.png"]')
+					.count(),
+			).toBe(1);
 		} finally {
 			await page.close();
 		}
