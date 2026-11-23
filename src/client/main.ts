@@ -131,6 +131,7 @@ import {
 	speakText,
 	stopAllVoice,
 	toggleSpeak,
+	toggleVoiceAutoStop,
 } from "./voice.js";
 import { nextVoiceMode, VOICE_MODE_DESCRIPTIONS } from "./voice-mode.js";
 import { isVoiceFailureNotice, pendingReplyText, voiceableReplyStamp } from "./voice-pending.js";
@@ -1797,6 +1798,7 @@ async function boot(): Promise<void> {
 		openQuickSwitcher: openQuickSwitcherHandler,
 		handleVoiceRecord,
 		cancelVoiceRecord,
+		toggleVoiceAutoStop,
 		stopAllVoice,
 		pauseVoice,
 		resumeVoice,

@@ -474,6 +474,18 @@ export function syncDisplayPreferences(): void {
 		const label = headerVoice.querySelector(".header-voice-v");
 		if (label) label.textContent = VOICE_MODE_LABELS[state.voiceMode];
 	}
+	const autoStopBtn = document.querySelector<HTMLButtonElement>("#voice-autostop-btn");
+	if (autoStopBtn) {
+		const autoStop = state.voiceAutoStop;
+		const desc = autoStop
+			? "Auto-stop after 4s pause (click for manual stop with 60s pause limit)"
+			: "Manual stop with 60s pause limit (click for 4s auto-stop)";
+		autoStopBtn.textContent = autoStop ? "Auto 4s" : "Manual";
+		autoStopBtn.classList.toggle("is-manual", !autoStop);
+		autoStopBtn.setAttribute("aria-pressed", String(!autoStop));
+		autoStopBtn.setAttribute("aria-label", desc);
+		autoStopBtn.setAttribute("title", desc);
+	}
 	const toolsHidden = !state.showToolCalls;
 	for (const node of document.querySelectorAll<HTMLElement>("#messages .row-tool")) {
 		node.classList.toggle("display-hidden", toolsHidden);
@@ -2182,6 +2194,7 @@ export interface ShellHandlers {
 	toggleVoiceMode: () => void;
 	handleVoiceRecord: () => Promise<void>;
 	cancelVoiceRecord: () => void;
+	toggleVoiceAutoStop: () => void;
 	/** Stop all voice playback + cancel in-flight TTS (status-bar stop button). */
 	stopAllVoice: () => void;
 	/** Pause TTS playback, holding position (status-bar pause button). */
@@ -2875,6 +2888,20 @@ export function renderShell(): void {
 			onclick: () => shellHandlers?.cancelVoiceRecord(),
 			html: CANCEL_ICON,
 		}),
+		el(
+			"button",
+			{
+				class: "voice-autostop-btn",
+				id: "voice-autostop-btn",
+				type: "button",
+				title: "Auto-stop after 4s pause (click for manual stop with 60s pause limit)",
+				"aria-label": "Auto-stop after 4s pause (click for manual stop with 60s pause limit)",
+				"aria-pressed": "false",
+				hidden: true,
+				onclick: () => shellHandlers?.toggleVoiceAutoStop(),
+			},
+			"Auto 4s",
+		),
 		el("textarea", {
 			id: "input",
 			class: "input",

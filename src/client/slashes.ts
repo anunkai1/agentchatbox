@@ -1910,7 +1910,18 @@ export function openOverflowMenu(): void {
 			),
 		);
 	}
-	mediaRows.push(voiceModeRow);
+	mediaRows.push(
+		voiceModeRow,
+		displayToggleRow(
+			"Voice auto-stop",
+			() => state.voiceAutoStop,
+			(auto) => {
+				state.voiceAutoStop = auto;
+			},
+			"Auto-stop recording after a 4s pause, or keep recording until clicked (60s pause limit)",
+			["4s pause", "Manual (60s)"],
+		),
+	);
 	if (state.ttsAvailable !== false) {
 		mediaRows.push(
 			actionRow(

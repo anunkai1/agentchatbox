@@ -22,6 +22,7 @@ import { $ } from "./dom.js";
 import { MIC_ICON, REC_ICON, SPEAK_ICON, STOP_ICON } from "./icons.js";
 import { markdownToSpeechText } from "./markdown.js";
 import { clearNotice, refreshNotices, showNotice } from "./notices.js";
+import { saveSessionPrefs } from "./prefs.js";
 import {
 	addFileAttachmentPreview,
 	addFileUploadPreview,
@@ -33,6 +34,7 @@ import {
 	resetPendingVoice,
 	setStatusMessage,
 	showVoiceStatus,
+	syncDisplayPreferences,
 } from "./render.js";
 import { services } from "./services.js";
 import { state } from "./state.js";
@@ -976,10 +978,12 @@ let mediaRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let recordingStart = 0;
 
-/** A recording that has heard no speech this long after the button press is dropped. */
-const NO_SPEECH_TIMEOUT_MS = 7_000;
-/** After speech, this much silence ends the recording and it is transcribed as normal. */
-const END_OF_SPEECH_SILENCE_MS = 4_000;
+/** A recording that has heard no speech this long after the button press is dropped (auto mode). */
+export const NO_SPEECH_TIMEOUT_MS = 7_000;
+/** After speech, this much silence ends the recording in auto mode and it is transcribed as normal. */
+export const END_OF_SPEECH_SILENCE_MS = 4_000;
+/** In manual mode, silence up to this limit keeps recording until the user clicks stop. */
+export const MANUAL_SILENCE_TIMEOUT_MS = 60_000;
 /**
  * Mic level (RMS, 0..1) that counts as speech. Deliberately low: if it is too
  * high a real recording is lost, if it is too low a noisy room just never times
@@ -989,13 +993,65 @@ const SPEECH_RMS_THRESHOLD = 0.01;
 
 /** Tears down the level monitor of the current recording, if any. */
 let stopSpeechWatch: (() => void) | null = null;
+/** Resets the silence timer (used when switching auto/manual mid-recording). */
+let resetSpeechSilence: (() => void) | null = null;
+/** Updates the recording elapsed timer in the status line while recording. */
+let recordingStatusTimer: ReturnType<typeof setInterval> | null = null;
 /** Set when a recording is to be dropped (no speech heard, or cancelled): onstop shows it and skips transcription. */
 let discardMessage: string | null = null;
 
-/** Shows the cancel button only while a recording is in progress. */
+export function silenceTimeoutMs(autoStop: boolean, heardSpeech: boolean): number {
+	if (!autoStop) return MANUAL_SILENCE_TIMEOUT_MS;
+	return heardSpeech ? END_OF_SPEECH_SILENCE_MS : NO_SPEECH_TIMEOUT_MS;
+}
+
+export function formatRecordingStatus(elapsedMs: number, autoStop: boolean): string {
+	const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+	const mins = Math.floor(totalSeconds / 60);
+	const secs = String(totalSeconds % 60).padStart(2, "0");
+	const modeHint = autoStop ? "stops after 4s pause · " : "";
+	return `recording (${mins}:${secs}) · ${modeHint}click mic to stop, ✕ to cancel`;
+}
+
+function paintRecordingStatus(): void {
+	if (mediaRecorder?.state !== "recording") return;
+	setStatusMessage(formatRecordingStatus(Date.now() - recordingStart, state.voiceAutoStop));
+}
+
+function startRecordingStatusTimer(): void {
+	paintRecordingStatus();
+	if (recordingStatusTimer !== null) return;
+	recordingStatusTimer = setInterval(paintRecordingStatus, 500);
+}
+
+function stopRecordingStatusTimer(): void {
+	if (recordingStatusTimer !== null) {
+		clearInterval(recordingStatusTimer);
+		recordingStatusTimer = null;
+	}
+}
+
+/** Shows the cancel and auto-stop pill buttons only while a recording is in progress. */
 function setRecordingUi(recording: boolean): void {
 	$<HTMLButtonElement>("#voice-btn").innerHTML = recording ? REC_ICON : MIC_ICON;
 	$<HTMLButtonElement>("#voice-cancel-btn").hidden = !recording;
+	const autoStopBtn = document.getElementById("voice-autostop-btn") as HTMLButtonElement | null;
+	if (autoStopBtn) autoStopBtn.hidden = !recording;
+	if (recording) {
+		syncDisplayPreferences();
+		startRecordingStatusTimer();
+	} else {
+		stopRecordingStatusTimer();
+	}
+}
+
+/** Toggles 4s auto-stop vs manual stop (60s silence limit), updating any active recording immediately. */
+export function toggleVoiceAutoStop(): void {
+	state.voiceAutoStop = !state.voiceAutoStop;
+	resetSpeechSilence?.();
+	saveSessionPrefs();
+	syncDisplayPreferences();
+	paintRecordingStatus();
 }
 
 /** Stops the current recording and throws the audio away instead of transcribing it. */
@@ -1008,21 +1064,20 @@ export function cancelVoiceRecord(): void {
 }
 
 /**
- * Watches the mic level of `stream` and calls `onTimeout` when no speech has been
- * heard for NO_SPEECH_TIMEOUT_MS from the start, or for END_OF_SPEECH_SILENCE_MS
- * after the last speech, saying whether any speech was heard at all. The monitor
- * is a side channel (an AnalyserNode beside MediaRecorder), so a failure to set
- * it up leaves recording untouched.
+ * Watches the mic level of `stream` and calls `onTimeout` when silence exceeds
+ * `silenceTimeoutMs(state.voiceAutoStop, heardSpeech)`, saying whether any
+ * speech was heard at all. The monitor is a side channel (an AnalyserNode beside
+ * MediaRecorder), so a failure to set it up leaves recording untouched.
  */
 function watchForSpeech(
 	stream: MediaStream,
-	onTimeout: (heardSpeech: boolean) => void,
-): () => void {
+	onTimeout: (heardSpeech: boolean, timeoutMs: number) => void,
+): { stop: () => void; resetSilence: () => void } {
 	let ctx: AudioContext;
 	try {
 		ctx = new AudioContext();
 	} catch {
-		return () => {};
+		return { stop: () => {}, resetSilence: () => {} };
 	}
 	const analyser = ctx.createAnalyser();
 	analyser.fftSize = 1024;
@@ -1036,22 +1091,23 @@ function watchForSpeech(
 		analyser.getFloatTimeDomainData(samples);
 		let sum = 0;
 		for (const v of samples) sum += v * v;
+		const timeoutMs = silenceTimeoutMs(state.voiceAutoStop, heardSpeech);
 		if (Math.sqrt(sum / samples.length) >= SPEECH_RMS_THRESHOLD) {
 			heardSpeech = true;
 			lastSoundAt = Date.now();
-		} else if (
-			ctx.state === "running" &&
-			Date.now() - lastSoundAt >= (heardSpeech ? END_OF_SPEECH_SILENCE_MS : NO_SPEECH_TIMEOUT_MS)
-		) {
+		} else if (ctx.state === "running" && Date.now() - lastSoundAt >= timeoutMs) {
 			stop();
-			onTimeout(heardSpeech);
+			onTimeout(heardSpeech, timeoutMs);
 		}
 	}, 50);
 	function stop(): void {
 		clearInterval(timer);
 		void ctx.close().catch(() => {}); // a second stop() finds it already closed
 	}
-	return stop;
+	function resetSilence(): void {
+		lastSoundAt = Date.now();
+	}
+	return { stop, resetSilence };
 }
 
 /**
@@ -1149,6 +1205,7 @@ export async function handleVoiceRecord(): Promise<void> {
 			try {
 				stopSpeechWatch?.();
 				stopSpeechWatch = null;
+				resetSpeechSilence = null;
 				// Canonical teardown also covers an OS/permission revoke.
 				setRecordingUi(false);
 				micStream.getTracks().forEach((t) => {
@@ -1173,14 +1230,15 @@ export async function handleVoiceRecord(): Promise<void> {
 		discardMessage = null;
 		mediaRecorder.start();
 		const recorder = mediaRecorder;
-		stopSpeechWatch = watchForSpeech(micStream, (heardSpeech) => {
+		const watch = watchForSpeech(micStream, (heardSpeech, timeoutMs) => {
 			if (!heardSpeech) {
-				discardMessage = `no speech heard in ${NO_SPEECH_TIMEOUT_MS / 1000}s, recording stopped`;
+				discardMessage = `no speech heard in ${Math.round(timeoutMs / 1000)}s, recording stopped`;
 			}
 			recorder.stop();
 		});
+		stopSpeechWatch = watch.stop;
+		resetSpeechSilence = watch.resetSilence;
 		setRecordingUi(true);
-		setStatusMessage("recording… click the mic to stop, ✕ to cancel");
 	} catch (err) {
 		recordingPending = false;
 		refreshNotices();

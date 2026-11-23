@@ -45,6 +45,7 @@ interface DisplayPrefs {
 	showThinking?: boolean;
 	showToolCalls?: boolean;
 	voiceMode?: VoiceMode | boolean;
+	voiceAutoStop?: boolean;
 	theme?: ThemePreference;
 	enterToSend?: boolean | null;
 }
@@ -120,6 +121,7 @@ export function effectiveEnterToSend(): boolean {
 export function applyDeviceDisplayPrefs(): void {
 	const display = loadDisplayDefaults();
 	state.voiceMode = parseVoiceMode(display.voiceMode);
+	state.voiceAutoStop = typeof display.voiceAutoStop === "boolean" ? display.voiceAutoStop : true;
 	state.theme = parseThemePreference(display.theme);
 	state.enterToSend = typeof display.enterToSend === "boolean" ? display.enterToSend : null;
 	if (typeof display.showThinking === "boolean") state.showThinking = display.showThinking;
@@ -148,6 +150,7 @@ export function applySessionPrefs(): void {
 
 	const display = loadDisplayDefaults();
 	state.voiceMode = parseVoiceMode(display.voiceMode);
+	state.voiceAutoStop = typeof display.voiceAutoStop === "boolean" ? display.voiceAutoStop : true;
 	state.theme = parseThemePreference(display.theme);
 	state.enterToSend = typeof display.enterToSend === "boolean" ? display.enterToSend : null;
 	const hasLegacyDisplay =
@@ -174,6 +177,7 @@ export function saveSessionPrefs(): void {
 		showThinking: state.showThinking,
 		showToolCalls: state.showToolCalls,
 		voiceMode: state.voiceMode,
+		voiceAutoStop: state.voiceAutoStop,
 		theme: state.theme,
 		enterToSend: state.enterToSend,
 	});
@@ -196,6 +200,7 @@ export function reloadVoiceMode(): void {
 export function reloadDisplayPrefs(): void {
 	const display = loadDisplayDefaults();
 	state.voiceMode = parseVoiceMode(display.voiceMode);
+	state.voiceAutoStop = typeof display.voiceAutoStop === "boolean" ? display.voiceAutoStop : true;
 	state.theme = parseThemePreference(display.theme);
 	state.enterToSend = typeof display.enterToSend === "boolean" ? display.enterToSend : null;
 	if (typeof display.showThinking === "boolean") state.showThinking = display.showThinking;

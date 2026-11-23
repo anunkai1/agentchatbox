@@ -188,6 +188,8 @@ export interface AppState {
 	showToolCalls: boolean;
 	/** Device-wide: off, auto-submit only (V), or auto-submit and speak replies (V+). */
 	voiceMode: VoiceMode;
+	/** Device-wide: auto-stop voice recording after a 4s silence pause (false = manual stop, 60s silence limit). */
+	voiceAutoStop: boolean;
 	/** Device-wide colour theme: pure black, soft dark, light, or OS system. */
 	theme: ThemePreference;
 	/** Device-wide Enter key behaviour: true = Enter sends (Shift+Enter newline),
@@ -383,6 +385,7 @@ export const state: AppState = {
 	showThinking: false,
 	showToolCalls: false,
 	voiceMode: "off",
+	voiceAutoStop: true,
 	theme: "black",
 	enterToSend: null,
 	pendingModelSet: null,

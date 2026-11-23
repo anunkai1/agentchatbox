@@ -2586,6 +2586,39 @@ body.sidebar-resizing iframe {
 	border-color: var(--accent-border);
 	color: var(--accent-hover);
 }
+.composer .voice-autostop-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	height: 36px;
+	padding: 0 10px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-pill);
+	background: transparent;
+	color: var(--text-secondary);
+	font-family: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		background 0.12s,
+		border-color 0.12s,
+		color 0.12s;
+}
+.composer .voice-autostop-btn:hover {
+	background: var(--surface-hover);
+	color: var(--text);
+}
+.composer .voice-autostop-btn.is-manual {
+	background: var(--accent-soft);
+	border-color: var(--accent-border);
+	color: var(--accent-hover);
+}
+.composer .voice-autostop-btn[hidden] {
+	display: none;
+}
 .composer .input {
 	flex: 1;
 	resize: none;
@@ -3770,6 +3803,11 @@ button.model-row-info .model-provider {
 		width: 34px;
 		height: 34px;
 	}
+	.composer .voice-autostop-btn {
+		height: 34px;
+		padding: 0 8px;
+		font-size: 11px;
+	}
 	.composer-actions {
 		gap: 2px;
 	}
@@ -4576,6 +4614,7 @@ select:focus-visible,
 	}
 	.new-chat-btn,
 	.composer .icon-btn,
+	.composer .voice-autostop-btn,
 	.send-btn,
 	.stop-btn,
 	.header .icon-btn,

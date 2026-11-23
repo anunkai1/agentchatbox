@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applySessionPrefs, reloadVoiceMode, saveSessionPrefs } from "../src/client/prefs.js";
+import {
+	applySessionPrefs,
+	reloadDisplayPrefs,
+	reloadVoiceMode,
+	saveSessionPrefs,
+} from "../src/client/prefs.js";
 import { state } from "../src/client/state.js";
 import { nextVoiceMode } from "../src/client/voice-mode.js";
 
@@ -155,5 +160,35 @@ describe("voice mode preference", () => {
 		expect(nextVoiceMode("off")).toBe("send");
 		expect(nextVoiceMode("send")).toBe("reply");
 		expect(nextVoiceMode("reply")).toBe("off");
+	});
+});
+
+describe("voice auto-stop preference", () => {
+	it("defaults to true and persists across sessions and tabs", () => {
+		applySessionPrefs();
+		expect(state.voiceAutoStop).toBe(true);
+
+		state.voiceAutoStop = false;
+		saveSessionPrefs();
+
+		state.sessionId = "another-session";
+		state.voiceAutoStop = true;
+		applySessionPrefs();
+		expect(state.voiceAutoStop).toBe(false);
+
+		state.voiceAutoStop = true;
+		reloadDisplayPrefs();
+		expect(state.voiceAutoStop).toBe(false);
+	});
+
+	it.each([
+		["manual", true],
+		[null, true],
+		[false, false],
+		[true, true],
+	])("safely handles stored value %s", (stored, expected) => {
+		storage.setItem("acb:prefs:display-defaults", JSON.stringify({ voiceAutoStop: stored }));
+		applySessionPrefs();
+		expect(state.voiceAutoStop).toBe(expected);
 	});
 });
