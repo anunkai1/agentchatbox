@@ -13,6 +13,7 @@
 
 import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
+import { openChatFind } from "./chat-find.js";
 import { copyText } from "./clipboard.js";
 import { $, el, escapeHtml, mountModal } from "./dom.js";
 import { effectiveEnterToSend, saveSessionPrefs } from "./prefs.js";
@@ -1819,6 +1820,14 @@ export function openOverflowMenu(): void {
 	});
 	updateEnterSendRow();
 	chatRows.push(enterSendRow);
+	chatRows.push(
+		actionRow(
+			"Find in chat",
+			"Search",
+			closeThen(() => openChatFind()),
+			"Search messages in the current conversation (Ctrl/⌘+F)",
+		),
+	);
 
 	box.append(section("Chat", ...chatRows));
 	box.append(

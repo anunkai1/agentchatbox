@@ -17,6 +17,7 @@
 
 import type { PiCommand, ProjectSummary, SessionSummary } from "../shared/protocol.js";
 import { type SessionSearchHit, searchSessions } from "./api.js";
+import { createChatFindBar, refreshChatFind } from "./chat-find.js";
 import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
 import {
 	CANCEL_ICON,
@@ -42,6 +43,7 @@ import {
 	STOP_ICON,
 	TRASH_ICON,
 } from "./icons.js";
+import { attachLightboxGestures } from "./lightbox-gestures.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { mountNotices, type NoticeOptions, refreshNotices, showNotice } from "./notices.js";
 import { effectiveEnterToSend } from "./prefs.js";
@@ -60,6 +62,7 @@ import {
 	type SessionTreeRow,
 	visibleSessionRows,
 } from "./session-tree.js";
+import { installSidebarSwipe } from "./sidebar-swipe.js";
 import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
 import { applyTheme } from "./theme.js";
 import { formatAbsolute, formatRelative } from "./time.js";
@@ -210,6 +213,7 @@ export function renderHistory(): void {
 	// changed — reset the walk and refresh the FAB state.
 	currentUserMsgIndex = null;
 	updateJumpFabState();
+	refreshChatFind();
 }
 
 /**
@@ -436,6 +440,16 @@ export function syncInputWritingAttrs(input: HTMLTextAreaElement | null): void {
 	input.setAttribute("autocapitalize", isSlash ? "off" : "sentences");
 }
 
+function isCompactOrTouchViewport(): boolean {
+	if (typeof window === "undefined") return false;
+	return (
+		window.innerWidth <= 720 ||
+		Boolean(
+			typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches,
+		)
+	);
+}
+
 function syncComposerSendHints(): void {
 	const input = document.querySelector<HTMLTextAreaElement>("#input");
 	const sendBtn = document.querySelector<HTMLButtonElement>("#send-btn");
@@ -443,9 +457,11 @@ function syncComposerSendHints(): void {
 	const modKey =
 		typeof navigator !== "undefined" && navigator.platform.includes("Mac") ? "⌘" : "Ctrl";
 	if (input) {
-		input.placeholder = enterSends
-			? "Send a message  ·  Shift+Enter for new line"
-			: `Send a message  ·  ${modKey}+Enter to send`;
+		input.placeholder = isCompactOrTouchViewport()
+			? "Send a message"
+			: enterSends
+				? "Send a message  ·  Shift+Enter for new line"
+				: `Send a message  ·  ${modKey}+Enter to send`;
 	}
 	if (sendBtn && !state.isStreaming) {
 		sendBtn.title = enterSends ? "Send (Enter)" : `Send (${modKey}+Enter)`;
@@ -2295,7 +2311,7 @@ function showStatusDetail(detail: string): void {
 	mountModal(overlay, box, { label: "Status details" });
 }
 
-/** Fullscreen image lightbox with 1:1 zoom toggle and open/download action. */
+/** Fullscreen image lightbox with 1:1 zoom, pinch-to-zoom, swipe-down-to-close, and download. */
 function openImageLightbox(img: HTMLImageElement): void {
 	const src = img.currentSrc || img.getAttribute("src");
 	if (!src) return;
@@ -2321,15 +2337,6 @@ function openImageLightbox(img: HTMLImageElement): void {
 		},
 		"Zoom 100%",
 	) as HTMLButtonElement;
-	const setZoom = (next: boolean) => {
-		zoomed = next;
-		stage.classList.toggle("is-zoomed", zoomed);
-		preview.classList.toggle("is-zoomed", zoomed);
-		zoomBtn.textContent = zoomed ? "Fit to screen" : "Zoom 100%";
-		zoomBtn.setAttribute("aria-pressed", String(zoomed));
-	};
-	zoomBtn.addEventListener("click", () => setZoom(!zoomed));
-	preview.addEventListener("click", () => setZoom(!zoomed));
 
 	const openLink = el(
 		"a",
@@ -2350,11 +2357,48 @@ function openImageLightbox(img: HTMLImageElement): void {
 		el("div", { class: "lightbox-actions" }, zoomBtn, openLink),
 	);
 	box.append(stage, toolbar);
-	mountModal(overlay, box, { label: `Image preview: ${alt}` });
+	const modal = mountModal(overlay, box, { label: `Image preview: ${alt}` });
+
+	const syncZoomButton = (pinched: boolean) => {
+		const active = zoomed || pinched;
+		zoomBtn.textContent = active ? "Fit to screen" : "Zoom 100%";
+		zoomBtn.setAttribute("aria-pressed", String(active));
+	};
+
+	const gestures = attachLightboxGestures({
+		overlay,
+		box,
+		stage,
+		img: preview,
+		isNativeZoomed: () => zoomed,
+		onPinchStateChange: (pinched) => syncZoomButton(pinched),
+		onDismiss: () => modal.dismiss(),
+	});
+
+	const setZoom = (next: boolean) => {
+		if (!next && gestures.isPinched()) {
+			gestures.reset();
+		}
+		zoomed = next;
+		stage.classList.toggle("is-zoomed", zoomed);
+		preview.classList.toggle("is-zoomed", zoomed);
+		if (zoomed) gestures.reset();
+		syncZoomButton(gestures.isPinched());
+	};
+	zoomBtn.addEventListener("click", () => {
+		if (zoomed || gestures.isPinched()) setZoom(false);
+		else setZoom(true);
+	});
+	preview.addEventListener("click", () => {
+		if (gestures.consumeSuppressedClick()) return;
+		if (zoomed || gestures.isPinched()) setZoom(false);
+		else setZoom(true);
+	});
 }
 
 let windowDndWired = false;
 let windowDragDepth = 0;
+let viewportHintListenerWired = false;
 
 function setDropOverlayVisible(visible: boolean): void {
 	let overlay = document.getElementById("drop-overlay");
@@ -2759,6 +2803,7 @@ export function renderShell(): void {
 		class: "messages-region",
 		"aria-label": "Conversation transcript",
 	});
+	messagesRegion.append(createChatFindBar());
 	messagesRegion.append(messagesWrap);
 	const jumpFabs = el("div", { class: "jump-fabs" });
 	jumpFabs.append(makeJumpPrevUserFab());
@@ -2877,9 +2922,11 @@ export function renderShell(): void {
 			id: "input",
 			class: "input",
 			rows: 1,
-			placeholder: `Send a message  ·  ${
-				navigator.platform.includes("Mac") ? "⌘+Enter" : "Ctrl+Enter"
-			} to send`,
+			placeholder: isCompactOrTouchViewport()
+				? "Send a message"
+				: `Send a message  ·  ${
+						navigator.platform.includes("Mac") ? "⌘+Enter" : "Ctrl+Enter"
+					} to send`,
 			"aria-label": "Message",
 			autocomplete: "off",
 			autocapitalize: "sentences",
@@ -3026,6 +3073,13 @@ export function renderShell(): void {
 
 	// Desktop: sidebar open by default. Mobile: collapsed.
 	if (window.innerWidth <= 720) toggleSidebar(true);
+	installSidebarSwipe(toggleSidebar);
+	if (typeof window.matchMedia === "function" && !viewportHintListenerWired) {
+		viewportHintListenerWired = true;
+		window.matchMedia("(max-width: 720px)").addEventListener?.("change", () => {
+			syncComposerSendHints();
+		});
+	}
 
 	renderHistory();
 	restoreAttachmentPreviews();

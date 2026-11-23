@@ -4392,4 +4392,226 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.close();
 		}
 	});
+
+	it("supports mobile sidebar swipe, in-chat find, concentric mobile composer fit, and lightbox touch gestures", async () => {
+		const { page } = await openPage("/");
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type !== "init") return;
+				ws.send(
+					JSON.stringify({
+						type: "ready",
+						sessionId: "ux-touch-1",
+						modelId: "glm-5.2",
+						provider: "zai",
+						thinkingLevel: "off",
+					}),
+				);
+				ws.send(
+					JSON.stringify({
+						type: "transcript",
+						sessionId: "ux-touch-1",
+						messages: [
+							{ role: "user", content: [{ type: "text", text: "Find alpha one in this conversation." }] },
+							{
+								role: "assistant",
+								content: [
+									{
+										type: "text",
+										text: "Here is Alpha two and a screenshot:\n\n![Demo](/acb-logo-static.svg)",
+									},
+								],
+							},
+						],
+					}),
+				);
+			});
+		});
+		try {
+			await page.reload();
+			await expect.poll(() => page.locator(".row-assistant .markdown img").count()).toBe(1);
+
+			// 1. Mobile composer fit: concentric 40px controls inside 26px pill, concise placeholder, no scrollbar
+			const composerMetrics = await page.evaluate(() => {
+				const composer = document.querySelector<HTMLElement>("#composer")!;
+				const input = document.querySelector<HTMLTextAreaElement>("#input")!;
+				const send = document.querySelector<HTMLElement>("#send-btn")!;
+				const voice = document.querySelector<HTMLElement>("#voice-btn")!;
+				const composerStyle = getComputedStyle(composer);
+				const inputStyle = getComputedStyle(input);
+				return {
+					placeholder: input.placeholder,
+					inputOverflowY: inputStyle.overflowY,
+					composerRadius: composerStyle.borderRadius,
+					sendW: Math.round(send.getBoundingClientRect().width),
+					sendH: Math.round(send.getBoundingClientRect().height),
+					voiceW: Math.round(voice.getBoundingClientRect().width),
+					voiceH: Math.round(voice.getBoundingClientRect().height),
+				};
+			});
+			expect(composerMetrics.placeholder).toBe("Send a message");
+			expect(composerMetrics.inputOverflowY).toBe("hidden");
+			expect(composerMetrics.composerRadius).toBe("26px");
+			expect(composerMetrics.sendW).toBe(40);
+			expect(composerMetrics.sendH).toBe(40);
+			expect(composerMetrics.voiceW).toBe(40);
+			expect(composerMetrics.voiceH).toBe(40);
+
+			// 2. Left-edge swipe opens collapsed mobile sidebar; left swipe closes it
+			expect(
+				await page.evaluate(() => document.getElementById("sidebar")?.classList.contains("collapsed")),
+			).toBe(true);
+			await page.evaluate(() => {
+				const fire = (type: string, target: EventTarget, x: number, y: number) => {
+					const touch = new Touch({
+						identifier: 1,
+						target,
+						clientX: x,
+						clientY: y,
+						pageX: x,
+						pageY: y,
+					});
+					const list = type === "touchend" ? [] : [touch];
+					target.dispatchEvent(
+						new TouchEvent(type, {
+							bubbles: true,
+							cancelable: true,
+							touches: list,
+							targetTouches: list,
+							changedTouches: [touch],
+						}),
+					);
+				};
+				const main = document.querySelector(".messages-wrap")!;
+				fire("touchstart", main, 12, 300);
+				fire("touchmove", main, 140, 305);
+				fire("touchend", main, 140, 305);
+			});
+			expect(
+				await page.evaluate(() => document.getElementById("sidebar")?.classList.contains("collapsed")),
+			).toBe(false);
+
+			await page.evaluate(() => {
+				const fire = (type: string, target: EventTarget, x: number, y: number) => {
+					const touch = new Touch({
+						identifier: 2,
+						target,
+						clientX: x,
+						clientY: y,
+						pageX: x,
+						pageY: y,
+					});
+					const list = type === "touchend" ? [] : [touch];
+					target.dispatchEvent(
+						new TouchEvent(type, {
+							bubbles: true,
+							cancelable: true,
+							touches: list,
+							targetTouches: list,
+							changedTouches: [touch],
+						}),
+					);
+				};
+				const sidebar = document.getElementById("sidebar")!;
+				fire("touchstart", sidebar, 220, 300);
+				fire("touchmove", sidebar, 80, 304);
+				fire("touchend", sidebar, 80, 304);
+			});
+			expect(
+				await page.evaluate(() => document.getElementById("sidebar")?.classList.contains("collapsed")),
+			).toBe(true);
+
+			// 3. In-chat Find bar via Ctrl+F: highlights matches, steps between them, and unwraps on Esc
+			await page.keyboard.press("Control+f");
+			const findInput = page.locator("#chat-find-input");
+			await expect.poll(() => findInput.isVisible()).toBe(true);
+			await findInput.fill("alpha");
+			await expect.poll(() => page.locator("mark.chat-find-hit").count()).toBe(2);
+			expect(await page.locator(".chat-find-count").innerText()).toMatch(/^[12] \/ 2$/);
+			const beforeIdx = await page.locator(".chat-find-count").innerText();
+			await findInput.press("Enter");
+			const afterIdx = await page.locator(".chat-find-count").innerText();
+			expect(afterIdx).not.toBe(beforeIdx);
+			await findInput.press("Escape");
+			await expect.poll(() => page.locator("#chat-find-bar").isVisible()).toBe(false);
+			expect(await page.locator("mark.chat-find-hit").count()).toBe(0);
+
+			// Also reachable from Settings → Chat → Find in chat
+			await page.locator(".header-overflow").click();
+			await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: /Find in chat/ }).click();
+			await expect.poll(() => findInput.isVisible()).toBe(true);
+			await page.keyboard.press("Escape");
+			await expect.poll(() => page.locator("#chat-find-bar").isVisible()).toBe(false);
+
+			// 4. Image lightbox pinch-to-zoom + Fit to screen reset + swipe-down-to-close
+			await page.locator(".row-assistant .markdown img").click();
+			const lightbox = page.locator("#image-lightbox");
+			await expect.poll(() => lightbox.count()).toBe(1);
+			await page.evaluate(() => {
+				const stage = document.querySelector(".lightbox-stage")!;
+				const mk = (id: number, x: number, y: number) =>
+					new Touch({ identifier: id, target: stage, clientX: x, clientY: y, pageX: x, pageY: y });
+				const t1a = mk(1, 150, 350);
+				const t2a = mk(2, 240, 350);
+				stage.dispatchEvent(
+					new TouchEvent("touchstart", {
+						bubbles: true,
+						cancelable: true,
+						touches: [t1a, t2a],
+						targetTouches: [t1a, t2a],
+						changedTouches: [t1a, t2a],
+					}),
+				);
+				const t1b = mk(1, 100, 350);
+				const t2b = mk(2, 290, 350);
+				stage.dispatchEvent(
+					new TouchEvent("touchmove", {
+						bubbles: true,
+						cancelable: true,
+						touches: [t1b, t2b],
+						targetTouches: [t1b, t2b],
+						changedTouches: [t1b, t2b],
+					}),
+				);
+				stage.dispatchEvent(
+					new TouchEvent("touchend", {
+						bubbles: true,
+						cancelable: true,
+						touches: [],
+						targetTouches: [],
+						changedTouches: [t1b, t2b],
+					}),
+				);
+			});
+			await expect.poll(() => lightbox.locator(".lightbox-stage.is-pinch-zoomed").count()).toBe(1);
+			await lightbox.getByRole("button", { name: "Fit to screen" }).click();
+			await expect.poll(() => lightbox.locator(".lightbox-stage.is-pinch-zoomed").count()).toBe(0);
+
+			// Swipe down on unzoomed lightbox closes it
+			await page.evaluate(() => {
+				const stage = document.querySelector(".lightbox-stage")!;
+				const fire = (type: string, x: number, y: number) => {
+					const t = new Touch({ identifier: 3, target: stage, clientX: x, clientY: y, pageX: x, pageY: y });
+					const list = type === "touchend" ? [] : [t];
+					stage.dispatchEvent(
+						new TouchEvent(type, {
+							bubbles: true,
+							cancelable: true,
+							touches: list,
+							targetTouches: list,
+							changedTouches: [t],
+						}),
+					);
+				};
+				fire("touchstart", 195, 250);
+				fire("touchmove", 195, 420);
+				fire("touchend", 195, 420);
+			});
+			await expect.poll(() => lightbox.count()).toBe(0);
+		} finally {
+			await page.close();
+		}
+	});
 });

@@ -23,6 +23,7 @@ import { extractText } from "../shared/content.js";
 import type { ProjectSummary, PromptImage, SessionSummary } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
 import { getHealth, getModels, type ModelInfo, sessionExists } from "./api.js";
+import { closeChatFind, openChatFind } from "./chat-find.js";
 import { copyText } from "./clipboard.js";
 import {
 	noteAssistantMessageEnd,
@@ -1746,6 +1747,7 @@ async function boot(): Promise<void> {
 				onNewChat: () => newChatView(),
 				onToggleSidebar: () => toggleSidebar(),
 				onOpenSettings: openOverflowMenu,
+				onFindInChat: () => openChatFind(),
 				onOpenThemePicker: openThemePicker,
 				onOpenCompact: openCompactDialog,
 				onOpenPinnedModels: openPinnedModelPicker,
@@ -1867,15 +1869,21 @@ async function boot(): Promise<void> {
 
 	// Global keyboard shortcuts:
 	//   Ctrl/⌘+K  — quick switcher (chats, models, actions, /commands)
+	//   Ctrl/⌘+F  — find in current chat
 	//   Ctrl/⌘+B  — toggle sidebar
 	//   Alt+↑     — jump to previous user message
-	//   Esc       — stop streaming when no modal/palette is open
+	//   Esc       — close find bar, or stop streaming when no modal/palette is open
 	document.addEventListener("keydown", (e) => {
 		if ((e.ctrlKey || e.metaKey) && !e.altKey) {
 			const lower = e.key.toLowerCase();
 			if (lower === "k") {
 				e.preventDefault();
 				openQuickSwitcherHandler();
+				return;
+			}
+			if (lower === "f" && !document.querySelector(".modal-overlay")) {
+				e.preventDefault();
+				openChatFind();
 				return;
 			}
 			if (lower === "b") {
@@ -1893,11 +1901,16 @@ async function boot(): Promise<void> {
 			e.key === "Escape" &&
 			!e.defaultPrevented &&
 			!document.querySelector(".modal-overlay") &&
-			!document.getElementById("command-palette") &&
-			(state.isStreaming || state.retry || claudeRunActive())
+			!document.getElementById("command-palette")
 		) {
-			e.preventDefault();
-			shellHandlers.abort();
+			if (closeChatFind(true)) {
+				e.preventDefault();
+				return;
+			}
+			if (state.isStreaming || state.retry || claudeRunActive()) {
+				e.preventDefault();
+				shellHandlers.abort();
+			}
 		}
 	});
 

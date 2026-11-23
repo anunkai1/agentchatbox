@@ -20,6 +20,7 @@ export interface QuickSwitcherContext {
 	onNewChat: () => void;
 	onToggleSidebar: () => void;
 	onOpenSettings: () => void;
+	onFindInChat?: () => void;
 	onOpenThemePicker: () => void;
 	onOpenCompact: () => void;
 	onOpenPinnedModels: () => void;
@@ -89,6 +90,17 @@ export function openQuickSwitcher(ctx: QuickSwitcherContext, initialQuery = ""):
 			searchText: "new chat fresh conversation",
 			run: ctx.onNewChat,
 		},
+		...(ctx.onFindInChat
+			? [
+					{
+						section: "Actions",
+						label: "Find in chat",
+						meta: "Ctrl/⌘+F · Search messages in this chat",
+						searchText: "find search in chat messages text transcript",
+						run: ctx.onFindInChat,
+					},
+				]
+			: []),
 		{
 			section: "Actions",
 			label: "Toggle sidebar",

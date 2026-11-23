@@ -176,6 +176,9 @@ body {
 .sidebar.collapsed {
 	margin-left: calc(var(--sidebar-w) * -1);
 }
+.sidebar.is-swiping {
+	transition: none;
+}
 
 .sidebar-header {
 	display: flex;
@@ -2636,7 +2639,11 @@ body.sidebar-resizing iframe {
 	.composer .input:placeholder-shown {
 		/* The long keyboard-shortcut hint must not size an empty draft. */
 		field-sizing: fixed;
+		overflow-y: hidden;
 	}
+}
+.composer .input:placeholder-shown {
+	overflow-y: hidden;
 }
 .composer .input::placeholder {
 	color: var(--text-muted);
@@ -3779,31 +3786,32 @@ button.model-row-info .model-provider {
 	}
 
 	.composer-wrap {
-		padding: 4px 10px 2px;
+		padding: 4px 10px 4px;
 	}
 	.composer {
-		gap: 2px;
-		padding: 4px;
-		border-radius: 22px;
+		gap: 4px;
+		padding: 6px;
+		border-radius: 26px;
 	}
 	.composer .input {
 		min-width: 0;
 		font-size: 16px; /* prevents iOS zoom-on-focus */
-		padding: 6px 3px;
+		line-height: 1.45;
+		padding: 8px 4px;
 	}
 	.composer .icon-btn,
 	.send-btn,
 	.stop-btn {
-		width: 34px;
-		height: 34px;
+		width: 40px;
+		height: 40px;
 	}
 	.composer .voice-autostop-btn {
-		height: 34px;
-		padding: 0 8px;
+		height: 40px;
+		padding: 0 9px;
 		font-size: 11px;
 	}
 	.composer-actions {
-		gap: 2px;
+		gap: 4px;
 	}
 	/* The control line has to hold nine controls in ~338px at a 412px phone
 	 * width, so the icon strip and the voice chips are trimmed here (see
@@ -4618,6 +4626,10 @@ select:focus-visible,
 		min-height: 44px;
 		height: 44px;
 	}
+	.composer {
+		padding: 6px;
+		border-radius: 28px;
+	}
 }
 
 @media (max-width: 720px) {
@@ -4633,6 +4645,26 @@ select:focus-visible,
 		padding-right: max(10px, env(safe-area-inset-right, 0px));
 		padding-bottom: max(4px, env(safe-area-inset-bottom, 0px));
 		padding-left: max(10px, env(safe-area-inset-left, 0px));
+	}
+	/* Keep mobile composer controls concentric (40px circles inside 6px
+	 * padding and 26px outer radius) so the mic ring and Send button have
+	 * even breathing room on coarse-pointer phones. */
+	.composer {
+		padding: 6px;
+		border-radius: 26px;
+	}
+	.composer .icon-btn,
+	.composer .send-btn,
+	.composer .stop-btn {
+		width: 40px;
+		min-width: 40px;
+		height: 40px;
+		min-height: 40px;
+	}
+	.composer .voice-autostop-btn {
+		min-width: 0;
+		height: 40px;
+		min-height: 40px;
 	}
 }
 
@@ -4906,6 +4938,12 @@ select:focus-visible,
 	flex-direction: column;
 	gap: 10px;
 	background: var(--surface);
+	transition:
+		transform 0.2s ease-out,
+		opacity 0.2s ease-out;
+}
+.lightbox-box.is-dragging {
+	transition: none;
 }
 .lightbox-stage {
 	flex: 1;
@@ -4917,11 +4955,16 @@ select:focus-visible,
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	padding: 8px;
+	touch-action: none;
 }
 .lightbox-stage.is-zoomed {
 	display: block;
 	overflow: auto;
 	text-align: center;
+	touch-action: pan-x pan-y;
+}
+.lightbox-stage.is-pinch-zoomed {
+	touch-action: none;
 }
 .lightbox-img {
 	display: block;
@@ -4931,10 +4974,17 @@ select:focus-visible,
 	object-fit: contain;
 	border-radius: 6px;
 	cursor: zoom-in;
+	transform-origin: center center;
+	will-change: transform;
+	user-select: none;
+	-webkit-user-select: none;
 }
 .lightbox-img.is-zoomed {
 	max-width: none;
 	max-height: none;
+	cursor: zoom-out;
+}
+.lightbox-stage.is-pinch-zoomed .lightbox-img {
 	cursor: zoom-out;
 }
 .lightbox-toolbar {
@@ -4961,6 +5011,107 @@ select:focus-visible,
 .lightbox-actions .btn {
 	margin-top: 0;
 	text-decoration: none;
+}
+
+/* In-chat Find bar (Ctrl/Cmd+F, Settings → Find in chat) */
+.chat-find-bar {
+	position: absolute;
+	top: 10px;
+	right: 16px;
+	z-index: 40;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 5px 6px 5px 10px;
+	background: var(--surface);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-pill);
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+	max-width: calc(100% - 24px);
+}
+.chat-find-bar[hidden] {
+	display: none;
+}
+.chat-find-input {
+	width: 210px;
+	min-width: 0;
+	flex: 1 1 auto;
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	font: 14px / 1.4 var(--font-sans);
+	outline: none;
+}
+.chat-find-input::placeholder {
+	color: var(--text-muted);
+}
+.chat-find-count {
+	flex-shrink: 0;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-muted);
+	padding: 0 4px;
+	min-width: 36px;
+	text-align: center;
+}
+.chat-find-count:empty {
+	display: none;
+}
+.chat-find-count.is-empty {
+	color: var(--c-warn);
+}
+.chat-find-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	width: 28px;
+	height: 28px;
+	border: 0;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--text-secondary);
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	transition:
+		background 0.12s,
+		color 0.12s;
+}
+.chat-find-btn:hover:not(:disabled) {
+	background: var(--surface-hover);
+	color: var(--text);
+}
+.chat-find-btn:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+mark.chat-find-hit {
+	background: rgba(250, 204, 21, 0.32);
+	color: inherit;
+	border-radius: 3px;
+	padding: 0 1px;
+}
+mark.chat-find-hit.is-current {
+	background: rgba(250, 204, 21, 0.85);
+	color: #111;
+	box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.9);
+}
+@media (max-width: 720px) {
+	.chat-find-bar {
+		left: 10px;
+		right: 10px;
+		top: 8px;
+		max-width: none;
+	}
+	.chat-find-input {
+		width: auto;
+		font-size: 16px;
+	}
+	.chat-find-btn {
+		width: 34px;
+		height: 34px;
+	}
 }
 
 /* Quick switcher (Ctrl/Cmd+K) */
