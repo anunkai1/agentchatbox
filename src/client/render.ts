@@ -31,6 +31,7 @@ import {
 	PAUSE_ICON,
 	PENCIL_ICON,
 	PLAY_ICON,
+	RELAY_ICON,
 	SEND_ICON,
 	SHORT_ICON,
 	SHRINK_ICON,
@@ -2656,7 +2657,7 @@ export function renderShell(): void {
 				"aria-expanded": String(document.body.classList.contains("relay-voice-expanded")),
 				onclick: (e: MouseEvent) => shellHandlers?.handleSlash(e.shiftKey ? "relay new" : "relay"),
 			},
-			el("span", { class: "header-voice-v", "aria-hidden": "true" }, "R"),
+			iconEl(RELAY_ICON),
 		),
 		// Cycle Off → V → V+. Device-wide, like the Settings row it mirrors.
 		// Starting a new chat lives in the drawer behind the ☰ button.

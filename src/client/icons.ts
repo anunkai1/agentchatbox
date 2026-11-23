@@ -23,6 +23,9 @@ export const CANCEL_ICON = svg('<path d="M6 6l12 12M18 6L6 18"/>', false, "20");
 export const REC_ICON =
 	'<svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="#ef4444"/></svg>';
 
+/** Header Relay button: five-bar audio waveform signalling live voice conversation. */
+export const RELAY_ICON = svg('<path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/>', false, "18");
+
 /**
  * Composer primary actions: send (up arrow) and, while the agent is streaming,
  * steer (right arrow — the instruction is queued for the next turn).

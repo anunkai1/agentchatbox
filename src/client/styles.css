@@ -978,7 +978,8 @@ body.sidebar-resizing iframe {
 	background: var(--surface-hover);
 	color: var(--text);
 }
-.header-voice.on {
+.header-voice.on,
+#header-relay[aria-expanded="true"] {
 	background: var(--brand-gradient);
 	border-color: transparent;
 	color: #fff;

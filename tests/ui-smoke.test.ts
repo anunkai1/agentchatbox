@@ -2714,7 +2714,8 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.setViewportSize({ width: 390, height: 844 });
 			const relayButton = page.getByRole("button", { name: "Open Relay", exact: true });
 			expect(await relayButton.isVisible()).toBe(true);
-			expect(await relayButton.innerText()).toBe("R");
+			expect(await relayButton.innerText()).toBe("");
+			expect(await relayButton.locator("svg.icon").count()).toBe(1);
 			expect(await page.locator("#header-relay + #header-voice").count()).toBe(1);
 			const relayBounds = await relayButton.boundingBox();
 			const voiceBounds = await page.locator("#header-voice").boundingBox();
