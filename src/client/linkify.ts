@@ -121,6 +121,46 @@ function upgradeUploadVideos(container: HTMLElement): void {
 	}
 }
 
+const CODE_COPY_SVG =
+	'<svg class="code-copy-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+function enhanceCodeBlocks(container: HTMLElement): void {
+	if (typeof document === "undefined") return;
+	for (const pre of Array.from(container.querySelectorAll("pre"))) {
+		if (pre.parentElement?.classList.contains("code-block")) continue;
+		const code = pre.querySelector("code");
+		let lang = "";
+		if (code) {
+			for (const cls of Array.from(code.classList)) {
+				if (cls.startsWith("language-")) {
+					lang = cls.slice("language-".length).trim();
+					break;
+				}
+			}
+		}
+		const wrapper = document.createElement("div");
+		wrapper.className = "code-block";
+
+		const header = document.createElement("div");
+		header.className = "code-block-header";
+
+		const langSpan = document.createElement("span");
+		langSpan.className = "code-block-lang";
+		langSpan.textContent = lang || "code";
+
+		const copyBtn = document.createElement("button");
+		copyBtn.type = "button";
+		copyBtn.className = "code-copy-btn";
+		copyBtn.setAttribute("aria-label", lang ? `Copy ${lang} code` : "Copy code");
+		copyBtn.title = "Copy code";
+		copyBtn.innerHTML = `${CODE_COPY_SVG}<span class="code-copy-label">Copy</span>`;
+
+		header.append(langSpan, copyBtn);
+		pre.replaceWith(wrapper);
+		wrapper.append(header, pre);
+	}
+}
+
 /**
  * Render `text` (markdown) into `container` as sanitized HTML, replacing
  * any existing children. Used for both persisted messages (render.ts)
@@ -134,6 +174,7 @@ export function setRichText(container: HTMLElement, text: string): void {
 		const html = marked.parse(src, { async: false }) as string;
 		container.innerHTML = DOMPurify.sanitize(html);
 		upgradeUploadVideos(container);
+		enhanceCodeBlocks(container);
 	} catch {
 		container.textContent = src;
 	}

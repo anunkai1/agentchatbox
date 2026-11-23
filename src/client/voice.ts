@@ -638,7 +638,7 @@ function clearTimeline(): void {
 	slots = [];
 	if (barTimer !== null) clearInterval(barTimer);
 	barTimer = null;
-	updateVoiceBar(null);
+	if (updateVoiceBar(null)) refreshStatus();
 }
 
 /** True when the whole utterance has played and only its kept chunks remain. */
@@ -654,12 +654,16 @@ function currentPosition(): number {
 
 function syncVoiceBar(): void {
 	if (chunks.length === 0) return;
-	updateVoiceBar({
-		position: currentPosition(),
-		total: bufferedSeconds(chunks),
-		complete: streamEnded,
-		paused: userPaused || isFinished(),
-	});
+	if (
+		updateVoiceBar({
+			position: currentPosition(),
+			total: bufferedSeconds(chunks),
+			complete: streamEnded,
+			paused: userPaused || isFinished(),
+		})
+	) {
+		refreshStatus();
+	}
 }
 
 /** Repaint the bar's position while there is audio; started with the first chunk. */

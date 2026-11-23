@@ -84,4 +84,80 @@ describe("footer voice controls", () => {
 		refreshStatus();
 		expect(voice.innerHTML).toContain("data-stop-voice");
 	});
+
+	it("hides duplicate footer voice controls when the seekable voice bar is visible", () => {
+		const slot = () => {
+			let html = "";
+			return {
+				title: "",
+				get innerHTML() {
+					return html;
+				},
+				set innerHTML(value: string) {
+					html = value;
+				},
+				get textContent() {
+					return html.replace(/<[^>]*>/g, "");
+				},
+				set textContent(value: string) {
+					html = value;
+				},
+			};
+		};
+		const slots = new Map<string, ReturnType<typeof slot>>();
+		vi.stubGlobal("document", {
+			getElementById: (id: string) =>
+				id === "voice-bar" ? { classList: { contains: () => false } } : null,
+			querySelector: (selector: string) => {
+				if (!slots.has(selector)) slots.set(selector, slot());
+				return slots.get(selector);
+			},
+		});
+		state.audioPlaying = true;
+		refreshStatus();
+		expect(slots.get("#status-voice")!.innerHTML).toBe("");
+	});
+
+	it("renders a visual context meter with warn and danger thresholds", () => {
+		const slot = () => {
+			let html = "";
+			return {
+				title: "",
+				get innerHTML() {
+					return html;
+				},
+				set innerHTML(value: string) {
+					html = value;
+				},
+				get textContent() {
+					return html.replace(/<[^>]*>/g, "");
+				},
+				set textContent(value: string) {
+					html = value;
+				},
+			};
+		};
+		const slots = new Map<string, ReturnType<typeof slot>>();
+		vi.stubGlobal("document", {
+			getElementById: () => null,
+			querySelector: (selector: string) => {
+				if (!slots.has(selector)) slots.set(selector, slot());
+				return slots.get(selector);
+			},
+		});
+		try {
+			state.contextUsage = { tokens: 160_000, contextWindow: 200_000, percent: 80 };
+			refreshStatus();
+			const core = slots.get("#status-core")!;
+			expect(core.innerHTML).toContain("status-context-btn is-warn");
+			expect(core.innerHTML).toContain("context-meter-fill");
+			expect(core.innerHTML).toContain("data-status-compact");
+
+			state.contextUsage = { tokens: 186_000, contextWindow: 200_000, percent: 93 };
+			refreshStatus();
+			expect(core.innerHTML).toContain("status-context-btn is-danger");
+		} finally {
+			state.contextUsage = null;
+		}
+	});
 });

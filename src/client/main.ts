@@ -36,12 +36,14 @@ import { type ExtensionUiResponder, handleExtensionUiRequest } from "./extension
 import { setRichText } from "./linkify.js";
 import { clearNotice, refreshNotices, setNoticeSession, showNotice } from "./notices.js";
 import {
+	applyDeviceDisplayPrefs,
 	applySessionPrefs,
 	DISPLAY_DEFAULTS_KEY,
-	reloadVoiceMode,
+	reloadDisplayPrefs,
 	saveSessionPrefs,
 } from "./prefs.js";
 import { projectDisplayNote, projectTranscript } from "./project.js";
+import { openQuickSwitcher } from "./quick-switcher.js";
 import { type DisplayChange, relayVoiceDisplay, userMessageDisplay } from "./relay-display.js";
 import {
 	appendAssistantPlaceholder,
@@ -59,6 +61,7 @@ import {
 	lastAssistantVoiceBox,
 	matchesVoiceHint,
 	modelErrorNotice,
+	refreshChatSurface,
 	refreshSidebarSearchVisibility,
 	refreshStatus,
 	refreshWelcomeSuggestions,
@@ -74,8 +77,10 @@ import {
 	setStreaming,
 	showToast,
 	syncDisplayPreferences,
+	syncInputWritingAttrs,
 	syncSteerBadges,
 	syncStopButton,
+	toggleSidebar,
 	updateVoiceTextBox,
 	voiceBoxForHint,
 	voiceBoxForMessage,
@@ -83,12 +88,15 @@ import {
 import { services, setServices } from "./services.js";
 import {
 	closeSlashMenu,
+	getCommandPaletteEntries,
 	handleSlash,
 	handleSlashMenuKeydown,
 	isKnownSlash,
+	openCompactDialog,
 	openModelPicker,
 	openOverflowMenu,
 	openPinnedModelPicker,
+	openThemePicker,
 	openThinkPicker,
 	renderSessionsIntoPicker,
 	resetChatState,
@@ -101,6 +109,7 @@ import {
 	refreshCurrentModelLabel,
 	state,
 } from "./state.js";
+import { applyTheme, watchSystemTheme } from "./theme.js";
 import {
 	readAskFromUrl,
 	readForkFromUrl,
@@ -144,6 +153,7 @@ function historyBack(): void {
 	state.historyIdx = idx;
 	const input = $<HTMLTextAreaElement>("#input");
 	input.value = state.history[idx];
+	syncInputWritingAttrs(input);
 	persistDraft(input.value);
 	autoSize();
 }
@@ -151,14 +161,16 @@ function historyBack(): void {
 function historyForward(): void {
 	if (state.historyIdx === null) return;
 	const idx = state.historyIdx + 1;
+	const input = $<HTMLTextAreaElement>("#input");
 	if (idx >= state.history.length) {
 		state.historyIdx = null;
-		$<HTMLTextAreaElement>("#input").value = "";
+		input.value = "";
 	} else {
 		state.historyIdx = idx;
-		$<HTMLTextAreaElement>("#input").value = state.history[idx];
+		input.value = state.history[idx];
 	}
-	persistDraft($<HTMLTextAreaElement>("#input").value);
+	syncInputWritingAttrs(input);
+	persistDraft(input.value);
 	autoSize();
 }
 
@@ -210,6 +222,7 @@ function restoreSavedDraft(): void {
 		const text = storage.getItem(draftStorageKey());
 		if (text) {
 			input.value = text;
+			syncInputWritingAttrs(input);
 			autoSize();
 		}
 	} catch {
@@ -245,6 +258,7 @@ function offerLegacyDraft(): void {
 						const text = localStorage.getItem(draftStorageKey(null));
 						if (text) {
 							input.value = text;
+							syncInputWritingAttrs(input);
 							persistDraft(text);
 							autoSize();
 						}
@@ -263,7 +277,9 @@ function offerLegacyDraft(): void {
 // ---------------------------------------------------------------------------
 
 function clearComposerDraft(): void {
-	$<HTMLTextAreaElement>("#input").value = "";
+	const input = $<HTMLTextAreaElement>("#input");
+	input.value = "";
+	syncInputWritingAttrs(input);
 	clearAttachmentPreviews();
 	persistDraft("");
 	autoSize();
@@ -279,10 +295,12 @@ let sessionMoving = false;
 const relaySessions = new Set<string>();
 
 function updateComposerLock(): void {
-	for (const id of ["#input", "#send-btn", "#attach-btn", "#voice-btn"]) {
-		$<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>(id).disabled = Boolean(
-			sessionSwitch || pendingSend || sessionMoving,
+	const locked = Boolean(sessionSwitch || pendingSend || sessionMoving);
+	for (const id of ["#input", "#send-btn", "#attach-btn", "#slash-btn", "#voice-btn"]) {
+		const node = document.querySelector<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>(
+			id,
 		);
+		if (node) node.disabled = locked;
 	}
 }
 
@@ -1552,10 +1570,6 @@ function onEvent(event: Record<string, unknown>): void {
 const SIDEBAR_CACHE_KEY = "acb-sidebar-summaries-v1";
 type SidebarCache = { sessions: SessionSummary[]; projects: ProjectSummary[] };
 let sidebarSessionsForCache: SessionSummary[] = [];
-/** True once either localStorage or the server has supplied a real sidebar
- * snapshot. This distinguishes an authoritative empty list from the initial
- * "nothing has loaded yet" state when a transcript rebuilds the shell. */
-let hasSidebarSessionSnapshot = false;
 
 /** Keep the header title aligned with the server-owned session summary.
  * Resumed/direct-link sessions do not pass through the optimistic first-send
@@ -1615,6 +1629,9 @@ function saveSidebarCache(): void {
 }
 
 async function boot(): Promise<void> {
+	applyDeviceDisplayPrefs();
+	applyTheme(state.theme);
+	watchSystemTheme(() => state.theme);
 	const cachedSidebar = readSidebarCache();
 	// These display-only requests must never delay the chat handshake. On a
 	// cold server /api/models may be waiting for its one-shot pi probe, while
@@ -1719,6 +1736,48 @@ async function boot(): Promise<void> {
 		chatClient.resumeSession(sessionId, preserve);
 	};
 
+	const openQuickSwitcherHandler = (initialQuery = "") => {
+		openQuickSwitcher(
+			{
+				sessions: sidebarSessionsForCache,
+				commands: getCommandPaletteEntries(),
+				onResumeSession: (sessionId) => resumeChatView(sessionId),
+				onNewChat: () => newChatView(),
+				onToggleSidebar: () => toggleSidebar(),
+				onOpenSettings: openOverflowMenu,
+				onOpenThemePicker: openThemePicker,
+				onOpenCompact: openCompactDialog,
+				onOpenPinnedModels: openPinnedModelPicker,
+				onOpenAllModels: openModelPicker,
+				onSelectModel: (modelId, provider) => {
+					state.currentModelId = modelId;
+					state.currentProvider = provider;
+					state.pendingModelSet = modelId;
+					refreshCurrentModelLabel();
+					chatClient.setModel(modelId, provider);
+					refreshStatus();
+				},
+				onRunSlash: (commandName, needsArgument) => {
+					const input = $<HTMLTextAreaElement>("#input");
+					if (needsArgument) {
+						input.value = `/${commandName} `;
+						syncInputWritingAttrs(input);
+						autoSize();
+						input.focus();
+						input.setSelectionRange(input.value.length, input.value.length);
+						return;
+					}
+					if (isKnownSlash(`/${commandName}`)) {
+						handleSlash(commandName);
+					} else {
+						services.sendSlashCommand?.(`/${commandName}`);
+					}
+				},
+			},
+			initialQuery,
+		);
+	};
+
 	// Register cross-module handlers BEFORE renderShell so the UI
 	// buttons can find them. Once renderShell runs, the handlers
 	// can't be re-registered without throwing.
@@ -1734,6 +1793,8 @@ async function boot(): Promise<void> {
 		openPinnedModelPicker,
 		openThinkPicker,
 		openOverflowMenu,
+		openCompactDialog,
+		openQuickSwitcher: openQuickSwitcherHandler,
 		handleVoiceRecord,
 		cancelVoiceRecord,
 		stopAllVoice,
@@ -1788,32 +1849,54 @@ async function boot(): Promise<void> {
 	renderShell();
 	restoreSavedDraft();
 
-	// Voice mode is device-wide, so another tab can flip it while this one sits
-	// open. `storage` fires only in the OTHER tabs, so re-read the flag there and
-	// repaint rather than trusting a stale copy. Switching the setting here is
-	// what writes the key, so this tab needs no handler of its own.
+	// Voice mode, theme, and Enter-to-send are device-wide, so another tab can
+	// flip them while this one sits open. `storage` fires only in OTHER tabs.
 	window.addEventListener("storage", (e) => {
 		if (e.key !== DISPLAY_DEFAULTS_KEY) return;
-		reloadVoiceMode();
+		reloadDisplayPrefs();
 		syncDisplayPreferences();
 	});
 	// Paint the previous display-only sidebar snapshot before pi finishes
 	// starting. The authoritative WS response below replaces it shortly after.
 	if (cachedSidebar) {
 		sidebarSessionsForCache = cachedSidebar.sessions;
-		hasSidebarSessionSnapshot = true;
 		syncCurrentSessionTitle(cachedSidebar.sessions);
 		renderSidebarSessions(cachedSidebar.sessions);
 	}
 
-	// Global shortcut: Alt+↑ jumps to the previous user message (same as
-	// the floating button). Attached once at boot; the handler queries the
-	// DOM at call time, so it survives renderShell rebuilds. The input's
-	// own ↑ (history recall) is gated on !e.altKey, so the two never clash.
+	// Global keyboard shortcuts:
+	//   Ctrl/⌘+K  — quick switcher (chats, models, actions, /commands)
+	//   Ctrl/⌘+B  — toggle sidebar
+	//   Alt+↑     — jump to previous user message
+	//   Esc       — stop streaming when no modal/palette is open
 	document.addEventListener("keydown", (e) => {
+		if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+			const lower = e.key.toLowerCase();
+			if (lower === "k") {
+				e.preventDefault();
+				openQuickSwitcherHandler();
+				return;
+			}
+			if (lower === "b") {
+				e.preventDefault();
+				toggleSidebar();
+				return;
+			}
+		}
 		if (e.altKey && (e.key === "ArrowUp" || e.key === "Up")) {
 			e.preventDefault();
 			jumpToPrevUserMessage();
+			return;
+		}
+		if (
+			e.key === "Escape" &&
+			!e.defaultPrevented &&
+			!document.querySelector(".modal-overlay") &&
+			!document.getElementById("command-palette") &&
+			(state.isStreaming || state.retry || claudeRunActive())
+		) {
+			e.preventDefault();
+			shellHandlers.abort();
 		}
 	});
 
@@ -2028,7 +2111,6 @@ async function boot(): Promise<void> {
 	// Also refresh the sidebar session list.
 	chatClient.onSessionsUpdated((sessions) => {
 		sidebarSessionsForCache = sessions;
-		hasSidebarSessionSnapshot = true;
 		syncCurrentSessionTitle(sessions);
 		saveSidebarCache();
 		renderSessionsIntoPicker(sessions);
@@ -2136,28 +2218,13 @@ async function boot(): Promise<void> {
 		// On a background reconnect for the same session this is a no-op,
 		// preserving scroll position and avoiding a flicker.
 		if (lastMatches) return;
-		// The transcript renderer currently rebuilds the shell. Restore the
-		// authoritative sidebar snapshot immediately afterward; otherwise a
-		// fast listSessions response rendered before this transcript is wiped
-		// back to "Loading sessions…" with no later event to repaint it.
-		// A search query cannot survive a shell rebuild, so clear its matching
-		// state too or renderSidebarSessions would intentionally no-op.
-		state.searchActive = false;
-		renderShell();
+		// Update the chat surface in place so #sidebar (including its scroll
+		// position and active search results), #header, and #composer focus
+		// stay mounted across chat switches and transcript replays.
+		refreshChatSurface();
 		if (sessionSwitch) setSessionSwitch(sessionSwitch);
 		else updateComposerLock();
-		if (hasSidebarSessionSnapshot) renderSidebarSessions(sidebarSessionsForCache);
-		// onReady restores the session draft before the transcript event, and
-		// renderShell replaces that textarea. Restore it once more into the new
-		// shell so resuming a chat does not silently discard its saved draft.
 		restoreSavedDraft();
-		// renderShell rebuilds the entire DOM, including a fresh
-		// #stop-btn created hidden. If we're mid-run (server reported
-		// isStreaming=true in the ready that preceded this transcript,
-		// or we never left a run), re-apply that state so the Stop
-		// button is visible after resume. Without this the button we
-		// unhid in onReady is destroyed and replaced by a hidden one —
-		// the "Stop button missing after refresh/resume" bug.
 		setStreaming(state.isStreaming);
 	});
 	// After resumeSession/newSession completes, the server reports

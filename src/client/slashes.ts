@@ -15,14 +15,16 @@ import type { SessionSummary, ThinkingLevel } from "../shared/protocol.js";
 import { THINKING_LEVELS } from "../shared/thinking.js";
 import { copyText } from "./clipboard.js";
 import { $, el, escapeHtml, mountModal } from "./dom.js";
-import { saveSessionPrefs } from "./prefs.js";
+import { effectiveEnterToSend, saveSessionPrefs } from "./prefs.js";
 import {
 	appendError,
 	appendNode,
+	autoSize,
 	openProjectEditor,
+	refreshChatSurface,
 	refreshStatus,
-	renderShell,
 	syncDisplayPreferences,
+	syncInputWritingAttrs,
 	toggleCapabilitiesPopover,
 } from "./render.js";
 import { services } from "./services.js";
@@ -33,6 +35,7 @@ import {
 	refreshCurrentModelLabel,
 	state,
 } from "./state.js";
+import { THEME_LABELS, type ThemePreference } from "./theme.js";
 import { shareableSessionUrl } from "./url.js";
 import { nextVoiceMode, VOICE_MODE_LABELS } from "./voice-mode.js";
 import { openRelay, openRelayTrial, openVoiceTest } from "./voice-test.js";
@@ -109,7 +112,7 @@ function commandCategory(name: string): string {
 	return "Reference";
 }
 
-function getCommandPaletteEntries(): CommandPaletteEntry[] {
+export function getCommandPaletteEntries(): CommandPaletteEntry[] {
 	const entries: CommandPaletteEntry[] = Object.entries(SLASH_COMMANDS).map(
 		([name, description], order) => ({
 			name,
@@ -353,7 +356,14 @@ function resetChatState(): void {
 	state.costTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 	state.contextUsage = null;
 	state.contextWarned = false;
-	renderShell();
+	const input = document.querySelector<HTMLTextAreaElement>("#input");
+	if (input) {
+		input.value = "";
+		syncInputWritingAttrs(input);
+		autoSize();
+	}
+	closeSlashMenu();
+	refreshChatSurface();
 }
 
 /** Main resets the view only after the replacement session is ready. */
@@ -576,15 +586,18 @@ export function handleSlash(arg: string): void {
 			$<HTMLTextAreaElement>("#input").value = "";
 			break;
 		case "hotkeys": {
+			const enterDesc = effectiveEnterToSend()
+				? "send message (Shift+Enter for newline; configurable in Settings)"
+				: "newline in input (⌘/Ctrl+Enter to send; configurable in Settings)";
 			const text =
 				`Keyboard shortcuts:\n` +
-				`  Enter           newline in input (mobile-friendly)\n` +
-				`  ⌘/Ctrl+Enter    send message\n` +
-				`  /               open slash menu (in empty input)\n` +
-				`  ↑ / ↓           recall previous / next user message\n` +
-				`  /abort          stop the current run\n` +
-				`  /clear          start a new chat\n` +
-				`  /sessions       browse previous chats\n` +
+				`  ⌘/Ctrl+K        quick switcher (chats, models, actions, /commands)\n` +
+				`  ⌘/Ctrl+B        toggle sidebar\n` +
+				`  Esc             stop streaming / close open modal\n` +
+				`  Enter           ${enterDesc}\n` +
+				`  ⌘/Ctrl+Enter    always send message\n` +
+				`  /               open slash menu (in empty input or via / button)\n` +
+				`  Alt+↑ / Alt+↓   recall previous / next user message\n` +
 				`  /model          switch model\n` +
 				`  /think <level>  set thinking level`;
 			appendNode(el_pre(text));
@@ -941,7 +954,13 @@ export function openPinnedModelPicker(): void {
 		openModelPicker();
 		return;
 	}
-	const { overlay, box } = openModal("Pinned models", "model-picker-box");
+	const { overlay, box } = openModal("♥ Pinned models", "model-picker-box");
+	box.append(
+		el("p", {
+			class: "modal-hint",
+			text: "Quick-pick models you hearted (♥) in All models.",
+		}),
+	);
 	const currentDefault = defaultModelForNewChats();
 	for (const m of pinned) {
 		const row = el("div", { class: "model-row" });
@@ -1184,6 +1203,103 @@ export function openSpeedPicker(): void {
 			onclick: () => overlay.remove(),
 		}),
 	);
+}
+
+export function openThemePicker(): void {
+	const options: { id: ThemePreference; desc: string }[] = [
+		{ id: "black", desc: "True OLED black background (default)" },
+		{ id: "dark", desc: "Soft charcoal dark surface" },
+		{ id: "light", desc: "Clean daylight surface" },
+		{ id: "system", desc: "Match your device light / dark setting" },
+	];
+	const { overlay, box } = openModal("Theme");
+	for (const opt of options) {
+		const row = el("div", { class: "model-row" });
+		const info = el("div", { class: "model-row-info" });
+		info.append(
+			el("div", { class: "model-name" }, THEME_LABELS[opt.id]),
+			el("div", { class: "model-provider" }, opt.desc),
+		);
+		row.append(info);
+		if (opt.id === state.theme) row.classList.add("active");
+		makeKeyboardClickable(row, () => {
+			state.theme = opt.id;
+			saveSessionPrefs();
+			syncDisplayPreferences();
+			overlay.remove();
+		});
+		box.append(row);
+	}
+	box.append(
+		el("button", {
+			class: "btn",
+			type: "button",
+			text: "Close",
+			onclick: () => overlay.remove(),
+		}),
+	);
+}
+
+export function openCompactDialog(): void {
+	const { overlay, box } = openModal("Compact context");
+	const cu = state.contextUsage;
+	const usageText =
+		cu && cu.contextWindow > 0 && cu.tokens !== null
+			? `Current context: ${Math.round(cu.tokens / 1000)}k / ${Math.round(cu.contextWindow / 1000)}k tokens (${Math.round(cu.percent ?? (cu.tokens / cu.contextWindow) * 100)}%).`
+			: "Summarise earlier turns in this chat to free up context window space.";
+	box.append(el("p", { class: "modal-hint", text: usageText }));
+
+	const instructionsInput = el("input", {
+		type: "text",
+		class: "model-filter-input",
+		placeholder: "Optional focus instructions (e.g. keep API decisions)…",
+		"aria-label": "Optional compaction focus instructions",
+		autocomplete: "off",
+	}) as HTMLInputElement;
+	box.append(instructionsInput);
+
+	const runCompact = () => {
+		if (state.isStreaming) {
+			appendError("Wait for the current reply to finish (or stop it) before compacting.");
+			return;
+		}
+		const instructions = instructionsInput.value.trim() || undefined;
+		overlay.remove();
+		chatControls?.compact(instructions);
+	};
+
+	instructionsInput.addEventListener("keydown", (event) => {
+		if (event.key === "Enter") {
+			event.preventDefault();
+			runCompact();
+		}
+	});
+
+	const actions = el("div", { class: "dialog-actions" });
+	actions.append(
+		el("button", {
+			class: "btn primary",
+			type: "button",
+			text: "Compact now",
+			disabled: state.isStreaming ? "disabled" : null,
+			onclick: runCompact,
+		}),
+		el("button", {
+			class: "btn",
+			type: "button",
+			text: "Cancel",
+			onclick: () => overlay.remove(),
+		}),
+	);
+	box.append(actions);
+	if (state.isStreaming) {
+		box.append(
+			el("p", {
+				class: "modal-hint",
+				text: "Compaction is available once the current reply finishes.",
+			}),
+		);
+	}
 }
 
 export async function openSessionsDialog(): Promise<void> {
@@ -1673,10 +1789,47 @@ export function openOverflowMenu(): void {
 			),
 		);
 	}
+	const enterSendValue = el("span", { class: "overflow-value" });
+	const enterSendRow = el("button", {
+		class: "overflow-row settings-row",
+		type: "button",
+		title:
+			"Toggle whether pressing Enter sends the message or inserts a new line (Ctrl/⌘+Enter always sends)",
+	});
+	const updateEnterSendRow = () => {
+		const enabled = effectiveEnterToSend();
+		const suffix = state.enterToSend === null ? " (auto)" : "";
+		enterSendValue.textContent = `${enabled ? "On" : "Off"}${suffix}`;
+		enterSendRow.setAttribute("aria-pressed", String(enabled));
+	};
+	enterSendRow.append(
+		el("span", { class: "overflow-label" }, "Enter key sends"),
+		el(
+			"span",
+			{ class: "settings-row-end" },
+			enterSendValue,
+			el("span", { class: "settings-chevron", "aria-hidden": "true" }, "↔"),
+		),
+	);
+	enterSendRow.addEventListener("click", () => {
+		state.enterToSend = !effectiveEnterToSend();
+		saveSessionPrefs();
+		syncDisplayPreferences();
+		updateEnterSendRow();
+	});
+	updateEnterSendRow();
+	chatRows.push(enterSendRow);
+
 	box.append(section("Chat", ...chatRows));
 	box.append(
 		section(
 			"Display",
+			actionRow(
+				"Theme",
+				THEME_LABELS[state.theme],
+				closeThen(openThemePicker),
+				"Choose colour theme",
+			),
 			displayToggleRow(
 				"Thinking blocks",
 				() => state.showThinking,
@@ -1777,6 +1930,12 @@ export function openOverflowMenu(): void {
 			"Overview",
 			closeThen(openModelsPanel),
 			"Show all models and services in use",
+		),
+		actionRow(
+			"Keyboard shortcuts",
+			"Ctrl/⌘+K",
+			closeThen(() => handleSlash("hotkeys")),
+			"Show keyboard shortcuts in chat",
 		),
 	);
 	if (state.capabilities && state.capabilities.length > 0) {

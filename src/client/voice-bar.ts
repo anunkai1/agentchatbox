@@ -106,14 +106,24 @@ function paintScrub(seconds: number): void {
 	elapsed.textContent = formatClock(seconds);
 }
 
-/** Show the bar with `snapshot`, or hide it with null. */
-export function updateVoiceBar(snapshot: VoiceBarSnapshot | null): void {
+/** True when the seekable voice bar above the composer is currently visible. */
+export function isVoiceBarVisible(): boolean {
+	if (typeof document === "undefined") return false;
 	const bar = document.getElementById("voice-bar");
-	if (!bar) return;
-	bar.classList.toggle("hidden", snapshot === null);
+	return Boolean(bar && !bar.classList.contains("hidden"));
+}
+
+/** Show the bar with `snapshot`, or hide it with null. Returns true if visibility changed. */
+export function updateVoiceBar(snapshot: VoiceBarSnapshot | null): boolean {
+	const bar = document.getElementById("voice-bar");
+	if (!bar) return false;
+	const wasHidden = bar.classList.contains("hidden");
+	const nextHidden = snapshot === null;
+	bar.classList.toggle("hidden", nextHidden);
+	const visibilityChanged = wasHidden !== nextHidden;
 	if (!snapshot) {
 		dragging = false;
-		return;
+		return visibilityChanged;
 	}
 	const play = bar.querySelector<HTMLButtonElement>(".voice-bar-play");
 	if (play) {
@@ -124,11 +134,12 @@ export function updateVoiceBar(snapshot: VoiceBarSnapshot | null): void {
 	}
 	const scrub = bar.querySelector<HTMLInputElement>(".voice-bar-scrub");
 	const total = bar.querySelector(".voice-bar-total");
-	if (!scrub || !total) return;
+	if (!scrub || !total) return visibilityChanged;
 	// A trailing "+" while synthesis is still running: the total is a lower bound.
 	total.textContent = formatClock(snapshot.total) + (snapshot.complete ? "" : "+");
 	scrub.max = String(snapshot.total);
-	if (dragging) return;
+	if (dragging) return visibilityChanged;
 	scrub.value = String(snapshot.position);
 	paintScrub(snapshot.position);
+	return visibilityChanged;
 }

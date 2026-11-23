@@ -26,6 +26,7 @@
  * are a nicety, never a correctness requirement.
  */
 
+import { parseThemePreference, type ThemePreference } from "./theme.js";
 import { parseVoiceMode, type VoiceMode } from "./voice-mode.js";
 
 const PREFIX = "acb:prefs:";
@@ -44,6 +45,8 @@ interface DisplayPrefs {
 	showThinking?: boolean;
 	showToolCalls?: boolean;
 	voiceMode?: VoiceMode | boolean;
+	theme?: ThemePreference;
+	enterToSend?: boolean | null;
 }
 
 function key(sessionId: string): string {
@@ -95,11 +98,33 @@ function saveDisplayDefaults(prefs: DisplayPrefs): void {
 }
 
 // ── state glue ─────────────────────────────────────────────────────
-// These two bridge the raw load/save above to the app's singleton state.
+// These bridge the raw load/save above to the app's singleton state.
 // Kept here so the persistence concern lives in one module; main.ts and
-// the pickers just call applySessionPrefs() / saveCurrentPrefs().
+// the pickers just call applySessionPrefs() / saveSessionPrefs().
 
 import { state } from "./state.js";
+
+/** True on touch-primary devices (phones/tablets) where Enter should stay a newline by default. */
+export function isCoarsePointerDevice(): boolean {
+	if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+	return window.matchMedia("(pointer: coarse)").matches;
+}
+
+/** Whether plain Enter should submit the composer (Shift+Enter inserts a newline). */
+export function effectiveEnterToSend(): boolean {
+	if (typeof state.enterToSend === "boolean") return state.enterToSend;
+	return !isCoarsePointerDevice();
+}
+
+/** Load device-wide display defaults before a session id is known (e.g. at boot). */
+export function applyDeviceDisplayPrefs(): void {
+	const display = loadDisplayDefaults();
+	state.voiceMode = parseVoiceMode(display.voiceMode);
+	state.theme = parseThemePreference(display.theme);
+	state.enterToSend = typeof display.enterToSend === "boolean" ? display.enterToSend : null;
+	if (typeof display.showThinking === "boolean") state.showThinking = display.showThinking;
+	if (typeof display.showToolCalls === "boolean") state.showToolCalls = display.showToolCalls;
+}
 
 /**
  * Load the current session's stored prefs into `state`. Call whenever
@@ -123,6 +148,8 @@ export function applySessionPrefs(): void {
 
 	const display = loadDisplayDefaults();
 	state.voiceMode = parseVoiceMode(display.voiceMode);
+	state.theme = parseThemePreference(display.theme);
+	state.enterToSend = typeof display.enterToSend === "boolean" ? display.enterToSend : null;
 	const hasLegacyDisplay =
 		typeof prefs.showThinking === "boolean" || typeof prefs.showToolCalls === "boolean";
 	if (typeof display.showThinking === "boolean") state.showThinking = display.showThinking;
@@ -147,6 +174,8 @@ export function saveSessionPrefs(): void {
 		showThinking: state.showThinking,
 		showToolCalls: state.showToolCalls,
 		voiceMode: state.voiceMode,
+		theme: state.theme,
+		enterToSend: state.enterToSend,
 	});
 
 	const id = state.sessionId;
@@ -161,4 +190,14 @@ export function saveSessionPrefs(): void {
  * listener in main.ts calls this before repainting. */
 export function reloadVoiceMode(): void {
 	state.voiceMode = parseVoiceMode(loadDisplayDefaults().voiceMode);
+}
+
+/** Re-read all device-wide display prefs when another tab updates localStorage. */
+export function reloadDisplayPrefs(): void {
+	const display = loadDisplayDefaults();
+	state.voiceMode = parseVoiceMode(display.voiceMode);
+	state.theme = parseThemePreference(display.theme);
+	state.enterToSend = typeof display.enterToSend === "boolean" ? display.enterToSend : null;
+	if (typeof display.showThinking === "boolean") state.showThinking = display.showThinking;
+	if (typeof display.showToolCalls === "boolean") state.showToolCalls = display.showToolCalls;
 }

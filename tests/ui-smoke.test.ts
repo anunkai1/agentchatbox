@@ -4158,4 +4158,236 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.close();
 		}
 	});
+
+	it("supports code block copy headers, image lightbox, slash button, dynamic spellcheck, smart Enter, themes, quick switcher, and mounted shell transitions", async () => {
+		const { page } = await openPage("/");
+		await page.route(/\/uploads\/sample\.svg$/, (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "image/svg+xml",
+				body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#2689c7"/></svg>',
+			}),
+		);
+		const sentPrompts: string[] = [];
+		let activeSession = "ux-s1";
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "init" || message.type === "resumeSession") {
+					if (message.type === "resumeSession") activeSession = message.sessionId;
+					ws.send(
+						JSON.stringify({
+							type: "ready",
+							sessionId: activeSession,
+							modelId: "glm-5.2",
+							provider: "zai",
+							thinkingLevel: "off",
+						}),
+					);
+					ws.send(
+						JSON.stringify({
+							type: "sessions",
+							sessions: [
+								{
+									id: "ux-s1",
+									cwd: "/tmp",
+									createdAt: "2026-01-01T00:00:00.000Z",
+									modifiedAt: "2026-01-02T00:00:00.000Z",
+									title: "First UX Chat",
+									messageCount: 2,
+								},
+								{
+									id: "ux-s2",
+									cwd: "/tmp",
+									createdAt: "2026-01-01T00:00:00.000Z",
+									modifiedAt: "2026-01-03T00:00:00.000Z",
+									title: "Second UX Chat",
+									messageCount: 1,
+								},
+							],
+						}),
+					);
+					ws.send(
+						JSON.stringify({
+							type: "transcript",
+							sessionId: activeSession,
+							messages:
+								activeSession === "ux-s1"
+									? [
+											{ role: "user", content: [{ type: "text", text: "Show code and image" }] },
+											{
+												role: "assistant",
+												content: [
+													{
+														type: "text",
+														text: "```ts\nconst answer = 42;\n```\n\n![Sample graphic](/uploads/sample.svg)",
+													},
+												],
+											},
+										]
+									: [{ role: "user", content: [{ type: "text", text: "Hello second chat" }] }],
+						}),
+					);
+					return;
+				}
+				if (message.type === "prompt") {
+					sentPrompts.push(message.text);
+					ws.send(
+						JSON.stringify({ type: "sendResult", requestId: message.requestId, accepted: true }),
+					);
+				}
+			});
+		});
+
+		try {
+			await page.reload();
+			// 1. Code block language tag + Copy button
+			await expect.poll(() => page.locator(".code-block .code-block-lang").innerText()).toBe("ts");
+			await page.locator(".code-block .code-copy-btn").click();
+			await expect
+				.poll(() => page.locator(".code-block .code-copy-btn").innerText())
+				.toContain("Copied");
+
+			// 2. Click-to-zoom image lightbox
+			await page.locator(".row-assistant .markdown img").click();
+			const lightbox = page.locator("#image-lightbox");
+			await expect.poll(() => lightbox.count()).toBe(1);
+			const zoomBtn = lightbox.getByRole("button", { name: "Zoom 100%" });
+			await zoomBtn.click();
+			await expect.poll(() => lightbox.locator(".lightbox-img.is-zoomed").count()).toBe(1);
+			await page.keyboard.press("Escape");
+			await expect.poll(() => lightbox.count()).toBe(0);
+
+			// 3. Dynamic spellcheck/autocapitalize + composer `/` button
+			const input = page.locator("#input");
+			expect(await input.getAttribute("spellcheck")).toBe("true");
+			expect(await input.getAttribute("autocapitalize")).toBe("sentences");
+			await page.locator("#slash-btn").click();
+			await expect.poll(() => page.locator("#command-palette").count()).toBe(1);
+			expect(await input.inputValue()).toBe("/");
+			expect(await input.getAttribute("spellcheck")).toBe("false");
+			expect(await input.getAttribute("autocapitalize")).toBe("off");
+			await input.fill("Normal prose");
+			expect(await input.getAttribute("spellcheck")).toBe("true");
+
+			// 4. Smart Enter on desktop pointer: Shift+Enter adds newline, Enter sends
+			await input.fill("Line one");
+			await input.press("Shift+Enter");
+			await input.type("Line two");
+			expect(await input.inputValue()).toBe("Line one\nLine two");
+			await input.press("Enter");
+			await expect.poll(() => sentPrompts.length).toBe(1);
+			expect(sentPrompts[0]).toBe("Line one\nLine two");
+
+			// Toggle "Enter key sends" off in Settings so plain Enter inserts newline
+			await page.locator(".header-overflow").click();
+			const settings = page.getByRole("dialog", { name: "Settings" });
+			await settings.getByRole("button", { name: /Enter key sends/ }).click();
+			await settings.getByRole("button", { name: /Theme/ }).click();
+			const themeDialog = page.getByRole("dialog", { name: "Theme" });
+			await themeDialog.locator(".model-row", { hasText: /^Light/ }).click();
+			await expect
+				.poll(() => page.evaluate(() => document.documentElement.getAttribute("data-theme")))
+				.toBe("light");
+
+			await input.fill("No auto send");
+			await input.press("Enter");
+			expect(await input.inputValue()).toBe("No auto send\n");
+			expect(sentPrompts.length).toBe(1);
+
+			// 5. Shell stays mounted across chat switches via Quick Switcher (Ctrl+K)
+			await page.evaluate(() => {
+				(window as unknown as { __sidebarRef?: Element | null }).__sidebarRef =
+					document.getElementById("sidebar");
+			});
+			await page.keyboard.press("Control+k");
+			const switcher = page.locator("#quick-switcher-modal");
+			await expect.poll(() => switcher.count()).toBe(1);
+			await switcher.locator(".quick-switcher-input").fill("Second UX Chat");
+			await switcher.locator(".quick-switcher-input").press("Enter");
+			await expect.poll(() => page.locator("#messages").innerText()).toContain("Hello second chat");
+			const sameSidebarNode = await page.evaluate(
+				() =>
+					(window as unknown as { __sidebarRef?: Element | null }).__sidebarRef ===
+					document.getElementById("sidebar"),
+			);
+			expect(sameSidebarNode).toBe(true);
+
+			// 6. Ctrl+B toggles sidebar collapsed state
+			const beforeCollapsed = await page.evaluate(() =>
+				document.getElementById("sidebar")?.classList.contains("collapsed"),
+			);
+			await page.keyboard.press("Control+b");
+			const afterCollapsed = await page.evaluate(() =>
+				document.getElementById("sidebar")?.classList.contains("collapsed"),
+			);
+			expect(afterCollapsed).toBe(!beforeCollapsed);
+
+			// 7. Theme persists across reload
+			await page.reload();
+			await expect
+				.poll(() => page.evaluate(() => document.documentElement.getAttribute("data-theme")))
+				.toBe("light");
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("uses the 44x44 kebab button instead of cramped 20px inline actions on narrow viewports", async () => {
+		const { page } = await openPage("/");
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+			ws.onMessage((raw) => {
+				const message = JSON.parse(String(raw));
+				if (message.type !== "init") return;
+				ws.send(
+					JSON.stringify({
+						type: "ready",
+						sessionId: "mob-1",
+						modelId: "glm-5.2",
+						provider: "zai",
+						thinkingLevel: "off",
+					}),
+				);
+				ws.send(
+					JSON.stringify({
+						type: "sessions",
+						sessions: [
+							{
+								id: "mob-1",
+								cwd: "/tmp",
+								createdAt: "2026-01-01T00:00:00.000Z",
+								modifiedAt: "2026-01-02T00:00:00.000Z",
+								title: "Mobile Chat",
+								messageCount: 1,
+							},
+						],
+					}),
+				);
+			});
+		});
+		try {
+			await page.reload();
+			await page.getByRole("button", { name: "Open sidebar" }).click();
+			const row = page.locator('.session-item[data-session-id="mob-1"]');
+			await expect.poll(() => row.count()).toBe(1);
+			const metrics = await row.evaluate((el) => {
+				const actions = el.querySelector<HTMLElement>(".session-item-actions");
+				const more = el.querySelector<HTMLElement>(".session-more");
+				const rect = more?.getBoundingClientRect();
+				return {
+					actionsDisplay: actions ? getComputedStyle(actions).display : null,
+					moreDisplay: more ? getComputedStyle(more).display : null,
+					moreWidth: rect?.width ?? 0,
+					moreHeight: rect?.height ?? 0,
+				};
+			});
+			expect(metrics.actionsDisplay).toBe("none");
+			expect(metrics.moreDisplay).toBe("flex");
+			expect(metrics.moreWidth).toBeGreaterThanOrEqual(44);
+			expect(metrics.moreHeight).toBeGreaterThanOrEqual(44);
+		} finally {
+			await page.close();
+		}
+	});
 });

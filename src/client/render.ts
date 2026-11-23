@@ -43,6 +43,7 @@ import {
 } from "./icons.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { mountNotices, type NoticeOptions, refreshNotices, showNotice } from "./notices.js";
+import { effectiveEnterToSend } from "./prefs.js";
 import { services } from "./services.js";
 import {
 	brisbaneDayKey,
@@ -59,9 +60,10 @@ import {
 	visibleSessionRows,
 } from "./session-tree.js";
 import { GLOBAL_PROJECT_ID, type PersistedMessage, state, voiceRewriteLabel } from "./state.js";
+import { applyTheme } from "./theme.js";
 import { formatAbsolute, formatRelative } from "./time.js";
 import { forkPath, sessionPath } from "./url.js";
-import { createVoiceBar } from "./voice-bar.js";
+import { createVoiceBar, isVoiceBarVisible } from "./voice-bar.js";
 import { VOICE_MODE_DESCRIPTIONS, VOICE_MODE_LABELS } from "./voice-mode.js";
 
 export function autoSize(): void {
@@ -99,21 +101,26 @@ export function setStreaming(s: boolean): void {
 	// optical centre (see SEND_ICON / STEER_ICON in icons.ts).
 	sendBtn.innerHTML = s ? STEER_ICON : SEND_ICON;
 	sendBtn.setAttribute("aria-label", s ? "Queue instruction" : "Send message");
+	const sendShortcut = effectiveEnterToSend()
+		? "Enter"
+		: typeof navigator !== "undefined" && navigator.platform.includes("Mac")
+			? "⌘+Enter"
+			: "Ctrl+Enter";
 	sendBtn.title = s
-		? "Queue instruction — delivered after the current turn (⌘/Ctrl+Enter)"
-		: "Send message (⌘/Ctrl+Enter)";
+		? `Queue instruction — delivered after the current turn (${sendShortcut})`
+		: `Send message (${sendShortcut})`;
 	const stopBtn = $<HTMLButtonElement>("#stop-btn");
 	stopBtn.hidden = !s && !claudeRunActive();
 	// Context-aware label mirroring the CLI: while a retry backoff is
 	// counting down, Stop cancels the retry ("interrupt to cancel"); a
 	// compaction is likewise abortable through pi's normal abort path.
 	stopBtn.title = state.retry
-		? "Cancel retry backoff"
+		? "Cancel retry backoff (Esc)"
 		: state.compaction
-			? "Stop context cleanup"
+			? "Stop context cleanup (Esc)"
 			: !s && claudeRunActive()
-				? "Stop the Claude Code task"
-				: "Stop the current run";
+				? "Stop the Claude Code task (Esc)"
+				: "Stop the current run (Esc)";
 	startOrStopWorkingTick(s);
 	refreshStatus();
 }
@@ -420,8 +427,34 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 	return el("div", { class: "row row-error" }, el("div", { class: "body" }, m.text));
 }
 
-/** Apply the current per-session display preferences to already-rendered rows. */
+/** Enable spellcheck & autocapitalisation for normal text, disable while typing a /slash command. */
+export function syncInputWritingAttrs(input: HTMLTextAreaElement | null): void {
+	if (!input) return;
+	const isSlash = input.value.startsWith("/");
+	input.spellcheck = !isSlash;
+	input.setAttribute("autocapitalize", isSlash ? "off" : "sentences");
+}
+
+function syncComposerSendHints(): void {
+	const input = document.querySelector<HTMLTextAreaElement>("#input");
+	const sendBtn = document.querySelector<HTMLButtonElement>("#send-btn");
+	const enterSends = effectiveEnterToSend();
+	const modKey =
+		typeof navigator !== "undefined" && navigator.platform.includes("Mac") ? "⌘" : "Ctrl";
+	if (input) {
+		input.placeholder = enterSends
+			? "Send a message  ·  Shift+Enter for new line"
+			: `Send a message  ·  ${modKey}+Enter to send`;
+	}
+	if (sendBtn && !state.isStreaming) {
+		sendBtn.title = enterSends ? "Send (Enter)" : `Send (${modKey}+Enter)`;
+	}
+}
+
+/** Apply the current per-session and device display preferences to the UI. */
 export function syncDisplayPreferences(): void {
+	applyTheme(state.theme);
+	syncComposerSendHints();
 	const thinkingHidden = !state.showThinking;
 	for (const node of document.querySelectorAll<HTMLElement>("#messages .thinking")) {
 		node.classList.toggle("display-hidden", thinkingHidden);
@@ -1682,20 +1715,13 @@ export function refreshStatus(): void {
 	// controls remain reachable beside the metadata without adding height.
 	const coreEl = $<HTMLSpanElement>("#status-core");
 	if (coreEl) {
-		// Core slot — stable info: model · think level · context fill.
-		// Context-window fill is the SAME number the token pill represents
-		// (state.contextUsage.tokens / contextWindow), NOT cumulative session
-		// usage — cumulative input+output only ever grows and diverges from
-		// the bar after a compaction, which made the number and the bar
-		// disagree. They reset together when pi compacts. `tokens` is null
-		// right after a compaction (pi can't size the context until the next
-		// reply) → show `?`.
-		const modelTitle = `Pinned models (/model) — current id: ${state.currentModelId ?? "…"}`;
+		// Core slot — clickable chips: ♥ pinned model · think level · visual context meter (click to compact).
+		const modelTitle = `Pinned (♥) models — click to switch quickly (current id: ${state.currentModelId ?? "…"})`;
 		const core = [
-			`<button type="button" class="status-core-btn" data-status-model title="${esc(modelTitle)}" aria-label="Choose pinned model">${esc(modelLabel)}</button>`,
-			`<button type="button" class="status-core-btn" data-status-think title="Thinking (/think)" aria-label="Choose thinking level">think: ${esc(state.currentThinking)}</button>`,
-			esc(contextFillLabel()),
-		].join(" · ");
+			`<button type="button" class="status-core-btn status-model-chip" data-status-model title="${esc(modelTitle)}" aria-label="Choose pinned model">${esc(modelLabel)}</button>`,
+			`<button type="button" class="status-core-btn status-think-chip" data-status-think title="Thinking level (/think)" aria-label="Choose thinking level">think: ${esc(state.currentThinking)}</button>`,
+			contextFillHtml(),
+		].join(" ");
 		if (voiceSlotHtml.get(coreEl) !== core) {
 			voiceSlotHtml.set(coreEl, core);
 			coreEl.innerHTML = core;
@@ -1706,14 +1732,10 @@ export function refreshStatus(): void {
 
 	paintStatusDynamic();
 
-	// Voice slot — transport controls (pause/resume + stop, or the
-	// synthesizing stop). Rendered as clickable buttons (not inert text) so
-	// they're always reachable in a long session without scrolling back to
-	// the message that started playback — the status bar never scrolls away.
-	// The slot is flex-shrink: 0 and never truncates, so the stop button
-	// can't be cut off. Clicks are handled by the delegated listener on
-	// #status-bar (set up once in renderShell) so they survive this
-	// innerHTML rebuild.
+	// Voice slot — transport controls when the seekable #voice-bar above the
+	// composer is NOT visible (e.g. while initial synthesis is in flight before
+	// audio starts, or fallback). When #voice-bar is already visible, suppress
+	// the duplicate play/pause/stop buttons here to keep the footer clean.
 	const voiceEl = $<HTMLSpanElement>("#status-voice");
 	if (voiceEl) {
 		let html = "";
@@ -1724,14 +1746,13 @@ export function refreshStatus(): void {
 			state.pendingVoiceVariant
 		) {
 			if (state.audioPlaying || state.audioPaused) {
-				// Playback active or paused — show pause/resume + stop controls.
-				// The toggle button swaps between pause (playing) and play (paused); the
-				// stop button (red) is always present to fully halt + clear.
-				const toggle = state.audioPaused
-					? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback" aria-label="Resume voice playback">${PLAY_ICON}</button>`
-					: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback" aria-label="Pause voice playback">${PAUSE_ICON}</button>`;
-				const label = state.audioPaused ? "‖ paused" : "♪ playing";
-				html = `${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Stop all voice playback">${STOP_ICON}</button> ${esc(label)}`;
+				if (!isVoiceBarVisible()) {
+					const toggle = state.audioPaused
+						? `<button class="status-voice-ctrl" data-voice-resume title="Resume playback" aria-label="Resume voice playback">${PLAY_ICON}</button>`
+						: `<button class="status-voice-ctrl" data-voice-pause title="Pause playback" aria-label="Pause voice playback">${PAUSE_ICON}</button>`;
+					const label = state.audioPaused ? "‖ paused" : "♪ playing";
+					html = `${toggle}<button class="status-stop-voice" data-stop-voice title="Stop all voice" aria-label="Stop all voice playback">${STOP_ICON}</button> ${esc(label)}`;
+				}
 			} else {
 				// Synthesizing — nothing to pause yet (no audio loaded). Keep the
 				// single stop button with a spinner so the user can cancel.
@@ -1754,7 +1775,7 @@ export function refreshStatus(): void {
 	// Pro"), otherwise fall back to the raw id. Keep the raw id in the
 	// title attribute for hover-tooltips.
 	mp.textContent = modelLabel;
-	mp.title = `Model (/model) — current id: ${state.currentModelId ?? "…"}`;
+	mp.title = `All models (/model) — current id: ${state.currentModelId ?? "…"}`;
 }
 
 /**
@@ -1883,19 +1904,21 @@ export function setStatusMessage(text: string): void {
 	if (dynEl) dynEl.textContent = "";
 }
 
-/** Compact text label for the status-line token pill. Reads
- *  `state.contextUsage` (seeded from pi's `get_session_stats` on every
- *  `ready`) so it survives a page refresh — unlike the old cumulative
- *  count, which was accumulated client-side from live events and reset
- *  to 0 on every load. Returns `?` when pi can't size the context yet
- *  (right after a compaction, before the next reply). */
-function contextFillLabel(): string {
+/** Visual context-window meter chip (click to compact). Shifts amber at >=75% and red at >=90%. */
+function contextFillHtml(): string {
+	const esc = escapeHtml;
 	const cu = state.contextUsage;
-	if (!cu || cu.contextWindow <= 0) return "? tok";
-	if (cu.tokens == null || cu.percent == null) return "? tok";
+	if (!cu || cu.contextWindow <= 0 || cu.tokens == null || cu.percent == null) {
+		return `<button type="button" class="status-core-btn status-context-btn" data-status-compact title="Context usage — click to compact (/compact)" aria-label="Compact conversation context"><span class="context-meter-track" aria-hidden="true"><span class="context-meter-fill" style="width:0%"></span></span><span class="context-meter-text">? tok</span></button>`;
+	}
+	const pct = Math.max(0, Math.min(100, cu.percent));
 	const usedK = Math.round(cu.tokens / 1000);
 	const winK = Math.round(cu.contextWindow / 1000);
-	return `${usedK}k/${winK}k tok (${cu.percent.toFixed(0)}%)`;
+	const tone = pct >= 90 ? " is-danger" : pct >= 75 ? " is-warn" : "";
+	const label = `${usedK}k/${winK}k (${cu.percent.toFixed(0)}%)`;
+	const title = `Context: ${cu.tokens.toLocaleString()} / ${cu.contextWindow.toLocaleString()} tokens (${cu.percent.toFixed(0)}%) — click to compact (/compact)`;
+	const aria = `Context ${cu.percent.toFixed(0)}% full. Click to compact conversation.`;
+	return `<button type="button" class="status-core-btn status-context-btn${tone}" data-status-compact title="${esc(title)}" aria-label="${esc(aria)}"><span class="context-meter-track" aria-hidden="true"><span class="context-meter-fill" style="width:${pct.toFixed(1)}%"></span></span><span class="context-meter-text">${esc(label)}</span></button>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2151,6 +2174,8 @@ export interface ShellHandlers {
 	openModelPicker: () => void;
 	openPinnedModelPicker?: () => void;
 	openThinkPicker: () => void;
+	openCompactDialog?: () => void;
+	openQuickSwitcher?: (initialQuery?: string) => void;
 	openOverflowMenu: () => void;
 	/** Toggle Voice mode from the header pill (mirrors the Settings row). */
 	toggleVoiceMode: () => void;
@@ -2257,34 +2282,193 @@ function showStatusDetail(detail: string): void {
 	mountModal(overlay, box, { label: "Status details" });
 }
 
-export function renderShell(): void {
-	if (!shellHandlers) {
-		throw new Error(
-			"renderShell called before registerShellHandlers — main.ts must wire the UI handlers first",
-		);
+/** Fullscreen image lightbox with 1:1 zoom toggle and open/download action. */
+function openImageLightbox(img: HTMLImageElement): void {
+	const src = img.currentSrc || img.getAttribute("src");
+	if (!src) return;
+	const alt = img.getAttribute("alt")?.trim() || src.split("/").pop()?.split("?")[0] || "Image";
+	const overlay = el("div", { class: "modal-overlay lightbox-overlay", id: "image-lightbox" });
+	const box = el("div", { class: "modal-box lightbox-box" });
+	const stage = el("div", { class: "lightbox-stage" });
+	const preview = el("img", {
+		class: "lightbox-img",
+		src,
+		alt,
+		draggable: false,
+	}) as HTMLImageElement;
+	stage.append(preview);
+
+	let zoomed = false;
+	const zoomBtn = el(
+		"button",
+		{
+			class: "btn lightbox-btn",
+			type: "button",
+			title: "Toggle 100% zoom",
+		},
+		"Zoom 100%",
+	) as HTMLButtonElement;
+	const setZoom = (next: boolean) => {
+		zoomed = next;
+		stage.classList.toggle("is-zoomed", zoomed);
+		preview.classList.toggle("is-zoomed", zoomed);
+		zoomBtn.textContent = zoomed ? "Fit to screen" : "Zoom 100%";
+		zoomBtn.setAttribute("aria-pressed", String(zoomed));
+	};
+	zoomBtn.addEventListener("click", () => setZoom(!zoomed));
+	preview.addEventListener("click", () => setZoom(!zoomed));
+
+	const openLink = el(
+		"a",
+		{
+			class: "btn lightbox-btn",
+			href: src,
+			target: "_blank",
+			rel: "noopener noreferrer",
+			download: "",
+			title: "Download or open original image",
+		},
+		"Download",
+	);
+	const toolbar = el(
+		"div",
+		{ class: "lightbox-toolbar" },
+		el("span", { class: "lightbox-caption", title: alt }, alt),
+		el("div", { class: "lightbox-actions" }, zoomBtn, openLink),
+	);
+	box.append(stage, toolbar);
+	mountModal(overlay, box, { label: `Image preview: ${alt}` });
+}
+
+let windowDndWired = false;
+let windowDragDepth = 0;
+
+function setDropOverlayVisible(visible: boolean): void {
+	let overlay = document.getElementById("drop-overlay");
+	if (visible) {
+		if (!overlay) {
+			overlay = el(
+				"div",
+				{
+					class: "drop-overlay",
+					id: "drop-overlay",
+					"aria-live": "polite",
+				},
+				el(
+					"div",
+					{ class: "drop-overlay-card" },
+					el("div", { class: "drop-overlay-icon", "aria-hidden": "true" }, "↥"),
+					el("div", { class: "drop-overlay-title" }, "Drop files to attach"),
+					el(
+						"div",
+						{ class: "drop-overlay-sub" },
+						"Images and files will attach to your current message",
+					),
+				),
+			);
+			document.body.append(overlay);
+		}
+		overlay.hidden = false;
+	} else if (overlay) {
+		overlay.hidden = true;
 	}
-	// Reset transient audio state BEFORE wiping the DOM. TTS playback lives on
-	// the client's shared AudioContext (voice.ts) and is NOT torn down by
-	// removing DOM nodes, so a re-render (session switch, reconnect) has to stop
-	// it explicitly — otherwise audio would keep playing against a page whose
-	// message is gone, while the status bar still claimed "♪ playing". Guarded
-	// on there being something to stop: at boot the shell doesn't exist yet, and
-	// stopping would repaint a status bar that has no elements.
+}
+
+function wireWindowFileDrop(): void {
+	if (windowDndWired || typeof window === "undefined") return;
+	windowDndWired = true;
+	const hasFiles = (e: DragEvent) => Boolean(e.dataTransfer?.types.includes("Files"));
+	window.addEventListener("dragenter", (e) => {
+		if (!hasFiles(e)) return;
+		e.preventDefault();
+		windowDragDepth++;
+		setDropOverlayVisible(true);
+	});
+	window.addEventListener("dragover", (e) => {
+		if (!hasFiles(e)) return;
+		e.preventDefault();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+	});
+	window.addEventListener("dragleave", (e) => {
+		if (windowDragDepth <= 0) return;
+		if (!e.relatedTarget || windowDragDepth === 1) {
+			windowDragDepth = Math.max(0, windowDragDepth - 1);
+		} else {
+			windowDragDepth = Math.max(0, windowDragDepth - 1);
+		}
+		if (windowDragDepth === 0) setDropOverlayVisible(false);
+	});
+	window.addEventListener("drop", (e) => {
+		windowDragDepth = 0;
+		setDropOverlayVisible(false);
+		if (!e.dataTransfer?.files?.length) return;
+		e.preventDefault();
+		void shellHandlers?.handleDrop(e);
+	});
+	window.addEventListener("blur", () => {
+		windowDragDepth = 0;
+		setDropOverlayVisible(false);
+	});
+}
+
+function resetTransientShellAudioAndNotices(): void {
 	if (state.audioPlaying || state.audioPaused || state.ttsInFlight > 0) {
-		shellHandlers.stopAllVoice();
+		shellHandlers?.stopAllVoice();
 	}
 	state.audioPlaying = false;
 	state.audioPaused = false;
 	state.ttsInFlight = 0;
 	if (statusNoticeTimer) clearTimeout(statusNoticeTimer);
 	statusNoticeTimer = null;
+	setStatusActivity("status-notice", "");
+	setStatusActivity("status-voice-detail", "");
+}
+
+/**
+ * Update the mounted chat shell in place when switching sessions or replaying a
+ * transcript. Keeps #sidebar, #header, #composer, focus, and sidebar scroll
+ * position intact instead of tearing down #app.
+ */
+export function refreshChatSurface(): void {
+	if (!document.getElementById("messages") || !document.getElementById("sidebar")) {
+		renderShell();
+		return;
+	}
+	resetTransientShellAudioAndNotices();
+	const titleEl = document.getElementById("title");
+	if (titleEl) titleEl.textContent = state.title;
+	renderHistory();
+	clearAttachmentPreviews();
+	restoreAttachmentPreviews();
+	for (const row of document.querySelectorAll<HTMLElement>(".session-item")) {
+		const active = Boolean(state.sessionId && row.dataset.sessionId === state.sessionId);
+		row.classList.toggle("active", active);
+		const link = row.querySelector<HTMLAnchorElement>(".session-item-link");
+		if (link) {
+			if (active) link.setAttribute("aria-current", "page");
+			else link.removeAttribute("aria-current");
+		}
+	}
+	refreshStatus();
+	syncDisplayPreferences();
+	syncInputWritingAttrs(document.querySelector<HTMLTextAreaElement>("#input"));
+}
+
+export function renderShell(): void {
+	if (!shellHandlers) {
+		throw new Error(
+			"renderShell called before registerShellHandlers — main.ts must wire the UI handlers first",
+		);
+	}
+	resetTransientShellAudioAndNotices();
 	// Keep the attached voice drawer (and its live iframe/mic) mounted across
 	// normal transcript renders. Reparenting an iframe would reload it.
 	for (const child of [...document.body.children]) {
-		if (child.id !== "relay-voice-ui") child.remove();
+		if (child.id !== "relay-voice-ui" && child.id !== "drop-overlay") child.remove();
 	}
 	const root = el("div", { id: "app" });
 	document.body.prepend(root);
+	wireWindowFileDrop();
 
 	// ── Sidebar ────────────────────────────────────────────────────
 	const sidebar = el("aside", {
@@ -2579,11 +2763,40 @@ export function renderShell(): void {
 		if (!programmaticScroll) resetJumpNav();
 		updateJumpToBottomFabState();
 	});
+	// Delegated clicks inside the transcript: 1-click code block copy and
+	// click-to-zoom lightbox on rendered images.
+	messagesWrap.addEventListener("click", (e) => {
+		const target = e.target as HTMLElement | null;
+		if (!target) return;
+		const copyBtn = target.closest<HTMLButtonElement>(".code-copy-btn");
+		if (copyBtn) {
+			const block = copyBtn.closest(".code-block");
+			const text =
+				block?.querySelector("pre code")?.textContent ?? block?.querySelector("pre")?.textContent;
+			if (text == null || !services.copyText) return;
+			void services.copyText(text).then((ok) => {
+				if (!ok) {
+					showToast("Clipboard access denied.", "error");
+					return;
+				}
+				copyBtn.classList.add("is-copied");
+				const label = copyBtn.querySelector<HTMLElement>(".code-copy-label");
+				if (label) label.textContent = "Copied";
+				setTimeout(() => {
+					copyBtn.classList.remove("is-copied");
+					if (label) label.textContent = "Copy";
+				}, 1800);
+			});
+			return;
+		}
+		const img = target.closest<HTMLImageElement>(".markdown img");
+		if (img && !img.closest("a[href]")) {
+			openImageLightbox(img);
+		}
+	});
 
-	// Composer — pill with attach + voice buttons on the left, textarea
-	// in the middle, and a green up-arrow send button on the right.
-	// The old globe/reasoning buttons were removed because they had no
-	// direct effect (they opened other menus instead).
+	// Composer — pill with attach, slash command + voice buttons on the left,
+	// textarea in the middle, and send/stop button on the right.
 	const composerWrap = el("div", { class: "composer-wrap" });
 	const notices = el("div", {
 		class: "composer-notices",
@@ -2611,6 +2824,34 @@ export function renderShell(): void {
 				onclick: () => $<HTMLInputElement>("#file-input").click(),
 			},
 			"+",
+		),
+		el(
+			"button",
+			{
+				class: "icon-btn composer-slash-btn",
+				id: "slash-btn",
+				type: "button",
+				title: "Slash commands (/)",
+				"aria-label": "Open slash commands",
+				onclick: () => {
+					const ta = document.querySelector<HTMLTextAreaElement>("#input");
+					if (!ta) return;
+					if (ta.value.trim() && !ta.value.startsWith("/")) {
+						// Preserve an in-progress message draft by opening the switcher on "/"
+						shellHandlers?.openQuickSwitcher?.("/");
+						return;
+					}
+					if (ta.value === "/") {
+						ta.value = "";
+					} else if (!ta.value.startsWith("/")) {
+						ta.value = "/";
+					}
+					ta.focus();
+					ta.setSelectionRange(ta.value.length, ta.value.length);
+					ta.dispatchEvent(new Event("input", { bubbles: true }));
+				},
+			},
+			"/",
 		),
 		el("button", {
 			class: "icon-btn",
@@ -2642,8 +2883,8 @@ export function renderShell(): void {
 			} to send`,
 			"aria-label": "Message",
 			autocomplete: "off",
-			autocapitalize: "off",
-			spellcheck: false,
+			autocapitalize: "sentences",
+			spellcheck: true,
 			"aria-autocomplete": "list",
 			"aria-expanded": "false",
 		}),
@@ -2654,7 +2895,7 @@ export function renderShell(): void {
 				class: "send-btn",
 				id: "send-btn",
 				type: "button",
-				title: "Send (⌘/Ctrl+Enter)",
+				title: "Send",
 				"aria-label": "Send message",
 				html: SEND_ICON,
 				onclick: () => shellHandlers?.handleSend(),
@@ -2710,10 +2951,8 @@ export function renderShell(): void {
 		el("span", { class: "status-slot status-dynamic", id: "status-dynamic" }),
 	);
 	statusBar.append(summary, el("span", { class: "status-voice", id: "status-voice" }), activity);
-	// Delegated click handler for the stop-voice button that refreshStatus()
-	// injects into the status bar as innerHTML. Delegation (one listener on
-	// the container, surviving innerHTML rebuilds) beats re-binding on every
-	// status tick. Matches any click bubbling from the [data-stop-voice] btn.
+	// Delegated click handler for interactive chips and voice controls injected
+	// into the status bar as innerHTML.
 	statusBar.addEventListener("click", (e) => {
 		const target = e.target as HTMLElement;
 		if (target.closest("[data-stop-voice]")) {
@@ -2727,6 +2966,9 @@ export function renderShell(): void {
 			else shellHandlers?.openModelPicker();
 		} else if (target.closest("[data-status-think]")) {
 			shellHandlers?.openThinkPicker();
+		} else if (target.closest("[data-status-compact]")) {
+			if (shellHandlers?.openCompactDialog) shellHandlers.openCompactDialog();
+			else shellHandlers?.handleSlash("compact");
 		}
 	});
 	main.append(statusBar);
@@ -2740,14 +2982,17 @@ export function renderShell(): void {
 	const input = $<HTMLTextAreaElement>("#input");
 	input.addEventListener("keydown", (e) => {
 		if (shellHandlers?.handleSlashMenuKeydown(e)) return;
-		// Enter always inserts a newline. Sending is via the send button
-		// (or Ctrl/Cmd+Enter for power users) — plain Enter on the soft
-		// Android keyboard doesn't have a Shift modifier, so the old
-		// "Enter sends, Shift+Enter newline" rule was unfriendly to
-		// mobile users who tapped return expecting a line break.
-		if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-			e.preventDefault();
-			shellHandlers?.handleSend();
+		if (e.key === "Enter" && !e.isComposing) {
+			if (e.ctrlKey || e.metaKey) {
+				e.preventDefault();
+				shellHandlers?.handleSend();
+				return;
+			}
+			if (!e.shiftKey && !e.altKey && effectiveEnterToSend()) {
+				e.preventDefault();
+				shellHandlers?.handleSend();
+				return;
+			}
 		} else if (
 			e.key === "ArrowUp" &&
 			!e.altKey &&
@@ -2769,20 +3014,14 @@ export function renderShell(): void {
 	});
 	input.addEventListener("input", () => {
 		autoSize();
+		syncInputWritingAttrs(input);
 		shellHandlers?.persistDraft(input.value);
 		shellHandlers?.showSlashMenu();
 	});
-	// Paste files (e.g. screenshots copied to clipboard) and drag-and-drop
-	// files route through the same attach pipeline as the file picker.
+	// Paste files (e.g. screenshots copied to clipboard) routes through the
+	// same attach pipeline as the file picker; file drops are handled window-wide.
 	input.addEventListener("paste", (e) => {
 		void shellHandlers?.handlePaste(e);
-	});
-	input.addEventListener("dragover", (e) => {
-		// A dragover must be canceled for the subsequent drop event to fire.
-		if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
-	});
-	input.addEventListener("drop", (e) => {
-		void shellHandlers?.handleDrop(e);
 	});
 	$("#model-picker").addEventListener("click", () => shellHandlers?.openModelPicker());
 
@@ -2795,6 +3034,7 @@ export function renderShell(): void {
 	// The header pill is built "off"; repaint it (and the mic) from state, since
 	// a rebuild after the session's prefs were applied would otherwise lose it.
 	syncDisplayPreferences();
+	syncInputWritingAttrs(input);
 }
 
 // ---------------------------------------------------------------------------
@@ -2869,17 +3109,18 @@ export function refreshWelcomeSuggestions(): void {
  * Toggle the sidebar open/closed. On mobile, a dim overlay is shown when
  * the sidebar is open so taps outside dismiss it.
  */
-function toggleSidebar(collapse: boolean): void {
+export function toggleSidebar(collapse?: boolean): void {
 	const sidebar = document.getElementById("sidebar");
 	if (!sidebar) return;
-	sidebar.classList.toggle("collapsed", collapse);
-	sidebar.setAttribute("aria-hidden", String(collapse));
+	const nextCollapsed = collapse ?? !sidebar.classList.contains("collapsed");
+	sidebar.classList.toggle("collapsed", nextCollapsed);
+	sidebar.setAttribute("aria-hidden", String(nextCollapsed));
 	const menuToggle = document.getElementById("menu-toggle");
-	menuToggle?.setAttribute("aria-expanded", String(!collapse));
+	menuToggle?.setAttribute("aria-expanded", String(!nextCollapsed));
 
 	// Mobile: manage the dim overlay
 	let dim = document.querySelector<HTMLElement>(".sidebar-dim");
-	if (!collapse) {
+	if (!nextCollapsed) {
 		if (!dim) {
 			dim = el("div", {
 				class: "sidebar-dim",

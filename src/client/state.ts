@@ -12,6 +12,7 @@
  */
 
 import type { ContextUsage, PiCommand, ProjectSummary, ThinkingLevel } from "../shared/protocol.js";
+import type { ThemePreference } from "./theme.js";
 import type { VoiceMode } from "./voice-mode.js";
 
 /**
@@ -187,6 +188,11 @@ export interface AppState {
 	showToolCalls: boolean;
 	/** Device-wide: off, auto-submit only (V), or auto-submit and speak replies (V+). */
 	voiceMode: VoiceMode;
+	/** Device-wide colour theme: pure black, soft dark, light, or OS system. */
+	theme: ThemePreference;
+	/** Device-wide Enter key behaviour: true = Enter sends (Shift+Enter newline),
+	 * false = Enter inserts newline (Ctrl/Cmd+Enter sends), null = auto (desktop sends, touch inserts newline). */
+	enterToSend: boolean | null;
 	/**
 	 * Human-readable label for the current image-generation model, shown
 	 * in the status overflow row. Updated by the pi-venice-image
@@ -377,6 +383,8 @@ export const state: AppState = {
 	showThinking: false,
 	showToolCalls: false,
 	voiceMode: "off",
+	theme: "black",
+	enterToSend: null,
 	pendingModelSet: null,
 	uploadedImages: new Map(),
 	uploadedFiles: new Map(),
