@@ -22,7 +22,9 @@ import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
 import {
 	CANCEL_ICON,
 	CLOCK_ICON,
+	COLLAPSE_ICON,
 	COMPOSER_STOP_ICON,
+	EXPAND_ICON,
 	FOLDER_ICON,
 	iconEl,
 	LONG_ICON,
@@ -42,6 +44,9 @@ import {
 	STEER_ICON,
 	STOP_ICON,
 	TRASH_ICON,
+	VOICE_MODE_OFF_ICON,
+	VOICE_MODE_REPLY_ICON,
+	VOICE_MODE_SEND_ICON,
 } from "./icons.js";
 import { attachLightboxGestures } from "./lightbox-gestures.js";
 import { setRichText, setUserRichText } from "./linkify.js";
@@ -69,15 +74,50 @@ import { applyTheme } from "./theme.js";
 import { formatAbsolute, formatRelative } from "./time.js";
 import { forkPath, sessionPath } from "./url.js";
 import { createVoiceBar, isVoiceBarVisible } from "./voice-bar.js";
-import { VOICE_MODE_DESCRIPTIONS, VOICE_MODE_LABELS } from "./voice-mode.js";
+import { VOICE_MODE_DESCRIPTIONS } from "./voice-mode.js";
+
+function shouldOfferComposerExpand(value: string): boolean {
+	if (value.length >= 120) return true;
+	let newlines = 0;
+	for (let i = 0; i < value.length; i++) {
+		if (value.charCodeAt(i) === 10 && ++newlines >= 2) return true;
+	}
+	return false;
+}
+
+function setComposerExpanded(expanded: boolean): void {
+	const composer = document.getElementById?.("composer");
+	const btn = document.getElementById?.("composer-expand-btn") as HTMLButtonElement | null;
+	if (!composer || !btn) return;
+	composer.classList.toggle("is-expanded", expanded);
+	btn.setAttribute("aria-expanded", String(expanded));
+	const label = expanded ? "Collapse message box" : "Expand message box";
+	btn.setAttribute("aria-label", label);
+	btn.title = label;
+	btn.innerHTML = expanded ? COLLAPSE_ICON : EXPAND_ICON;
+}
+
+function syncComposerExpandUi(value: string): void {
+	const composer = document.getElementById?.("composer");
+	const btn = document.getElementById?.("composer-expand-btn") as HTMLButtonElement | null;
+	if (!composer || !btn) return;
+	if (!value.trim() && composer.classList.contains("is-expanded")) {
+		setComposerExpanded(false);
+	}
+	const expanded = composer.classList.contains("is-expanded");
+	btn.hidden = !expanded && !shouldOfferComposerExpand(value);
+}
 
 export function autoSize(): void {
 	const ta = $<HTMLTextAreaElement>("#input");
+	syncComposerExpandUi(ta.value ?? "");
 	// Native sizing follows typing, pasted/restored drafts and width changes
 	// without collapsing the focused textarea and disturbing caret scrolling.
 	if (CSS.supports("field-sizing", "content")) return;
+	const expanded =
+		document.getElementById?.("composer")?.classList.contains("is-expanded") ?? false;
 	ta.style.height = "auto";
-	ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+	ta.style.height = `${Math.min(ta.scrollHeight, expanded ? 540 : 200)}px`;
 }
 
 /** A /cc run bypasses pi, so it has no streaming state; its heartbeat label says it is going. */
@@ -487,11 +527,18 @@ export function syncDisplayPreferences(): void {
 	voiceBtn?.setAttribute("title", voiceDescription);
 	const headerVoice = document.querySelector<HTMLElement>("#header-voice");
 	if (headerVoice) {
-		headerVoice.classList.toggle("on", voiceEnabled);
+		headerVoice.dataset.voiceMode = state.voiceMode;
+		headerVoice.classList.toggle("on", state.voiceMode === "reply");
+		headerVoice.classList.toggle("voice-send", state.voiceMode === "send");
 		headerVoice.setAttribute("aria-label", voiceDescription);
 		headerVoice.setAttribute("title", `${voiceDescription} — click to cycle Off → V → V+`);
-		const label = headerVoice.querySelector(".header-voice-v");
-		if (label) label.textContent = VOICE_MODE_LABELS[state.voiceMode];
+		const icon =
+			state.voiceMode === "reply"
+				? VOICE_MODE_REPLY_ICON
+				: state.voiceMode === "send"
+					? VOICE_MODE_SEND_ICON
+					: VOICE_MODE_OFF_ICON;
+		headerVoice.innerHTML = icon;
 	}
 	const autoStopBtn = document.querySelector<HTMLButtonElement>("#voice-autostop-btn");
 	if (autoStopBtn) {
@@ -2738,18 +2785,16 @@ export function renderShell(): void {
 		),
 		// Cycle Off → V → V+. Device-wide, like the Settings row it mirrors.
 		// Starting a new chat lives in the drawer behind the ☰ button.
-		el(
-			"button",
-			{
-				class: "header-voice",
-				id: "header-voice",
-				type: "button",
-				title: "Voice mode off — click to cycle Off → V → V+",
-				"aria-label": VOICE_MODE_DESCRIPTIONS.off,
-				onclick: () => shellHandlers?.toggleVoiceMode(),
-			},
-			el("span", { class: "header-voice-v", "aria-hidden": "true" }, "Off"),
-		),
+		el("button", {
+			class: "header-voice",
+			id: "header-voice",
+			type: "button",
+			"data-voice-mode": "off",
+			title: "Voice mode off — click to cycle Off → V → V+",
+			"aria-label": VOICE_MODE_DESCRIPTIONS.off,
+			html: VOICE_MODE_OFF_ICON,
+			onclick: () => shellHandlers?.toggleVoiceMode(),
+		}),
 		el(
 			"button",
 			{
@@ -2957,26 +3002,46 @@ export function renderShell(): void {
 		}),
 		el(
 			"div",
-			{ class: "composer-actions" },
+			{ class: "composer-right" },
 			el("button", {
-				class: "send-btn",
-				id: "send-btn",
+				class: "composer-expand-btn",
+				id: "composer-expand-btn",
 				type: "button",
-				title: "Send",
-				"aria-label": "Send message",
-				html: SEND_ICON,
-				onclick: () => shellHandlers?.handleSend(),
-			}),
-			el("button", {
-				class: "stop-btn",
-				id: "stop-btn",
-				type: "button",
-				title: "Stop the current run",
-				"aria-label": "Stop the current run",
-				html: COMPOSER_STOP_ICON,
+				title: "Expand message box",
+				"aria-label": "Expand message box",
+				"aria-expanded": "false",
 				hidden: true,
-				onclick: () => shellHandlers?.abort(),
+				html: EXPAND_ICON,
+				onclick: () => {
+					const expanded = !composer.classList.contains("is-expanded");
+					setComposerExpanded(expanded);
+					autoSize();
+					$<HTMLTextAreaElement>("#input").focus({ preventScroll: true });
+				},
 			}),
+			el(
+				"div",
+				{ class: "composer-actions" },
+				el("button", {
+					class: "send-btn",
+					id: "send-btn",
+					type: "button",
+					title: "Send",
+					"aria-label": "Send message",
+					html: SEND_ICON,
+					onclick: () => shellHandlers?.handleSend(),
+				}),
+				el("button", {
+					class: "stop-btn",
+					id: "stop-btn",
+					type: "button",
+					title: "Stop the current run",
+					"aria-label": "Stop the current run",
+					html: COMPOSER_STOP_ICON,
+					hidden: true,
+					onclick: () => shellHandlers?.abort(),
+				}),
+			),
 		),
 	);
 	composerWrap.append(composer);

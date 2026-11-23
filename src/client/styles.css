@@ -981,17 +981,24 @@ body.sidebar-resizing iframe {
 	background: var(--surface-hover);
 	color: var(--text);
 }
+.header-voice.voice-send {
+	background: color-mix(in srgb, var(--brand-cyan) 22%, transparent);
+	border: 1.5px solid var(--brand-cyan);
+	color: #6ce5ef;
+	box-shadow: 0 0 8px color-mix(in srgb, var(--brand-cyan) 28%, transparent);
+}
+:root[data-theme="light"] .header-voice.voice-send {
+	background: color-mix(in srgb, var(--accent) 14%, transparent);
+	border-color: var(--accent);
+	color: var(--accent);
+	box-shadow: none;
+}
 .header-voice.on,
 #header-relay[aria-expanded="true"] {
 	background: var(--brand-gradient);
 	border-color: transparent;
 	color: #fff;
 	box-shadow: 0 0 10px var(--brand-glow);
-}
-.header-voice-v {
-	font-size: 12px;
-	font-weight: 700;
-	line-height: 1;
 }
 
 /* Settings: a round wrench button. */
@@ -2650,6 +2657,48 @@ body.sidebar-resizing iframe {
 }
 .composer .input:disabled {
 	opacity: 0.5;
+}
+.composer.is-expanded {
+	border-radius: 20px;
+}
+.composer.is-expanded .input {
+	min-height: min(40dvh, 320px);
+	max-height: min(62dvh, 540px);
+	overflow-y: auto;
+}
+.composer-right {
+	align-self: stretch;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	justify-content: flex-end;
+	gap: 6px;
+	flex-shrink: 0;
+}
+.composer-expand-btn {
+	margin-bottom: auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	border: 1px solid var(--border-strong);
+	border-radius: 50%;
+	background: var(--surface);
+	color: var(--text-secondary);
+	cursor: pointer;
+	transition:
+		background 0.12s,
+		border-color 0.12s,
+		color 0.12s;
+}
+.composer-expand-btn:hover {
+	background: var(--surface-hover);
+	color: var(--text);
+}
+.composer-expand-btn[hidden] {
+	display: none;
 }
 .composer-actions {
 	display: flex;
@@ -4665,6 +4714,17 @@ select:focus-visible,
 		min-width: 0;
 		height: 40px;
 		min-height: 40px;
+	}
+	.composer.is-expanded {
+		border-radius: 20px;
+	}
+	.composer.is-expanded .input {
+		min-height: min(36dvh, 260px);
+		max-height: min(55dvh, 420px);
+	}
+	.composer-expand-btn {
+		width: 34px;
+		height: 34px;
 	}
 }
 

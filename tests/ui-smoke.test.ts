@@ -1190,18 +1190,31 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 		try {
 			await expect.poll(() => messages(page).innerText()).toContain("stored answer");
 			const toggle = page.locator("#header-voice");
-			expect(await toggle.innerText()).toBe("Off");
+			expect(await toggle.getAttribute("data-voice-mode")).toBe("off");
+			expect(await toggle.locator("svg").count()).toBe(1);
+			expect(await toggle.evaluate((el) => el.classList.contains("voice-send"))).toBe(false);
+			expect(await toggle.evaluate((el) => el.classList.contains("on"))).toBe(false);
+
 			await toggle.click();
-			expect(await toggle.innerText()).toBe("V");
+			expect(await toggle.getAttribute("data-voice-mode")).toBe("send");
+			expect(await toggle.evaluate((el) => el.classList.contains("voice-send"))).toBe(true);
+			expect(await toggle.evaluate((el) => el.classList.contains("on"))).toBe(false);
+
 			await page.reload();
-			await expect.poll(() => toggle.innerText()).toBe("V");
+			await expect.poll(() => toggle.getAttribute("data-voice-mode")).toBe("send");
+			expect(await toggle.locator("svg").count()).toBe(1);
+
 			await page.getByRole("button", { name: "Open settings", exact: true }).click();
 			const settingsVoice = page.locator(".settings-row").filter({ hasText: "Voice mode" });
 			await settingsVoice.click();
 			expect(await settingsVoice.locator(".overflow-value").innerText()).toBe("V+");
-			expect(await toggle.innerText()).toBe("V+");
+			expect(await toggle.getAttribute("data-voice-mode")).toBe("reply");
+			expect(await toggle.evaluate((el) => el.classList.contains("on"))).toBe(true);
+			expect(await toggle.evaluate((el) => el.classList.contains("voice-send"))).toBe(false);
+
 			await settingsVoice.click();
-			expect(await toggle.innerText()).toBe("Off");
+			expect(await toggle.getAttribute("data-voice-mode")).toBe("off");
+			expect(await toggle.evaluate((el) => el.classList.contains("on"))).toBe(false);
 		} finally {
 			await page.close();
 		}
@@ -4820,6 +4833,52 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					.locator('img[src="/uploads/test-shot-1.png"]')
 					.count(),
 			).toBe(1);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("reveals and toggles the expandable composer on desktop and mobile", async () => {
+		const { page } = await openPage("/");
+		try {
+			await page.setViewportSize({ width: 1280, height: 800 });
+			const input = page.locator("#input");
+			const expandBtn = page.locator("#composer-expand-btn");
+			const composer = page.locator("#composer");
+
+			// Hidden for empty/short drafts
+			await expect.poll(() => input.isVisible()).toBe(true);
+			expect(await expandBtn.isVisible()).toBe(false);
+			await input.fill("Short note");
+			expect(await expandBtn.isVisible()).toBe(false);
+
+			// Appears once draft reaches 3 lines; expanding grows textarea well past 200px on desktop
+			const longDraft = Array.from({ length: 14 }, (_, i) => `Line ${i + 1} of a long prompt`).join(
+				"\n",
+			);
+			await input.fill(longDraft);
+			await expect.poll(() => expandBtn.isVisible()).toBe(true);
+			const collapsedHeight = (await input.boundingBox())!.height;
+			expect(collapsedHeight).toBeLessThanOrEqual(205);
+
+			await expandBtn.click();
+			expect(await composer.evaluate((el) => el.classList.contains("is-expanded"))).toBe(true);
+			expect(await expandBtn.getAttribute("aria-label")).toBe("Collapse message box");
+			const expandedHeight = (await input.boundingBox())!.height;
+			expect(expandedHeight).toBeGreaterThan(280);
+
+			// Collapsing restores compact auto-height
+			await expandBtn.click();
+			expect(await composer.evaluate((el) => el.classList.contains("is-expanded"))).toBe(false);
+			expect((await input.boundingBox())!.height).toBeLessThanOrEqual(205);
+
+			// Mobile viewport also expands cleanly and auto-collapses when cleared
+			await page.setViewportSize({ width: 390, height: 844 });
+			await expandBtn.click();
+			expect((await input.boundingBox())!.height).toBeGreaterThan(240);
+			await input.fill("");
+			await expect.poll(() => expandBtn.isVisible()).toBe(false);
+			expect(await composer.evaluate((el) => el.classList.contains("is-expanded"))).toBe(false);
 		} finally {
 			await page.close();
 		}

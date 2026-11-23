@@ -26,6 +26,35 @@ export const REC_ICON =
 /** Header Relay button: five-bar audio waveform signalling live voice conversation. */
 export const RELAY_ICON = svg('<path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/>', false, "18");
 
+/** Header Voice mode cycle (Off → V auto-send → V+ auto-send & speak replies). */
+export const VOICE_MODE_OFF_ICON = svg(
+	'<line x1="2" y1="2" x2="22" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" y1="19" x2="12" y2="22"/>',
+	false,
+	"18",
+);
+export const VOICE_MODE_SEND_ICON = svg(
+	'<rect x="5" y="3" width="6" height="11" rx="3"/><path d="M14 10v1a6 6 0 0 1-12 0v-1"/><line x1="8" y1="17" x2="8" y2="21"/><path d="M19 15V5M15.5 8.5 19 5l3.5 3.5"/>',
+	false,
+	"18",
+);
+export const VOICE_MODE_REPLY_ICON = svg(
+	'<rect x="5" y="3" width="6" height="11" rx="3"/><path d="M14 10v1a6 6 0 0 1-12 0v-1"/><line x1="8" y1="17" x2="8" y2="21"/><path d="M16.5 8.5a4.5 4.5 0 0 1 0 6"/><path d="M19.5 6a8.5 8.5 0 0 1 0 11"/>',
+	false,
+	"18",
+);
+
+/** Composer expand / collapse toggle for long multi-line drafts. */
+export const EXPAND_ICON = svg(
+	'<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>',
+	false,
+	"15",
+);
+export const COLLAPSE_ICON = svg(
+	'<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>',
+	false,
+	"15",
+);
+
 /**
  * Composer primary actions: send (up arrow) and, while the agent is streaming,
  * steer (right arrow — the instruction is queued for the next turn).
