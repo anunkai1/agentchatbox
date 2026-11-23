@@ -1252,8 +1252,8 @@ export function openCompactDialog(): void {
 	const instructionsInput = el("input", {
 		type: "text",
 		class: "model-filter-input",
-		placeholder: "Optional focus instructions (e.g. keep API decisions)…",
-		"aria-label": "Optional compaction focus instructions",
+		placeholder: "Compact instructions (e.g. keep API decisions)…",
+		"aria-label": "Compact instructions",
 		autocomplete: "off",
 	}) as HTMLInputElement;
 	box.append(instructionsInput);
