@@ -61,6 +61,64 @@ describe("Relay normal-chat display", () => {
 		expect(messages).toHaveLength(1);
 	});
 
+	it("stamps an optimistic image message when Pi echoes upload: and image dimensions", () => {
+		const messages: PersistedMessage[] = [
+			{
+				kind: "user",
+				text: "![image: Screenshot.jpg](/uploads/db86c2ea-9e5f-4d21-957a-f1a41338b34d.jpg)\nWhat does this button do?",
+				ts: 1,
+			},
+		];
+		const change = userMessageDisplay(
+			messages,
+			"![image: Screenshot.jpg](upload:db86c2ea-9e5f-4d21-957a-f1a41338b34d.jpg)\nWhat does this button do?\n\n[Image: original 1220x2712, displayed at 900x2000. Multiply coordinates by 1.36 to map to original image.]",
+			12,
+			2,
+		);
+		expect(change).toMatchObject({ added: false });
+		expect(messages).toEqual([
+			{
+				kind: "user",
+				text: "![image: Screenshot.jpg](/uploads/db86c2ea-9e5f-4d21-957a-f1a41338b34d.jpg)\nWhat does this button do?",
+				ts: 2,
+				seq: 12,
+			},
+		]);
+	});
+
+	it("stamps an optimistic file attachment when the server rewrites /uploads/ to a disk path", () => {
+		const messages: PersistedMessage[] = [
+			{ kind: "user", text: "[file: notes.txt](/uploads/abc123.txt)\nCheck this", ts: 1 },
+		];
+		const change = userMessageDisplay(
+			messages,
+			"[file: notes.txt](/home/lepton/agentchatbox/uploads/abc123.txt)\nCheck this",
+			14,
+			3,
+		);
+		expect(change).toMatchObject({ added: false });
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toMatchObject({ seq: 14, ts: 3 });
+	});
+
+	it("does not duplicate a steered image attachment into a normal user bubble", () => {
+		const messages: PersistedMessage[] = [
+			{
+				kind: "steer",
+				text: "![image: clip.png](/uploads/clip-1.png)\nLook here instead",
+				delivered: true,
+			},
+		];
+		expect(
+			userMessageDisplay(
+				messages,
+				"![image: clip.png](upload:clip-1.png)\nLook here instead\n\n[Image: original 800x600, displayed at 800x600.]",
+				15,
+			),
+		).toBeNull();
+		expect(messages).toHaveLength(1);
+	});
+
 	it("replays voice, full model replies and approximate playback with stable fork ordinals", () => {
 		const messages = [
 			{

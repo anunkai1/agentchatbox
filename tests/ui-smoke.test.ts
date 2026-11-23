@@ -4414,7 +4414,10 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 						type: "transcript",
 						sessionId: "ux-touch-1",
 						messages: [
-							{ role: "user", content: [{ type: "text", text: "Find alpha one in this conversation." }] },
+							{
+								role: "user",
+								content: [{ type: "text", text: "Find alpha one in this conversation." }],
+							},
 							{
 								role: "assistant",
 								content: [
@@ -4461,7 +4464,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 
 			// 2. Left-edge swipe opens collapsed mobile sidebar; left swipe closes it
 			expect(
-				await page.evaluate(() => document.getElementById("sidebar")?.classList.contains("collapsed")),
+				await page.evaluate(() =>
+					document.getElementById("sidebar")?.classList.contains("collapsed"),
+				),
 			).toBe(true);
 			await page.evaluate(() => {
 				const fire = (type: string, target: EventTarget, x: number, y: number) => {
@@ -4490,7 +4495,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				fire("touchend", main, 140, 305);
 			});
 			expect(
-				await page.evaluate(() => document.getElementById("sidebar")?.classList.contains("collapsed")),
+				await page.evaluate(() =>
+					document.getElementById("sidebar")?.classList.contains("collapsed"),
+				),
 			).toBe(false);
 
 			await page.evaluate(() => {
@@ -4520,7 +4527,9 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				fire("touchend", sidebar, 80, 304);
 			});
 			expect(
-				await page.evaluate(() => document.getElementById("sidebar")?.classList.contains("collapsed")),
+				await page.evaluate(() =>
+					document.getElementById("sidebar")?.classList.contains("collapsed"),
+				),
 			).toBe(true);
 
 			// 3. In-chat Find bar via Ctrl+F: highlights matches, steps between them, and unwraps on Esc
@@ -4540,7 +4549,10 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 
 			// Also reachable from Settings → Chat → Find in chat
 			await page.locator(".header-overflow").click();
-			await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: /Find in chat/ }).click();
+			await page
+				.getByRole("dialog", { name: "Settings" })
+				.getByRole("button", { name: /Find in chat/ })
+				.click();
 			await expect.poll(() => findInput.isVisible()).toBe(true);
 			await page.keyboard.press("Escape");
 			await expect.poll(() => page.locator("#chat-find-bar").isVisible()).toBe(false);
@@ -4593,7 +4605,14 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.evaluate(() => {
 				const stage = document.querySelector(".lightbox-stage")!;
 				const fire = (type: string, x: number, y: number) => {
-					const t = new Touch({ identifier: 3, target: stage, clientX: x, clientY: y, pageX: x, pageY: y });
+					const t = new Touch({
+						identifier: 3,
+						target: stage,
+						clientX: x,
+						clientY: y,
+						pageX: x,
+						pageY: y,
+					});
 					const list = type === "touchend" ? [] : [t];
 					stage.dispatchEvent(
 						new TouchEvent(type, {
@@ -4610,6 +4629,184 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				fire("touchend", 195, 420);
 			});
 			await expect.poll(() => lightbox.count()).toBe(0);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("opens Select text modal for partial copy and deduplicates Relay image echoes", async () => {
+		const { page } = await openPage("/");
+		try {
+			await page.setViewportSize({ width: 390, height: 844 });
+			const copied: string[] = [];
+			await page.exposeFunction("__recordCopied", (t: string) => copied.push(t));
+			await page.addInitScript(() => {
+				Object.defineProperty(navigator, "clipboard", {
+					configurable: true,
+					value: {
+						writeText: async (text: string) => {
+							(window as unknown as { __recordCopied: (t: string) => void }).__recordCopied(text);
+						},
+					},
+				});
+			});
+
+			const tinyPng = Buffer.from(
+				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+				"base64",
+			);
+			await page.route(/\/api\/upload$/, async (route) => {
+				await route.fulfill({
+					status: 200,
+					contentType: "application/json",
+					body: JSON.stringify({
+						url: "/uploads/test-shot-1.png",
+						filename: "shot.png",
+						mimeType: "image/png",
+						size: tinyPng.length,
+					}),
+				});
+			});
+			await page.route(/\/uploads\/test-shot-1\.png$/, async (route) => {
+				await route.fulfill({ status: 200, contentType: "image/png", body: tinyPng });
+			});
+
+			await page.routeWebSocket(/\/api\/chat$/, (ws) => {
+				ws.onMessage((raw) => {
+					const msg = JSON.parse(String(raw));
+					if (msg.type === "init") {
+						ws.send(
+							JSON.stringify({
+								type: "ready",
+								sessionId: "select-relay-test",
+								provider: "zai",
+								modelId: "glm-5.2",
+								thinkingLevel: "off",
+							}),
+						);
+						ws.send(
+							JSON.stringify({
+								type: "transcript",
+								sessionId: "select-relay-test",
+								messages: [
+									{
+										role: "custom",
+										customType: "acb-relay",
+										details: { kind: "voice_context", id: "v0" },
+									},
+									{
+										role: "user",
+										content: [{ type: "text", text: "First user note for selection" }],
+									},
+									{
+										role: "assistant",
+										content: [
+											{
+												type: "text",
+												text: "Alpha paragraph one.\n\nBravo target sentence here.\n\nCharlie paragraph three.",
+											},
+										],
+									},
+								],
+							}),
+						);
+					} else if (msg.type === "prompt") {
+						if (msg.requestId) {
+							ws.send(
+								JSON.stringify({
+									type: "sendResult",
+									requestId: msg.requestId,
+									accepted: true,
+								}),
+							);
+						}
+						const echoed = String(msg.text)
+							.replace(
+								/\[image: ([^\]]+)\]\(\/uploads\/([A-Za-z0-9._-]+)\)/g,
+								"[image: $1](upload:$2)",
+							)
+							.concat(
+								"\n\n[Image: original 1220x2712, displayed at 900x2000. Multiply coordinates by 1.36 to map to original image.]",
+							);
+						ws.send(
+							JSON.stringify({
+								type: "event",
+								event: {
+									type: "message_start",
+									message: {
+										role: "user",
+										content: [{ type: "text", text: echoed }],
+										timestamp: Date.now(),
+									},
+								},
+							}),
+						);
+					}
+				});
+			});
+			await page.reload();
+			await expect.poll(() => page.locator(".row-assistant").count()).toBe(1);
+
+			// 1. Select text modal on assistant message: partial selection + Select all + Esc
+			const assistantRow = page.locator(".row-assistant").first();
+			await assistantRow.getByRole("button", { name: "Select text" }).click();
+			const dialog = page.getByRole("dialog", { name: "Select text" });
+			await expect.poll(() => dialog.isVisible()).toBe(true);
+			const body = dialog.locator(".select-text-body");
+			expect(await body.innerText()).toContain("Bravo target sentence here.");
+
+			// Highlight just "Bravo target sentence" inside the modal body
+			await body.evaluate((el) => {
+				const node = el.firstChild!;
+				const text = node.textContent ?? "";
+				const start = text.indexOf("Bravo target sentence");
+				const range = document.createRange();
+				range.setStart(node, start);
+				range.setEnd(node, start + "Bravo target sentence".length);
+				const sel = window.getSelection()!;
+				sel.removeAllRanges();
+				sel.addRange(range);
+			});
+			await expect
+				.poll(() => dialog.getByRole("button", { name: "Copy selected" }).isVisible())
+				.toBe(true);
+			await dialog.getByRole("button", { name: "Copy selected" }).click();
+			await expect.poll(() => copied.at(-1)).toBe("Bravo target sentence");
+
+			// Select all copies the full message
+			await dialog.getByRole("button", { name: "Select all" }).click();
+			await dialog.getByRole("button", { name: "Copy selected" }).click();
+			await expect.poll(() => copied.at(-1)).toContain("Charlie paragraph three.");
+
+			await page.keyboard.press("Escape");
+			await expect.poll(() => dialog.count()).toBe(0);
+
+			// 2. Select text button also works on user messages
+			await page.locator(".row-user").first().getByRole("button", { name: "Select text" }).click();
+			await expect
+				.poll(() => dialog.locator(".select-text-body").innerText())
+				.toBe("First user note for selection");
+			await page.keyboard.press("Escape");
+			await expect.poll(() => dialog.count()).toBe(0);
+
+			// 3. Attaching and posting an image in a Relay session renders only ONE bubble & ONE image
+			await page.locator('input[type="file"]').setInputFiles({
+				name: "shot.png",
+				mimeType: "image/png",
+				buffer: tinyPng,
+			});
+			await expect
+				.poll(() => page.locator("#attachment-previews .attachment-preview").count())
+				.toBe(1);
+			await page.locator("#input").fill("Check this screenshot");
+			await page.locator("#send-btn").click();
+
+			// Wait until the echoed user message has been stamped (fork link appears)
+			await expect
+				.poll(() => page.locator(".row-user").last().locator('a[aria-label*="Fork"]').count())
+				.toBe(1);
+			expect(await page.locator(".row-user").count()).toBe(2);
+			expect(await page.locator('.row-user img[src="/uploads/test-shot-1.png"]').count()).toBe(1);
 		} finally {
 			await page.close();
 		}

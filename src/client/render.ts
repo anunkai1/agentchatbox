@@ -47,6 +47,7 @@ import { attachLightboxGestures } from "./lightbox-gestures.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { mountNotices, type NoticeOptions, refreshNotices, showNotice } from "./notices.js";
 import { effectiveEnterToSend } from "./prefs.js";
+import { openSelectTextModal } from "./select-text.js";
 import { services } from "./services.js";
 import {
 	brisbaneDayKey,
@@ -270,6 +271,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 					showToast(ok ? "Message copied." : "Clipboard access denied.", ok ? "info" : "error");
 				});
 			}),
+			makeSelectTextButton(() => m.text),
 		);
 		if (m.seq !== undefined) {
 			actions.append(makeForkLink(() => m.seq));
@@ -417,6 +419,7 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 							showToast(ok ? "Note copied." : "Clipboard access denied.", ok ? "info" : "error");
 						});
 					}),
+					makeSelectTextButton(() => m.text),
 				);
 				meta.append(actions);
 			}
@@ -851,11 +854,13 @@ function previousUserPrompt(message: PersistedMessage): string | null {
 	return null;
 }
 
-type MessageIcon = "copy" | "retry" | "continue" | "fork" | "share" | "listen";
+type MessageIcon = "copy" | "select" | "retry" | "continue" | "fork" | "share" | "listen";
 
 function messageIcon(name: MessageIcon): HTMLElement {
 	const paths: Record<MessageIcon, string> = {
 		copy: '<rect x="8" y="8" width="10" height="10" rx="1.5"/><path d="M6 15H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1"/>',
+		select:
+			'<path d="M4 8V5a1 1 0 0 1 1-1h3"/><path d="M16 4h3a1 1 0 0 1 1 1v3"/><path d="M20 16v3a1 1 0 0 1-1 1h-3"/><path d="M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8"/><path d="M8 12h8"/><path d="M8 15h5"/>',
 		retry:
 			'<path d="M20 11a8 8 0 0 0-14.7-4L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L21 15"/><path d="M21 20v-5h-5"/>',
 		continue: '<path d="M4 12h15"/><path d="m13 6 6 6-6 6"/>',
@@ -887,6 +892,18 @@ function makeMessageActionButton(
 	button.append(messageIcon(icon));
 	button.addEventListener("click", () => onClick(button));
 	return button as HTMLButtonElement;
+}
+
+function makeSelectTextButton(getText: () => string, title = "Select text"): HTMLButtonElement {
+	return makeMessageActionButton("select", title, () => {
+		const text = getText();
+		if (!text.trim()) return;
+		openSelectTextModal(text, {
+			title,
+			copyText: services.copyText,
+			showToast,
+		});
+	});
 }
 
 /**
@@ -948,6 +965,10 @@ function makeAssistantActionBar(getMessage: () => PersistedMessage | null): HTML
 				button.classList.toggle("is-success", ok);
 				showToast(ok ? "Answer copied." : "Clipboard access denied.", ok ? "info" : "error");
 			});
+		}),
+		makeSelectTextButton(() => {
+			const message = getMessage();
+			return message?.kind === "assistant" ? message.text : "";
 		}),
 		makeMessageActionButton("retry", "Retry the previous request", () => {
 			const message = getMessage();

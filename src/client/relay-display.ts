@@ -49,6 +49,22 @@ export function relayVoiceDisplay(
 	return changes;
 }
 
+/**
+ * Normalise server-rewritten attachment links (`/uploads/...`, `upload:...`,
+ * or filesystem paths) and Pi's appended `[Image: ...]` coordinate notes so
+ * an echoed user/steer message matches the browser's optimistic bubble.
+ */
+function normalizeUserMessageText(text: string): string {
+	return text
+		.replace(
+			/!?\[(image|file):\s*([^\]]*)\]\((?:upload:|[^()\s]*[\\/])([A-Za-z0-9._-]+)\)/g,
+			(_full, kind: string, label: string, filename: string) =>
+				`[${kind}: ${label.trim()}](upload:${filename})`,
+		)
+		.replace(/(?:\r?\n)+\[Image:[^\n]*\]/g, "")
+		.trim();
+}
+
 /** Join an authoritative Pi echo to its optimistic/recognised input once. */
 export function userMessageDisplay(
 	messages: PersistedMessage[],
@@ -56,8 +72,10 @@ export function userMessageDisplay(
 	seq: number,
 	ts?: number,
 ): DisplayChange | null {
+	const normalized = normalizeUserMessageText(text);
 	const pending = messages.find(
-		(m): m is User => m.kind === "user" && m.seq === undefined && m.text === text,
+		(m): m is User =>
+			m.kind === "user" && m.seq === undefined && normalizeUserMessageText(m.text) === normalized,
 	);
 	if (pending) {
 		pending.seq = seq;
@@ -65,7 +83,8 @@ export function userMessageDisplay(
 		return { message: pending, added: false };
 	}
 	// Steering already has its own normal-chat bubble and delivery indicator.
-	if (messages.some((m) => m.kind === "steer" && m.text === text)) return null;
+	if (messages.some((m) => m.kind === "steer" && normalizeUserMessageText(m.text) === normalized))
+		return null;
 	const message: User = { kind: "user", text, seq, ts };
 	messages.push(message);
 	return { message, added: true };

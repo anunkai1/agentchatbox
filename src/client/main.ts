@@ -583,7 +583,9 @@ function paintRelayDisplay(change: DisplayChange | null): void {
 	}
 	const kind = change.message.kind;
 	const index = state.messages.filter((m) => m.kind === kind).indexOf(change.message);
-	const row = document.querySelectorAll(`#messages .row-${kind}`)[index];
+	const selector =
+		kind === "user" ? "#messages .row-user:not(.row-steer)" : `#messages .row-${kind}`;
+	const row = document.querySelectorAll(selector)[index];
 	row?.replaceWith(renderMessageNode(change.message));
 }
 
