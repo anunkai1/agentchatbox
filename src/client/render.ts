@@ -2188,7 +2188,6 @@ export interface ShellHandlers {
 	openPinnedModelPicker?: () => void;
 	openThinkPicker: () => void;
 	openCompactDialog?: () => void;
-	openQuickSwitcher?: (initialQuery?: string) => void;
 	openOverflowMenu: () => void;
 	/** Toggle Voice mode from the header pill (mirrors the Settings row). */
 	toggleVoiceMode: () => void;
@@ -2838,34 +2837,6 @@ export function renderShell(): void {
 				onclick: () => $<HTMLInputElement>("#file-input").click(),
 			},
 			"+",
-		),
-		el(
-			"button",
-			{
-				class: "icon-btn composer-slash-btn",
-				id: "slash-btn",
-				type: "button",
-				title: "Slash commands (/)",
-				"aria-label": "Open slash commands",
-				onclick: () => {
-					const ta = document.querySelector<HTMLTextAreaElement>("#input");
-					if (!ta) return;
-					if (ta.value.trim() && !ta.value.startsWith("/")) {
-						// Preserve an in-progress message draft by opening the switcher on "/"
-						shellHandlers?.openQuickSwitcher?.("/");
-						return;
-					}
-					if (ta.value === "/") {
-						ta.value = "";
-					} else if (!ta.value.startsWith("/")) {
-						ta.value = "/";
-					}
-					ta.focus();
-					ta.setSelectionRange(ta.value.length, ta.value.length);
-					ta.dispatchEvent(new Event("input", { bubbles: true }));
-				},
-			},
-			"/",
 		),
 		el("button", {
 			class: "icon-btn",

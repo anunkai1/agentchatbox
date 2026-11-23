@@ -2568,12 +2568,6 @@ body.sidebar-resizing iframe {
 	border-radius: 50%;
 	color: var(--text-secondary);
 }
-.composer .composer-slash-btn {
-	font-family: var(--font-mono);
-	font-size: 15px;
-	font-weight: 600;
-	color: var(--text-muted);
-}
 .composer .icon-btn:hover {
 	background: var(--surface-hover);
 	color: var(--text);

@@ -4259,11 +4259,12 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.keyboard.press("Escape");
 			await expect.poll(() => lightbox.count()).toBe(0);
 
-			// 3. Dynamic spellcheck/autocapitalize + composer `/` button
+			// 3. Dynamic spellcheck/autocapitalize (off for `/` commands, on for normal text)
 			const input = page.locator("#input");
+			expect(await page.locator("#slash-btn").count()).toBe(0);
 			expect(await input.getAttribute("spellcheck")).toBe("true");
 			expect(await input.getAttribute("autocapitalize")).toBe("sentences");
-			await page.locator("#slash-btn").click();
+			await input.fill("/");
 			await expect.poll(() => page.locator("#command-palette").count()).toBe(1);
 			expect(await input.inputValue()).toBe("/");
 			expect(await input.getAttribute("spellcheck")).toBe("false");

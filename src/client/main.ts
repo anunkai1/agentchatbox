@@ -297,7 +297,7 @@ const relaySessions = new Set<string>();
 
 function updateComposerLock(): void {
 	const locked = Boolean(sessionSwitch || pendingSend || sessionMoving);
-	for (const id of ["#input", "#send-btn", "#attach-btn", "#slash-btn", "#voice-btn"]) {
+	for (const id of ["#input", "#send-btn", "#attach-btn", "#voice-btn"]) {
 		const node = document.querySelector<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>(
 			id,
 		);
@@ -1795,7 +1795,6 @@ async function boot(): Promise<void> {
 		openThinkPicker,
 		openOverflowMenu,
 		openCompactDialog,
-		openQuickSwitcher: openQuickSwitcherHandler,
 		handleVoiceRecord,
 		cancelVoiceRecord,
 		toggleVoiceAutoStop,
