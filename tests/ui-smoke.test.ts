@@ -3981,6 +3981,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 					expect(await answer.locator(`[aria-label="${label}"]`).count()).toBe(1);
 				}
 				expect(await answer.locator(".voice-variant-btn").count()).toBe(3);
+				expect(await answer.locator(".immediate-voice").count()).toBe(0);
 				expect(
 					await answer.locator('a[aria-label="Fork this conversation here"]').getAttribute("href"),
 				).toContain("worker-report");

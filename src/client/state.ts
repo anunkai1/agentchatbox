@@ -302,14 +302,6 @@ export interface AppState {
 	/** Whether the sidebar is currently showing search results (vs the date list). */
 	searchActive: boolean;
 	/**
-	 * Plain string snapshot of `state.messages` last assistant text, kept
-	 * in sync by main.ts's event dispatcher. The render layer reads this
-	 * for the live-streaming speak button (so re-clicking after streaming
-	 * ends replays the final text) without needing a back-reference into
-	 * the messages array.
-	 */
-	lastAssistantText: string;
-	/**
 	 * JSONL ordinal of the currently-streaming (or just-finished) live
 	 * assistant message, mirrored from the in-place `lastAssistant` block
 	 * so the live fork button can read it without a back-reference into
@@ -404,7 +396,6 @@ export const state: AppState = {
 	pendingVoiceVariant: null,
 	pendingVoiceHint: null,
 	pendingVoiceBtn: null,
-	lastAssistantText: "",
 	lastAssistantSeq: null,
 	pendingSteerCount: 0,
 	retry: null,

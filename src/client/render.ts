@@ -324,7 +324,6 @@ export function renderMessageNode(m: PersistedMessage): HTMLElement {
 			makeAssistantControls(
 				() => m,
 				makeVoiceActions(
-					() => m.text,
 					() => m.voiceLong ?? "",
 					() => m.voiceMedium ?? "",
 					() => m.voiceShort ?? "",
@@ -613,7 +612,6 @@ function makeSpeakButton(
 }
 
 function makeVoiceActions(
-	getImmediateText: () => string,
 	getLongText: () => string,
 	getMediumText: () => string,
 	getShortText: () => string,
@@ -625,12 +623,6 @@ function makeVoiceActions(
 		"aria-label": "Voice actions",
 	});
 	actions.append(
-		makeSpeakButton(
-			getImmediateText,
-			"Speak this answer immediately",
-			"speak-btn voice-action immediate-voice",
-			"voice-icon",
-		),
 		makeVoiceVariantButton("long", getLongText, "Speak the detailed spoken version", getHint),
 		makeVoiceVariantButton("medium", getMediumText, "Speak a summary of the answer", getHint),
 		makeVoiceVariantButton("short", getShortText, "Speak a brief summary of the answer", getHint),
@@ -942,8 +934,8 @@ function makeAssistantMetaRow(
 
 /**
  * An assistant reply's single control line: the voice strip
- * (🔊 + Long / Med / Short) first, then the icon strip
- * (copy / retry / continue / fork / share). The voice strip used to sit on a
+ * (Long / Med / Short) first, then the icon strip
+ * (copy / retry / continue). The voice strip used to sit on a
  * line of its own above the icons; both now share one row and wrap onto a
  * second line only when the viewport is too narrow to hold both.
  */
@@ -1435,7 +1427,6 @@ export function appendAssistantPlaceholder(
 			// Streaming mutates the same object, so text and seq stay up to date.
 			() => message,
 			makeVoiceActions(
-				() => state.lastAssistantText,
 				// This row's own message, not "the last assistant message": once a
 				// newer turn exists the row is no longer last, and resolving by
 				// position would then play/read some other reply's variant.

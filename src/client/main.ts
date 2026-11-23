@@ -1101,7 +1101,6 @@ function onEvent(event: Record<string, unknown>): void {
 							ts: noteMsg.timestamp,
 						};
 						state.messages.push(reply);
-						state.lastAssistantText = content;
 						state.lastAssistantSeq = liveMessageSeq;
 						appendNode(renderMessageNode(reply), { pin: true });
 						// A /cc run bypasses pi, so no agent_end follows: voice the
@@ -1111,7 +1110,6 @@ function onEvent(event: Record<string, unknown>): void {
 						const note = projectDisplayNote({ ...noteMsg, content }, liveMessageSeq);
 						state.messages.push(note);
 						if (note.kind === "assistant") {
-							state.lastAssistantText = note.text;
 							state.lastAssistantSeq = note.seq ?? null;
 						}
 						appendNode(renderMessageNode(note));
@@ -1187,10 +1185,6 @@ function onEvent(event: Record<string, unknown>): void {
 				lastAssistant.text = text;
 				lastAssistant.thinking = thinking;
 			}
-			// Mirror the latest text into a top-level state field so the
-			// live-streaming speak button (which closes over `state` via
-			// render.ts) always replays the final text.
-			state.lastAssistantText = text;
 			if (lastAssistantDom) {
 				// Coalesce the expensive markdown repaint to one per frame
 				// (see scheduleStreamDom). The model object above is always
@@ -1287,7 +1281,6 @@ function onEvent(event: Record<string, unknown>): void {
 			) {
 				lastAssistant.text = finalText;
 				lastAssistant.thinking = finalThinking;
-				state.lastAssistantText = finalText;
 				paintStreamDom({ dom: lastAssistantDom, text: finalText, thinking: finalThinking });
 			}
 			const isModelError =

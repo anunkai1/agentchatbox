@@ -1738,8 +1738,8 @@ body.sidebar-resizing iframe {
 	margin-top: 2px;
 }
 
-/* Compact voice strip: immediate speech plus the generated Long/Medium/Short
-   variants stay together and fit on one line, including on narrow screens. */
+/* Compact voice strip: the generated Long/Medium/Short variants stay together
+   and fit on one line, including on narrow screens. */
 .voice-actions {
 	display: flex;
 	align-items: center;
@@ -1771,12 +1771,6 @@ body.sidebar-resizing iframe {
 .voice-actions .voice-label {
 	font-size: 11.5px;
 	font-weight: 600;
-}
-.voice-actions .immediate-voice {
-	padding: 0 5px;
-	color: var(--text-muted);
-	background: transparent;
-	border-color: transparent;
 }
 
 /* Inline SVG icons (icons.ts): sized by the host's font-size, tinted by its
