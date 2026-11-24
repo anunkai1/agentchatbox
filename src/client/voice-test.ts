@@ -923,14 +923,6 @@ function openVoice(
 				if (event.error) sayStatus(event.text);
 			} else if (event.kind === "voice_pending") {
 				sayStatus("Pi Relay request accepted/queued; speech interruption does not cancel it.");
-			} else if (event.kind === "voice-failed") {
-				// The command failed before ready (busy turn, rejected model). Settle the
-				// panel now; the startup timer's extension wording would be misleading.
-				if (!ready) {
-					clearTimeout(startupTimer);
-					fail(new Error(event.text));
-					startSent = false;
-				}
 			} else if (event.kind === "error") {
 				handleVoiceEvent(event);
 			} else if (event.kind === "job") {
@@ -1137,6 +1129,12 @@ function openVoice(
 		} else if (event.kind === "summary") {
 			addText("Summary", event.text);
 		} else if (event.kind === "error") {
+			if (!ready) {
+				// Startup failed before ready (busy turn, rejected model). Settle the
+				// panel now; the startup timer's generic fallback would be misleading.
+				clearTimeout(startupTimer);
+				startSent = false;
+			}
 			addText("Error", event.text);
 			fail(new Error(event.text));
 		} else if (event.kind === "stopped") {

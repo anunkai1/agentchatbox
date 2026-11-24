@@ -8,8 +8,6 @@ export interface RelayJob {
 	summary?: string;
 }
 export type RelayEvent =
-	/** The /relay command itself failed before the ready event (busy turn, bad model). */
-	| { kind: "voice-failed"; text: string }
 	| {
 			kind: "ready";
 			model: string;
