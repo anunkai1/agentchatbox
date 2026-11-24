@@ -26,12 +26,13 @@ beforeAll(async () => {
 			resolveDir: root,
 			contents: `
 				import { applyDeviceDisplayPrefs } from './src/client/prefs.ts';
-				import { registerShellHandlers, renderShell, syncDisplayPreferences } from './src/client/render.ts';
+				import { refreshStatus, registerShellHandlers, renderShell, syncDisplayPreferences } from './src/client/render.ts';
 				import { openOverflowMenu } from './src/client/slashes.ts';
 				import { state } from './src/client/state.ts';
 				import { cancelVoiceRecord, handleVoiceRecord, toggleVoiceAutoStop } from './src/client/voice.ts';
 
 				window.__testState = state;
+				window.__refreshStatus = refreshStatus;
 				window.__openSettings = openOverflowMenu;
 				applyDeviceDisplayPrefs();
 				registerShellHandlers({
@@ -85,11 +86,23 @@ afterAll(async () => {
 	await browser?.close();
 });
 
-async function open(): Promise<Page> {
-	const page = await browser.newPage();
+async function open(options?: {
+	failTranscribe?: boolean;
+	viewport?: { width: number; height: number };
+}): Promise<Page> {
+	const page = await browser.newPage(
+		options?.viewport ? { viewport: options.viewport } : undefined,
+	);
 	await page.clock.install();
 	await page.route("https://acb.test/**", (route) => {
 		if (route.request().url().endsWith("/api/transcribe")) {
+			if (options?.failTranscribe) {
+				return route.fulfill({
+					status: 500,
+					contentType: "application/json",
+					body: JSON.stringify({ error: "whisper unavailable" }),
+				});
+			}
 			return route.fulfill({
 				contentType: "application/json",
 				body: JSON.stringify({ text: "hello from mic" }),
@@ -287,6 +300,89 @@ describe("voice recording auto-stop pill UI", { timeout: 30_000 }, () => {
 			await expect.poll(() => page.locator("#input").inputValue()).toBe("hello from mic");
 		} finally {
 			await page.close();
+		}
+	});
+
+	it("keeps model and effort selector buttons visible on mobile after transcription completes", async () => {
+		const page = await open({ viewport: { width: 390, height: 844 } });
+		try {
+			await page.evaluate(() => {
+				const st = window as unknown as {
+					__testState: {
+						currentModelLabel: string;
+						currentThinking: string;
+						contextUsage: { tokens: number; contextWindow: number; percent: number };
+					};
+					__refreshStatus: () => void;
+				};
+				st.__testState.currentModelLabel = "Antigravity Claude Opus 4.6 (Thinking)";
+				st.__testState.currentThinking = "high";
+				st.__testState.contextUsage = { tokens: 120_000, contextWindow: 200_000, percent: 60 };
+				st.__refreshStatus();
+			});
+
+			await page.locator("#voice-btn").click();
+			await expect.poll(() => page.locator("#voice-cancel-btn").isVisible()).toBe(true);
+			await page.locator("#voice-btn").click();
+
+			await expect.poll(() => page.locator("#input").inputValue()).toBe("hello from mic");
+
+			const modelBtn = page.locator("[data-status-model]");
+			const thinkBtn = page.locator("[data-status-think]");
+			const notice = page.locator("#status-notice");
+			await expect.poll(() => modelBtn.isVisible()).toBe(true);
+			await expect.poll(() => thinkBtn.isVisible()).toBe(true);
+			await expect.poll(() => notice.isVisible()).toBe(true);
+			expect(await notice.textContent()).toBe("transcribed (14 chars). Press Enter to send.");
+
+			// Both buttons must fit inside the status bar bounds on mobile without clipping the effort chip.
+			const barBox = await page.locator("#status-bar").boundingBox();
+			const modelBox = await modelBtn.boundingBox();
+			const thinkBox = await thinkBtn.boundingBox();
+			expect(barBox).not.toBeNull();
+			expect(modelBox).not.toBeNull();
+			expect(thinkBox).not.toBeNull();
+			expect(modelBox!.x).toBeGreaterThanOrEqual(barBox!.x);
+			expect(thinkBox!.x + thinkBox!.width).toBeLessThanOrEqual(barBox!.x + barBox!.width + 1);
+			expect(thinkBox!.width).toBeGreaterThan(40);
+
+			// Toast clears after 8s while model & effort buttons stay visible.
+			await page.clock.runFor(8_100);
+			await expect.poll(() => notice.isVisible()).toBe(false);
+			expect(await modelBtn.isVisible()).toBe(true);
+			expect(await thinkBtn.isVisible()).toBe(true);
+		} finally {
+			await page.close();
+		}
+	});
+
+	it("restores model and effort buttons when recording is cancelled or transcription fails", async () => {
+		const cancelledPage = await open();
+		try {
+			await cancelledPage.locator("#voice-btn").click();
+			await expect.poll(() => cancelledPage.locator("#voice-cancel-btn").isVisible()).toBe(true);
+			await cancelledPage.locator("#voice-cancel-btn").click();
+			await expect.poll(() => cancelledPage.locator("[data-status-model]").isVisible()).toBe(true);
+			expect(await cancelledPage.locator("[data-status-think]").isVisible()).toBe(true);
+			expect(await cancelledPage.locator("#status-notice").textContent()).toBe(
+				"recording cancelled",
+			);
+		} finally {
+			await cancelledPage.close();
+		}
+
+		const failedPage = await open({ failTranscribe: true });
+		try {
+			await failedPage.locator("#voice-btn").click();
+			await expect.poll(() => failedPage.locator("#voice-cancel-btn").isVisible()).toBe(true);
+			await failedPage.locator("#voice-btn").click();
+			await expect.poll(() => failedPage.locator("[data-status-model]").isVisible()).toBe(true);
+			expect(await failedPage.locator("[data-status-think]").isVisible()).toBe(true);
+			expect(await failedPage.locator("#status-notice").textContent()).toBe(
+				"transcription failed — recording available to retry",
+			);
+		} finally {
+			await failedPage.close();
 		}
 	});
 });

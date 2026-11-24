@@ -2958,6 +2958,13 @@ body.sidebar-resizing iframe {
 .status-dynamic:empty {
 	display: none;
 }
+.status-bar:has(.status-activity:not([hidden])) .status-model-chip {
+	display: inline-block;
+	max-width: min(340px, 46%);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: bottom;
+}
 /* Flashing green dot shown next to "streaming" in the status bar.
    Pulses while the agent is actively generating, like a live LED. */
 .status-bar .streaming-dot {

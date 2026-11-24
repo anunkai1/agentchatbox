@@ -1984,12 +1984,13 @@ function paintStatusDynamic(): void {
 }
 
 /**
- * Transient message used by the voice recorder ("recording…",
- * "transcribing…", "transcribed (N chars)…" states). Painted into the core
- * slot and cleared by the next refreshStatus — the same lifecycle as the
- * old `$("#status-bar").textContent = …` writes, but routed through a slot
- * so the fixed-height bar layout is never replaced by a raw text node.
- * Voice playback controls stay in their own slot throughout.
+ * Transient message used while actively recording or transcribing ("recording…",
+ * "transcribing…"). Painted into the core slot and cleared by the next
+ * refreshStatus — the same lifecycle as the old `$("#status-bar").textContent = …`
+ * writes, but routed through a slot so the fixed-height bar layout is never
+ * replaced by a raw text node. Post-transcription notices use showToast() so the
+ * model/effort chips return immediately. Voice playback controls stay in their
+ * own slot throughout.
  */
 export function setStatusMessage(text: string): void {
 	const coreEl = $<HTMLSpanElement>("#status-core");

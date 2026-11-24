@@ -33,6 +33,7 @@ import {
 	refreshStatus,
 	resetPendingVoice,
 	setStatusMessage,
+	showToast,
 	showVoiceStatus,
 	syncDisplayPreferences,
 } from "./render.js";
@@ -1127,7 +1128,7 @@ export function isVoiceInputBusy(): boolean {
 
 async function transcribeRecording(blob: Blob, secs: number, key: string): Promise<void> {
 	if (transcribing || mediaRecorder?.state === "recording") {
-		setStatusMessage("finish the current recording or transcription before retrying…");
+		showToast("finish the current recording or transcription before retrying…");
 		return;
 	}
 	clearNotice(key);
@@ -1149,11 +1150,12 @@ async function transcribeRecording(blob: Blob, secs: number, key: string): Promi
 			ta.focus();
 		}
 		autoSize();
+		refreshStatus();
 		if (state.voiceMode !== "off" && text.trim()) {
-			setStatusMessage(`transcribed (${text.length} chars), sending…`);
+			showToast(`transcribed (${text.length} chars), sending…`);
 			services.submitComposer?.();
 		} else {
-			setStatusMessage(`transcribed (${text.length} chars). Press Enter to send.`);
+			showToast(`transcribed (${text.length} chars). Press Enter to send.`);
 		}
 	} catch (err) {
 		showNotice(
@@ -1167,7 +1169,8 @@ async function transcribeRecording(blob: Blob, secs: number, key: string): Promi
 				},
 			},
 		);
-		setStatusMessage("transcription failed — recording available to retry");
+		refreshStatus();
+		showToast("transcription failed — recording available to retry");
 	} finally {
 		transcribing = false;
 		btn.disabled = false;
@@ -1186,7 +1189,7 @@ export async function handleVoiceRecord(): Promise<void> {
 		return;
 	}
 	if (isVoiceInputBusy()) {
-		setStatusMessage("finish the current recording or transcription first…");
+		showToast("finish the current recording or transcription first…");
 		return;
 	}
 	// Voice mode: a reply still playing would be picked up by the mic.
@@ -1212,7 +1215,8 @@ export async function handleVoiceRecord(): Promise<void> {
 					t.stop();
 				});
 				if (discardMessage) {
-					setStatusMessage(discardMessage);
+					refreshStatus();
+					showToast(discardMessage);
 					discardMessage = null;
 					return;
 				}
