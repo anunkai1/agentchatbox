@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import registerColab from "../extensions/colab/index.js";
 import {
 	buildUniqueUploadName,
 	type CommandOutput,
+	downloadFileFromColab,
 	execBashOnColab,
 	execPythonOnColab,
 	formatStatusSnapshot,
@@ -18,6 +19,7 @@ import {
 	startColabSession,
 	stopAllColabSessions,
 	stopColabSession,
+	uploadFileToColab,
 	validateSessionName,
 } from "../extensions/colab/lib.js";
 
@@ -227,3 +229,76 @@ describe("colab extension registration", () => {
 		expect(notes[0]).toContain("/colab stop --all");
 	});
 });
+
+function openFdsMatching(substring: string): string[] {
+	const matches: string[] = [];
+	for (const entry of readdirSync("/proc/self/fd")) {
+		try {
+			const target = readlinkSync(`/proc/self/fd/${entry}`);
+			if (target.includes(substring)) matches.push(target);
+		} catch {
+			// fd closed while iterating
+		}
+	}
+	return matches;
+}
+
+describe("colab file transfer timeout cleanup", () => {
+	it("destroys the temp WriteStream and removes the temp file on download timeout", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "colab-dl-timeout-"));
+		tempDirs.push(dir);
+		const uploadsDir = join(dir, "uploads");
+		const fakeBin = join(dir, "fake-colab.sh");
+		// Stay alive briefly after SIGTERM so we can verify out.destroy() closed the fd
+		// before the child exits.
+		writeFileSync(
+			fakeBin,
+			"#!/bin/sh\ntrap 'sleep 0.35; exit 0' TERM\nprintf partial\nsleep 5\n",
+		);
+		chmodSync(fakeBin, 0o755);
+
+		await expect(
+			downloadFileFromColab({
+				session: "s1",
+				remotePath: "/content/out.bin",
+				uploadsDir,
+				timeoutMs: 80,
+				bin: fakeBin,
+			}),
+		).rejects.toThrow("Download timed out for /content/out.bin");
+
+		expect(readdirSync(uploadsDir)).toEqual([]);
+		// Allow stream close callback on the next turn, well before the child's 350 ms exit.
+		await new Promise((r) => setTimeout(r, 40));
+		expect(openFdsMatching(uploadsDir)).toEqual([]);
+	});
+
+	it("destroys the ReadStream on upload timeout", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "colab-ul-timeout-"));
+		tempDirs.push(dir);
+		const localFile = join(dir, "payload.bin");
+		// Larger than pipe buffer so ReadStream stays open until destroyed.
+		writeFileSync(localFile, Buffer.alloc(512 * 1024, 0x61));
+		const fakeBin = join(dir, "fake-colab.sh");
+		writeFileSync(
+			fakeBin,
+			"#!/bin/sh\ntrap 'sleep 0.35; exit 0' TERM\nsleep 5\n",
+		);
+		chmodSync(fakeBin, 0o755);
+
+		await expect(
+			uploadFileToColab({
+				session: "s1",
+				localPath: localFile,
+				remotePath: "/content/payload.bin",
+				timeoutMs: 80,
+				bin: fakeBin,
+			}),
+		).rejects.toThrow(`Upload timed out for ${localFile}`);
+
+		// Allow stream close callback on the next turn, well before the child's 350 ms exit.
+		await new Promise((r) => setTimeout(r, 40));
+		expect(openFdsMatching(localFile)).toEqual([]);
+	});
+});
+

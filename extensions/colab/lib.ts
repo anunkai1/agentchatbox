@@ -381,24 +381,30 @@ export async function uploadFileToColab(opts: {
 		child.stderr.on("data", (chunk) => {
 			stderr += chunk.toString();
 		});
+		const stream = createReadStream(localPath);
+		let settled = false;
+		const finish = (err?: Error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			if (err) {
+				stream.destroy();
+				rejectPromise(err);
+			} else {
+				resolvePromise();
+			}
+		};
 		const timer = setTimeout(() => {
 			child.kill("SIGTERM");
-			rejectPromise(new Error(`Upload timed out for ${localPath}`));
+			finish(new Error(`Upload timed out for ${localPath}`));
 		}, opts.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS);
 
-		const finish = (err?: Error) => {
-			clearTimeout(timer);
-			if (err) rejectPromise(err);
-			else resolvePromise();
-		};
-
+		child.stdin.on("error", () => {});
 		child.on("error", (err) => finish(err));
 		child.on("close", (code) => {
 			if (code === 0) finish();
 			else finish(new Error(stderr.trim() || `Upload failed with exit code ${code}`));
 		});
-
-		const stream = createReadStream(localPath);
 		stream.on("error", (err) => {
 			child.kill("SIGTERM");
 			finish(err);
@@ -449,11 +455,6 @@ export async function downloadFileFromColab(opts: {
 			child.stderr.on("data", (chunk) => {
 				stderr += chunk.toString();
 			});
-			const timer = setTimeout(() => {
-				child.kill("SIGTERM");
-				rejectPromise(new Error(`Download timed out for ${opts.remotePath}`));
-			}, opts.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS);
-
 			const out = createWriteStream(tempPath, { mode: 0o600 });
 			let settled = false;
 			const finish = (err?: Error) => {
@@ -467,6 +468,10 @@ export async function downloadFileFromColab(opts: {
 					resolvePromise();
 				}
 			};
+			const timer = setTimeout(() => {
+				child.kill("SIGTERM");
+				finish(new Error(`Download timed out for ${opts.remotePath}`));
+			}, opts.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS);
 
 			let exitCode: number | null = null;
 			let streamClosed = false;
