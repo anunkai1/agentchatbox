@@ -193,12 +193,19 @@ describe("colab CLI wrappers", () => {
 
 describe("colab extension registration", () => {
 	it("registers the colab tool and /colab command cleanly", async () => {
-		const tools = new Map<string, { name: string; execute: (...args: never[]) => unknown }>();
+		const tools = new Map<
+			string,
+			{ name: string; exposure?: string; execute: (...args: never[]) => unknown }
+		>();
 		const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
 		const notes: string[] = [];
 
 		registerColab({
-			registerTool: (def: { name: string; execute: (...args: never[]) => unknown }) => {
+			registerTool: (def: {
+				name: string;
+				exposure?: string;
+				execute: (...args: never[]) => unknown;
+			}) => {
 				tools.set(def.name, def);
 			},
 			registerCommand: (
@@ -213,6 +220,7 @@ describe("colab extension registration", () => {
 		} as never);
 
 		expect(tools.has("colab")).toBe(true);
+		expect(tools.get("colab")?.exposure).toBe("deferred");
 		expect(commands.has("colab")).toBe(true);
 
 		await commands.get("colab")!.handler("help", {});

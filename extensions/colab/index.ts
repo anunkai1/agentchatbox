@@ -153,6 +153,7 @@ export default function registerColab(pi: ExtensionAPI): void {
 	pi.registerTool<typeof COLAB_PARAMS, Record<string, unknown>>({
 		name: "colab",
 		label: "Google Colab GPU",
+		exposure: "deferred",
 		description:
 			"Manage and run tasks on Google Colab GPU/TPU runtimes (account compute-unit balance, " +
 			"start/stop sessions, execute Python or bash, transfer files to/from ACB /uploads/). " +
