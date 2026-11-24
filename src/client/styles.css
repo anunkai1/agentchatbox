@@ -4986,17 +4986,19 @@ select:focus-visible,
 
 /* Image click-to-zoom lightbox */
 .lightbox-overlay {
-	background: rgba(0, 0, 0, 0.86);
+	background: rgba(0, 0, 0, 0.88);
 	padding: 16px;
 }
 .lightbox-box {
-	width: min(1100px, calc(100vw - 32px));
+	width: min(1200px, calc(100vw - 32px));
 	max-width: calc(100vw - 32px);
+	height: calc(100dvh - 32px);
 	max-height: calc(100dvh - 32px);
-	padding: 14px;
+	padding: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: 0;
+	overflow: hidden;
 	background: var(--surface);
 	transition:
 		transform 0.2s ease-out,
@@ -5005,58 +5007,71 @@ select:focus-visible,
 .lightbox-box.is-dragging {
 	transition: none;
 }
+.lightbox-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 10px 8px 14px;
+	border-bottom: 1px solid var(--border);
+	flex-shrink: 0;
+	min-height: 48px;
+}
+.lightbox-close-btn {
+	position: static;
+	flex-shrink: 0;
+}
 .lightbox-stage {
 	flex: 1;
 	min-height: 0;
+	width: 100%;
 	display: flex;
-	align-items: center;
-	justify-content: center;
 	overflow: hidden;
-	border-radius: var(--radius-sm);
 	background: var(--bg);
 	padding: 8px;
 	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
 }
-.lightbox-stage.is-zoomed {
-	display: block;
-	overflow: auto;
-	text-align: center;
-	touch-action: pan-x pan-y;
-}
+.lightbox-stage.is-zoomed,
 .lightbox-stage.is-pinch-zoomed {
+	overflow: auto;
+	padding: 0;
 	touch-action: none;
+}
+.lightbox-stage.is-pinching {
+	overflow: hidden;
 }
 .lightbox-img {
 	display: block;
-	margin: 0 auto;
+	flex-shrink: 0;
+	margin: auto;
 	max-width: 100%;
-	max-height: 76dvh;
+	max-height: 100%;
 	object-fit: contain;
 	border-radius: 6px;
 	cursor: zoom-in;
 	transform-origin: center center;
-	will-change: transform;
 	user-select: none;
 	-webkit-user-select: none;
 }
-.lightbox-img.is-zoomed {
+.lightbox-img.is-zoomed,
+.lightbox-stage.is-pinch-zoomed .lightbox-img {
 	max-width: none;
 	max-height: none;
-	cursor: zoom-out;
-}
-.lightbox-stage.is-pinch-zoomed .lightbox-img {
 	cursor: zoom-out;
 }
 .lightbox-toolbar {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 10px;
+	padding: 8px 14px;
+	border-top: 1px solid var(--border);
+	flex-shrink: 0;
 }
 .lightbox-caption {
 	flex: 1;
-	min-width: 120px;
+	min-width: 0;
 	font-size: 13px;
 	color: var(--text-secondary);
 	overflow: hidden;
@@ -5070,7 +5085,49 @@ select:focus-visible,
 }
 .lightbox-actions .btn {
 	margin-top: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 	text-decoration: none;
+}
+@media (max-width: 720px) {
+	.lightbox-overlay {
+		padding: 0;
+		background: #000;
+	}
+	.lightbox-box {
+		width: 100vw;
+		max-width: none;
+		height: 100dvh;
+		max-height: none;
+		border: 0;
+		border-radius: 0;
+		background: #000;
+		box-shadow: none;
+	}
+	.lightbox-header {
+		padding: max(6px, env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) 6px
+			max(14px, env(safe-area-inset-left, 0px));
+		background: rgba(16, 18, 22, 0.94);
+	}
+	.lightbox-stage {
+		padding: 0;
+		background: #000;
+	}
+	.lightbox-img {
+		border-radius: 0;
+	}
+	.lightbox-toolbar {
+		padding: 8px max(12px, env(safe-area-inset-right, 0px))
+			max(10px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+		background: rgba(16, 18, 22, 0.94);
+	}
+	.lightbox-actions {
+		width: 100%;
+	}
+	.lightbox-actions .btn {
+		flex: 1;
+	}
 }
 
 /* In-chat Find bar (Ctrl/Cmd+F, Settings → Find in chat) */

@@ -4409,6 +4409,12 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 	it("supports mobile sidebar swipe, in-chat find, concentric mobile composer fit, and lightbox touch gestures", async () => {
 		const { page } = await openPage("/");
 		await page.setViewportSize({ width: 390, height: 844 });
+		await page.route("**/demo-diagram.svg", async (route) => {
+			await route.fulfill({
+				contentType: "image/svg+xml",
+				body: '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600"><rect width="1200" height="600" fill="#ffffff"/><text x="60" y="300" font-size="48" fill="#111">Diagram</text></svg>',
+			});
+		});
 		await page.routeWebSocket(/\/api\/chat$/, (ws) => {
 			ws.onMessage((raw) => {
 				const message = JSON.parse(String(raw));
@@ -4436,7 +4442,7 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 								content: [
 									{
 										type: "text",
-										text: "Here is Alpha two and a screenshot:\n\n![Demo](/acb-logo-static.svg)",
+										text: "Here is Alpha two and a screenshot:\n\n![Demo](/demo-diagram.svg)",
 									},
 								],
 							},
@@ -4570,10 +4576,108 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 			await page.keyboard.press("Escape");
 			await expect.poll(() => page.locator("#chat-find-bar").isVisible()).toBe(false);
 
-			// 4. Image lightbox pinch-to-zoom + Fit to screen reset + swipe-down-to-close
+			// 4. Image lightbox fullscreen mobile layout, single-tap guard, double-tap, pinch-to-zoom, pan, Fit reset, swipe-down close
 			await page.locator(".row-assistant .markdown img").click();
 			const lightbox = page.locator("#image-lightbox");
 			await expect.poll(() => lightbox.count()).toBe(1);
+			const mobileBoxMetrics = await page.evaluate(() => {
+				const box = document.querySelector<HTMLElement>(".lightbox-box")!.getBoundingClientRect();
+				const stage = document
+					.querySelector<HTMLElement>(".lightbox-stage")!
+					.getBoundingClientRect();
+				const close = document
+					.querySelector<HTMLElement>(".lightbox-close-btn")!
+					.getBoundingClientRect();
+				return {
+					boxW: Math.round(box.width),
+					boxH: Math.round(box.height),
+					stageW: Math.round(stage.width),
+					stageH: Math.round(stage.height),
+					closeBottom: close.bottom,
+					stageTop: stage.top,
+				};
+			});
+			expect(mobileBoxMetrics.boxW).toBe(390);
+			expect(mobileBoxMetrics.boxH).toBe(844);
+			expect(mobileBoxMetrics.stageW).toBe(390);
+			expect(mobileBoxMetrics.stageH).toBeGreaterThan(680);
+			expect(mobileBoxMetrics.closeBottom).toBeLessThanOrEqual(mobileBoxMetrics.stageTop + 1);
+
+			// Single touch tap on the image must not jump to Zoom 100% (unlike mouse click)
+			await page.evaluate(() => {
+				const stage = document.querySelector(".lightbox-stage")!;
+				const img = document.querySelector(".lightbox-img")!;
+				const t = new Touch({
+					identifier: 10,
+					target: img,
+					clientX: 195,
+					clientY: 420,
+					pageX: 195,
+					pageY: 420,
+				});
+				stage.dispatchEvent(
+					new TouchEvent("touchstart", {
+						bubbles: true,
+						cancelable: true,
+						touches: [t],
+						targetTouches: [t],
+						changedTouches: [t],
+					}),
+				);
+				stage.dispatchEvent(
+					new TouchEvent("touchend", {
+						bubbles: true,
+						cancelable: true,
+						touches: [],
+						targetTouches: [],
+						changedTouches: [t],
+					}),
+				);
+				img.dispatchEvent(
+					new MouseEvent("click", { bubbles: true, cancelable: true, clientX: 195, clientY: 420 }),
+				);
+			});
+			expect(await lightbox.locator(".lightbox-stage.is-zoomed").count()).toBe(0);
+
+			// Double-tap zooms in crisply, and double-tap again resets to Fit
+			await page.evaluate(() => {
+				const stage = document.querySelector(".lightbox-stage")!;
+				const tap = (id: number) => {
+					const t = new Touch({
+						identifier: id,
+						target: stage,
+						clientX: 195,
+						clientY: 420,
+						pageX: 195,
+						pageY: 420,
+					});
+					stage.dispatchEvent(
+						new TouchEvent("touchstart", {
+							bubbles: true,
+							cancelable: true,
+							touches: [t],
+							targetTouches: [t],
+							changedTouches: [t],
+						}),
+					);
+					stage.dispatchEvent(
+						new TouchEvent("touchend", {
+							bubbles: true,
+							cancelable: true,
+							touches: [],
+							targetTouches: [],
+							changedTouches: [t],
+						}),
+					);
+				};
+				tap(11);
+				tap(12);
+			});
+			await expect.poll(() => lightbox.locator(".lightbox-stage.is-zoomed").count()).toBe(1);
+			await lightbox.getByRole("button", { name: "Fit to screen" }).click();
+			await expect.poll(() => lightbox.locator(".lightbox-stage.is-zoomed").count()).toBe(0);
+
+			// Pinch-to-zoom commits crisp layout size and allows 1-finger panning
 			await page.evaluate(() => {
 				const stage = document.querySelector(".lightbox-stage")!;
 				const mk = (id: number, x: number, y: number) =>
@@ -4589,8 +4693,8 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 						changedTouches: [t1a, t2a],
 					}),
 				);
-				const t1b = mk(1, 100, 350);
-				const t2b = mk(2, 290, 350);
+				const t1b = mk(1, 80, 350);
+				const t2b = mk(2, 310, 350);
 				stage.dispatchEvent(
 					new TouchEvent("touchmove", {
 						bubbles: true,
@@ -4611,6 +4715,60 @@ describe("browser smoke", { timeout: 30_000 }, () => {
 				);
 			});
 			await expect.poll(() => lightbox.locator(".lightbox-stage.is-pinch-zoomed").count()).toBe(1);
+			const zoomedWidth = await page.evaluate(() => {
+				const img = document.querySelector<HTMLImageElement>(".lightbox-img")!;
+				return Number.parseInt(img.style.width || "0", 10);
+			});
+			expect(zoomedWidth).toBeGreaterThan(390);
+			const scrolledAfterPan = await page.evaluate(() => {
+				const stage = document.querySelector<HTMLElement>(".lightbox-stage")!;
+				const before = stage.scrollLeft;
+				const tStart = new Touch({
+					identifier: 21,
+					target: stage,
+					clientX: 220,
+					clientY: 400,
+					pageX: 220,
+					pageY: 400,
+				});
+				const tMove = new Touch({
+					identifier: 21,
+					target: stage,
+					clientX: 140,
+					clientY: 400,
+					pageX: 140,
+					pageY: 400,
+				});
+				stage.dispatchEvent(
+					new TouchEvent("touchstart", {
+						bubbles: true,
+						cancelable: true,
+						touches: [tStart],
+						targetTouches: [tStart],
+						changedTouches: [tStart],
+					}),
+				);
+				stage.dispatchEvent(
+					new TouchEvent("touchmove", {
+						bubbles: true,
+						cancelable: true,
+						touches: [tMove],
+						targetTouches: [tMove],
+						changedTouches: [tMove],
+					}),
+				);
+				stage.dispatchEvent(
+					new TouchEvent("touchend", {
+						bubbles: true,
+						cancelable: true,
+						touches: [],
+						targetTouches: [],
+						changedTouches: [tMove],
+					}),
+				);
+				return stage.scrollLeft - before;
+			});
+			expect(scrolledAfterPan).toBeGreaterThan(20);
 			await lightbox.getByRole("button", { name: "Fit to screen" }).click();
 			await expect.poll(() => lightbox.locator(".lightbox-stage.is-pinch-zoomed").count()).toBe(0);
 

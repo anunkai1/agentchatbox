@@ -2386,6 +2386,22 @@ function openImageLightbox(img: HTMLImageElement): void {
 	const alt = img.getAttribute("alt")?.trim() || src.split("/").pop()?.split("?")[0] || "Image";
 	const overlay = el("div", { class: "modal-overlay lightbox-overlay", id: "image-lightbox" });
 	const box = el("div", { class: "modal-box lightbox-box" });
+	const closeBtn = el(
+		"button",
+		{
+			class: "modal-close-btn lightbox-close-btn",
+			type: "button",
+			title: "Close",
+			"aria-label": `Close Image preview: ${alt}`,
+		},
+		"✕",
+	);
+	const header = el(
+		"div",
+		{ class: "lightbox-header" },
+		el("span", { class: "lightbox-caption", title: alt }, alt),
+		closeBtn,
+	);
 	const stage = el("div", { class: "lightbox-stage" });
 	const preview = el("img", {
 		class: "lightbox-img",
@@ -2395,7 +2411,6 @@ function openImageLightbox(img: HTMLImageElement): void {
 	}) as HTMLImageElement;
 	stage.append(preview);
 
-	let zoomed = false;
 	const zoomBtn = el(
 		"button",
 		{
@@ -2421,46 +2436,40 @@ function openImageLightbox(img: HTMLImageElement): void {
 	const toolbar = el(
 		"div",
 		{ class: "lightbox-toolbar" },
-		el("span", { class: "lightbox-caption", title: alt }, alt),
 		el("div", { class: "lightbox-actions" }, zoomBtn, openLink),
 	);
-	box.append(stage, toolbar);
-	const modal = mountModal(overlay, box, { label: `Image preview: ${alt}` });
+	box.append(header, stage, toolbar);
 
-	const syncZoomButton = (pinched: boolean) => {
-		const active = zoomed || pinched;
+	let gestures: ReturnType<typeof attachLightboxGestures> | null = null;
+	const modal = mountModal(overlay, box, {
+		label: `Image preview: ${alt}`,
+		showCloseButton: false,
+		onDismiss: () => gestures?.destroy(),
+	});
+	closeBtn.addEventListener("click", () => modal.dismiss());
+
+	const syncZoomButton = (active: boolean) => {
 		zoomBtn.textContent = active ? "Fit to screen" : "Zoom 100%";
 		zoomBtn.setAttribute("aria-pressed", String(active));
 	};
 
-	const gestures = attachLightboxGestures({
+	gestures = attachLightboxGestures({
 		overlay,
 		box,
 		stage,
 		img: preview,
-		isNativeZoomed: () => zoomed,
-		onPinchStateChange: (pinched) => syncZoomButton(pinched),
+		onZoomStateChange: (active) => syncZoomButton(active),
 		onDismiss: () => modal.dismiss(),
 	});
 
-	const setZoom = (next: boolean) => {
-		if (!next && gestures.isPinched()) {
-			gestures.reset();
-		}
-		zoomed = next;
-		stage.classList.toggle("is-zoomed", zoomed);
-		preview.classList.toggle("is-zoomed", zoomed);
-		if (zoomed) gestures.reset();
-		syncZoomButton(gestures.isPinched());
-	};
 	zoomBtn.addEventListener("click", () => {
-		if (zoomed || gestures.isPinched()) setZoom(false);
-		else setZoom(true);
+		if (gestures!.isZoomed()) gestures!.reset();
+		else gestures!.zoomTo100();
 	});
-	preview.addEventListener("click", () => {
-		if (gestures.consumeSuppressedClick()) return;
-		if (zoomed || gestures.isPinched()) setZoom(false);
-		else setZoom(true);
+	preview.addEventListener("click", (e) => {
+		if (gestures!.shouldIgnoreMouseClick(e)) return;
+		if (gestures!.isZoomed()) gestures!.reset();
+		else gestures!.zoomTo100(e.clientX, e.clientY);
 	});
 }
 
