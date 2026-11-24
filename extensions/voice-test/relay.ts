@@ -128,7 +128,7 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 			if (pi.getThinkingLevel() !== target.thinkingLevel) {
 				pi.setThinkingLevel(target.thinkingLevel as (typeof THINKING_LEVELS)[number]);
 			}
-			pi.setActiveTools(pi.getAllTools().map((tool) => tool.name));
+			pi.setActiveTools([...new Set([...previousTools, "relay_job"])]);
 		} catch (error) {
 			// A failed conversion must not leave the ordinary chat tool-less.
 			pi.setActiveTools(previousTools);
@@ -362,7 +362,8 @@ export default function registerRelay(pi: ExtensionAPI, acb = new AcbSessions())
 		if (!state) return;
 		ownerTurn = typeof event.prompt === "string";
 		voice.runStarted();
-		pi.setActiveTools(pi.getAllTools().map((tool) => tool.name));
+		const active = pi.getActiveTools();
+		if (!active.includes("relay_job")) pi.setActiveTools([...active, "relay_job"]);
 		const record = job(ctx);
 		const snapshot = record
 			? {

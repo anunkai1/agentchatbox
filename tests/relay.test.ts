@@ -17,8 +17,18 @@ function harness(manager = SessionManager.create(tmpdir(), root)) {
 		modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
 		isIdle: () => true,
 	};
-	const allTools = ["read", "bash", "edit", "write", "delegate", "delegate_status", "delegate_message", "web_enable", "relay_job"].map((name) => ({ name }));
-	let activeTools = allTools.map((tool) => tool.name);
+	const defaultTools = ["read", "bash", "edit", "write", "tool_search"];
+	const allTools = [
+		...defaultTools.map((name) => ({ name })),
+		{ name: "colab", exposure: "deferred" },
+		{ name: "delegate", exposure: "deferred" },
+		{ name: "delegate_status", exposure: "deferred" },
+		{ name: "delegate_message", exposure: "deferred" },
+		{ name: "delegation_report", defaultActive: false },
+		{ name: "relay_job", defaultActive: false },
+		{ name: "grep" },
+	];
+	let activeTools = [...defaultTools];
 	const pi = {
 		on: (name: string, fn: Handler) => hooks.set(name, fn),
 		getAllTools: vi.fn(() => allTools),
@@ -88,7 +98,7 @@ describe("Relay full-access agent and tracked worker", () => {
 		await h.command("start");
 		expect(h.pi.setSessionName).not.toHaveBeenCalled();
 		expect(h.pi.setModel).toHaveBeenCalledWith({ provider: "venice", id: "deepseek-v4-1-flash-1017" });
-		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(h.pi.getAllTools().map((tool) => tool.name));
+		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(["read", "bash", "edit", "write", "tool_search", "relay_job"]);
 		await h.command("say turn-1 Please do the read-only probe");
 		h.owner();
 		const result = await h.run(START);
@@ -111,7 +121,7 @@ describe("Relay full-access agent and tracked worker", () => {
 		expect(readFileSync(file, "utf8")).toContain(RELAY_STATE);
 		const resumed = harness(SessionManager.open(file));
 		await resumed.hooks.get("session_start")!({}, resumed.ctx);
-		expect(resumed.pi.setActiveTools).toHaveBeenLastCalledWith(resumed.pi.getAllTools().map((tool) => tool.name));
+		expect(resumed.pi.setActiveTools).toHaveBeenLastCalledWith(["read", "bash", "edit", "write", "tool_search", "relay_job"]);
 		expect(resumed.hooks.has("tool_call")).toBe(false);
 		await resumed.command("start");
 		await resumed.command("say turn-1 Please inspect the fixture");
@@ -197,13 +207,22 @@ describe("Relay full-access agent and tracked worker", () => {
 		await expect(h.run({ action: "cancel" })).rejects.toThrow("stop unavailable");
 		expect(readDelegation("worker-1")?.status).toBe("working");
 	});
-	it("enables all registered tools without file gates, including tools loaded later", async () => {
+	it("preserves active tools plus relay_job without activating deferred or worker-only tools", async () => {
 		const h = harness(); await h.command("start");
-		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(expect.arrayContaining(["read", "bash", "edit", "write", "delegate", "delegate_status", "delegate_message", "web_enable", "relay_job"]));
+		expect(h.pi.getActiveTools()).toEqual(["read", "bash", "edit", "write", "tool_search", "relay_job"]);
+		expect(h.pi.getActiveTools()).not.toContain("colab");
+		expect(h.pi.getActiveTools()).not.toContain("delegate");
+		expect(h.pi.getActiveTools()).not.toContain("delegation_report");
+		expect(h.pi.getActiveTools()).not.toContain("grep");
 		expect(h.hooks.has("tool_call")).toBe(false); // No Relay tool or path whitelist.
-		h.pi.getAllTools().push({ name: "web_search" });
+
+		// Simulate tool_search activating a deferred tool while another caller drops relay_job.
+		h.pi.setActiveTools(["read", "bash", "edit", "write", "tool_search", "delegate"]);
 		const turn = h.owner();
-		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(expect.arrayContaining(["web_search", "bash", "write"]));
+		expect(h.pi.getActiveTools()).toEqual(["read", "bash", "edit", "write", "tool_search", "delegate", "relay_job"]);
+		expect(h.pi.getActiveTools()).not.toContain("colab");
+		expect(h.pi.getActiveTools()).not.toContain("delegation_report");
+		expect(h.pi.getActiveTools()).not.toContain("grep");
 		expect(turn.systemPrompt).toContain("normal owner-level ACB tools and filesystem/network access");
 		expect(turn.systemPrompt).toContain("unrelated work does not require a new conversation");
 		expect(turn.systemPrompt).toContain("normal delegation tools for additional workers");
@@ -219,7 +238,7 @@ describe("Relay full-access agent and tracked worker", () => {
 	});
 	it("restores ordinary tools after a rejected Relay switch and allows full access after a successful retry", async () => {
 		const h = harness();
-		const ordinaryTools = h.pi.getActiveTools();
+		const ordinaryTools = [...h.pi.getActiveTools()];
 		h.pi.setModel.mockResolvedValueOnce(false);
 		await h.command("start");
 		expect(h.pi.getActiveTools()).toEqual(ordinaryTools);
@@ -227,7 +246,7 @@ describe("Relay full-access agent and tracked worker", () => {
 		expect(h.pi.getActiveTools()).toEqual(ordinaryTools);
 		await expect(h.run(START)).rejects.toThrow("not active");
 		await h.command("start");
-		expect(h.pi.getActiveTools()).toEqual(h.pi.getAllTools().map((tool) => tool.name));
+		expect(h.pi.getActiveTools()).toEqual([...ordinaryTools, "relay_job"]);
 	});
 	it("restores ordinary tools when the Relay model is missing", async () => {
 		const h = harness();
