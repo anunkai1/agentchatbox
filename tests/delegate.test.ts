@@ -25,6 +25,7 @@ import {
 type Handler = (...args: unknown[]) => Promise<unknown>;
 type Tool = {
 	name: string;
+	exposure?: string;
 	execute: Handler;
 	description: string;
 	promptGuidelines?: string[];
@@ -596,6 +597,9 @@ describe("delegation guidance and context reuse", () => {
 	it("guides independent dispatches, topic reuse and no speculative progress", async () => {
 		const h = harness();
 		const tool = h.tools.get("delegate")!;
+		expect(tool.exposure).toBe("deferred");
+		expect(h.tools.get("delegate_status")!.exposure).toBe("deferred");
+		expect(h.tools.get("delegate_message")!.exposure).toBe("deferred");
 		expect(tool.promptGuidelines).toEqual([...DISPATCH_GUIDANCE, BRIEF_GUIDANCE]);
 		expect(tool.description).not.toContain("ordinary requests are not approval");
 		for (const rule of [...DISPATCH_GUIDANCE, BRIEF_GUIDANCE])

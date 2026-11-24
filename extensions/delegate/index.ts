@@ -178,6 +178,7 @@ export default function registerDelegate(
 	pi.registerTool({
 		name: "delegate",
 		label: "Delegate",
+		exposure: "deferred",
 		description: [
 			"Start a worker: a separate ACB chat that does a task in the background while this chat stays free.",
 			cwdGuidance(),
@@ -237,6 +238,7 @@ export default function registerDelegate(
 	pi.registerTool({
 		name: "delegate_status",
 		label: "Worker status",
+		exposure: "deferred",
 		description:
 			"List or look up ACB delegation records to answer worker-status questions factually or find a same-topic worker before spawning. Defaults to the last 10 across chats; filters apply before paging. Includes original task, repo, parent and worker links, recorded status and timestamps. Long task/report text is excerpted; read recordPath for full context. This does not observe live activity or detailed progress.",
 		promptGuidelines: [
@@ -314,6 +316,7 @@ export default function registerDelegate(
 	pi.registerTool({
 		name: "delegate_message",
 		label: "Message worker",
+		exposure: "deferred",
 		description:
 			"Send a follow-up instruction to an existing worker (find its id and original task with delegate_status). Prefer this for the same topic instead of spawning a new conversation: it retains context and reports again to its original parent. Do not pick an unrelated worker just because it shares a repo.",
 		parameters: Type.Object({
