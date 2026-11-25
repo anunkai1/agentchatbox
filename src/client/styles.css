@@ -3971,6 +3971,7 @@ button.model-row-info .model-provider {
    =========================================================================== */
 
 .project-folder {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	margin-bottom: 2px;
@@ -4063,9 +4064,37 @@ button.model-row-info .model-provider {
 	line-height: 1;
 	opacity: 0.78;
 }
-.project-action:hover {
+.project-action:hover:not(:disabled) {
 	opacity: 1;
 	background: var(--surface-hover, rgba(255, 255, 255, 0.08));
+}
+.project-action:disabled {
+	opacity: 0.25;
+	cursor: default;
+}
+.projects-reorder-action {
+	flex: 0 0 auto;
+	color: var(--text-secondary);
+	opacity: 0.85;
+}
+.projects-reorder-action.active {
+	width: auto;
+	height: 24px;
+	padding: 0 9px;
+	margin-right: 4px;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: none;
+	letter-spacing: 0;
+	color: var(--accent);
+	background: var(--accent-soft);
+	border: 1px solid var(--accent-border);
+	border-radius: 6px;
+	opacity: 1;
+}
+.projects-reorder-action.active:hover {
+	background: var(--accent-soft);
+	color: var(--accent-hover);
 }
 .projects-add-action {
 	flex: 0 0 auto;
@@ -4264,6 +4293,79 @@ button.model-row-info .model-provider {
 }
 .projects-container.collapsed .projects-container-body {
 	display: none;
+}
+.projects-container.reordering .project-folder-header {
+	cursor: grab;
+}
+.project-drag-handle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 24px;
+	height: 28px;
+	color: var(--text-muted);
+	cursor: grab;
+	touch-action: none;
+}
+.project-folder-header:hover .project-drag-handle {
+	color: var(--text);
+}
+.project-reorder-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1 1 auto;
+	min-width: 0;
+	padding: 7px 4px;
+}
+.project-reorder-actions {
+	opacity: 1;
+}
+body.is-dragging-project,
+body.is-dragging-project .project-folder-header,
+body.is-dragging-project .project-folder-toggle,
+body.is-dragging-project .project-drag-handle {
+	cursor: grabbing;
+	user-select: none;
+}
+.project-folder.is-drag-source {
+	opacity: 0.35;
+}
+.project-folder.project-drop-before::before,
+.project-folder.project-drop-after::after {
+	content: "";
+	position: absolute;
+	left: 4px;
+	right: 4px;
+	height: 2px;
+	border-radius: 2px;
+	background: var(--accent);
+	pointer-events: none;
+	z-index: 2;
+}
+.project-folder.project-drop-before::before {
+	top: -2px;
+}
+.project-folder.project-drop-after::after {
+	bottom: -2px;
+}
+.project-drag-ghost {
+	position: fixed;
+	z-index: 1200;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 10px;
+	box-sizing: border-box;
+	border-radius: var(--radius);
+	background: var(--surface);
+	border: 1px solid var(--accent-border);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+	color: var(--text);
+	font-size: 12px;
+	pointer-events: none;
+	opacity: 0.95;
 }
 
 /* ── Extension UI relay dialogs (select/confirm/input) ──────────── */
@@ -4653,6 +4755,16 @@ select:focus-visible,
 	.search-info-btn {
 		min-width: 44px;
 		min-height: 44px;
+	}
+	.project-drag-handle {
+		width: 36px;
+		min-height: 44px;
+	}
+	.projects-reorder-action.active {
+		min-width: auto;
+		height: 36px;
+		min-height: 36px;
+		padding: 0 12px;
 	}
 	/* Pagination is a dense secondary control; 36px keeps it comfortably
 	 * tappable while reclaiming vertical room in long session lists. */

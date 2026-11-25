@@ -211,4 +211,15 @@ describe("reorderProjects", () => {
 		expect(order[0]).toBe("global");
 		expect(order.slice(1)).toEqual([b.id, a.id]);
 	});
+
+	it("ignores duplicate and unknown ids", async () => {
+		const { createProject, reorderProjects, listProjects } = await import(
+			"../src/server/projects.js"
+		);
+		const a = createProject({ name: "a" });
+		const b = createProject({ name: "b" });
+		const c = createProject({ name: "c" });
+		reorderProjects(["global", c.id, c.id, "missing", a.id]);
+		expect(listProjects().map((p) => p.id)).toEqual(["global", c.id, a.id, b.id]);
+	});
 });

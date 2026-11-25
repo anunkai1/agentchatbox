@@ -20,12 +20,15 @@ import { type SessionSearchHit, searchSessions } from "./api.js";
 import { createChatFindBar, refreshChatFind } from "./chat-find.js";
 import { $, el, escapeHtml, type LiveAssistantDom, mountModal } from "./dom.js";
 import {
+	ARROW_DOWN_ICON,
+	ARROW_UP_ICON,
 	CANCEL_ICON,
 	CLOCK_ICON,
 	COLLAPSE_ICON,
 	COMPOSER_STOP_ICON,
 	EXPAND_ICON,
 	FOLDER_ICON,
+	GRIP_ICON,
 	iconEl,
 	LONG_ICON,
 	MEDIUM_ICON,
@@ -35,6 +38,7 @@ import {
 	PENCIL_ICON,
 	PLAY_ICON,
 	RELAY_ICON,
+	REORDER_ICON,
 	SEND_ICON,
 	SHORT_ICON,
 	SHRINK_ICON,
@@ -52,6 +56,7 @@ import { attachLightboxGestures } from "./lightbox-gestures.js";
 import { setRichText, setUserRichText } from "./linkify.js";
 import { mountNotices, type NoticeOptions, refreshNotices, showNotice } from "./notices.js";
 import { effectiveEnterToSend } from "./prefs.js";
+import { installProjectDrag, moveProjectInOrder } from "./project-reorder.js";
 import { openSelectTextModal } from "./select-text.js";
 import { services } from "./services.js";
 import {
@@ -3571,6 +3576,11 @@ export function renderSidebarSessions(sessions: SessionSummary[]): void {
 	lastSessions = sessions;
 	// If the user is mid-search, don't clobber the search results.
 	if (state.searchActive) return;
+	// Don't tear down the DOM under an active pointer drag; flush on release.
+	if (projectDragActive) {
+		pendingSidebarRerender = true;
+		return;
+	}
 
 	const projectsPane = document.getElementById("sidebar-projects-pane");
 	const sessionsPane = document.getElementById("sidebar-sessions-pane");
@@ -3722,12 +3732,84 @@ function writeCollapseState(set: Set<string>, key = PROJECT_COLLAPSE_KEY): void 
  * reserved id so it's independent of any individual project's collapse.
  */
 const PROJECTS_CONTAINER_ID = "__projects__";
+let projectsReorderMode = false;
+let projectDragActive = false;
+let pendingSidebarRerender = false;
+
+type ProjectFocusTarget =
+	| { projectId: string; role: "up" | "down" | "toggle" }
+	| { role: "reorder-toggle" };
+
+function restoreProjectFocus(target?: ProjectFocusTarget): void {
+	if (!target) return;
+	const pane = document.getElementById("sidebar-projects-pane");
+	if (!pane) return;
+	if (target.role === "reorder-toggle") {
+		pane.querySelector<HTMLButtonElement>(".projects-reorder-action")?.focus();
+		return;
+	}
+	const folder = Array.from(pane.querySelectorAll<HTMLElement>(".project-folder")).find(
+		(node) => node.dataset.projectId === target.projectId,
+	);
+	if (!folder) return;
+	if (target.role === "toggle") {
+		folder.querySelector<HTMLButtonElement>(".project-folder-toggle")?.focus();
+		return;
+	}
+	const primary = folder.querySelector<HTMLButtonElement>(
+		target.role === "up" ? ".project-move-up" : ".project-move-down",
+	);
+	if (primary && !primary.disabled) {
+		primary.focus();
+		return;
+	}
+	const fallback = folder.querySelector<HTMLButtonElement>(
+		target.role === "up" ? ".project-move-down" : ".project-move-up",
+	);
+	if (fallback && !fallback.disabled) fallback.focus();
+}
+
+function commitProjectOrder(nextUserIds: string[], focusTarget?: ProjectFocusTarget): void {
+	const byId = new Map(state.projects.map((p) => [p.id, p]));
+	const nextProjects: ProjectSummary[] = [];
+	const globalProject = byId.get(GLOBAL_PROJECT_ID);
+	if (globalProject) nextProjects.push(globalProject);
+	const seen = new Set<string>([GLOBAL_PROJECT_ID]);
+	for (const id of nextUserIds) {
+		const project = byId.get(id);
+		if (project && !seen.has(id)) {
+			seen.add(id);
+			nextProjects.push(project);
+		}
+	}
+	for (const project of state.projects) {
+		if (!seen.has(project.id)) {
+			seen.add(project.id);
+			nextProjects.push(project);
+		}
+	}
+	state.projects = nextProjects;
+	renderSidebarProjects(nextProjects);
+	restoreProjectFocus(focusTarget);
+	shellHandlers?.reorderProjects(nextProjects.map((p) => p.id));
+}
+
+function moveUserProject(projectId: string, delta: -1 | 1, role: "up" | "down" | "toggle"): void {
+	const userIds = state.projects.filter((p) => p.id !== GLOBAL_PROJECT_ID).map((p) => p.id);
+	const nextUserIds = moveProjectInOrder(userIds, projectId, delta);
+	if (!nextUserIds) return;
+	commitProjectOrder(nextUserIds, { projectId, role });
+}
+
 function renderProjectsContainer(
 	userProjects: ProjectSummary[],
 	buckets: Map<string, SessionNode[]>,
 ): HTMLElement {
-	const collapsed = readCollapseState().has(PROJECTS_CONTAINER_ID);
-	const wrap = el("div", { class: `projects-container${collapsed ? " collapsed" : ""}` });
+	if (userProjects.length < 2) projectsReorderMode = false;
+	const collapsed = !projectsReorderMode && readCollapseState().has(PROJECTS_CONTAINER_ID);
+	const wrap = el("div", {
+		class: `projects-container${collapsed ? " collapsed" : ""}${projectsReorderMode ? " reordering" : ""}`,
+	});
 	wrap.dataset.projectId = PROJECTS_CONTAINER_ID;
 
 	const header = el("div", { class: "project-folder-header projects-container-header" });
@@ -3751,29 +3833,79 @@ function renderProjectsContainer(
 		"aria-controls": bodyId,
 	});
 	toggle.append(chevron, icon, name, count);
-	const addProject = el("button", {
-		class: "project-action projects-add-action",
-		type: "button",
-		title: "Create a project",
-		"aria-label": "Create a project",
-		text: "+",
-	});
-	addProject.addEventListener("click", (event) => {
-		event.stopPropagation();
-		openProjectEditor();
-	});
-	header.append(toggle, addProject);
+	header.append(toggle);
+
+	if (userProjects.length > 1) {
+		const reorderBtn = el("button", {
+			class: `project-action projects-reorder-action${projectsReorderMode ? " active" : ""}`,
+			type: "button",
+			title: projectsReorderMode ? "Done reordering projects" : "Reorder projects",
+			"aria-label": projectsReorderMode ? "Done reordering projects" : "Reorder projects",
+			"aria-pressed": String(projectsReorderMode),
+			...(projectsReorderMode ? { text: "Done" } : { html: REORDER_ICON }),
+		});
+		reorderBtn.addEventListener("click", (event) => {
+			event.stopPropagation();
+			projectsReorderMode = !projectsReorderMode;
+			if (projectsReorderMode) {
+				const set = readCollapseState();
+				if (set.delete(PROJECTS_CONTAINER_ID)) writeCollapseState(set);
+			}
+			renderSidebarSessions(lastSessions);
+			restoreProjectFocus({ role: "reorder-toggle" });
+		});
+		header.append(reorderBtn);
+	}
+
+	if (!projectsReorderMode) {
+		const addProject = el("button", {
+			class: "project-action projects-add-action",
+			type: "button",
+			title: "Create a project",
+			"aria-label": "Create a project",
+			text: "+",
+		});
+		addProject.addEventListener("click", (event) => {
+			event.stopPropagation();
+			openProjectEditor();
+		});
+		header.append(addProject);
+	}
 	wrap.append(header);
 
 	const body = el("div", { class: "projects-container-body", id: bodyId });
-	for (const p of userProjects) {
+	userProjects.forEach((p, index) => {
 		const items = buckets.get(p.id) ?? [];
-		body.append(renderProjectFolder(p, items));
+		body.append(
+			renderProjectFolder(p, items, {
+				reordering: projectsReorderMode,
+				reorderIndex: index,
+				reorderTotal: userProjects.length,
+			}),
+		);
+	});
+	if (userProjects.length > 1) {
+		installProjectDrag(body, {
+			reordering: projectsReorderMode,
+			onDragStateChange: (dragging, willReorder) => {
+				projectDragActive = dragging;
+				if (!dragging && pendingSidebarRerender) {
+					pendingSidebarRerender = false;
+					if (!willReorder) renderSidebarSessions(lastSessions);
+				}
+			},
+			onReorder: (nextUserIds) => commitProjectOrder(nextUserIds),
+		});
 	}
 	if (collapsed) body.style.display = "none";
 	wrap.append(body);
 
 	toggle.addEventListener("click", () => {
+		if (projectsReorderMode) {
+			projectsReorderMode = false;
+			renderSidebarSessions(lastSessions);
+			return;
+		}
 		const set = readCollapseState();
 		if (set.has(PROJECTS_CONTAINER_ID)) set.delete(PROJECTS_CONTAINER_ID);
 		else set.add(PROJECTS_CONTAINER_ID);
@@ -3784,6 +3916,16 @@ function renderProjectsContainer(
 		wrap.classList.toggle("collapsed", isCollapsed);
 		toggle.setAttribute("aria-expanded", String(!isCollapsed));
 	});
+	if (projectsReorderMode) {
+		wrap.addEventListener("keydown", (event) => {
+			if (event.key !== "Escape" || projectDragActive) return;
+			event.preventDefault();
+			event.stopPropagation();
+			projectsReorderMode = false;
+			renderSidebarSessions(lastSessions);
+			restoreProjectFocus({ role: "reorder-toggle" });
+		});
+	}
 	return wrap;
 }
 
@@ -4060,19 +4202,26 @@ function renderBrandFolderIcon(): HTMLElement {
 	});
 }
 
-function renderProjectFolder(p: ProjectSummary, items: SessionNode[]): HTMLElement {
+interface ProjectReorderRenderOptions {
+	reordering: boolean;
+	reorderIndex: number;
+	reorderTotal: number;
+}
+
+function renderProjectFolder(
+	p: ProjectSummary,
+	items: SessionNode[],
+	reorderOpts?: ProjectReorderRenderOptions,
+): HTMLElement {
 	const collapsed = readCollapseState().has(p.id);
 	const isOther = p.id === "other";
 	const isGlobal = p.id === "global";
-	const wrap = el("div", { class: `project-folder${collapsed ? " collapsed" : ""}` });
+	const wrap = el("div", {
+		class: `project-folder${collapsed && !reorderOpts?.reordering ? " collapsed" : ""}`,
+	});
 	wrap.dataset.projectId = p.id;
 
 	const header = el("div", { class: "project-folder-header" });
-	const chevron = el("span", {
-		class: "project-chevron",
-		text: collapsed ? "▸" : "▾",
-		"aria-hidden": "true",
-	});
 	const icon = isOther
 		? el("span", { class: "project-icon", html: PACKAGE_ICON, "aria-hidden": "true" })
 		: p.icon === "📁" || p.icon === "📂" || !p.icon
@@ -4084,6 +4233,55 @@ function renderProjectFolder(p: ProjectSummary, items: SessionNode[]): HTMLEleme
 		text: items.length > 0 ? String(items.length) : "",
 		"aria-label": `${items.length} conversations`,
 	});
+
+	if (reorderOpts?.reordering) {
+		const dragHandle = el("span", {
+			class: "project-drag-handle",
+			html: GRIP_ICON,
+			title: `Drag to reorder ${p.name}`,
+			"aria-hidden": "true",
+		});
+		const label = el("div", { class: "project-reorder-label" });
+		label.append(icon, name, count);
+		const actions = el("div", {
+			class: "project-actions project-reorder-actions",
+			"aria-label": `${p.name} reorder actions`,
+		});
+		const upBtn = el("button", {
+			class: "project-action project-move-up",
+			type: "button",
+			title: `Move ${p.name} up`,
+			"aria-label": `Move ${p.name} up`,
+			html: ARROW_UP_ICON,
+		}) as HTMLButtonElement;
+		upBtn.disabled = reorderOpts.reorderIndex <= 0;
+		upBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			moveUserProject(p.id, -1, "up");
+		});
+		const downBtn = el("button", {
+			class: "project-action project-move-down",
+			type: "button",
+			title: `Move ${p.name} down`,
+			"aria-label": `Move ${p.name} down`,
+			html: ARROW_DOWN_ICON,
+		}) as HTMLButtonElement;
+		downBtn.disabled = reorderOpts.reorderIndex >= reorderOpts.reorderTotal - 1;
+		downBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			moveUserProject(p.id, 1, "down");
+		});
+		actions.append(upBtn, downBtn);
+		header.append(dragHandle, label, actions);
+		wrap.append(header);
+		return wrap;
+	}
+
+	const chevron = el("span", {
+		class: "project-chevron",
+		text: collapsed ? "▸" : "▾",
+		"aria-hidden": "true",
+	});
 	const bodyId = `project-body-${p.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 	const toggle = el("button", {
 		class: "project-folder-toggle",
@@ -4093,6 +4291,13 @@ function renderProjectFolder(p: ProjectSummary, items: SessionNode[]): HTMLEleme
 		"aria-label": `${collapsed ? "Expand" : "Collapse"} ${p.name}`,
 	});
 	toggle.append(chevron, icon, name, count);
+	if (!isGlobal && !isOther && (reorderOpts?.reorderTotal ?? 0) > 1) {
+		toggle.addEventListener("keydown", (event) => {
+			if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+			event.preventDefault();
+			moveUserProject(p.id, event.key === "ArrowUp" ? -1 : 1, "toggle");
+		});
+	}
 	const actions = el("div", { class: "project-actions", "aria-label": `${p.name} actions` });
 	// "+" starts a new chat in this project (Global's "+" is redundant with
 	// the top New chat button but harmless; hide it on Global to avoid clutter).

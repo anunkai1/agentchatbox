@@ -128,6 +128,15 @@ export const FOLDER_ICON = svg(
 export const PACKAGE_ICON = svg(
 	'<path d="m7.5 4.27 9 5.15M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/>',
 );
+export const REORDER_ICON = svg(
+	'<path d="m21 16-4 4-4-4"/><path d="M17 20V4"/><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/>',
+);
+export const GRIP_ICON = svg(
+	'<circle cx="9" cy="5" r="1.4"/><circle cx="15" cy="5" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="15" cy="19" r="1.4"/>',
+	true,
+);
+export const ARROW_UP_ICON = svg('<path d="M12 19V5M5 12l7-7 7 7"/>');
+export const ARROW_DOWN_ICON = svg('<path d="M12 5v14M19 12l-7 7-7-7"/>');
 
 /** An icon as a standalone element, for use among other children. */
 export function iconEl(icon: string): HTMLSpanElement {

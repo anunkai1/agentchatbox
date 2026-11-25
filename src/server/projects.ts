@@ -196,12 +196,20 @@ function readStore(): ProjectsFile {
 		parsed.projects = parsed.projects.filter((project) => project.id !== id);
 		parsed.projects.push(external);
 	}
-	// Drop any sidebarOrder ids that no longer have a project, and append
-	// any projects not yet in the order.
+	// Drop any sidebarOrder ids that no longer have a project, deduplicate,
+	// and append any projects not yet in the order.
 	const known = new Set(parsed.projects.map((p) => p.id));
-	parsed.sidebarOrder = parsed.sidebarOrder.filter((id) => known.has(id));
+	const seen = new Set<string>();
+	parsed.sidebarOrder = parsed.sidebarOrder.filter((id) => {
+		if (!known.has(id) || seen.has(id)) return false;
+		seen.add(id);
+		return true;
+	});
 	for (const p of parsed.projects) {
-		if (!parsed.sidebarOrder.includes(p.id)) parsed.sidebarOrder.push(p.id);
+		if (!seen.has(p.id)) {
+			seen.add(p.id);
+			parsed.sidebarOrder.push(p.id);
+		}
 	}
 	cachedStore = { file, mtime, data: parsed };
 	return parsed;
@@ -396,15 +404,24 @@ export function deleteProject(id: string): boolean {
 	return true;
 }
 
-/** Reorder the sidebar by project id. Unknown ids are ignored. */
+/** Reorder the sidebar by project id. Unknown and duplicate ids are ignored. */
 export function reorderProjects(order: string[]): void {
 	const store = readStore();
 	const known = new Set(store.projects.map((p) => p.id));
-	const next = order.filter((id) => known.has(id));
 	// Global always stays first.
-	const withoutGlobal = next.filter((id) => id !== GLOBAL_PROJECT_ID);
-	for (const id of store.projects.map((p) => p.id)) {
-		if (id !== GLOBAL_PROJECT_ID && !next.includes(id)) withoutGlobal.push(id);
+	const seen = new Set<string>([GLOBAL_PROJECT_ID]);
+	const withoutGlobal: string[] = [];
+	for (const id of order) {
+		if (known.has(id) && !seen.has(id)) {
+			seen.add(id);
+			withoutGlobal.push(id);
+		}
+	}
+	for (const project of store.projects) {
+		if (!seen.has(project.id)) {
+			seen.add(project.id);
+			withoutGlobal.push(project.id);
+		}
 	}
 	store.sidebarOrder = [GLOBAL_PROJECT_ID, ...withoutGlobal];
 	writeStore(store);
